@@ -1,45 +1,57 @@
 /**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
+ * CyberClaw Mobile — Your AI companion on the go
+ * Connects to CyberClaw desktop via WebSocket for companion sync,
+ * chat, and always-listening voice features.
  */
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+import React, { useState } from 'react';
+import { StatusBar, SafeAreaView, StyleSheet, TouchableOpacity, Text, View } from 'react-native';
+import HomeScreen from './src/screens/HomeScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+export default function App(): React.JSX.Element {
+  const [screen, setScreen] = useState<'home' | 'settings'>('home');
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
-    </SafeAreaProvider>
-  );
-}
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
+      
+      {screen === 'home' ? (
+        <>
+          <HomeScreen />
+          {/* Settings gear button */}
+          <TouchableOpacity 
+            style={styles.settingsBtn}
+            onPress={() => setScreen('settings')}
+          >
+            <Text style={styles.settingsIcon}>⚙️</Text>
+          </TouchableOpacity>
+        </>
+      ) : (
+        <SettingsScreen onBack={() => setScreen('home')} />
+      )}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#0a0a0a',
+  },
+  settingsBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  settingsIcon: {
+    fontSize: 18,
   },
 });
-
-export default App;
