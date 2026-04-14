@@ -16,6 +16,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/AudioBuffer';
+import WakeWordTrainer from '../components/WakeWordTrainer';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
 
@@ -24,6 +25,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [pairingCode, setPairingCode] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('Disconnected');
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
+  const [showTrainer, setShowTrainer] = useState(false);
+  const [wakeTrained, setWakeTrained] = useState(false);
 
   useEffect(() => {
     // Load saved settings
@@ -38,6 +41,18 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
     syncClient.loadSaved().then(({ host }) => {
       if (host) setHostIp(host);
+    });
+
+    // Check if wake word was already trained
+    AsyncStorage.getItem('cyberclaw-wake-samples').then(raw => {
+      if (raw) {
+        try {
+          const data = JSON.parse(raw);
+          if (data.samplePaths && data.samplePaths.length >= 3) {
+            setWakeTrained(true);
+          }
+        } catch {}
+      }
     });
 
     // Update connection status
@@ -183,10 +198,34 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         <TextInput
           style={styles.input}
           value={audioSettings.wakeWord}
-          onChangeText={v => updateAudio('wakeWord', v)}
+          onChangeText={v => { updateAudio('wakeWord', v); setWakeTrained(false); }}
           placeholder="Hey CyberClaw"
           placeholderTextColor="#555"
         />
+
+        {/* Train wake phrase button */}
+        <TouchableOpacity
+          style={[styles.trainBtn, wakeTrained && styles.trainBtnDone]}
+          onPress={() => setShowTrainer(!showTrainer)}
+        >
+          <Text style={styles.trainBtnText}>
+            {wakeTrained ? '✅ Wake phrase trained' : '🎤 Train wake phrase'}
+          </Text>
+          <Text style={styles.trainBtnSub}>
+            {wakeTrained ? 'Tap to retrain' : 'Record 3 voice samples'}
+          </Text>
+        </TouchableOpacity>
+
+        {showTrainer && (
+          <WakeWordTrainer
+            wakePhrase={audioSettings.wakeWord}
+            onComplete={(paths) => {
+              setWakeTrained(true);
+              setShowTrainer(false);
+              Alert.alert('Done!', `Wake phrase "${audioSettings.wakeWord}" trained with ${paths.length} samples.`);
+            }}
+          />
+        )}
 
         <Text style={styles.label}>Audio Lookback (minutes)</Text>
         <View style={styles.optionRow}>
@@ -325,4 +364,28 @@ const styles = StyleSheet.create({
   },
   optionText: { color: '#888', fontSize: 14 },
   optionTextActive: { color: '#f7931a', fontWeight: 'bold' },
+  trainBtn: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 10,
+    padding: 14,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#f7931a',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+  },
+  trainBtnDone: {
+    borderColor: '#22c55e',
+    borderStyle: 'solid',
+  },
+  trainBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  trainBtnSub: {
+    color: '#888',
+    fontSize: 12,
+    marginTop: 2,
+  },
 });
