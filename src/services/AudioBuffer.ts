@@ -3,17 +3,10 @@
  * Records audio continuously in chunks, maintains a rolling buffer,
  * and provides lookback capability for the wake word system.
  * 
- * Architecture:
- *   - Records in 30-second chunks
- *   - Maintains rolling buffer (configurable: 5-60 minutes)
- *   - Old chunks auto-deleted beyond retention period
- *   - Daily transcription files stored for X days (user setting)
- *   - All local, nothing leaves the device unless user requests
+ * NOTE: File I/O (RNFS) will be integrated when actual audio recording is added.
+ * For now this manages in-memory chunk references and settings only.
  */
 
-import RNFS from 'react-native-fs';
-
-const AUDIO_DIR = `${RNFS.DocumentDirectoryPath}/cyberclaw-audio`;
 const CHUNK_DURATION_MS = 30_000; // 30 seconds per chunk
 const MAX_CHUNKS_DEFAULT = 120;   // 60 minutes at 30s chunks
 
@@ -42,18 +35,11 @@ export const DEFAULT_SETTINGS: AudioBufferSettings = {
 
 class AudioBufferService {
   private chunks: AudioChunk[] = [];
-  private recording: boolean = false;
   private settings: AudioBufferSettings = DEFAULT_SETTINGS;
   private maxChunks: number = MAX_CHUNKS_DEFAULT;
 
   async init() {
-    // Ensure audio directory exists
-    const exists = await RNFS.exists(AUDIO_DIR);
-    if (!exists) {
-      await RNFS.mkdir(AUDIO_DIR);
-    }
-    // Clean old daily recordings
-    await this.cleanOldRecordings();
+    // Will create audio directories when RNFS is integrated
   }
 
   updateSettings(settings: Partial<AudioBufferSettings>) {
@@ -69,21 +55,13 @@ class AudioBufferService {
    * Add a recorded chunk to the buffer
    * Called by the native recording module
    */
-  async addChunk(path: string, startTime: number, duration: number): Promise<void> {
-    const stat = await RNFS.stat(path);
-    this.chunks.push({
-      path,
-      startTime,
-      duration,
-      size: parseInt(stat.size || '0', 10),
-    });
+  async addChunk(path: string, startTime: number, duration: number, size: number = 0): Promise<void> {
+    this.chunks.push({ path, startTime, duration, size });
 
     // Remove old chunks beyond lookback window
     while (this.chunks.length > this.maxChunks) {
-      const old = this.chunks.shift();
-      if (old) {
-        try { await RNFS.unlink(old.path); } catch {}
-      }
+      this.chunks.shift();
+      // TODO: delete file via RNFS when integrated
     }
   }
 
@@ -103,57 +81,10 @@ class AudioBufferService {
   }
 
   /**
-   * Save current buffer as daily recording
-   */
-  async saveDailySnapshot(): Promise<string | null> {
-    if (this.chunks.length === 0) return null;
-
-    const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    const dailyDir = `${AUDIO_DIR}/daily/${date}`;
-    const exists = await RNFS.exists(dailyDir);
-    if (!exists) {
-      await RNFS.mkdir(dailyDir);
-    }
-
-    // Copy current chunks to daily dir
-    for (const chunk of this.chunks) {
-      const filename = `chunk_${chunk.startTime}.wav`;
-      const dest = `${dailyDir}/${filename}`;
-      try {
-        await RNFS.copyFile(chunk.path, dest);
-      } catch {}
-    }
-
-    return dailyDir;
-  }
-
-  /**
-   * Clean daily recordings older than retention period
-   */
-  async cleanOldRecordings(): Promise<void> {
-    const dailyDir = `${AUDIO_DIR}/daily`;
-    const exists = await RNFS.exists(dailyDir);
-    if (!exists) return;
-
-    const items = await RNFS.readDir(dailyDir);
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - this.settings.retentionDays);
-    const cutoff = cutoffDate.toISOString().split('T')[0];
-
-    for (const item of items) {
-      if (item.isDirectory() && item.name < cutoff) {
-        try { await RNFS.unlink(item.path); } catch {}
-      }
-    }
-  }
-
-  /**
-   * Clear all buffered audio
+   * Clear all buffered audio references
    */
   async clear(): Promise<void> {
-    for (const chunk of this.chunks) {
-      try { await RNFS.unlink(chunk.path); } catch {}
-    }
+    // TODO: delete files via RNFS when integrated
     this.chunks = [];
   }
 

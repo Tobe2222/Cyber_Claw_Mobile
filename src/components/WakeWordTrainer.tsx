@@ -18,10 +18,8 @@ import {
   Animated,
   Alert,
 } from 'react-native';
-import RNFS from 'react-native-fs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const WAKE_SAMPLES_DIR = `${RNFS.DocumentDirectoryPath}/cyberclaw-audio/wake-samples`;
 const WAKE_SAMPLES_KEY = 'cyberclaw-wake-samples';
 
 const REQUIRED_SAMPLES = 3;
@@ -76,10 +74,6 @@ export default function WakeWordTrainer({ wakePhrase, onComplete }: Props) {
   const startRecording = useCallback(async () => {
     if (isRecording) return;
 
-    // Ensure directory exists
-    const exists = await RNFS.exists(WAKE_SAMPLES_DIR);
-    if (!exists) await RNFS.mkdir(WAKE_SAMPLES_DIR);
-
     setIsRecording(true);
     recordStartRef.current = Date.now();
     startPulse();
@@ -103,7 +97,7 @@ export default function WakeWordTrainer({ wakePhrase, onComplete }: Props) {
     setIsRecording(false);
 
     const duration = Date.now() - recordStartRef.current;
-    const samplePath = `${WAKE_SAMPLES_DIR}/wake_sample_${currentSample}.wav`;
+    const samplePath = `wake_sample_${currentSample}.wav`;  // Placeholder path until RNFS integrated
 
     // Validate duration
     let status: SampleStatus = 'good';
