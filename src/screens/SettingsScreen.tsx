@@ -135,7 +135,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
         <Text style={styles.label}>Desktop IP Address</Text>
         <Text style={styles.hint}>
-          Find this in CyberClaw desktop: Settings → 📱 Mobile Companion → Local IP
+          Same network: use local IP (Settings → 📱 Mobile Companion → Local IP){'\n'}
+          Remote: use your public IP and forward port 9247 on your router
         </Text>
         <TextInput
           style={styles.input}
