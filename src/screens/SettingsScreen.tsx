@@ -134,14 +134,18 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         </Text>
 
         <Text style={styles.label}>Desktop IP Address</Text>
+        <Text style={styles.hint}>
+          Find this in CyberClaw desktop: Settings → 📱 Mobile Companion → Local IP
+        </Text>
         <TextInput
           style={styles.input}
           value={hostIp}
           onChangeText={setHostIp}
           placeholder="192.168.1.100"
           placeholderTextColor="#555"
-          keyboardType="numeric"
+          keyboardType="default"
           autoCapitalize="none"
+          autoCorrect={false}
         />
         <TouchableOpacity style={styles.button} onPress={connectToDesktop}>
           <Text style={styles.buttonText}>Connect</Text>

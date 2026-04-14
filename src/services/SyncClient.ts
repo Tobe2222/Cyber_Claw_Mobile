@@ -68,8 +68,9 @@ class SyncClient {
    */
   async connect(host?: string): Promise<void> {
     if (host) {
-      this.host = host;
-      await AsyncStorage.setItem(STORAGE_KEY_HOST, host);
+      // Strip port if user included it (e.g. "192.168.1.100:9247" → "192.168.1.100")
+      this.host = host.replace(/:\d+$/, '');
+      await AsyncStorage.setItem(STORAGE_KEY_HOST, this.host);
     }
 
     if (!this.host) {
