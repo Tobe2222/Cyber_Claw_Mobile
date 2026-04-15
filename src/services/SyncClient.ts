@@ -78,8 +78,7 @@ class SyncClient {
     }
 
     return new Promise((resolve, reject) => {
-      // Use wss:// (TLS) — self-signed cert is accepted by default in React Native
-      const url = `wss://${this.host}:${this.port}`;
+      const url = `ws://${this.host}:${this.port}`;
       console.log(`[SyncClient] Connecting to ${url}`);
 
       this.ws = new WebSocket(url);
