@@ -87,8 +87,18 @@ class SyncClient {
 
     return new Promise((resolve, reject) => {
       try {
+        // Validate address before creating WebSocket (prevents native crash)
+        const isIPv6 = this.host.includes(':');
+        if (isIPv6) {
+          const groups = this.host.split(':').filter(g => g.length > 0);
+          const hasShorthand = this.host.includes('::');
+          if (!hasShorthand && groups.length !== 8) {
+            throw new Error(`Invalid IPv6 address (${groups.length}/8 groups)`);
+          }
+        }
+
         // IPv6 addresses need brackets: ws://[::1]:9247
-        const host = this.host.includes(':') ? `[${this.host}]` : this.host;
+        const host = isIPv6 ? `[${this.host}]` : this.host;
         const url = `ws://${host}:${this.port}`;
         console.log(`[SyncClient] Connecting to ${url}`);
 
@@ -131,6 +141,9 @@ class SyncClient {
       } catch (e) {
         console.error('[SyncClient] Connection failed:', e);
         this._connected = false;
+        // Clear bad saved host so app doesn't crash on next restart
+        this.host = '';
+        AsyncStorage.removeItem(STORAGE_KEY_HOST);
         reject(e);
       }
     });

@@ -58,10 +58,12 @@ export default function HomeScreen() {
     syncClient.on('authenticated', onAuthenticated);
     syncClient.on('chat', onChat);
 
-    // Auto-connect if saved
+    // Auto-connect if saved (silently — don't crash on bad saved IP)
     syncClient.loadSaved().then(({ host, token }) => {
       if (host) {
-        syncClient.connect().catch(() => {});
+        syncClient.connect().catch((e) => {
+          console.log('[HomeScreen] Auto-connect failed:', e);
+        });
       }
     });
 
