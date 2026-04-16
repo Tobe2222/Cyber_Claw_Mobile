@@ -69,7 +69,15 @@ class SyncClient {
   async connect(host?: string): Promise<void> {
     if (host) {
       // Strip port if user included it (e.g. "192.168.1.100:9247" → "192.168.1.100")
-      this.host = host.replace(/:\d+$/, '');
+      // But don't strip from IPv6 addresses (contain multiple colons)
+      let cleaned = host.trim();
+      // Remove brackets if user wrapped IPv6 in them
+      cleaned = cleaned.replace(/^\[|\]$/g, '');
+      // Only strip trailing :port for IPv4 (single colon before digits at end)
+      if (!cleaned.includes(':') || (cleaned.match(/:/g) || []).length === 1) {
+        cleaned = cleaned.replace(/:\d+$/, '');
+      }
+      this.host = cleaned;
       await AsyncStorage.setItem(STORAGE_KEY_HOST, this.host);
     }
 
@@ -78,7 +86,9 @@ class SyncClient {
     }
 
     return new Promise((resolve, reject) => {
-      const url = `ws://${this.host}:${this.port}`;
+      // IPv6 addresses need brackets: ws://[::1]:9247
+      const host = this.host.includes(':') ? `[${this.host}]` : this.host;
+      const url = `ws://${host}:${this.port}`;
       console.log(`[SyncClient] Connecting to ${url}`);
 
       this.ws = new WebSocket(url);

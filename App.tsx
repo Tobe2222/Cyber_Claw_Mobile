@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from 'react';
-import { StatusBar, SafeAreaView, StyleSheet, TouchableOpacity, Text, View } from 'react-native';
+import { StatusBar, SafeAreaView, StyleSheet, TouchableOpacity, Text, View, Platform } from 'react-native';
 import HomeScreen from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
@@ -41,8 +41,8 @@ const styles = StyleSheet.create({
   },
   settingsBtn: {
     position: 'absolute',
-    top: 12,
-    right: 12,
+    top: Platform.OS === 'android' ? 48 : 54,
+    right: 16,
     width: 36,
     height: 36,
     borderRadius: 18,
