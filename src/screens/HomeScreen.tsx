@@ -317,7 +317,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 50 : 10,
+    paddingTop: Platform.OS === 'ios' ? 54 : 44,
     paddingBottom: 8,
     backgroundColor: '#111',
     borderBottomWidth: 1,

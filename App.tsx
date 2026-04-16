@@ -41,7 +41,7 @@ const styles = StyleSheet.create({
   },
   settingsBtn: {
     position: 'absolute',
-    top: Platform.OS === 'android' ? 48 : 54,
+    top: Platform.OS === 'android' ? 46 : 56,
     right: 16,
     width: 36,
     height: 36,

@@ -12,6 +12,7 @@ import {
   StyleSheet,
   Switch,
   Alert,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
@@ -86,6 +87,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     const data = { audioSettings };
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
     audioBuffer.updateSettings(audioSettings);
+    Alert.alert('Saved ✓', 'Settings have been saved.');
   };
 
   const connectToDesktop = async () => {
@@ -364,7 +366,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 20,
-    paddingTop: 10,
+    paddingTop: Platform.OS === 'android' ? 34 : 10,
   },
   backBtn: { color: '#f7931a', fontSize: 16 },
   title: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginLeft: 16 },
