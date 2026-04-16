@@ -24,6 +24,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [hostIp, setHostIp] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+  const [debugLog, setDebugLog] = useState<string[]>([]);
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [showTrainer, setShowTrainer] = useState(false);
   const [wakeTrained, setWakeTrained] = useState(false);
@@ -94,33 +95,52 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       return;
     }
 
-    // Validate IP format before attempting connection
+    const log = (msg: string) => {
+      const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setDebugLog(prev => [...prev, `[${ts}] ${msg}`]);
+    };
+
+    // Validate IP format
     const isIPv4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip);
     const isIPv6 = /^[0-9a-fA-F:]+$/.test(ip.replace(/^\[|\]$/g, ''));
     const isDomain = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ip);
 
+    log(`Input: "${ip}"`);
+    log(`Type: ${isIPv4 ? 'IPv4' : isIPv6 ? 'IPv6' : isDomain ? 'Domain' : 'Unknown'}`);
+
     if (!isIPv4 && !isIPv6 && !isDomain) {
-      Alert.alert('Invalid Address', 'Enter a valid IPv4, IPv6, or hostname.\n\nExamples:\n• 192.168.1.100\n• mydomain.com');
+      log('❌ Invalid address format');
+      Alert.alert('Invalid Address', 'Enter a valid IPv4, IPv6, or hostname.');
       return;
     }
 
-    // Validate IPv6 has 8 groups (or uses :: shorthand)
     if (isIPv6) {
       const clean = ip.replace(/^\[|\]$/g, '');
-      const groups = clean.split(':');
+      const groups = clean.split(':').filter(g => g.length > 0);
       const hasShorthand = clean.includes('::');
+      log(`IPv6 groups: ${groups.length}/8, shorthand: ${hasShorthand}`);
       if (!hasShorthand && groups.length !== 8) {
-        Alert.alert('Invalid IPv6', `IPv6 address needs 8 groups (got ${groups.length}).\n\nYour address: ${clean}\n\nTip: Use your IPv4 address instead if available, or a DDNS hostname.`);
+        log('❌ Invalid IPv6 (wrong group count)');
+        Alert.alert('Invalid IPv6', `IPv6 needs 8 groups (got ${groups.length}).`);
         return;
       }
     }
 
+    // Build the URL that will be used
+    const cleanHost = ip.replace(/^\[|\]$/g, '').replace(/:\d+$/, '');
+    const wsHost = cleanHost.includes(':') ? `[${cleanHost}]` : cleanHost;
+    log(`Connecting to: ws://${wsHost}:9247`);
+
     try {
       setConnectionStatus('Connecting...');
+      log('⏳ WebSocket connecting...');
       await syncClient.connect(ip);
+      log('✅ Connected!');
     } catch (e: any) {
+      const errMsg = e?.message || String(e);
+      log(`❌ Failed: ${errMsg}`);
       setConnectionStatus('Failed to connect');
-      Alert.alert('Connection Failed', 'Check the IP and make sure CyberClaw is running on your desktop.');
+      Alert.alert('Connection Failed', `${errMsg}\n\nMake sure:\n• CyberClaw is running on desktop\n• Port 9247 is forwarded on router\n• IP address is correct`);
     }
   };
 
@@ -182,6 +202,21 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           ]} />
           <Text style={styles.statusText}>{connectionStatus}</Text>
         </View>
+
+        {/* Debug log */}
+        {debugLog.length > 0 && (
+          <View style={styles.debugBox}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+              <Text style={{ color: '#f7931a', fontSize: 11, fontWeight: 'bold' }}>Connection Log</Text>
+              <TouchableOpacity onPress={() => setDebugLog([])}>
+                <Text style={{ color: '#666', fontSize: 11 }}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+            {debugLog.map((line, i) => (
+              <Text key={i} style={styles.debugLine}>{line}</Text>
+            ))}
+          </View>
+        )}
 
         {syncClient.connected && !syncClient.authenticated && (
           <View style={styles.pairingSection}>
@@ -392,6 +427,20 @@ const styles = StyleSheet.create({
   },
   optionText: { color: '#888', fontSize: 14 },
   optionTextActive: { color: '#f7931a', fontWeight: 'bold' },
+  debugBox: {
+    backgroundColor: '#0a0a1a',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#222',
+  },
+  debugLine: {
+    color: '#8a8',
+    fontSize: 11,
+    fontFamily: 'monospace',
+    lineHeight: 16,
+  },
   trainBtn: {
     backgroundColor: '#1a1a2e',
     borderRadius: 10,

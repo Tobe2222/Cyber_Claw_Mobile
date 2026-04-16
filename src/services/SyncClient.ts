@@ -125,18 +125,31 @@ class SyncClient {
           }
         };
 
-        this.ws.onclose = () => {
-          console.log('[SyncClient] Disconnected');
+        // Timeout — if no open event in 10 seconds, fail
+        const connectTimeout = setTimeout(() => {
+          console.log('[SyncClient] Connection timeout (10s)');
+          if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+          }
+          this._connected = false;
+          reject(new Error('Connection timeout (10 seconds). Server not reachable.'));
+        }, 10000);
+
+        this.ws.onclose = (event) => {
+          clearTimeout(connectTimeout);
+          console.log(`[SyncClient] Disconnected (code: ${event.code}, reason: ${event.reason})`);
           this._connected = false;
           this._authenticated = false;
-          this.emit('disconnected', {});
+          this.emit('disconnected', { code: event.code, reason: event.reason });
           this.scheduleReconnect();
         };
 
-        this.ws.onerror = (err) => {
-          console.error('[SyncClient] Error:', err);
+        this.ws.onerror = (err: any) => {
+          clearTimeout(connectTimeout);
+          console.error('[SyncClient] Error:', err?.message || err);
           this._connected = false;
-          reject(err);
+          reject(new Error(err?.message || 'WebSocket connection error'));
         };
       } catch (e) {
         console.error('[SyncClient] Connection failed:', e);
