@@ -88,13 +88,36 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   };
 
   const connectToDesktop = async () => {
-    if (!hostIp.trim()) {
+    const ip = hostIp.trim();
+    if (!ip) {
       Alert.alert('Error', 'Enter your desktop IP address');
       return;
     }
+
+    // Validate IP format before attempting connection
+    const isIPv4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip);
+    const isIPv6 = /^[0-9a-fA-F:]+$/.test(ip.replace(/^\[|\]$/g, ''));
+    const isDomain = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(ip);
+
+    if (!isIPv4 && !isIPv6 && !isDomain) {
+      Alert.alert('Invalid Address', 'Enter a valid IPv4, IPv6, or hostname.\n\nExamples:\n• 192.168.1.100\n• mydomain.com');
+      return;
+    }
+
+    // Validate IPv6 has 8 groups (or uses :: shorthand)
+    if (isIPv6) {
+      const clean = ip.replace(/^\[|\]$/g, '');
+      const groups = clean.split(':');
+      const hasShorthand = clean.includes('::');
+      if (!hasShorthand && groups.length !== 8) {
+        Alert.alert('Invalid IPv6', `IPv6 address needs 8 groups (got ${groups.length}).\n\nYour address: ${clean}\n\nTip: Use your IPv4 address instead if available, or a DDNS hostname.`);
+        return;
+      }
+    }
+
     try {
       setConnectionStatus('Connecting...');
-      await syncClient.connect(hostIp.trim());
+      await syncClient.connect(ip);
     } catch (e: any) {
       setConnectionStatus('Failed to connect');
       Alert.alert('Connection Failed', 'Check the IP and make sure CyberClaw is running on your desktop.');

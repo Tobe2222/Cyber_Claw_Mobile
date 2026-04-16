@@ -86,47 +86,53 @@ class SyncClient {
     }
 
     return new Promise((resolve, reject) => {
-      // IPv6 addresses need brackets: ws://[::1]:9247
-      const host = this.host.includes(':') ? `[${this.host}]` : this.host;
-      const url = `ws://${host}:${this.port}`;
-      console.log(`[SyncClient] Connecting to ${url}`);
+      try {
+        // IPv6 addresses need brackets: ws://[::1]:9247
+        const host = this.host.includes(':') ? `[${this.host}]` : this.host;
+        const url = `ws://${host}:${this.port}`;
+        console.log(`[SyncClient] Connecting to ${url}`);
 
-      this.ws = new WebSocket(url);
+        this.ws = new WebSocket(url);
 
-      this.ws.onopen = () => {
-        console.log('[SyncClient] Connected');
-        this._connected = true;
-        this.emit('connected', {});
+        this.ws.onopen = () => {
+          console.log('[SyncClient] Connected');
+          this._connected = true;
+          this.emit('connected', {});
 
-        // Auto-authenticate if we have a saved token
-        if (this.token) {
-          this.send({ type: 'auth', token: this.token });
-        }
-        resolve();
-      };
+          // Auto-authenticate if we have a saved token
+          if (this.token) {
+            this.send({ type: 'auth', token: this.token });
+          }
+          resolve();
+        };
 
-      this.ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data as string);
-          this.handleMessage(msg);
-        } catch (e) {
-          console.error('[SyncClient] Bad message:', e);
-        }
-      };
+        this.ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data as string);
+            this.handleMessage(msg);
+          } catch (e) {
+            console.error('[SyncClient] Bad message:', e);
+          }
+        };
 
-      this.ws.onclose = () => {
-        console.log('[SyncClient] Disconnected');
+        this.ws.onclose = () => {
+          console.log('[SyncClient] Disconnected');
+          this._connected = false;
+          this._authenticated = false;
+          this.emit('disconnected', {});
+          this.scheduleReconnect();
+        };
+
+        this.ws.onerror = (err) => {
+          console.error('[SyncClient] Error:', err);
+          this._connected = false;
+          reject(err);
+        };
+      } catch (e) {
+        console.error('[SyncClient] Connection failed:', e);
         this._connected = false;
-        this._authenticated = false;
-        this.emit('disconnected', {});
-        this.scheduleReconnect();
-      };
-
-      this.ws.onerror = (err) => {
-        console.error('[SyncClient] Error:', err);
-        this._connected = false;
-        reject(err);
-      };
+        reject(e);
+      }
     });
   }
 
