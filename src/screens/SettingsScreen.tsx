@@ -4,15 +4,8 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Alert,
-  Platform,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
+  Switch, Alert, Platform, PermissionsAndroid, Linking,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
@@ -20,6 +13,8 @@ import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/
 import WakeWordTrainer from '../components/WakeWordTrainer';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
+
+type PermStatus = 'granted' | 'denied' | 'never_ask_again' | 'unknown';
 
 export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [hostIp, setHostIp] = useState('');
@@ -29,8 +24,40 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [showTrainer, setShowTrainer] = useState(false);
   const [wakeTrained, setWakeTrained] = useState(false);
+  const [micPerm, setMicPerm] = useState<PermStatus>('unknown');
+  const [notifPerm, setNotifPerm] = useState<PermStatus>('unknown');
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+
+  const checkPermissions = async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const mic = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      setMicPerm(mic ? 'granted' : 'denied');
+      if (Platform.Version >= 33) {
+        const notif = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS as any);
+        setNotifPerm(notif ? 'granted' : 'denied');
+      } else {
+        setNotifPerm('granted'); // always granted < API 33
+      }
+    } catch {}
+  };
+
+  const requestPermission = async (perm: string) => {
+    try {
+      const result = await PermissionsAndroid.request(perm as any);
+      checkPermissions();
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        Alert.alert('Permission blocked', 'Go to Settings → Apps → CyberClaw → Permissions to enable it.', [
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          { text: 'Cancel' },
+        ]);
+      }
+    } catch {}
+  };
 
   useEffect(() => {
+    checkPermissions();
+    AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -251,6 +278,46 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         )}
       </View>
 
+      {/* Permissions */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>🔒 Permissions</Text>
+        <Text style={styles.sectionDesc}>These permissions are required for voice and background features.</Text>
+        {[
+          { label: 'Microphone', status: micPerm, perm: 'android.permission.RECORD_AUDIO', desc: 'Required for voice chat and wake word detection' },
+          { label: 'Notifications', status: notifPerm, perm: 'android.permission.POST_NOTIFICATIONS', desc: 'Required for background service indicator' },
+        ].map(({ label, status, perm, desc }) => (
+          <View key={label} style={styles.permRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.permLabel}>
+                {status === 'granted' ? '✅' : '❌'} {label}
+              </Text>
+              <Text style={styles.permDesc}>{desc}</Text>
+            </View>
+            {status !== 'granted' && (
+              <TouchableOpacity style={styles.permBtn} onPress={() => requestPermission(perm)}>
+                <Text style={styles.permBtnText}>Grant</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ))}
+      </View>
+
+      {/* TTS */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>🔊 Voice Response</Text>
+        <Text style={styles.sectionDesc}>Clawsuu speaks responses out loud when you use voice chat.</Text>
+        <View style={styles.switchRow}>
+          <Text style={styles.switchLabel}>Speak AI responses</Text>
+          <Switch
+            value={ttsEnabled}
+            onValueChange={v => { setTtsEnabled(v); AsyncStorage.setItem('cyberclaw-tts-enabled', String(v)); }}
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={ttsEnabled ? '#fff' : '#666'}
+          />
+        </View>
+        <Text style={styles.sectionDesc}>Uses your device's built-in text-to-speech engine. Go to Settings → Accessibility → Text-to-speech to change the voice.</Text>
+      </View>
+
       {/* Always Listening */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>🎙️ Always Listening</Text>
@@ -388,6 +455,11 @@ const styles = StyleSheet.create({
     borderColor: '#222',
   },
   sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+  permRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 6, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#1a1a2e' },
+  permLabel: { color: '#ddd', fontSize: 14, fontWeight: 'bold' },
+  permDesc: { color: '#777', fontSize: 11, marginTop: 2 },
+  permBtn: { backgroundColor: '#f7931a', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  permBtnText: { color: '#000', fontSize: 12, fontWeight: 'bold' },
   sectionDesc: { color: '#888', fontSize: 13, marginBottom: 16, lineHeight: 18 },
   label: { color: '#ccc', fontSize: 14, marginBottom: 6, marginTop: 12 },
   input: {

@@ -217,6 +217,10 @@ class SyncClient {
     this.send({ type: 'voice_transcript', transcript, context, lookbackMinutes });
   }
 
+  requestChatHistory() {
+    this.send({ type: 'request_chat_history' });
+  }
+
   requestState() {
     this.send({ type: 'request_state' });
   }
@@ -255,11 +259,21 @@ class SyncClient {
           this._reconnectAttempts = 0;
           this.setState('connected');
           this.emit('authenticated', { name: msg.name });
+          // Auto-request chat history from desktop
+          setTimeout(() => this.requestChatHistory(), 300);
         } else {
           this.token = null;
           AsyncStorage.removeItem(STORAGE_KEY_TOKEN);
           this.emit('auth_failed', { error: msg.error });
         }
+        break;
+
+      case 'chat_history':
+        this.emit('chat_history', msg);
+        break;
+
+      case 'typing':
+        this.emit('typing', msg);
         break;
 
       case 'state_sync':
