@@ -193,8 +193,13 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           autoCapitalize="none"
           autoCorrect={false}
         />
-        <TouchableOpacity style={styles.button} onPress={connectToDesktop}>
-          <Text style={styles.buttonText}>Connect</Text>
+        <TouchableOpacity 
+          style={[styles.button, connectionStatus.includes('✓') && styles.buttonConnected]}
+          onPress={connectionStatus.includes('✓') ? () => { syncClient.disconnect(); setConnectionStatus('Disconnected'); } : connectToDesktop}
+        >
+          <Text style={[styles.buttonText, connectionStatus.includes('✓') && styles.buttonTextConnected]}>
+            {connectionStatus.includes('✓') ? 'Disconnect' : 'Connect'}
+          </Text>
         </TouchableOpacity>
 
         <View style={styles.statusRow}>
@@ -205,20 +210,24 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.statusText}>{connectionStatus}</Text>
         </View>
 
-        {/* Debug log */}
-        {debugLog.length > 0 && (
-          <View style={styles.debugBox}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#f7931a', fontSize: 11, fontWeight: 'bold' }}>Connection Log</Text>
+        {/* Connection log — always visible */}
+        <View style={styles.debugBox}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+            <Text style={{ color: '#f7931a', fontSize: 11, fontWeight: 'bold' }}>Connection Log</Text>
+            {debugLog.length > 0 && (
               <TouchableOpacity onPress={() => setDebugLog([])}>
                 <Text style={{ color: '#666', fontSize: 11 }}>Clear</Text>
               </TouchableOpacity>
-            </View>
-            {debugLog.map((line, i) => (
-              <Text key={i} style={styles.debugLine}>{line}</Text>
-            ))}
+            )}
           </View>
-        )}
+          {debugLog.length === 0 ? (
+            <Text style={[styles.debugLine, { color: '#444' }]}>No connection attempts yet</Text>
+          ) : (
+            debugLog.map((line, i) => (
+              <Text key={i} style={styles.debugLine}>{line}</Text>
+            ))
+          )}
+        </View>
 
         {syncClient.connected && !syncClient.authenticated && (
           <View style={styles.pairingSection}>
@@ -398,6 +407,8 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   buttonText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
+  buttonConnected: { backgroundColor: '#333', borderWidth: 1, borderColor: '#4ade80' },
+  buttonTextConnected: { color: '#4ade80' },
   saveButton: { marginTop: 8, backgroundColor: '#22c55e' },
   statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
