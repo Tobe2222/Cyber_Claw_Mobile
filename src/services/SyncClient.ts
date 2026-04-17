@@ -1,6 +1,13 @@
 /**
  * SyncClient — connects to CyberClaw desktop's WebSocket sync server
  * Handles pairing, auth, state sync, and message routing.
+ * 
+ * Connection states (for UI):
+ *   - 'disconnected': no connection, not trying
+ *   - 'connecting': actively trying to connect
+ *   - 'connected': WebSocket open + authenticated (paired)
+ *   - 'reconnecting': temporarily lost, auto-recovering (still show as "connected" to user)
+ *   - 'lost': failed to reconnect after multiple attempts
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,11 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const STORAGE_KEY_TOKEN = 'cyberclaw-sync-token';
 const STORAGE_KEY_HOST = 'cyberclaw-sync-host';
 
-export type SyncState = {
-  connected: boolean;
-  authenticated: boolean;
-  deviceName: string;
-};
+export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'lost';
 
 type MessageHandler = (msg: any) => void;
 
@@ -23,22 +26,18 @@ class SyncClient {
   private token: string | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private handlers: Map<string, MessageHandler[]> = new Map();
-  private _connected: boolean = false;
+  private _state: ConnectionState = 'disconnected';
   private _authenticated: boolean = false;
+  private _reconnectAttempts: number = 0;
+  private _maxReconnectAttempts: number = 20; // ~100 seconds before "lost"
+  private _isReconnecting: boolean = false;
+  private _connectingPromise: Promise<void> | null = null;
 
-  /**
-   * Register a handler for a message type
-   */
   on(type: string, handler: MessageHandler) {
-    if (!this.handlers.has(type)) {
-      this.handlers.set(type, []);
-    }
+    if (!this.handlers.has(type)) this.handlers.set(type, []);
     this.handlers.get(type)!.push(handler);
   }
 
-  /**
-   * Remove a handler
-   */
   off(type: string, handler: MessageHandler) {
     const list = this.handlers.get(type);
     if (list) {
@@ -52,9 +51,12 @@ class SyncClient {
     if (list) list.forEach(h => h(data));
   }
 
-  /**
-   * Load saved connection info
-   */
+  private setState(state: ConnectionState) {
+    if (this._state === state) return;
+    this._state = state;
+    this.emit('state_change', { state });
+  }
+
   async loadSaved(): Promise<{ host: string; token: string | null }> {
     const host = await AsyncStorage.getItem(STORAGE_KEY_HOST) || '';
     const token = await AsyncStorage.getItem(STORAGE_KEY_TOKEN);
@@ -63,17 +65,11 @@ class SyncClient {
     return { host, token };
   }
 
-  /**
-   * Connect to the desktop sync server
-   */
   async connect(host?: string): Promise<void> {
     if (host) {
-      // Strip port if user included it (e.g. "192.168.1.100:9247" → "192.168.1.100")
-      // But don't strip from IPv6 addresses (contain multiple colons)
-      let cleaned = host.trim();
-      // Remove brackets if user wrapped IPv6 in them
-      cleaned = cleaned.replace(/^\[|\]$/g, '');
-      // Only strip trailing :port for IPv4 (single colon before digits at end)
+      // Clean up host input
+      let cleaned = host.trim().replace(/^\[|\]$/g, '');
+      // Only strip trailing :port for IPv4
       if (!cleaned.includes(':') || (cleaned.match(/:/g) || []).length === 1) {
         cleaned = cleaned.replace(/:\d+$/, '');
       }
@@ -81,13 +77,29 @@ class SyncClient {
       await AsyncStorage.setItem(STORAGE_KEY_HOST, this.host);
     }
 
-    if (!this.host) {
-      throw new Error('No host configured');
-    }
+    if (!this.host) throw new Error('No host configured');
 
+    // Prevent multiple simultaneous connect attempts
+    if (this._connectingPromise) return this._connectingPromise;
+
+    this._connectingPromise = this._doConnect();
+    try {
+      await this._connectingPromise;
+    } finally {
+      this._connectingPromise = null;
+    }
+  }
+
+  private _doConnect(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        // Validate address before creating WebSocket (prevents native crash)
+        // Close existing connection cleanly
+        if (this.ws) {
+          try { this.ws.close(); } catch {}
+          this.ws = null;
+        }
+
+        // Validate and build URL
         const isIPv6 = this.host.includes(':');
         if (isIPv6) {
           const groups = this.host.split(':').filter(g => g.length > 0);
@@ -97,17 +109,28 @@ class SyncClient {
           }
         }
 
-        // IPv6 addresses need brackets: ws://[::1]:9247
-        const host = isIPv6 ? `[${this.host}]` : this.host;
-        const url = `ws://${host}:${this.port}`;
+        const wsHost = isIPv6 ? `[${this.host}]` : this.host;
+        const url = `ws://${wsHost}:${this.port}`;
         console.log(`[SyncClient] Connecting to ${url}`);
+
+        if (!this._isReconnecting) {
+          this.setState('connecting');
+        }
 
         this.ws = new WebSocket(url);
 
+        const connectTimeout = setTimeout(() => {
+          if (this.ws) {
+            try { this.ws.close(); } catch {}
+            this.ws = null;
+          }
+          reject(new Error('Connection timeout (10s). Server not reachable.'));
+        }, 10000);
+
         this.ws.onopen = () => {
-          console.log('[SyncClient] Connected');
-          this._connected = true;
-          this.emit('connected', {});
+          clearTimeout(connectTimeout);
+          console.log('[SyncClient] WebSocket open');
+          this._reconnectAttempts = 0;
 
           // Auto-authenticate if we have a saved token
           if (this.token) {
@@ -119,109 +142,94 @@ class SyncClient {
         this.ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data as string);
-            this.handleMessage(msg);
+            this._handleMessage(msg);
           } catch (e) {
             console.error('[SyncClient] Bad message:', e);
           }
         };
 
-        // Timeout — if no open event in 10 seconds, fail
-        const connectTimeout = setTimeout(() => {
-          console.log('[SyncClient] Connection timeout (10s)');
-          if (this.ws) {
-            this.ws.close();
-            this.ws = null;
-          }
-          this._connected = false;
-          reject(new Error('Connection timeout (10 seconds). Server not reachable.'));
-        }, 10000);
-
         this.ws.onclose = (event) => {
           clearTimeout(connectTimeout);
-          console.log(`[SyncClient] Disconnected (code: ${event.code}, reason: ${event.reason})`);
-          this._connected = false;
-          this._authenticated = false;
-          this.emit('disconnected', { code: event.code, reason: event.reason });
-          this.scheduleReconnect();
+          console.log(`[SyncClient] Closed (code: ${event.code})`);
+          this.ws = null;
+
+          // If we were authenticated, this is a temporary disconnect — reconnect silently
+          if (this._authenticated && this._reconnectAttempts < this._maxReconnectAttempts) {
+            this._isReconnecting = true;
+            this._authenticated = false;
+            this.setState('reconnecting'); // UI keeps showing "connected" for this state
+            this._scheduleReconnect();
+          } else if (this._isReconnecting && this._reconnectAttempts < this._maxReconnectAttempts) {
+            this._scheduleReconnect();
+          } else if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+            this._isReconnecting = false;
+            this._authenticated = false;
+            this.setState('lost');
+          } else {
+            this._authenticated = false;
+            this.setState('disconnected');
+          }
         };
 
         this.ws.onerror = (err: any) => {
           clearTimeout(connectTimeout);
           console.error('[SyncClient] Error:', err?.message || err);
-          this._connected = false;
-          reject(new Error(err?.message || 'WebSocket connection error'));
+          // Don't reject if we're reconnecting — onclose handles that
+          if (!this._isReconnecting) {
+            reject(new Error(err?.message || 'WebSocket connection error'));
+          }
         };
       } catch (e) {
         console.error('[SyncClient] Connection failed:', e);
-        this._connected = false;
-        // Clear bad saved host so app doesn't crash on next restart
-        this.host = '';
-        AsyncStorage.removeItem(STORAGE_KEY_HOST);
+        if (!this._isReconnecting) {
+          this.host = '';
+          AsyncStorage.removeItem(STORAGE_KEY_HOST);
+        }
         reject(e);
       }
     });
   }
 
-  /**
-   * Disconnect
-   */
   disconnect() {
+    this._isReconnecting = false;
+    this._reconnectAttempts = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      this.ws.close();
+      try { this.ws.close(); } catch {}
       this.ws = null;
     }
-    this._connected = false;
     this._authenticated = false;
+    this.setState('disconnected');
   }
 
-  /**
-   * Pair with desktop using 6-digit code
-   */
   pair(code: string, deviceName: string = 'Android') {
     this.send({ type: 'pair', code, deviceName });
   }
 
-  /**
-   * Send a chat message to the desktop
-   */
   sendChat(text: string, agentId: string = 'companion') {
     this.send({ type: 'chat', text, agentId });
   }
 
-  /**
-   * Send voice transcript with context
-   */
   sendVoiceTranscript(transcript: string, context: string, lookbackMinutes: number) {
-    this.send({
-      type: 'voice_transcript',
-      transcript,
-      context,
-      lookbackMinutes
-    });
+    this.send({ type: 'voice_transcript', transcript, context, lookbackMinutes });
   }
 
-  /**
-   * Request full state sync
-   */
   requestState() {
     this.send({ type: 'request_state' });
   }
 
-  /**
-   * Send companion interaction (feed, play)
-   */
   sendCompanionAction(action: any) {
     this.send({ type: 'companion_interaction', action });
   }
 
-  get connected(): boolean { return this._connected; }
+  get state(): ConnectionState { return this._state; }
+  get connected(): boolean { return this._state === 'connected' || this._state === 'reconnecting'; }
   get authenticated(): boolean { return this._authenticated; }
 
-  private handleMessage(msg: any) {
+  private _handleMessage(msg: any) {
     switch (msg.type) {
       case 'hello':
         console.log(`[SyncClient] Server version ${msg.version}`);
@@ -231,9 +239,10 @@ class SyncClient {
         if (msg.success && msg.token) {
           this.token = msg.token;
           this._authenticated = true;
+          this._isReconnecting = false;
           AsyncStorage.setItem(STORAGE_KEY_TOKEN, msg.token);
+          this.setState('connected');
           this.emit('paired', { token: msg.token });
-          this.emit('authenticated', {});
         } else {
           this.emit('pair_failed', { error: msg.error });
         }
@@ -242,9 +251,11 @@ class SyncClient {
       case 'auth_result':
         if (msg.success) {
           this._authenticated = true;
+          this._isReconnecting = false;
+          this._reconnectAttempts = 0;
+          this.setState('connected');
           this.emit('authenticated', { name: msg.name });
         } else {
-          // Token invalid, clear it
           this.token = null;
           AsyncStorage.removeItem(STORAGE_KEY_TOKEN);
           this.emit('auth_failed', { error: msg.error });
@@ -277,18 +288,19 @@ class SyncClient {
     }
   }
 
-  private scheduleReconnect() {
+  private _scheduleReconnect() {
     if (this.reconnectTimer) return;
+    this._reconnectAttempts++;
+    const delay = Math.min(5000, 1000 * this._reconnectAttempts); // 1s, 2s, 3s, 4s, 5s...
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.host) {
-        console.log('[SyncClient] Reconnecting...');
-        this.connect().catch(() => {});
+        console.log(`[SyncClient] Reconnecting (attempt ${this._reconnectAttempts})...`);
+        this._doConnect().catch(() => {});
       }
-    }, 5000);
+    }, delay);
   }
 }
 
-// Singleton
 export const syncClient = new SyncClient();
 export default syncClient;

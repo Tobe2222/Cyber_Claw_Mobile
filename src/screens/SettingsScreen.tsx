@@ -58,18 +58,20 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     });
 
     // Update connection status
-    const updateStatus = () => {
-      if (syncClient.authenticated) setConnectionStatus('Connected ✓');
-      else if (syncClient.connected) setConnectionStatus('Connected, not paired');
+    const onStateChange = (data: any) => {
+      const s = data.state;
+      if (s === 'connected') setConnectionStatus('Connected ✓');
+      else if (s === 'reconnecting') setConnectionStatus('Connected ✓');
+      else if (s === 'connecting') setConnectionStatus('Connecting...');
+      else if (s === 'lost') setConnectionStatus('Connection lost ✕');
       else setConnectionStatus('Disconnected');
     };
-    updateStatus();
+    // Set initial
+    if (syncClient.connected) setConnectionStatus('Connected ✓');
 
-    syncClient.on('connected', updateStatus);
-    syncClient.on('disconnected', updateStatus);
-    syncClient.on('authenticated', updateStatus);
+    syncClient.on('state_change', onStateChange);
     syncClient.on('paired', () => {
-      updateStatus();
+      setConnectionStatus('Connected ✓');
       Alert.alert('Paired!', 'Mobile app is now linked to your desktop CyberClaw.');
     });
     syncClient.on('pair_failed', (msg: any) => {
@@ -77,9 +79,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     });
 
     return () => {
-      syncClient.off('connected', updateStatus);
-      syncClient.off('disconnected', updateStatus);
-      syncClient.off('authenticated', updateStatus);
+      syncClient.off('state_change', onStateChange);
     };
   }, []);
 

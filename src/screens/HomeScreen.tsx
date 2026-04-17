@@ -33,32 +33,36 @@ const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.6, 280);
 export default function HomeScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
-  const [connected, setConnected] = useState(false);
-  const [authenticated, setAuthenticated] = useState(false);
+  const [connState, setConnState] = useState<string>('disconnected');
   const flatListRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
 
+  const isConnected = connState === 'connected' || connState === 'reconnecting';
+
   useEffect(() => {
-    // Set up sync client handlers
-    const onConnected = () => setConnected(true);
-    const onDisconnected = () => { setConnected(false); setAuthenticated(false); };
-    const onAuthenticated = () => setAuthenticated(true);
+    // Single state handler — replaces individual connected/disconnected/authenticated
+    const onStateChange = (data: any) => setConnState(data.state);
     const onChat = (msg: any) => {
-      setMessages(prev => [...prev, {
-        id: `${msg.ts}-${Math.random()}`,
-        text: msg.text,
-        isUser: msg.isUser,
-        agentId: msg.agentId,
-        ts: msg.ts,
-      }]);
+      // Only show AI responses from desktop (not our own messages echoed back)
+      if (msg.isUser) return;
+      setMessages(prev => {
+        // Dedup by timestamp (within 2 seconds)
+        const isDupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
+        if (isDupe) return prev;
+        return [...prev, {
+          id: `${msg.ts}-${Math.random()}`,
+          text: msg.text,
+          isUser: false,
+          agentId: msg.agentId,
+          ts: msg.ts,
+        }];
+      });
     };
 
-    syncClient.on('connected', onConnected);
-    syncClient.on('disconnected', onDisconnected);
-    syncClient.on('authenticated', onAuthenticated);
+    syncClient.on('state_change', onStateChange);
     syncClient.on('chat', onChat);
 
-    // Auto-connect if saved (silently — don't crash on bad saved IP)
+    // Auto-connect if saved
     syncClient.loadSaved().then(({ host, token }) => {
       if (host) {
         syncClient.connect().catch((e) => {
@@ -68,9 +72,7 @@ export default function HomeScreen() {
     });
 
     return () => {
-      syncClient.off('connected', onConnected);
-      syncClient.off('disconnected', onDisconnected);
-      syncClient.off('authenticated', onAuthenticated);
+      syncClient.off('state_change', onStateChange);
       syncClient.off('chat', onChat);
     };
   }, []);
@@ -94,8 +96,10 @@ export default function HomeScreen() {
       ts: Date.now(),
     }]);
 
-    // Send to desktop via sync
-    syncClient.sendChat(text);
+    // Send to desktop via sync (only once)
+    if (syncClient.connected) {
+      syncClient.sendChat(text);
+    }
     setInputText('');
     Keyboard.dismiss();
   }, [inputText]);
@@ -236,9 +240,13 @@ export default function HomeScreen() {
         <Text style={styles.statusText}>
           🐾 CyberClaw
         </Text>
-        <View style={[styles.statusDot, connected && authenticated ? styles.dotOnline : styles.dotOffline]} />
+        <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
         <Text style={styles.statusLabel}>
-          {!connected ? 'Disconnected' : !authenticated ? 'Connecting...' : 'Connected'}
+          {connState === 'connected' ? 'Connected' :
+           connState === 'reconnecting' ? 'Connected' :
+           connState === 'connecting' ? 'Connecting...' :
+           connState === 'lost' ? 'Connection lost' :
+           'Disconnected'}
         </Text>
       </View>
 
@@ -273,7 +281,7 @@ export default function HomeScreen() {
           ListEmptyComponent={
             <View style={styles.emptyChat}>
               <Text style={styles.emptyChatText}>
-                {authenticated 
+                {isConnected 
                   ? "Say hi to your companion! 🐾" 
                   : "Connect to your desktop CyberClaw to start chatting"}
               </Text>
@@ -288,9 +296,9 @@ export default function HomeScreen() {
           style={styles.textInput}
           value={inputText}
           onChangeText={setInputText}
-          placeholder={authenticated ? "Type a message..." : "Not connected"}
+          placeholder={isConnected ? "Type a message..." : "Not connected"}
           placeholderTextColor="#555"
-          editable={authenticated}
+          editable={isConnected}
           multiline
           maxLength={2000}
           onSubmitEditing={sendMessage}
@@ -299,7 +307,7 @@ export default function HomeScreen() {
         <TouchableOpacity 
           style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]} 
           onPress={sendMessage}
-          disabled={!inputText.trim() || !authenticated}
+          disabled={!inputText.trim() || !isConnected}
         >
           <Text style={styles.sendButtonText}>▶</Text>
         </TouchableOpacity>
@@ -337,6 +345,7 @@ const styles = StyleSheet.create({
   },
   dotOnline: { backgroundColor: '#4ade80' },
   dotOffline: { backgroundColor: '#666' },
+  dotLost: { backgroundColor: '#ef4444' },
   statusLabel: {
     color: '#888',
     fontSize: 12,
