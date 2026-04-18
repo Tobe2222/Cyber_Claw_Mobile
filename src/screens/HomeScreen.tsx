@@ -7,15 +7,20 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView,
-  NativeModules, PermissionsAndroid, Alert,
+  NativeModules, Modal, StatusBar,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 
-// Speak using device TTS (Android built-in via WebView bridge)
-// We'll trigger TTS from within the WebView since React Native's
-// built-in Speech API isn't bundled — we inject utterance via postMessage
+// Native modules
+const { BackgroundService, AppControl } = NativeModules;
+async function startBgService() {
+  try { if (BackgroundService) await BackgroundService.start(); } catch {}
+}
+async function bringToForeground() {
+  try { if (AppControl) await AppControl.bringToForeground(); } catch {}
+}
 
 interface ChatMessage {
   id: string;
@@ -51,14 +56,6 @@ export function offLogEntry(fn: (e: LogEntry) => void) {
 
 type TabId = 'chat' | 'events' | 'log';
 
-// Bridge to native background service
-const { BackgroundService } = NativeModules;
-async function startBgService() {
-  try {
-    if (BackgroundService) await BackgroundService.start();
-  } catch (e) { console.log('[BG] Service start failed:', e); }
-}
-
 export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [events, setEvents] = useState<string[]>([]);
@@ -69,8 +66,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fsZoomed, setFsZoomed] = useState(true); // true = zoomed companion, false = arena
+  const [lockScreenMode, setLockScreenMode] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
+  const fsWebViewRef = useRef<WebView>(null);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -90,14 +91,50 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     `);
   }, [ttsEnabled]);
 
-  // Notify arena of thinking state
+  // Propagate thinking state to both WebViews
   const setArenaThinking = useCallback((active: boolean) => {
-    if (!webViewRef.current) return;
-    webViewRef.current.injectJavaScript(`
-      window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: ${active} }) }));
-      document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: ${active} }) }));
-      true;
-    `);
+    const js = `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: ${false} }) })); document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: ${false} }) })); true;`;
+    const jsActive = `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: true }) })); document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: true }) })); true;`;
+    const jsInactive = `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: false }) })); document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: false }) })); true;`;
+    const inject = active ? jsActive : jsInactive;
+    webViewRef.current?.injectJavaScript(inject);
+    fsWebViewRef.current?.injectJavaScript(inject);
+  }, []);
+
+  // Open fullscreen from arena WebView message
+  const handleArenaMessage = useCallback((e: any) => {
+    try {
+      const msg = JSON.parse(e.nativeEvent.data);
+      if (msg.type === 'fullscreen') {
+        setFullscreen(true);
+        setFsZoomed(false); // start in arena view, user can toggle to zoomed
+        AppControl?.keepScreenOn?.(true);
+      }
+    } catch {}
+  }, []);
+
+  // Wake word → bring to foreground + show zoomed companion on lock screen
+  const handleWakeWord = useCallback(() => {
+    bringToForeground();
+    setFullscreen(true);
+    setFsZoomed(true); // zoomed companion when woken from lock
+    setLockScreenMode(true);
+    AppControl?.showOnLockScreen?.(true);
+    AppControl?.keepScreenOn?.(true);
+  }, []);
+
+  // Expose wake word handler for voice service
+  useEffect(() => {
+    (global as any).__cyberclawWakeWord = handleWakeWord;
+    return () => { delete (global as any).__cyberclawWakeWord; };
+  }, [handleWakeWord]);
+
+  // When fullscreen closes, restore lock screen flags
+  const closeFullscreen = useCallback(() => {
+    setFullscreen(false);
+    setLockScreenMode(false);
+    AppControl?.showOnLockScreen?.(false);
+    AppControl?.keepScreenOn?.(false);
   }, []);
 
   // Load persisted chat
@@ -258,13 +295,50 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             javaScriptEnabled
             allowFileAccess
             originWhitelist={['*']}
-            onMessage={() => {}}
+            onMessage={handleArenaMessage}
           />
         </View>
       )}
 
-      {/* Thinking indicator */}
-      {isThinking && (
+      {/* Fullscreen arena / companion modal */}
+      <Modal
+        visible={fullscreen}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={closeFullscreen}
+      >
+        <StatusBar hidden />
+        <View style={styles.fsContainer}>
+          <WebView
+            ref={fsWebViewRef}
+            source={{ uri: 'file:///android_asset/arena.html' }}
+            style={{ flex: 1, backgroundColor: '#0a0a2e' }}
+            scrollEnabled={false}
+            bounces={false}
+            javaScriptEnabled
+            allowFileAccess
+            originWhitelist={['*']}
+            injectedJavaScript={fsZoomed
+              ? `setTimeout(()=>{ zoomed=true; },300); true;`
+              : 'true;'}
+            onMessage={() => {}}
+          />
+          <View style={styles.fsControls}>
+            <TouchableOpacity style={styles.fsBtn} onPress={() => setFsZoomed(z => !z)}>
+              <Text style={styles.fsBtnText}>{fsZoomed ? '🌍' : '🔍'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.fsBtn} onPress={closeFullscreen}>
+              <Text style={styles.fsBtnText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          {lockScreenMode && (
+            <View style={styles.lockBadge}>
+              <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
+            </View>
+          )}
+        </View>
+      </Modal>
+    </View>
         <View style={styles.thinkingBar}>
           <Text style={styles.thinkingText}>💭 Clawsuu is thinking...</Text>
         </View>
@@ -418,4 +492,24 @@ const styles = StyleSheet.create({
   logSent: { color: '#4a9eff' },
   logReceived: { color: '#4ade80' },
   logError: { color: '#ef4444' },
+  // Fullscreen modal
+  fsContainer: { flex: 1, backgroundColor: '#0a0a2e' },
+  fsControls: {
+    position: 'absolute', top: 40, right: 12,
+    flexDirection: 'row', gap: 8,
+  },
+  fsBtn: {
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 8,
+    width: 36, height: 36, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(247,147,26,0.3)',
+  },
+  fsBtnText: { color: '#f7931a', fontSize: 16 },
+  lockBadge: {
+    position: 'absolute', bottom: 40, left: 0, right: 0,
+    alignItems: 'center',
+  },
+  lockBadgeText: {
+    color: 'rgba(247,147,26,0.6)', fontSize: 13,
+    fontFamily: 'monospace', letterSpacing: 2,
+  },
 });
