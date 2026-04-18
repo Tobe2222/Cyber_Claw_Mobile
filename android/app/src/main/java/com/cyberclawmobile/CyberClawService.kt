@@ -21,8 +21,17 @@ class CyberClawService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notif = buildNotification("Connected", "CyberClaw companion is active")
-        startForeground(NOTIF_ID, notif)
+        try {
+            val notif = buildNotification("Connected", "CyberClaw companion is active")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+        } catch (e: Exception) {
+            // Fall back to regular foreground if type fails
+            try { startForeground(NOTIF_ID, buildNotification("CyberClaw", "Running")) } catch (_: Exception) {}
+        }
         return START_STICKY
     }
 

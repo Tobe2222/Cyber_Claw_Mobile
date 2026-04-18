@@ -12,6 +12,7 @@ class BackgroundServiceModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun start(promise: Promise) {
         try {
+            // Check RECORD_AUDIO before starting with mic type
             val intent = Intent(reactApplicationContext, CyberClawService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 reactApplicationContext.startForegroundService(intent)
@@ -19,6 +20,14 @@ class BackgroundServiceModule(reactContext: ReactApplicationContext) :
                 reactApplicationContext.startService(intent)
             }
             promise.resolve(true)
+        } catch (e: SecurityException) {
+            // Permission not granted yet — start without foreground
+            try {
+                reactApplicationContext.startService(Intent(reactApplicationContext, CyberClawService::class.java))
+                promise.resolve(false)
+            } catch (e2: Exception) {
+                promise.reject("SERVICE_ERROR", e2.message)
+            }
         } catch (e: Exception) {
             promise.reject("SERVICE_ERROR", e.message)
         }
