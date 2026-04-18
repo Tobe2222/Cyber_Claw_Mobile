@@ -125,8 +125,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
   // Expose wake word handler for voice service
   useEffect(() => {
-    (global as any).__cyberclawWakeWord = handleWakeWord;
-    return () => { delete (global as any).__cyberclawWakeWord; };
+    (globalThis as any).__cyberclawWakeWord = handleWakeWord;
+    return () => { delete (globalThis as any).__cyberclawWakeWord; };
   }, [handleWakeWord]);
 
   // When fullscreen closes, restore lock screen flags
@@ -300,45 +300,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         </View>
       )}
 
-      {/* Fullscreen arena / companion modal */}
-      <Modal
-        visible={fullscreen}
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={closeFullscreen}
-      >
-        <StatusBar hidden />
-        <View style={styles.fsContainer}>
-          <WebView
-            ref={fsWebViewRef}
-            source={{ uri: 'file:///android_asset/arena.html' }}
-            style={{ flex: 1, backgroundColor: '#0a0a2e' }}
-            scrollEnabled={false}
-            bounces={false}
-            javaScriptEnabled
-            allowFileAccess
-            originWhitelist={['*']}
-            injectedJavaScript={fsZoomed
-              ? `setTimeout(()=>{ zoomed=true; },300); true;`
-              : 'true;'}
-            onMessage={() => {}}
-          />
-          <View style={styles.fsControls}>
-            <TouchableOpacity style={styles.fsBtn} onPress={() => setFsZoomed(z => !z)}>
-              <Text style={styles.fsBtnText}>{fsZoomed ? '🌍' : '🔍'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.fsBtn} onPress={closeFullscreen}>
-              <Text style={styles.fsBtnText}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          {lockScreenMode && (
-            <View style={styles.lockBadge}>
-              <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
-            </View>
-          )}
-        </View>
-      </Modal>
-    </View>
+      {/* Thinking indicator */}
+      {isThinking && (
         <View style={styles.thinkingBar}>
           <Text style={styles.thinkingText}>💭 Clawsuu is thinking...</Text>
         </View>
@@ -419,6 +382,43 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           />
         )}
       </KeyboardAvoidingView>
+
+      {/* Fullscreen arena / companion modal */}
+      <Modal
+        visible={fullscreen}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={closeFullscreen}
+      >
+        <StatusBar hidden />
+        <View style={styles.fsContainer}>
+          <WebView
+            ref={fsWebViewRef}
+            source={{ uri: 'file:///android_asset/arena.html' }}
+            style={{ flex: 1, backgroundColor: '#0a0a2e' }}
+            scrollEnabled={false}
+            bounces={false}
+            javaScriptEnabled
+            allowFileAccess
+            originWhitelist={['*']}
+            injectedJavaScript={fsZoomed ? `setTimeout(()=>{ zoomed=true; },300); true;` : 'true;'}
+            onMessage={() => {}}
+          />
+          <View style={styles.fsControls}>
+            <TouchableOpacity style={styles.fsBtn} onPress={() => setFsZoomed(z => !z)}>
+              <Text style={styles.fsBtnText}>{fsZoomed ? '🌍' : '🔍'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.fsBtn} onPress={closeFullscreen}>
+              <Text style={styles.fsBtnText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          {lockScreenMode && (
+            <View style={styles.lockBadge}>
+              <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
+            </View>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
