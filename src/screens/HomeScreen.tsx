@@ -7,7 +7,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView,
-  NativeModules, Modal, StatusBar,
+  NativeModules, StatusBar,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -67,11 +67,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [isThinking, setIsThinking] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
-  const [fsZoomed, setFsZoomed] = useState(true); // true = zoomed companion, false = arena
   const [lockScreenMode, setLockScreenMode] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
-  const fsWebViewRef = useRef<WebView>(null);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -98,7 +96,16 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const jsInactive = `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: false }) })); document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: false }) })); true;`;
     const inject = active ? jsActive : jsInactive;
     webViewRef.current?.injectJavaScript(inject);
-    fsWebViewRef.current?.injectJavaScript(inject);
+  }, []);
+
+  // When fullscreen closes, restore lock screen flags
+  const closeFullscreen = useCallback(() => {
+    setFullscreen(false);
+    setLockScreenMode(false);
+    AppControl?.showOnLockScreen?.(false);
+    AppControl?.keepScreenOn?.(false);
+    const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
+    webViewRef.current?.injectJavaScript(js);
   }, []);
 
   // Open fullscreen from arena WebView message
@@ -107,34 +114,30 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === 'fullscreen') {
         setFullscreen(true);
-        setFsZoomed(false); // start in arena view, user can toggle to zoomed
         AppControl?.keepScreenOn?.(true);
+        webViewRef.current?.injectJavaScript(`
+          window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})}));
+          document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})}));
+          true;
+        `);
+      }
+      if (msg.type === 'exitFullscreen') {
+        closeFullscreen();
       }
     } catch {}
-  }, []);
+  }, [closeFullscreen]);
 
   // Wake word → bring to foreground + show zoomed companion on lock screen
   const handleWakeWord = useCallback(() => {
     bringToForeground();
     setFullscreen(true);
-    setFsZoomed(true); // zoomed companion when woken from lock
     setLockScreenMode(true);
     AppControl?.showOnLockScreen?.(true);
     AppControl?.keepScreenOn?.(true);
-  }, []);
-
-  // Expose wake word handler for voice service
-  useEffect(() => {
-    (globalThis as any).__cyberclawWakeWord = handleWakeWord;
-    return () => { delete (globalThis as any).__cyberclawWakeWord; };
-  }, [handleWakeWord]);
-
-  // When fullscreen closes, restore lock screen flags
-  const closeFullscreen = useCallback(() => {
-    setFullscreen(false);
-    setLockScreenMode(false);
-    AppControl?.showOnLockScreen?.(false);
-    AppControl?.keepScreenOn?.(false);
+    setTimeout(() => {
+      const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})})); true;`;
+      webViewRef.current?.injectJavaScript(js);
+    }, 300);
   }, []);
 
   // Load persisted chat
@@ -283,9 +286,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         </View>
       </View>
 
-      {/* Arena — real sprite companion, hide when keyboard open */}
-      {!keyboardVisible && (
-        <View style={{ height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
+      {/* Arena — expands to fullscreen when fullscreen state is active */}
+      {(!keyboardVisible || fullscreen) && (
+        <View style={fullscreen
+          ? StyleSheet.absoluteFill
+          : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }
+        }>
           <WebView
             ref={webViewRef}
             source={{ uri: 'file:///android_asset/arena.html' }}
@@ -297,6 +303,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             originWhitelist={['*']}
             onMessage={handleArenaMessage}
           />
+          {fullscreen && lockScreenMode && (
+            <View style={styles.lockBadge}>
+              <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -382,43 +393,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           />
         )}
       </KeyboardAvoidingView>
-
-      {/* Fullscreen arena / companion modal */}
-      <Modal
-        visible={fullscreen}
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={closeFullscreen}
-      >
-        <StatusBar hidden />
-        <View style={styles.fsContainer}>
-          <WebView
-            ref={fsWebViewRef}
-            source={{ uri: 'file:///android_asset/arena.html' }}
-            style={{ flex: 1, backgroundColor: '#0a0a2e' }}
-            scrollEnabled={false}
-            bounces={false}
-            javaScriptEnabled
-            allowFileAccess
-            originWhitelist={['*']}
-            injectedJavaScript={fsZoomed ? `setTimeout(()=>{ zoomed=true; },300); true;` : 'true;'}
-            onMessage={() => {}}
-          />
-          <View style={styles.fsControls}>
-            <TouchableOpacity style={styles.fsBtn} onPress={() => setFsZoomed(z => !z)}>
-              <Text style={styles.fsBtnText}>{fsZoomed ? '🌍' : '🔍'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.fsBtn} onPress={closeFullscreen}>
-              <Text style={styles.fsBtnText}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          {lockScreenMode && (
-            <View style={styles.lockBadge}>
-              <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
-            </View>
-          )}
-        </View>
-      </Modal>
     </View>
   );
 }
