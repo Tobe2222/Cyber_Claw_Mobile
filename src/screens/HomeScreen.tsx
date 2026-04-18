@@ -7,14 +7,14 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView,
-  NativeModules, StatusBar,
+  NativeModules, StatusBar, NativeEventEmitter,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 
 // Native modules
-const { BackgroundService, AppControl } = NativeModules;
+const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
 async function startBgService() {
   try { if (BackgroundService) await BackgroundService.start(); } catch {}
 }
@@ -135,7 +135,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     AppControl?.showOnLockScreen?.(true);
     AppControl?.keepScreenOn?.(true);
     setTimeout(() => {
-      const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})})); true;`;
+      const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); true;`;
       webViewRef.current?.injectJavaScript(js);
     }, 300);
   }, []);
@@ -168,6 +168,18 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   useEffect(() => {
     startBgService();
 
+    // Start wake word listener
+    AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
+      const settings = raw ? JSON.parse(raw) : {};
+      const phrase = settings.wakeWord || 'hey clawsuu';
+      WakeWordModule?.start?.(phrase).catch(() => {});
+    });
+
+    // Wake word event → bring app to front in focus mode
+    const wakeEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
+    const wakeSub = wakeEmitter?.addListener('wakeWordDetected', () => {
+      handleWakeWord();
+    });
     const onState = (data: any) => {
       setConnState(data.state);
       addLogEntry(`State → ${data.state}`, 'info');
@@ -224,6 +236,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     });
 
     return () => {
+      wakeSub?.remove();
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
       syncClient.off('typing', onTyping);
