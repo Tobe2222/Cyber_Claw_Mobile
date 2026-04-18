@@ -274,6 +274,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
   return (
     <View style={styles.container}>
+      <StatusBar hidden={fullscreen} />
       {/* Header */}
       <View style={styles.headerBar}>
         <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
@@ -289,7 +290,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       {/* Arena — expands to fullscreen when fullscreen state is active */}
       {(!keyboardVisible || fullscreen) && (
         <View style={fullscreen
-          ? StyleSheet.absoluteFill
+          ? [StyleSheet.absoluteFill, { zIndex: 100 }]
           : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }
         }>
           <WebView
