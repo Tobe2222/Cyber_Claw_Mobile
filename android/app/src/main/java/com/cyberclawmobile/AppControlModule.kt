@@ -17,7 +17,7 @@ class AppControlModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun bringToForeground(promise: Promise) {
         try {
-            val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
+            val activity = reactApplicationContext.currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
             activity.runOnUiThread {
                 // Wake screen and bring app over lock screen
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -49,7 +49,7 @@ class AppControlModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun keepScreenOn(enabled: Boolean, promise: Promise) {
         try {
-            val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
+            val activity = reactApplicationContext.currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
             activity.runOnUiThread {
                 if (enabled) {
                     activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -69,7 +69,7 @@ class AppControlModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun showOnLockScreen(enabled: Boolean, promise: Promise) {
         try {
-            val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
+            val activity = reactApplicationContext.currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
             activity.runOnUiThread {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                     activity.setShowWhenLocked(enabled)
