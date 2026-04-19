@@ -189,7 +189,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       handleWakeWord();
     });
     const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
-      setWakeDebug(`wake: ${e.state}${e.text ? ' "' + e.text + '"' : ''}`);
+      const label = e.text ? `${e.state}: "${e.text}"` : e.state;
+      setWakeDebug(`🎤 ${label}`);
+      addLogEntry(`[wake] ${label}`, 'info');
     });
     const onState = (data: any) => {
       setConnState(data.state);
@@ -339,13 +341,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               });
             }}
           />
-          {/* Wake debug bar — remove once wake word is confirmed working */}
-          <View style={styles.wakeDebugBar}>
-            <Text style={styles.wakeDebugText} numberOfLines={1}>{wakeDebug}</Text>
-            <TouchableOpacity style={styles.wakeTestBtn} onPress={() => WakeWordModule?.test?.().catch(() => {})}>
-              <Text style={styles.wakeTestBtnText}>test wake</Text>
-            </TouchableOpacity>
-          </View>
           {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>
               <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
@@ -426,14 +421,22 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         )}
 
         {activeTab === 'log' && (
-          <FlatList
-            data={logEntries}
-            keyExtractor={i => i.id}
-            renderItem={renderLog}
-            contentContainerStyle={styles.logList}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={<Text style={[styles.emptyChatText, { padding: 20 }]}>No log entries</Text>}
-          />
+          <>
+            <View style={styles.wakeDebugBar}>
+              <Text style={styles.wakeDebugText} numberOfLines={1}>{wakeDebug}</Text>
+              <TouchableOpacity style={styles.wakeTestBtn} onPress={() => WakeWordModule?.test?.().catch(() => {})}>
+                <Text style={styles.wakeTestBtnText}>test wake</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={logEntries}
+              keyExtractor={i => i.id}
+              renderItem={renderLog}
+              contentContainerStyle={styles.logList}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={<Text style={[styles.emptyChatText, { padding: 20 }]}>No log entries</Text>}
+            />
+          </>
         )}
       </KeyboardAvoidingView>
     </View>
