@@ -1,48 +1,52 @@
 package com.cyberclawmobile
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.util.Log
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
+/**
+ * WakeWordModule — runs SpeechRecognizer on the main (UI) thread, which is required by Android.
+ * The recognizer is started/stopped from JS and continuously listens in a loop.
+ */
 class WakeWordModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     override fun getName() = "WakeWordModule"
 
-    private var receiver: BroadcastReceiver? = null
+    private var recognizer: SpeechRecognizer? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var running = false
+    private var wakePhrase = "hey clawsuu"
 
     @ReactMethod
     fun start(phrase: String, promise: Promise) {
-        try {
-            WakeWordService.wakePhrase = phrase.ifBlank { "hey clawsuu" }
-            val intent = Intent(reactContext, WakeWordService::class.java).apply {
-                putExtra(WakeWordService.EXTRA_PHRASE, WakeWordService.wakePhrase)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                reactContext.startForegroundService(intent)
-            } else {
-                reactContext.startService(intent)
-            }
-            registerReceiver()
-            promise.resolve(true)
-        } catch (e: Exception) {
-            promise.reject("WAKE_ERROR", e.message)
-        }
+        wakePhrase = phrase.ifBlank { "hey clawsuu" }.lowercase().trim()
+        running = true
+        handler.post { startListening() }
+        promise.resolve(true)
     }
 
     @ReactMethod
     fun stop(promise: Promise) {
-        try {
-            reactContext.stopService(Intent(reactContext, WakeWordService::class.java))
-            unregisterReceiver()
-            promise.resolve(true)
-        } catch (e: Exception) {
-            promise.reject("WAKE_ERROR", e.message)
+        running = false
+        handler.post {
+            recognizer?.cancel()
+            recognizer?.destroy()
+            recognizer = null
         }
+        promise.resolve(true)
     }
 
     @ReactMethod
@@ -50,28 +54,64 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun removeListeners(count: Int) {}
 
-    private fun registerReceiver() {
-        if (receiver != null) return
-        receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action == WakeWordService.ACTION_WAKE) {
-                    // Fire JS event
-                    reactContext
-                        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                        .emit("wakeWordDetected", null)
-                }
-            }
+    private fun startListening() {
+        if (!running) return
+        if (!SpeechRecognizer.isRecognitionAvailable(reactContext)) {
+            Log.w("WakeWord", "Speech recognition not available on this device")
+            return
         }
-        val filter = IntentFilter(WakeWordService.ACTION_WAKE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            reactContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            reactContext.registerReceiver(receiver, filter)
+
+        recognizer?.cancel()
+        recognizer?.destroy()
+        recognizer = SpeechRecognizer.createSpeechRecognizer(reactContext)
+        recognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(p: Bundle?) { Log.d("WakeWord", "Ready") }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rms: Float) {}
+            override fun onBufferReceived(b: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onEvent(t: Int, p: Bundle?) {}
+
+            override fun onPartialResults(b: Bundle?) {
+                checkResults(b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
+            }
+            override fun onResults(b: Bundle?) {
+                checkResults(b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
+                scheduleRestart(300)
+            }
+            override fun onError(error: Int) {
+                Log.d("WakeWord", "Error: $error")
+                // 7=no match, 6=no speech, 5=client-side — just restart
+                scheduleRestart(if (error in listOf(5, 6, 7)) 100L else 800L)
+            }
+        })
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, reactContext.packageName)
+            // Don't show UI
+            putExtra("android.speech.extra.DICTATION_MODE", true)
+        }
+        recognizer?.startListening(intent)
+    }
+
+    private fun checkResults(matches: List<String>?) {
+        if (matches == null) return
+        for (match in matches) {
+            if (match.lowercase().contains(wakePhrase)) {
+                Log.i("WakeWord", "Detected: $match")
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("wakeWordDetected", null)
+                break
+            }
         }
     }
 
-    private fun unregisterReceiver() {
-        receiver?.let { reactContext.unregisterReceiver(it) }
-        receiver = null
+    private fun scheduleRestart(delayMs: Long) {
+        if (!running) return
+        handler.postDelayed({ startListening() }, delayMs)
     }
 }

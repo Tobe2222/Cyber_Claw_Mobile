@@ -41,11 +41,6 @@
         android:foregroundServiceType="dataSync"
         android:exported="false" />
 
-      <!-- Wake word listener service -->
-      <service
-        android:name=".WakeWordService"
-        android:foregroundServiceType="microphone"
-        android:exported="false" />
 
     </application>
 </manifest>
