@@ -250,7 +250,7 @@ function drawComp() {
     const dw=fw*comp.scale, dh=fh*comp.scale;
     const dx=Math.round(comp.x-dw/2), dy=Math.round(comp.y-dh/2);
     ctx.fillStyle='rgba(0,0,0,0.18)';
-    ctx.beginPath(); ctx.ellipse(comp.x, dy+dh+3, dw*0.35,4, 0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(comp.x, dy+dh-4, dw*0.35, 4, 0,0,Math.PI*2); ctx.fill();
     ctx.drawImage(img,sx,sy,fw,fh, dx,dy,dw,dh);
   }
 }
