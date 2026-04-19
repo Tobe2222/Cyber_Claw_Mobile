@@ -170,6 +170,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     return () => { show.remove(); hide.remove(); };
   }, []);
 
+  const [wakeDebug, setWakeDebug] = useState<string>('wake: init');
+
   // Sync & background service
   useEffect(() => {
     startBgService();
@@ -185,6 +187,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const wakeEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
     const wakeSub = wakeEmitter?.addListener('wakeWordDetected', () => {
       handleWakeWord();
+    });
+    const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
+      setWakeDebug(`wake: ${e.state}${e.text ? ' "' + e.text + '"' : ''}`);
     });
     const onState = (data: any) => {
       setConnState(data.state);
@@ -243,6 +248,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
     return () => {
       wakeSub?.remove();
+      debugSub?.remove();
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
       syncClient.off('typing', onTyping);
@@ -333,6 +339,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               });
             }}
           />
+          {/* Wake debug bar — remove once wake word is confirmed working */}
+          <View style={styles.wakeDebugBar}>
+            <Text style={styles.wakeDebugText} numberOfLines={1}>{wakeDebug}</Text>
+            <TouchableOpacity style={styles.wakeTestBtn} onPress={() => WakeWordModule?.test?.().catch(() => {})}>
+              <Text style={styles.wakeTestBtnText}>test wake</Text>
+            </TouchableOpacity>
+          </View>
           {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>
               <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
@@ -454,6 +467,17 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#333',
   },
   thinkingText: { color: '#f7931a', fontSize: 12, fontStyle: 'italic' },
+  wakeDebugBar: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 8, paddingVertical: 3,
+  },
+  wakeDebugText: { flex: 1, color: '#4ade80', fontSize: 10, fontFamily: 'monospace' },
+  wakeTestBtn: {
+    backgroundColor: 'rgba(247,147,26,0.2)', borderRadius: 4,
+    paddingHorizontal: 8, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(247,147,26,0.4)',
+  },
+  wakeTestBtnText: { color: '#f7931a', fontSize: 10 },
   tabBar: {
     flexDirection: 'row', backgroundColor: '#111',
     borderBottomWidth: 1, borderBottomColor: '#222',

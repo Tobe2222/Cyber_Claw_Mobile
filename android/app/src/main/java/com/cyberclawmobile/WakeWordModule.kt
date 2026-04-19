@@ -71,27 +71,41 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(reactContext)
 
+        emitDebug("listening", "")
         recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) { Log.d("WakeWord", "Ready") }
-            override fun onBeginningOfSpeech() {}
+            override fun onReadyForSpeech(params: Bundle?) {
+                Log.d("WakeWord", "Ready")
+                emitDebug("ready", "")
+            }
+            override fun onBeginningOfSpeech() { emitDebug("heard", "...") }
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
+            override fun onEndOfSpeech() { emitDebug("end", "") }
             override fun onEvent(eventType: Int, params: Bundle?) {}
 
             override fun onPartialResults(partialResults: Bundle?) {
                 val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val top = matches?.firstOrNull() ?: ""
+                emitDebug("partial", top)
                 checkResults(matches)
             }
 
             override fun onResults(results: Bundle?) {
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val top = matches?.firstOrNull() ?: ""
+                emitDebug("result", top)
                 checkResults(matches)
                 scheduleRestart(300)
             }
 
             override fun onError(error: Int) {
-                Log.d("WakeWord", "Error: $error")
+                val msg = when(error) {
+                    1 -> "network timeout" 2 -> "network" 3 -> "audio" 4 -> "server"
+                    5 -> "client" 6 -> "no speech" 7 -> "no match" 8 -> "busy"
+                    9 -> "insufficient perms" else -> "err$error"
+                }
+                Log.d("WakeWord", "Error: $msg")
+                emitDebug("error", msg)
                 scheduleRestart(if (error == 6 || error == 7) 100L else 800L)
             }
         })
@@ -102,6 +116,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, reactContext.packageName)
         recognizer?.startListening(intent)
+    }
+
+    private fun emitDebug(state: String, text: String) {
+        val payload = com.facebook.react.bridge.Arguments.createMap().apply {
+            putString("state", state)
+            putString("text", text)
+        }
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("wakeWordDebug", payload)
     }
 
     private fun checkResults(matches: List<String>?) {
