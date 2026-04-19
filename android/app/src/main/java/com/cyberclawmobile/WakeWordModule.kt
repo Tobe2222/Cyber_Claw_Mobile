@@ -1,10 +1,5 @@
 package com.cyberclawmobile
 
-import android.app.Activity
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -75,9 +70,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         recognizer?.cancel()
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(reactContext)
-        // Note: on some devices, createOnDeviceSpeechRecognizer is needed
-        // If null, try with activity context
-        ?: currentActivity?.let { SpeechRecognizer.createSpeechRecognizer(it) }
+            ?: currentActivity?.let { SpeechRecognizer.createSpeechRecognizer(it) }
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(p: Bundle?) { Log.d("WakeWord", "Ready") }
             override fun onBeginningOfSpeech() {}
