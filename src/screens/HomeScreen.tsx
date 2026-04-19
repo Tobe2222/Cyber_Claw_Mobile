@@ -124,6 +124,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       if (msg.type === 'exitFullscreen') {
         closeFullscreen();
       }
+      if (msg.type === 'saveBg') {
+        AsyncStorage.setItem('cyberclaw-arena-bg', msg.value);
+      }
+      if (msg.type === 'saveComp') {
+        AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
+      }
     } catch {}
   }, [closeFullscreen]);
 
@@ -316,6 +322,16 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             allowFileAccess
             originWhitelist={['*']}
             onMessage={handleArenaMessage}
+            onLoadEnd={() => {
+              Promise.all([
+                AsyncStorage.getItem('cyberclaw-arena-bg'),
+                AsyncStorage.getItem('cyberclaw-arena-comp'),
+              ]).then(([bgId, compId]) => {
+                const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
+                const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
+                webViewRef.current?.injectJavaScript(js);
+              });
+            }}
           />
           {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>

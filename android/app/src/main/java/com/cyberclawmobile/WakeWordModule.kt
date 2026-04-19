@@ -34,6 +34,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     fun start(phrase: String, promise: Promise) {
         wakePhrase = phrase.ifBlank { "hey clawsuu" }.lowercase().trim()
         running = true
+        Log.d("WakeWord", "Starting with phrase: '$wakePhrase'")
         handler.post { startListening() }
         promise.resolve(true)
     }
@@ -46,6 +47,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             recognizer?.destroy()
             recognizer = null
         }
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun test(promise: Promise) {
+        // Fire a fake wake event — use this to verify the JS bridge is alive
+        Log.d("WakeWord", "test() called — emitting wakeWordDetected")
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("wakeWordDetected", null)
         promise.resolve(true)
     }
 
@@ -64,6 +75,9 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         recognizer?.cancel()
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(reactContext)
+        // Note: on some devices, createOnDeviceSpeechRecognizer is needed
+        // If null, try with activity context
+        ?: currentActivity?.let { SpeechRecognizer.createSpeechRecognizer(it) }
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(p: Bundle?) { Log.d("WakeWord", "Ready") }
             override fun onBeginningOfSpeech() {}
