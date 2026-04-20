@@ -316,25 +316,19 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       return;
     }
     if (isVoiceListening) {
-      // Cancel
       setIsVoiceListening(false);
-      WakeWordModule.stop?.().catch(() => {});
       addLogEntry('[voice] cancelled', 'info');
       return;
     }
-    setIsVoiceListening(true);
-    setLastInputWasVoice(true);
-    addLogEntry('[voice] 🎤 listening...', 'info');
 
-    // Try recognize() first (one-shot), fall back to event subscription
-    const doRecognize = WakeWordModule.recognize
-      ? WakeWordModule.recognize()
-      : Promise.reject(new Error('no recognize'));
+    addLogEntry('[voice] starting...', 'info');
 
-    doRecognize
+    addLogEntry(`[voice] calling recognize(), module=${!!WakeWordModule}, method=${!!WakeWordModule?.recognize}`, 'info');
+    WakeWordModule.recognize()
       .then((text: string) => {
         addLogEntry(`[voice] heard: "${text}"`, 'info');
         if (text?.trim()) {
+          setLastInputWasVoice(true);
           setMessages(prev => [...prev, {
             id: `user-voice-${Date.now()}`,
             text: text.trim(),
@@ -343,17 +337,20 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           }]);
           syncClient.sendChat(text.trim());
           addLogEntry(`→ ${text.trim().substring(0, 80)}`, 'sent');
+        } else {
+          addLogEntry('[voice] nothing heard', 'info');
         }
       })
       .catch((err: any) => {
-        addLogEntry(`[voice] error: ${err?.message || err}`, 'error');
+        const msg = err?.message || String(err);
+        if (msg !== 'cancelled') {
+          addLogEntry(`[voice] error: ${msg}`, 'error');
+        }
       })
-      .finally(() => {
-        setIsVoiceListening(false);
-      });
+      .finally(() => setIsVoiceListening(false));
 
-    // Safety timeout
-    setTimeout(() => setIsVoiceListening(false), 12000);
+    // Mark as listening after calling recognize so state reflects intent
+    setIsVoiceListening(true);
   }, [isVoiceListening]);
 
   const renderMessage = useCallback(({ item }: { item: ChatMessage }) => (
