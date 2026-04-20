@@ -70,6 +70,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [fullscreen, setFullscreen] = useState(false);
   const [lockScreenMode, setLockScreenMode] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const eventsRef = useRef<FlatList>(null);
+  const logRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
@@ -276,6 +278,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   useEffect(() => {
     if (messages.length > 0 && activeTab === 'chat') {
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      setTimeout(() => logRef.current?.scrollToEnd({ animated: false }), 100);
     }
   }, [messages.length, activeTab]);
 
@@ -322,8 +325,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     }
 
     addLogEntry('[voice] starting...', 'info');
-
-    addLogEntry(`[voice] calling recognize(), module=${!!WakeWordModule}, method=${!!WakeWordModule?.recognize}`, 'info');
+    addLogEntry(`[voice] module=${!!WakeWordModule} recognize=${typeof WakeWordModule?.recognize}`, 'info');
     WakeWordModule.recognize()
       .then((text: string) => {
         addLogEntry(`[voice] heard: "${text}"`, 'info');
@@ -510,10 +512,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
         {activeTab === 'events' && (
           <FlatList
+            ref={eventsRef}
             data={events}
             keyExtractor={(_, i) => `ev-${i}`}
             renderItem={({ item }) => <Text style={styles.eventLine}>{item}</Text>}
             contentContainerStyle={{ padding: 12 }}
+            onContentSizeChange={() => eventsRef.current?.scrollToEnd({ animated: false })}
             ListEmptyComponent={<Text style={[styles.emptyChatText, { padding: 20 }]}>No events yet</Text>}
           />
         )}
@@ -530,11 +534,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               </TouchableOpacity>
             </View>
             <FlatList
+              ref={logRef}
               data={logEntries}
               keyExtractor={i => i.id}
               renderItem={renderLog}
               contentContainerStyle={styles.logList}
               showsVerticalScrollIndicator={false}
+              onContentSizeChange={() => logRef.current?.scrollToEnd({ animated: false })}
               ListEmptyComponent={<Text style={[styles.emptyChatText, { padding: 20 }]}>No log entries</Text>}
             />
           </>
