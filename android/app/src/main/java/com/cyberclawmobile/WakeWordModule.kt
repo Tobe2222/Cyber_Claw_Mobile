@@ -62,12 +62,13 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             recognizer?.cancel()
             recognizer?.destroy()
 
-            if (!SpeechRecognizer.isRecognitionAvailable(reactContext)) {
+            val ctx = currentActivity ?: reactContext
+            if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
                 promise.reject("unavailable", "Speech recognition not available")
                 return@post
             }
 
-            val oneShot = SpeechRecognizer.createSpeechRecognizer(reactContext)
+            val oneShot = SpeechRecognizer.createSpeechRecognizer(ctx)
             oneShot.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(p: Bundle?) { emitDebug("mic-ready", "") }
                 override fun onBeginningOfSpeech() { emitDebug("mic-heard", "") }
@@ -114,14 +115,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private fun startListening() {
         if (!running) return
-        if (!SpeechRecognizer.isRecognitionAvailable(reactContext)) {
+        val ctx = currentActivity ?: reactContext
+        if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
             Log.w("WakeWord", "Speech recognition not available")
+            emitDebug("error", "not available")
             return
         }
 
         recognizer?.cancel()
         recognizer?.destroy()
-        recognizer = SpeechRecognizer.createSpeechRecognizer(reactContext)
+        recognizer = SpeechRecognizer.createSpeechRecognizer(ctx)
 
         emitDebug("listening", "")
         recognizer?.setRecognitionListener(object : RecognitionListener {

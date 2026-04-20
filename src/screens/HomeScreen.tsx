@@ -310,28 +310,51 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     setInputText('');
   }, [inputText, isConnected]);
 
-  const toggleVoiceInput = useCallback(async () => {
-    if (isVoiceListening) return;
-    if (!WakeWordModule?.recognize) {
-      addLogEntry('[voice] recognize() not available', 'error');
+  const toggleVoiceInput = useCallback(() => {
+    if (!WakeWordModule) {
+      addLogEntry('[voice] WakeWordModule not available', 'error');
+      return;
+    }
+    if (isVoiceListening) {
+      // Cancel
+      setIsVoiceListening(false);
+      WakeWordModule.stop?.().catch(() => {});
+      addLogEntry('[voice] cancelled', 'info');
       return;
     }
     setIsVoiceListening(true);
     setLastInputWasVoice(true);
-    addLogEntry('[voice] listening...', 'info');
-    try {
-      const text: string = await WakeWordModule.recognize();
-      addLogEntry(`[voice] heard: "${text}"`, 'info');
-      if (text.trim()) {
-        setInputText(text.trim());
-        setTimeout(() => sendMessage(), 80);
-      }
-    } catch (e: any) {
-      addLogEntry(`[voice] error: ${e?.message}`, 'error');
-    } finally {
-      setIsVoiceListening(false);
-    }
-  }, [isVoiceListening, sendMessage]);
+    addLogEntry('[voice] 🎤 listening...', 'info');
+
+    // Try recognize() first (one-shot), fall back to event subscription
+    const doRecognize = WakeWordModule.recognize
+      ? WakeWordModule.recognize()
+      : Promise.reject(new Error('no recognize'));
+
+    doRecognize
+      .then((text: string) => {
+        addLogEntry(`[voice] heard: "${text}"`, 'info');
+        if (text?.trim()) {
+          setMessages(prev => [...prev, {
+            id: `user-voice-${Date.now()}`,
+            text: text.trim(),
+            isUser: true,
+            ts: Date.now(),
+          }]);
+          syncClient.sendChat(text.trim());
+          addLogEntry(`→ ${text.trim().substring(0, 80)}`, 'sent');
+        }
+      })
+      .catch((err: any) => {
+        addLogEntry(`[voice] error: ${err?.message || err}`, 'error');
+      })
+      .finally(() => {
+        setIsVoiceListening(false);
+      });
+
+    // Safety timeout
+    setTimeout(() => setIsVoiceListening(false), 12000);
+  }, [isVoiceListening]);
 
   const renderMessage = useCallback(({ item }: { item: ChatMessage }) => (
     <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
@@ -447,6 +470,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
                 </View>
               }
             />
+            {isVoiceListening && (
+              <View style={styles.recordingBanner}>
+                <Text style={styles.recordingBannerText}>⏹ Recording… tap Stop when done</Text>
+              </View>
+            )}
             <View style={styles.inputContainer}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={styles.micButtonText}>+</Text>
@@ -455,7 +483,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
                 style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
                 onPress={toggleVoiceInput}
               >
-                <Text style={styles.micButtonText}>{isVoiceListening ? 'Stop' : 'Mic'}</Text>
+                <Text style={[styles.micButtonText, isVoiceListening && { color: '#ef4444' }]}>
+                  {isVoiceListening ? '⏹ Stop' : 'Mic'}
+                </Text>
               </TouchableOpacity>
               <TextInput
                 style={styles.textInput}
@@ -620,6 +650,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239,68,68,0.25)', borderColor: '#ef4444',
   },
   micButtonText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
+  recordingBanner: {
+    backgroundColor: 'rgba(239,68,68,0.15)', borderTopWidth: 1, borderTopColor: 'rgba(239,68,68,0.4)',
+    paddingVertical: 6, alignItems: 'center',
+  },
+  recordingBannerText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
   listeningBadge: {
     position: 'absolute', top: 16, left: 12,
     pointerEvents: 'none',
