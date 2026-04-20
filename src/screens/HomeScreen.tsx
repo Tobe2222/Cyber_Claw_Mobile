@@ -451,7 +451,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         ))}
       </View>
 
-      <KeyboardAvoidingView style={styles.tabContent} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
         {activeTab === 'chat' && (
           <>
             <FlatList
@@ -461,6 +461,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               renderItem={renderMessage}
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={false}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
@@ -481,6 +483,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               <TouchableOpacity
                 style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
                 onPress={toggleVoiceInput}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                activeOpacity={0.6}
               >
                 <Text style={[styles.micButtonText, isVoiceListening && { color: '#ef4444' }]}>
                   {isVoiceListening ? '⏹ Stop' : 'Mic'}
@@ -646,7 +650,7 @@ const styles = StyleSheet.create({
   fsBtnText: { color: '#f7931a', fontSize: 16 },
   micButton: {
     backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 20,
-    width: 40, height: 40, justifyContent: 'center', alignItems: 'center',
+    width: 48, height: 48, justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: 'rgba(247,147,26,0.4)', marginRight: 6,
   },
   micButtonActive: {
