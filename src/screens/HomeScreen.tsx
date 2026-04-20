@@ -12,6 +12,7 @@ import {
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import syncClient from '../services/SyncClient';
 
 // Native modules
@@ -176,6 +177,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [wakeDebug, setWakeDebug] = useState<string>('init');
   const [wakePhrase, setWakePhrase] = useState<string>('hey clawsuu');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
+  // AudioRecorderPlayer is a singleton instance, not a class
+  const audioRecorderPlayerRef = useRef(AudioRecorderPlayer);
 
   // toggleVoiceInput defined after sendMessage below
 
@@ -246,6 +249,26 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       setEvents(prev => [`${new Date().toLocaleTimeString()} ${msg.event || JSON.stringify(msg)}`, ...prev.slice(0, 99)]);
     };
 
+    const onAudioResponse = async (msg: any) => {
+      try {
+        if (!msg.audioBase64) return;
+        const player = audioRecorderPlayerRef.current;
+        const fs = require('react-native-fs');
+        const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.mp3`;
+        await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
+        await player.startPlayer(tmpPath);
+        player.addPlayBackListener((e: any) => {
+          if (e.currentPosition >= e.duration && e.duration > 0) {
+            player.stopPlayer();
+            player.removePlayBackListener();
+          }
+        });
+        addLogEntry('🔊 Playing audio response', 'received');
+      } catch (e: any) {
+        addLogEntry(`Audio playback error: ${e?.message}`, 'error');
+      }
+    };
+
     const onLogUpdate = (e: LogEntry) => setLogEntries(prev => [...prev, e]);
 
     syncClient.on('state_change', onState);
@@ -253,6 +276,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     syncClient.on('typing', onTyping);
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
+    syncClient.on('audio_response', onAudioResponse);
     onLogEntry(onLogUpdate);
 
     syncClient.loadSaved().then(({ host }) => {
@@ -270,6 +294,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       syncClient.off('typing', onTyping);
       syncClient.off('chat_history', onChatHistory);
       syncClient.off('arena', onArena);
+      syncClient.off('audio_response', onAudioResponse);
       offLogEntry(onLogUpdate);
     };
   }, [speak, setArenaThinking]);
@@ -313,13 +338,42 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     setInputText('');
   }, [inputText, isConnected]);
 
-  const toggleVoiceInput = useCallback(() => {
-    Alert.alert(
-      'Voice Not Available',
-      'Google Speech Recognition is not installed on this device. Please use the text input instead.',
-      [{ text: 'OK' }]
-    );
-  }, []);
+  const toggleVoiceInput = useCallback(async () => {
+    if (!isConnected) {
+      Alert.alert('Not Connected', 'Please connect to your desktop first.');
+      return;
+    }
+    if (isVoiceListening) {
+      // Stop recording and send
+      try {
+        const player = audioRecorderPlayerRef.current;
+        const result = await player.stopRecorder();
+        player.removeRecordBackListener();
+        setIsVoiceListening(false);
+        // Read file as base64
+        const fs = require('react-native-fs');
+        const base64 = await fs.readFile(result, 'base64');
+        syncClient.sendAudioInput(base64, 'audio/m4a');
+        addLogEntry('🎤 Audio sent to desktop', 'sent');
+      } catch (e: any) {
+        setIsVoiceListening(false);
+        addLogEntry(`Recording error: ${e?.message}`, 'error');
+      }
+    } else {
+      // Start recording
+      try {
+        const player = audioRecorderPlayerRef.current;
+        const recPath = `cyberclaw-voice-${Date.now()}.m4a`;
+        await player.startRecorder(recPath);
+        player.addRecordBackListener(() => {});
+        setIsVoiceListening(true);
+        addLogEntry('🎤 Recording...', 'info');
+      } catch (e: any) {
+        addLogEntry(`Mic error: ${e?.message}`, 'error');
+        Alert.alert('Microphone Error', e?.message || 'Could not start recording');
+      }
+    }
+  }, [isConnected, isVoiceListening]);
 
   const renderMessage = useCallback(({ item }: { item: ChatMessage }) => (
     <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>

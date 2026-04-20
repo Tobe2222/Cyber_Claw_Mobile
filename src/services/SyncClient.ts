@@ -217,6 +217,10 @@ class SyncClient {
     this.send({ type: 'voice_transcript', transcript, context, lookbackMinutes });
   }
 
+  sendAudioInput(audioBase64: string, mimeType: string = 'audio/m4a') {
+    this.send({ type: 'audio_input', audioBase64, mimeType });
+  }
+
   requestChatHistory() {
     this.send({ type: 'request_chat_history' });
   }
@@ -286,6 +290,10 @@ class SyncClient {
 
       case 'arena_event':
         this.emit('arena', msg);
+        break;
+
+      case 'audio_response':
+        this.emit('audio_response', msg);
         break;
 
       case 'pong':
