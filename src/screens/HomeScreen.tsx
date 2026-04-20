@@ -424,7 +424,10 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           <>
             <View style={styles.wakeDebugBar}>
               <Text style={styles.wakeDebugText} numberOfLines={1}>{wakeDebug}</Text>
-              <TouchableOpacity style={styles.wakeTestBtn} onPress={() => WakeWordModule?.test?.().catch(() => {})}>
+              <TouchableOpacity style={styles.wakeTestBtn} onPress={() => {
+                addLogEntry('[wake] test button pressed', 'info');
+                WakeWordModule?.test?.().catch((e: any) => addLogEntry(`[wake] test error: ${e?.message}`, 'error'));
+              }}>
                 <Text style={styles.wakeTestBtnText}>test wake</Text>
               </TouchableOpacity>
             </View>
@@ -471,16 +474,18 @@ const styles = StyleSheet.create({
   },
   thinkingText: { color: '#f7931a', fontSize: 12, fontStyle: 'italic' },
   wakeDebugBar: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 8, paddingVertical: 3,
+    backgroundColor: 'rgba(0,0,0,0.85)', paddingHorizontal: 10, paddingVertical: 6,
+    borderBottomWidth: 1, borderBottomColor: '#222',
   },
-  wakeDebugText: { flex: 1, color: '#4ade80', fontSize: 10, fontFamily: 'monospace' },
+  wakeDebugText: { flex: 1, color: '#4ade80', fontSize: 11, fontFamily: 'monospace' },
   wakeTestBtn: {
-    backgroundColor: 'rgba(247,147,26,0.2)', borderRadius: 4,
-    paddingHorizontal: 8, paddingVertical: 2, borderWidth: 1, borderColor: 'rgba(247,147,26,0.4)',
+    backgroundColor: 'rgba(247,147,26,0.15)', borderRadius: 6,
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderWidth: 1, borderColor: 'rgba(247,147,26,0.6)',
+    minWidth: 80, alignItems: 'center',
   },
-  wakeTestBtnText: { color: '#f7931a', fontSize: 10 },
+  wakeTestBtnText: { color: '#f7931a', fontSize: 12, fontWeight: '600' },
   tabBar: {
     flexDirection: 'row', backgroundColor: '#111',
     borderBottomWidth: 1, borderBottomColor: '#222',
