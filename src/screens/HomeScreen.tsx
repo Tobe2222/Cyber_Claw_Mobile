@@ -314,46 +314,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   }, [inputText, isConnected]);
 
   const toggleVoiceInput = useCallback(() => {
-    if (!WakeWordModule) {
-      addLogEntry('[voice] WakeWordModule not available', 'error');
-      return;
-    }
-    if (isVoiceListening) {
-      setIsVoiceListening(false);
-      addLogEntry('[voice] cancelled', 'info');
-      return;
-    }
-
-    addLogEntry('[voice] starting...', 'info');
-    addLogEntry(`[voice] module=${!!WakeWordModule} recognize=${typeof WakeWordModule?.recognize}`, 'info');
-    WakeWordModule.recognize()
-      .then((text: string) => {
-        addLogEntry(`[voice] heard: "${text}"`, 'info');
-        if (text?.trim()) {
-          setLastInputWasVoice(true);
-          setMessages(prev => [...prev, {
-            id: `user-voice-${Date.now()}`,
-            text: text.trim(),
-            isUser: true,
-            ts: Date.now(),
-          }]);
-          syncClient.sendChat(text.trim());
-          addLogEntry(`→ ${text.trim().substring(0, 80)}`, 'sent');
-        } else {
-          addLogEntry('[voice] nothing heard', 'info');
-        }
-      })
-      .catch((err: any) => {
-        const msg = err?.message || String(err);
-        if (msg !== 'cancelled') {
-          addLogEntry(`[voice] error: ${msg}`, 'error');
-        }
-      })
-      .finally(() => setIsVoiceListening(false));
-
-    // Mark as listening after calling recognize so state reflects intent
-    setIsVoiceListening(true);
-  }, [isVoiceListening]);
+    Alert.alert(
+      'Voice Not Available',
+      'Google Speech Recognition is not installed on this device. Please use the text input instead.',
+      [{ text: 'OK' }]
+    );
+  }, []);
 
   const renderMessage = useCallback(({ item }: { item: ChatMessage }) => (
     <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
@@ -461,7 +427,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               renderItem={renderMessage}
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={false}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
               onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
