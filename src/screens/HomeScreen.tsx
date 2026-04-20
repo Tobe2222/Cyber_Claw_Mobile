@@ -181,6 +181,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       const settings = raw ? JSON.parse(raw) : {};
       const phrase = settings.wakeWord || 'hey clawsuu';
       WakeWordModule?.start?.(phrase).catch(() => {});
+      addLogEntry(`[wake] starting, phrase: "${phrase}"`, 'info');
     });
 
     // Wake word event → bring app to front in focus mode
@@ -341,6 +342,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               });
             }}
           />
+          {fullscreen && (
+            <View style={styles.listeningBadge} pointerEvents="none">
+              <Text style={styles.listeningText}>🎤 listening for "{wakeDebug.replace('🎤 ', '')}"</Text>
+            </View>
+          )}
           {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>
               <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
@@ -540,6 +546,15 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(247,147,26,0.3)',
   },
   fsBtnText: { color: '#f7931a', fontSize: 16 },
+  listeningBadge: {
+    position: 'absolute', top: 12, left: 0, right: 0,
+    alignItems: 'center', pointerEvents: 'none',
+  },
+  listeningText: {
+    color: 'rgba(74,222,128,0.85)', fontSize: 12, fontFamily: 'monospace',
+    backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 12, paddingVertical: 3,
+    borderRadius: 10,
+  },
   lockBadge: {
     position: 'absolute', bottom: 40, left: 0, right: 0,
     alignItems: 'center',

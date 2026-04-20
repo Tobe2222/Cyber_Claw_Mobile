@@ -51,27 +51,27 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
 <canvas id="c"></canvas>
 <div id="ui">
   <div id="ctrlLeft">
-    <button class="btn" id="settingsBtn" title="Settings">&#x2699;&#xFE0F;</button>
+    <button class="btn" id="settingsBtn" title="Settings">cfg</button>
   </div>
   <div id="ctrlRight">
-    <button class="btn" id="fsBtn" title="Fullscreen">&#x26F6;</button>
+    <button class="btn" id="fsBtn" title="Fullscreen">[  ]</button>
   </div>
   <div id="ctrlFs">
-    <button class="btn" id="focusBtn" title="Focus companion">&#x1F535;</button>
-    <button class="btn" id="exitFsBtn" title="Exit">&#x2715;</button>
+    <button class="btn" id="focusBtn" title="Focus companion">focus</button>
+    <button class="btn" id="exitFsBtn" title="Exit">X</button>
   </div>
-  <div id="thinking">&#x1F4AD; thinking...</div>
+  <div id="thinking">thinking...</div>
 
   <!-- Settings Modal -->
   <div class="modal" id="settingsModal">
     <div class="modal-box">
-      <h3>Settings <button id="settingsClose">&#x2715;</button></h3>
+      <h3>Settings <button id="settingsClose">X</button></h3>
       <div class="modal-section">
-        <h4>&#x1F3DE; Background</h4>
+        <h4>BG Background</h4>
         <div class="radio-grid" id="bgGrid"></div>
       </div>
       <div class="modal-section">
-        <h4>&#x1F43E; Companion</h4>
+        <h4>Companion Companion</h4>
         <div class="radio-grid" id="compGrid"></div>
       </div>
     </div>
@@ -273,7 +273,7 @@ function buildGrid(containerId, items, selectedId, onChange) {
   items.forEach(item => {
     const card = document.createElement('div');
     card.className = 'radio-card' + (item.id===selectedId ? ' selected' : '');
-    card.innerHTML = `<span>${item.emoji||'🎭'}</span>${item.label}`;
+    card.innerHTML = `${item.label}`;
     card.addEventListener('click', () => {
       el.querySelectorAll('.radio-card').forEach(c=>c.classList.remove('selected'));
       card.classList.add('selected');
@@ -283,8 +283,8 @@ function buildGrid(containerId, items, selectedId, onChange) {
   });
 }
 
-const BG_ITEMS = BG_META.map(b=>({...b, emoji: b.id==='meadow'?'☀️':b.id==='forest'?'🌲':b.id==='grove'?'🌿':'🌑'}));
-const COMP_ITEMS = CATALOG.map(c=>({id:c.id, label:c.name, emoji:'🐾'}));
+const BG_ITEMS = BG_META.map(b=>({...b, emoji: ''}));
+const COMP_ITEMS = CATALOG.map(c=>({id:c.id, label:c.name, emoji:''}));
 
 function openSettings() {
   buildGrid('bgGrid', BG_ITEMS, bgId, id=>{ applyBg(id); buildGrid('bgGrid',BG_ITEMS,id,()=>{}); });

@@ -13,12 +13,19 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
 class WakeWordModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     override fun getName() = "WakeWordModule"
+
+    // Required for NativeEventEmitter on the JS side
+    override fun getConstants(): Map<String, Any> = mapOf(
+        "WAKE_DETECTED" to "wakeWordDetected",
+        "WAKE_DEBUG"    to "wakeWordDebug"
+    )
 
     private var recognizer: SpeechRecognizer? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -48,9 +55,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun test(promise: Promise) {
         Log.d("WakeWord", "test() called - emitting wakeWordDetected")
-        reactContext
-            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-            .emit("wakeWordDetected", null)
+        emitEvent("wakeWordDetected", null)
         promise.resolve(true)
     }
 
@@ -118,6 +123,12 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         recognizer?.startListening(intent)
     }
 
+    private fun emitEvent(name: String, payload: WritableMap?) {
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(name, payload)
+    }
+
     private fun emitDebug(state: String, text: String) {
         val payload = com.facebook.react.bridge.Arguments.createMap().apply {
             putString("state", state)
@@ -127,15 +138,12 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit("wakeWordDebug", payload)
     }
-
     private fun checkResults(matches: List<String>?) {
         if (matches == null) return
         for (match in matches) {
             if (match.lowercase().contains(wakePhrase)) {
                 Log.i("WakeWord", "Wake detected: $match")
-                reactContext
-                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                    .emit("wakeWordDetected", null)
+                emitEvent("wakeWordDetected", null)
                 break
             }
         }
