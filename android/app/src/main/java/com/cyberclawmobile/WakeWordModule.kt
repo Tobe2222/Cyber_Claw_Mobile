@@ -62,7 +62,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             recognizer?.cancel()
             recognizer?.destroy()
 
-            val ctx = currentActivity ?: reactContext
+            val ctx = reactContext.currentActivity ?: reactContext
             if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
                 promise.reject("unavailable", "Speech recognition not available")
                 return@post
@@ -115,7 +115,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private fun startListening() {
         if (!running) return
-        val ctx = currentActivity ?: reactContext
+        val ctx = reactContext.currentActivity ?: reactContext
         if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
             Log.w("WakeWord", "Speech recognition not available")
             emitDebug("error", "not available")
