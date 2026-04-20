@@ -70,42 +70,12 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun recognize(promise: Promise) {
-        Log.d("WakeWord", "recognize() one-shot")
-        handler.post {
-            val wasRunning = running
-            running = false
-            recognizer?.cancel()
-            recognizer?.destroy()
-            recognizer = null
-
-            val oneShot = SpeechRecognizer.createSpeechRecognizer(getCtx())
-            oneShot.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(p: Bundle?) { emitDebug("mic-ready", "") }
-                override fun onBeginningOfSpeech() { emitDebug("mic-heard", "") }
-                override fun onRmsChanged(r: Float) {}
-                override fun onBufferReceived(b: ByteArray?) {}
-                override fun onEndOfSpeech() {}
-                override fun onEvent(t: Int, p: Bundle?) {}
-                override fun onPartialResults(r: Bundle?) {}
-                override fun onResults(results: Bundle?) {
-                    val text = results
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull() ?: ""
-                    Log.d("WakeWord", "recognize result: '$text'")
-                    oneShot.destroy()
-                    promise.resolve(text)
-                    if (wasRunning) { running = true; startListening() }
-                }
-                override fun onError(error: Int) {
-                    val msg = errorName(error)
-                    Log.w("WakeWord", "recognize error: $msg")
-                    emitDebug("mic-error", msg)
-                    oneShot.destroy()
-                    promise.reject("error", msg)
-                    if (wasRunning) { running = true; startListening() }
-                }
-            })
-            oneShot.startListening(buildIntent(partial = false, maxResults = 1))
+        Log.d("WakeWord", "recognize() via Activity intent")
+        val activity = reactContext.currentActivity
+        if (activity is MainActivity) {
+            activity.startSpeechRecognition(promise)
+        } else {
+            promise.reject("error", "Activity not available")
         }
     }
 
@@ -164,20 +134,17 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 // errors 6/7 = no speech/no match — normal, reset error count
                 if (error == 6 || error == 7) {
                     errorCount = 0
-                    scheduleRestart(300L)
+                    scheduleRestart(500L)
                 } else {
                     errorCount++
-                    if (errorCount > 8) {
-                        // Too many consecutive errors — stop to prevent freeze
-                        Log.e("WakeWord", "Too many errors, pausing listener")
-                        emitDebug("paused", "too many errors, will retry in 30s")
-                        running = false
-                        scheduleRestart(30_000L)
-                        running = true  // re-arm for the delayed restart
+                    if (errorCount > 5) {
+                        Log.e("WakeWord", "Too many errors, pausing 60s")
+                        emitDebug("paused", "retry in 60s")
                         errorCount = 0
+                        scheduleRestart(60_000L)
                     } else {
-                        // Exponential backoff: 1s, 2s, 4s, 8s, cap at 10s
-                        val delay = minOf(1000L * (1L shl (errorCount - 1)), 10_000L)
+                        // Exponential backoff: 2s, 4s, 8s, 16s, cap 30s
+                        val delay = minOf(2000L * (1L shl (errorCount - 1)), 30_000L)
                         scheduleRestart(delay)
                     }
                 }
