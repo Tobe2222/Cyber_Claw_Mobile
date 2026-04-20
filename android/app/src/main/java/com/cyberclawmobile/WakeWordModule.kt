@@ -30,6 +30,8 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private val handler = Handler(Looper.getMainLooper())
     private var running = false
     private var wakePhrase = "hey clawsuu"
+    private var errorCount = 0
+    private var restartJob: Runnable? = null
 
     // Always use Activity context when available — required on newer Android
     private fun getCtx() = reactContext.currentActivity ?: reactContext
@@ -47,6 +49,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     fun start(phrase: String, promise: Promise) {
         wakePhrase = phrase.ifBlank { "hey clawsuu" }.lowercase().trim()
         running = true
+        errorCount = 0
         Log.d("WakeWord", "start() phrase='$wakePhrase'")
         handler.post { startListening() }
         promise.resolve(true)
@@ -55,6 +58,8 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stop(promise: Promise) {
         running = false
+        errorCount = 0
+        restartJob?.let { handler.removeCallbacks(it) }
         handler.post {
             recognizer?.cancel()
             recognizer?.destroy()
@@ -120,8 +125,11 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private fun startListening() {
         if (!running) return
 
-        recognizer?.cancel()
-        recognizer?.destroy()
+        // Kill previous recognizer cleanly before creating a new one
+        try { recognizer?.cancel() } catch (_: Exception) {}
+        try { recognizer?.destroy() } catch (_: Exception) {}
+        recognizer = null
+
         recognizer = SpeechRecognizer.createSpeechRecognizer(getCtx())
 
         emitDebug("listening", "")
@@ -144,16 +152,35 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val top = matches?.firstOrNull() ?: ""
                 emitDebug("result", top)
+                errorCount = 0  // reset on success
                 checkResults(matches)
                 scheduleRestart(300)
             }
 
             override fun onError(error: Int) {
                 val msg = errorName(error)
-                Log.d("WakeWord", "onError: $msg")
+                Log.d("WakeWord", "onError: $msg (count=$errorCount)")
                 emitDebug("error", msg)
-                // errors 6/7 = no speech / no match — normal cycling, restart quickly
-                scheduleRestart(if (error == 6 || error == 7) 200L else 1000L)
+                // errors 6/7 = no speech/no match — normal, reset error count
+                if (error == 6 || error == 7) {
+                    errorCount = 0
+                    scheduleRestart(300L)
+                } else {
+                    errorCount++
+                    if (errorCount > 8) {
+                        // Too many consecutive errors — stop to prevent freeze
+                        Log.e("WakeWord", "Too many errors, pausing listener")
+                        emitDebug("paused", "too many errors, will retry in 30s")
+                        running = false
+                        scheduleRestart(30_000L)
+                        running = true  // re-arm for the delayed restart
+                        errorCount = 0
+                    } else {
+                        // Exponential backoff: 1s, 2s, 4s, 8s, cap at 10s
+                        val delay = minOf(1000L * (1L shl (errorCount - 1)), 10_000L)
+                        scheduleRestart(delay)
+                    }
+                }
             }
         })
         recognizer?.startListening(buildIntent(partial = true, maxResults = 3))
@@ -201,6 +228,9 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private fun scheduleRestart(delayMs: Long) {
         if (!running) return
-        handler.postDelayed({ startListening() }, delayMs)
+        restartJob?.let { handler.removeCallbacks(it) }
+        val job = Runnable { startListening() }
+        restartJob = job
+        handler.postDelayed(job, delayMs)
     }
 }
