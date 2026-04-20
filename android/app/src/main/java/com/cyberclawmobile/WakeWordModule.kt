@@ -1,6 +1,5 @@
 package com.cyberclawmobile
 
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -9,6 +8,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import android.content.Intent
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -21,7 +21,6 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName() = "WakeWordModule"
 
-    // Required for NativeEventEmitter on the JS side
     override fun getConstants(): Map<String, Any> = mapOf(
         "WAKE_DETECTED" to "wakeWordDetected",
         "WAKE_DEBUG"    to "wakeWordDebug"
@@ -32,11 +31,23 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private var running = false
     private var wakePhrase = "hey clawsuu"
 
+    // Always use Activity context when available — required on newer Android
+    private fun getCtx() = reactContext.currentActivity ?: reactContext
+
+    private fun buildIntent(partial: Boolean = false, maxResults: Int = 3): Intent {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, maxResults)
+        intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, reactContext.packageName)
+        if (partial) intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        return intent
+    }
+
     @ReactMethod
     fun start(phrase: String, promise: Promise) {
         wakePhrase = phrase.ifBlank { "hey clawsuu" }.lowercase().trim()
         running = true
-        Log.d("WakeWord", "Starting with phrase: '$wakePhrase'")
+        Log.d("WakeWord", "start() phrase='$wakePhrase'")
         handler.post { startListening() }
         promise.resolve(true)
     }
@@ -54,21 +65,15 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun recognize(promise: Promise) {
-        // One-shot recognition — pauses wake word listener, records once, resolves with text
         Log.d("WakeWord", "recognize() one-shot")
         handler.post {
             val wasRunning = running
             running = false
             recognizer?.cancel()
             recognizer?.destroy()
+            recognizer = null
 
-            val ctx = reactContext.currentActivity ?: reactContext
-            if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
-                promise.reject("unavailable", "Speech recognition not available")
-                return@post
-            }
-
-            val oneShot = SpeechRecognizer.createSpeechRecognizer(ctx)
+            val oneShot = SpeechRecognizer.createSpeechRecognizer(getCtx())
             oneShot.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(p: Bundle?) { emitDebug("mic-ready", "") }
                 override fun onBeginningOfSpeech() { emitDebug("mic-heard", "") }
@@ -78,31 +83,30 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 override fun onEvent(t: Int, p: Bundle?) {}
                 override fun onPartialResults(r: Bundle?) {}
                 override fun onResults(results: Bundle?) {
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val text = matches?.firstOrNull() ?: ""
-                    Log.d("WakeWord", "recognize result: $text")
+                    val text = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull() ?: ""
+                    Log.d("WakeWord", "recognize result: '$text'")
                     oneShot.destroy()
                     promise.resolve(text)
-                    // Restart continuous listener if it was running
                     if (wasRunning) { running = true; startListening() }
                 }
                 override fun onError(error: Int) {
+                    val msg = errorName(error)
+                    Log.w("WakeWord", "recognize error: $msg")
+                    emitDebug("mic-error", msg)
                     oneShot.destroy()
-                    promise.reject("error", "Recognition error $error")
+                    promise.reject("error", msg)
                     if (wasRunning) { running = true; startListening() }
                 }
             })
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, reactContext.packageName)
-            oneShot.startListening(intent)
+            oneShot.startListening(buildIntent(partial = false, maxResults = 1))
         }
     }
 
     @ReactMethod
     fun test(promise: Promise) {
-        Log.d("WakeWord", "test() called - emitting wakeWordDetected")
+        Log.d("WakeWord", "test() - emitting wakeWordDetected")
         emitEvent("wakeWordDetected", null)
         promise.resolve(true)
     }
@@ -115,24 +119,15 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private fun startListening() {
         if (!running) return
-        val ctx = reactContext.currentActivity ?: reactContext
-        if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
-            Log.w("WakeWord", "Speech recognition not available")
-            emitDebug("error", "not available")
-            return
-        }
 
         recognizer?.cancel()
         recognizer?.destroy()
-        recognizer = SpeechRecognizer.createSpeechRecognizer(ctx)
+        recognizer = SpeechRecognizer.createSpeechRecognizer(getCtx())
 
         emitDebug("listening", "")
         recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                Log.d("WakeWord", "Ready")
-                emitDebug("ready", "")
-            }
-            override fun onBeginningOfSpeech() { emitDebug("heard", "...") }
+            override fun onReadyForSpeech(params: Bundle?) { emitDebug("ready", "") }
+            override fun onBeginningOfSpeech() { emitDebug("heard", "") }
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() { emitDebug("end", "") }
@@ -141,7 +136,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             override fun onPartialResults(partialResults: Bundle?) {
                 val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val top = matches?.firstOrNull() ?: ""
-                emitDebug("partial", top)
+                if (top.isNotBlank()) emitDebug("partial", top)
                 checkResults(matches)
             }
 
@@ -154,23 +149,27 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             }
 
             override fun onError(error: Int) {
-                val msg = when(error) {
-                    1 -> "network timeout" 2 -> "network" 3 -> "audio" 4 -> "server"
-                    5 -> "client" 6 -> "no speech" 7 -> "no match" 8 -> "busy"
-                    9 -> "insufficient perms" else -> "err$error"
-                }
-                Log.d("WakeWord", "Error: $msg")
+                val msg = errorName(error)
+                Log.d("WakeWord", "onError: $msg")
                 emitDebug("error", msg)
-                scheduleRestart(if (error == 6 || error == 7) 100L else 800L)
+                // errors 6/7 = no speech / no match — normal cycling, restart quickly
+                scheduleRestart(if (error == 6 || error == 7) 200L else 1000L)
             }
         })
+        recognizer?.startListening(buildIntent(partial = true, maxResults = 3))
+    }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, reactContext.packageName)
-        recognizer?.startListening(intent)
+    private fun errorName(code: Int) = when (code) {
+        1 -> "network timeout"
+        2 -> "network"
+        3 -> "audio"
+        4 -> "server"
+        5 -> "client"
+        6 -> "no speech"
+        7 -> "no match"
+        8 -> "busy"
+        9 -> "no permission"
+        else -> "err$code"
     }
 
     private fun emitEvent(name: String, payload: WritableMap?) {
@@ -180,7 +179,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     }
 
     private fun emitDebug(state: String, text: String) {
-        val payload = com.facebook.react.bridge.Arguments.createMap().apply {
+        val payload = Arguments.createMap().apply {
             putString("state", state)
             putString("text", text)
         }
@@ -188,11 +187,12 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit("wakeWordDebug", payload)
     }
+
     private fun checkResults(matches: List<String>?) {
         if (matches == null) return
         for (match in matches) {
             if (match.lowercase().contains(wakePhrase)) {
-                Log.i("WakeWord", "Wake detected: $match")
+                Log.i("WakeWord", "WAKE: '$match'")
                 emitEvent("wakeWordDetected", null)
                 break
             }
