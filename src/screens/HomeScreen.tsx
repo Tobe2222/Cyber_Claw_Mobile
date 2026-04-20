@@ -375,7 +375,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           />
           {fullscreen && (
             <View style={styles.listeningBadge} pointerEvents="none">
-              <Text style={styles.listeningText}>Listening for "{wakePhrase}" ({wakeDebug})</Text>
+              <Text style={styles.listeningText}>Mic: {wakeDebug}</Text>
             </View>
           )}
           {fullscreen && lockScreenMode && (
@@ -466,7 +466,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         {activeTab === 'log' && (
           <>
             <View style={styles.wakeDebugBar}>
-              <Text style={styles.wakeDebugText} numberOfLines={1}>Wake: {wakeDebug} | phrase: "{wakePhrase}"</Text>
+              <Text style={styles.wakeDebugText} numberOfLines={1}>Mic: {wakeDebug}</Text>
               <TouchableOpacity style={styles.wakeTestBtn} onPress={() => {
                 addLogEntry('[wake] test button pressed', 'info');
                 WakeWordModule?.test?.().catch((e: any) => addLogEntry(`[wake] test error: ${e?.message}`, 'error'));
