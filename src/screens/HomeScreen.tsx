@@ -170,7 +170,37 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     return () => { show.remove(); hide.remove(); };
   }, []);
 
-  const [wakeDebug, setWakeDebug] = useState<string>('wake: init');
+  const [wakeDebug, setWakeDebug] = useState<string>('init');
+  const [wakePhrase, setWakePhrase] = useState<string>('hey clawsuu');
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+
+  const toggleVoiceInput = useCallback(() => {
+    if (isVoiceListening) {
+      setIsVoiceListening(false);
+      WakeWordModule?.stop?.().catch(() => {});
+    } else {
+      setIsVoiceListening(true);
+      addLogEntry('[voice] Manual mic started', 'info');
+      // Temporarily override wake handler to put result in chat input
+      const emitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
+      const voiceSub = emitter?.addListener('wakeWordDebug', (e: any) => {
+        if (e.state === 'result' && e.text) {
+          setInputText(e.text);
+          setIsVoiceListening(false);
+          voiceSub?.remove();
+        }
+      });
+      // Restart recognizer fresh
+      WakeWordModule?.stop?.().then(() => {
+        WakeWordModule?.start?.('').catch(() => {});
+      }).catch(() => {});
+      // Auto-stop after 10s
+      setTimeout(() => {
+        voiceSub?.remove();
+        setIsVoiceListening(false);
+      }, 10000);
+    }
+  }, [isVoiceListening]);
 
   // Sync & background service
   useEffect(() => {
@@ -180,6 +210,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
       const settings = raw ? JSON.parse(raw) : {};
       const phrase = settings.wakeWord || 'hey clawsuu';
+      setWakePhrase(phrase);
       WakeWordModule?.start?.(phrase).catch(() => {});
       addLogEntry(`[wake] starting, phrase: "${phrase}"`, 'info');
     });
@@ -191,7 +222,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     });
     const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
       const label = e.text ? `${e.state}: "${e.text}"` : e.state;
-      setWakeDebug(`🎤 ${label}`);
+      setWakeDebug(label);
       addLogEntry(`[wake] ${label}`, 'info');
     });
     const onState = (data: any) => {
@@ -344,7 +375,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           />
           {fullscreen && (
             <View style={styles.listeningBadge} pointerEvents="none">
-              <Text style={styles.listeningText}>🎤 listening for "{wakeDebug.replace('🎤 ', '')}"</Text>
+              <Text style={styles.listeningText}>Listening for "{wakePhrase}" ({wakeDebug})</Text>
             </View>
           )}
           {fullscreen && lockScreenMode && (
@@ -392,6 +423,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               }
             />
             <View style={styles.inputContainer}>
+              <TouchableOpacity
+                style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
+                onPress={toggleVoiceInput}
+              >
+                <Text style={styles.micButtonText}>{isVoiceListening ? 'Stop' : 'Mic'}</Text>
+              </TouchableOpacity>
               <TextInput
                 style={styles.textInput}
                 value={inputText}
@@ -429,7 +466,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         {activeTab === 'log' && (
           <>
             <View style={styles.wakeDebugBar}>
-              <Text style={styles.wakeDebugText} numberOfLines={1}>{wakeDebug}</Text>
+              <Text style={styles.wakeDebugText} numberOfLines={1}>Wake: {wakeDebug} | phrase: "{wakePhrase}"</Text>
               <TouchableOpacity style={styles.wakeTestBtn} onPress={() => {
                 addLogEntry('[wake] test button pressed', 'info');
                 WakeWordModule?.test?.().catch((e: any) => addLogEntry(`[wake] test error: ${e?.message}`, 'error'));
@@ -546,6 +583,15 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(247,147,26,0.3)',
   },
   fsBtnText: { color: '#f7931a', fontSize: 16 },
+  micButton: {
+    backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 20,
+    width: 40, height: 40, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(247,147,26,0.4)', marginRight: 6,
+  },
+  micButtonActive: {
+    backgroundColor: 'rgba(239,68,68,0.25)', borderColor: '#ef4444',
+  },
+  micButtonText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
   listeningBadge: {
     position: 'absolute', top: 12, left: 0, right: 0,
     alignItems: 'center', pointerEvents: 'none',

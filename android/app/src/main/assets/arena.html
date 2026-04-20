@@ -51,14 +51,14 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
 <canvas id="c"></canvas>
 <div id="ui">
   <div id="ctrlLeft">
-    <button class="btn" id="settingsBtn" title="Settings">cfg</button>
+    <button class="btn" id="settingsBtn" title="Settings">Settings</button>
   </div>
   <div id="ctrlRight">
-    <button class="btn" id="fsBtn" title="Fullscreen">[  ]</button>
+    <button class="btn" id="fsBtn" title="Fullscreen">Fullscreen</button>
   </div>
   <div id="ctrlFs">
-    <button class="btn" id="focusBtn" title="Focus companion">focus</button>
-    <button class="btn" id="exitFsBtn" title="Exit">X</button>
+    <button class="btn" id="focusBtn" title="Focus companion">Focus</button>
+    <button class="btn" id="exitFsBtn" title="Exit">Exit</button>
   </div>
   <div id="thinking">thinking...</div>
 
@@ -249,10 +249,14 @@ function drawComp() {
   } else {
     const dw=fw*comp.scale, dh=fh*comp.scale;
     const dx=Math.round(comp.x-dw/2), dy=Math.round(comp.y-dh/2);
-    // Shadow at actual feet — sprite has ~19% transparent padding at bottom
+    // Shadow — save/restore ctx state — sprite has ~19% transparent padding at bottom
     const feetY = dy + dh * 0.81;
-    ctx.fillStyle='rgba(0,0,0,0.22)';
-    ctx.beginPath(); ctx.ellipse(comp.x, feetY, dw*0.32, 3, 0,0,Math.PI*2); ctx.fill();
+    ctx.save();
+    ctx.fillStyle='rgba(0,0,0,0.30)';
+    ctx.beginPath();
+    ctx.ellipse(comp.x, feetY, dw*0.30, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
     ctx.drawImage(img,sx,sy,fw,fh, dx,dy,dw,dh);
   }
 }
