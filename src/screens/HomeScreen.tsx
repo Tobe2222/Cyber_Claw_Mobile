@@ -593,17 +593,16 @@ const styles = StyleSheet.create({
   },
   micButtonText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
   listeningBadge: {
-    position: 'absolute', top: 12, left: 0, right: 0,
-    alignItems: 'center', pointerEvents: 'none',
+    position: 'absolute', top: 16, left: 12,
+    pointerEvents: 'none',
   },
   listeningText: {
-    color: 'rgba(74,222,128,0.85)', fontSize: 12, fontFamily: 'monospace',
-    backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 12, paddingVertical: 3,
-    borderRadius: 10,
+    color: 'rgba(74,222,128,0.9)', fontSize: 10, fontFamily: 'monospace',
+    backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: 8,
   },
   lockBadge: {
-    position: 'absolute', bottom: 40, left: 0, right: 0,
-    alignItems: 'center',
+    position: 'absolute', top: 16, right: 12,
   },
   lockBadgeText: {
     color: 'rgba(247,147,26,0.6)', fontSize: 13,
