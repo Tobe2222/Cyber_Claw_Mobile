@@ -53,6 +53,53 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun recognize(promise: Promise) {
+        // One-shot recognition — pauses wake word listener, records once, resolves with text
+        Log.d("WakeWord", "recognize() one-shot")
+        handler.post {
+            val wasRunning = running
+            running = false
+            recognizer?.cancel()
+            recognizer?.destroy()
+
+            if (!SpeechRecognizer.isRecognitionAvailable(reactContext)) {
+                promise.reject("unavailable", "Speech recognition not available")
+                return@post
+            }
+
+            val oneShot = SpeechRecognizer.createSpeechRecognizer(reactContext)
+            oneShot.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(p: Bundle?) { emitDebug("mic-ready", "") }
+                override fun onBeginningOfSpeech() { emitDebug("mic-heard", "") }
+                override fun onRmsChanged(r: Float) {}
+                override fun onBufferReceived(b: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onEvent(t: Int, p: Bundle?) {}
+                override fun onPartialResults(r: Bundle?) {}
+                override fun onResults(results: Bundle?) {
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val text = matches?.firstOrNull() ?: ""
+                    Log.d("WakeWord", "recognize result: $text")
+                    oneShot.destroy()
+                    promise.resolve(text)
+                    // Restart continuous listener if it was running
+                    if (wasRunning) { running = true; startListening() }
+                }
+                override fun onError(error: Int) {
+                    oneShot.destroy()
+                    promise.reject("error", "Recognition error $error")
+                    if (wasRunning) { running = true; startListening() }
+                }
+            })
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, reactContext.packageName)
+            oneShot.startListening(intent)
+        }
+    }
+
+    @ReactMethod
     fun test(promise: Promise) {
         Log.d("WakeWord", "test() called - emitting wakeWordDetected")
         emitEvent("wakeWordDetected", null)

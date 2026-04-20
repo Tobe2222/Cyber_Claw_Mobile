@@ -6,11 +6,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
-  Platform, Keyboard, Dimensions, KeyboardAvoidingView,
+  Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert,
   NativeModules, StatusBar, NativeEventEmitter,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import syncClient from '../services/SyncClient';
 
 // Native modules
@@ -174,33 +175,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [wakePhrase, setWakePhrase] = useState<string>('hey clawsuu');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
 
-  const toggleVoiceInput = useCallback(() => {
-    if (isVoiceListening) {
-      setIsVoiceListening(false);
-      WakeWordModule?.stop?.().catch(() => {});
-    } else {
-      setIsVoiceListening(true);
-      addLogEntry('[voice] Manual mic started', 'info');
-      // Temporarily override wake handler to put result in chat input
-      const emitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
-      const voiceSub = emitter?.addListener('wakeWordDebug', (e: any) => {
-        if (e.state === 'result' && e.text) {
-          setInputText(e.text);
-          setIsVoiceListening(false);
-          voiceSub?.remove();
-        }
-      });
-      // Restart recognizer fresh
-      WakeWordModule?.stop?.().then(() => {
-        WakeWordModule?.start?.('').catch(() => {});
-      }).catch(() => {});
-      // Auto-stop after 10s
-      setTimeout(() => {
-        voiceSub?.remove();
-        setIsVoiceListening(false);
-      }, 10000);
-    }
-  }, [isVoiceListening]);
+  // toggleVoiceInput defined after sendMessage below
 
   // Sync & background service
   useEffect(() => {
@@ -238,8 +213,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
       });
       addLogEntry(`← ${msg.text.substring(0, 80)}`, 'received');
-      // Speak AI response
-      speak(msg.text);
+      // Always speak if last input was voice; otherwise respect ttsEnabled setting
+      if (lastInputWasVoice) {
+        speak(msg.text);
+        setLastInputWasVoice(false);
+      } else {
+        speak(msg.text);
+      }
     };
 
     const onTyping = (msg: any) => {
@@ -299,6 +279,28 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     }
   }, [messages.length, activeTab]);
 
+  const [lastInputWasVoice, setLastInputWasVoice] = useState(false);
+
+  const handleAttach = useCallback(() => {
+    Alert.alert('Attach', 'Choose source', [
+      { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
+        if (res.assets?.[0]) {
+          const asset = res.assets[0];
+          addLogEntry(`[attach] ${asset.fileName} (${asset.type})`, 'info');
+          syncClient.sendChat(`[Image: ${asset.fileName}]`);
+        }
+      })},
+      { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 1 }, (res) => {
+        if (res.assets?.[0]) {
+          const asset = res.assets[0];
+          addLogEntry(`[attach] ${asset.fileName} (${asset.type})`, 'info');
+          syncClient.sendChat(`[Image: ${asset.fileName}]`);
+        }
+      })},
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, []);
+
   const sendMessage = useCallback(() => {
     const text = inputText.trim();
     if (!text || !isConnected) return;
@@ -307,6 +309,29 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
     setInputText('');
   }, [inputText, isConnected]);
+
+  const toggleVoiceInput = useCallback(async () => {
+    if (isVoiceListening) return;
+    if (!WakeWordModule?.recognize) {
+      addLogEntry('[voice] recognize() not available', 'error');
+      return;
+    }
+    setIsVoiceListening(true);
+    setLastInputWasVoice(true);
+    addLogEntry('[voice] listening...', 'info');
+    try {
+      const text: string = await WakeWordModule.recognize();
+      addLogEntry(`[voice] heard: "${text}"`, 'info');
+      if (text.trim()) {
+        setInputText(text.trim());
+        setTimeout(() => sendMessage(), 80);
+      }
+    } catch (e: any) {
+      addLogEntry(`[voice] error: ${e?.message}`, 'error');
+    } finally {
+      setIsVoiceListening(false);
+    }
+  }, [isVoiceListening, sendMessage]);
 
   const renderMessage = useCallback(({ item }: { item: ChatMessage }) => (
     <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
@@ -423,6 +448,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               }
             />
             <View style={styles.inputContainer}>
+              <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
+                <Text style={styles.micButtonText}>+</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
                 onPress={toggleVoiceInput}
