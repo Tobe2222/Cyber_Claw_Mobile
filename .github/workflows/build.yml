@@ -26,16 +26,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
       - name: Apply gradle patches
-        run: cp patches/react-native-audio-recorder-player-build.gradle node_modules/react-native-audio-recorder-player/android/build.gradle
+        run: |
+          echo "Patching react-native-audio-recorder-player build.gradle..."
+          cp patches/react-native-audio-recorder-player-build.gradle node_modules/react-native-audio-recorder-player/android/build.gradle
+          echo "Patch applied. Verifying:"
+          grep jvmTarget node_modules/react-native-audio-recorder-player/android/build.gradle
+
       - name: Build Release APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon --rerun-tasks
 
       - name: Rename APK
         run: |

@@ -20,15 +20,6 @@ buildscript {
 
 apply plugin: "com.facebook.react.rootproject"
 
-// Force consistent JVM target across all subprojects (fixes JVM 17 vs 1.8 mismatch in third-party modules)
-subprojects {
-    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-        kotlinOptions {
-            jvmTarget = "17"
-        }
-    }
-}
-
 allprojects {
     repositories {
         maven {
