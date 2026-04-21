@@ -254,7 +254,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         if (!msg.audioBase64) return;
         const player = audioRecorderPlayerRef.current;
         const fs = require('react-native-fs');
-        const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.mp3`;
+        const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
+        const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
         await player.startPlayer(tmpPath);
         player.addPlayBackListener((e: any) => {
