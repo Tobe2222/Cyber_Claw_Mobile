@@ -31,6 +31,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Apply gradle patches
+        run: cp patches/react-native-audio-recorder-player-build.gradle node_modules/react-native-audio-recorder-player/android/build.gradle
       - name: Build Release APK
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
