@@ -203,7 +203,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
       const label = e.text ? `${e.state}: "${e.text}"` : e.state;
       setWakeDebug(label);
-      addLogEntry(`[wake] ${label}`, 'info');
+      // Don't spam 'error' or 'unavailable' to log — show once only
+      if (e.state === 'unavailable') {
+        addLogEntry(`[wake] Speech Recognition not available on this device`, 'error');
+      } else if (e.state !== 'error') {
+        addLogEntry(`[wake] ${label}`, 'info');
+      }
     });
     const onState = (data: any) => {
       setConnState(data.state);

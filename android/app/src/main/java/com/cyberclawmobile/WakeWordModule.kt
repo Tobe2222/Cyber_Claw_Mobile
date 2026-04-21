@@ -131,6 +131,14 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 val msg = errorName(error)
                 Log.d("WakeWord", "onError: $msg (count=$errorCount)")
                 emitDebug("error", msg)
+                // error 5 = "client" = Speech Recognition service not available on device
+                // Stop retrying immediately — it will never work without Google services
+                if (error == 5) {
+                    Log.e("WakeWord", "Speech Recognition not available (client error) — wake word disabled")
+                    emitDebug("unavailable", "Speech Recognition not available on this device")
+                    stopListening()
+                    return
+                }
                 // errors 6/7 = no speech/no match — normal, reset error count
                 if (error == 6 || error == 7) {
                     errorCount = 0
