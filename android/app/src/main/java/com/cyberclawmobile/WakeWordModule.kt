@@ -199,11 +199,8 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
         emitDebug("partial", text)
 
-        val phraseWords = wakePhrase.split(" ")
-        val heardWords = text.split(" ")
-        val matchCount = phraseWords.count { pw -> heardWords.any { hw -> hw.contains(pw) } }
-        if (matchCount >= phraseWords.size - 1) { // allow 1 word miss
-            Log.d("WakeWord", "Wake phrase detected: $text")
+        if (PhoneticMatcher.matches(text, wakePhrase)) {
+            Log.d("WakeWord", "Wake phrase detected: $text (target: $wakePhrase)")
             handler.post {
                 reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                     .emit("wakeWordDetected", null)

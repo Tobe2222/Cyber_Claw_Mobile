@@ -112,10 +112,7 @@ class CyberClawService : Service() {
         val text = Regex("\"(text|partial)\"\\s*:\\s*\"([^\"]+)\"")
             .find(json)?.groupValues?.get(2)?.lowercase() ?: return
         if (text.isBlank()) return
-        val phraseWords = WAKE_PHRASE.split(" ")
-        val heardWords = text.split(" ")
-        val matchCount = phraseWords.count { pw -> heardWords.any { hw -> hw.contains(pw) } }
-        if (matchCount >= phraseWords.size - 1) {
+        if (PhoneticMatcher.matches(text, WAKE_PHRASE)) {
             Log.d("CyberClawService", "Wake phrase detected in service: $text")
             handler.post { openApp() }
         }

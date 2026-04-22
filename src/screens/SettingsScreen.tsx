@@ -27,6 +27,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [micPerm, setMicPerm] = useState<PermStatus>('unknown');
   const [notifPerm, setNotifPerm] = useState<PermStatus>('unknown');
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [ppnPath, setPpnPath] = useState<string>('');
 
   const checkPermissions = async () => {
     if (Platform.OS !== 'android') return;
@@ -58,6 +59,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
+    AsyncStorage.getItem('cyberclaw-ppn-path').then(v => { if (v) setPpnPath(v); });
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -368,6 +370,53 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           />
         )}
 
+        {/* Porcupine custom wake word (.ppn) */}
+        <View style={styles.porcupineBox}>
+          <Text style={styles.porcupineTitle}>🦔 Custom Wake Word (Porcupine)</Text>
+          <Text style={styles.porcupineSub}>
+            For precise detection of any custom word/phrase — even made-up names. Works fully offline.
+          </Text>
+          <TouchableOpacity
+            style={styles.guideBtn}
+            onPress={() => Linking.openURL('https://console.picovoice.ai/')}
+          >
+            <Text style={styles.guideBtnText}>📖 Get a free .ppn file at picovoice.ai →</Text>
+          </TouchableOpacity>
+          <Text style={styles.porcupineSteps}>
+            {'1. Sign up free at console.picovoice.ai\n2. Go to Wake Word → Create wake word\n3. Type your phrase, train it, download the .ppn file\n4. Transfer the .ppn to your phone and paste the path below'}
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={ppnPath}
+            onChangeText={setPpnPath}
+            placeholder="/storage/emulated/0/Download/my-wake-word_android.ppn"
+            placeholderTextColor="#555"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
+            style={[styles.trainBtn, ppnPath ? styles.trainBtnDone : null]}
+            onPress={async () => {
+              if (!ppnPath.trim()) {
+                Alert.alert('No path', 'Paste the path to your .ppn file above.');
+                return;
+              }
+              const fs = require('react-native-fs');
+              const exists = await fs.exists(ppnPath.trim());
+              if (!exists) {
+                Alert.alert('File not found', `Could not find:\n${ppnPath}\n\nCheck the path and try again.`);
+                return;
+              }
+              await AsyncStorage.setItem('cyberclaw-ppn-path', ppnPath.trim());
+              Alert.alert('✅ Saved', 'Porcupine wake word file saved. Restart the app to activate it.');
+            }}
+          >
+            <Text style={styles.trainBtnText}>
+              {ppnPath ? '💾 Save .ppn path' : '📂 Set .ppn path'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <Text style={styles.label}>Audio Lookback (minutes)</Text>
         <View style={styles.optionRow}>
           {[5, 10, 30, 60].map(m => (
@@ -549,5 +598,43 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 12,
     marginTop: 2,
+  },
+  porcupineBox: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#2a2a4a',
+  },
+  porcupineTitle: {
+    color: '#f7931a',
+    fontSize: 15,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  porcupineSub: {
+    color: '#aaa',
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  porcupineSteps: {
+    color: '#888',
+    fontSize: 11,
+    fontFamily: 'monospace',
+    marginBottom: 10,
+    lineHeight: 18,
+  },
+  guideBtn: {
+    backgroundColor: '#0d47a1',
+    borderRadius: 6,
+    padding: 8,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  guideBtnText: {
+    color: '#64b5f6',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
