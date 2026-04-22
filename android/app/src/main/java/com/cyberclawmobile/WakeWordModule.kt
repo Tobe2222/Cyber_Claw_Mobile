@@ -18,7 +18,6 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import org.vosk.Model
 import org.vosk.Recognizer
-import org.vosk.android.StorageService
 import java.io.File
 import java.io.IOException
 
@@ -61,21 +60,53 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private fun downloadModel(onDone: (Boolean) -> Unit) {
         emitDebug("downloading", "Downloading wake word model (~50MB)...")
-        StorageService.unpack(
-            reactContext,
-            "vosk-model-small-en-us-0.15.zip",
-            "vosk-model-small-en",
-            { model ->
+        Thread {
+            try {
+                val zipFile = File(reactContext.cacheDir, "vosk-model-small-en.zip")
+                val url = java.net.URL("https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connect()
+                val input = conn.inputStream
+                val out = java.io.FileOutputStream(zipFile)
+                val buf = ByteArray(8192)
+                var n: Int
+                while (input.read(buf).also { n = it } != -1) out.write(buf, 0, n)
+                out.close(); input.close()
+
+                // Unzip into filesDir/vosk-model-small-en
+                val destDir = File(reactContext.filesDir, "vosk-model-small-en")
+                destDir.mkdirs()
+                val zis = java.util.zip.ZipInputStream(java.io.FileInputStream(zipFile))
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    // Strip top-level dir from zip (vosk-model-small-en-us-0.15/am/... -> am/...)
+                    val name = entry.name.substringAfter("/")
+                    if (name.isNotEmpty()) {
+                        val outFile = File(destDir, name)
+                        if (entry.isDirectory) outFile.mkdirs()
+                        else {
+                            outFile.parentFile?.mkdirs()
+                            val fos = java.io.FileOutputStream(outFile)
+                            val b = ByteArray(8192); var r: Int
+                            while (zis.read(b).also { r = it } != -1) fos.write(b, 0, r)
+                            fos.close()
+                        }
+                    }
+                    zis.closeEntry(); entry = zis.nextEntry
+                }
+                zis.close()
+                zipFile.delete()
+
+                val model = Model(destDir.absolutePath)
                 voskModel = model
-                emitDebug("model_ready", "Wake word model ready")
+                handler.post { emitDebug("model_ready", "Wake word model ready") }
                 onDone(true)
-            },
-            { e ->
+            } catch (e: Exception) {
                 Log.e("WakeWord", "Model download failed", e)
-                emitDebug("error", "Model download failed: ${e.message}")
+                handler.post { emitDebug("error", "Model download failed: ${e.message}") }
                 onDone(false)
             }
-        )
+        }.also { it.isDaemon = true; it.start() }
     }
 
     @ReactMethod fun start(phrase: String, promise: Promise) {
