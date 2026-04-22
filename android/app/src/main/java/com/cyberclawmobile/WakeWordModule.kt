@@ -232,10 +232,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private var mediaRecorder: MediaRecorder? = null
     private var recordingPath: String? = null
+    private var silenceTimer: java.util.Timer? = null
 
     @ReactMethod fun startRecorder(path: String, promise: Promise) {
+        startRecorderWithSilence(path, 5000, promise)
+    }
+
+    @ReactMethod fun startRecorderWithSilence(path: String, silenceMs: Int, promise: Promise) {
         try {
             mediaRecorder?.release()
+            silenceTimer?.cancel(); silenceTimer = null
             val outFile = File(path)
             outFile.parentFile?.mkdirs()
             recordingPath = path
@@ -255,6 +261,34 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             recorder.prepare()
             recorder.start()
             mediaRecorder = recorder
+
+            // Auto-stop on silence: poll amplitude every 500ms, stop after silenceMs of quiet
+            var silentFor = 0L
+            val SILENCE_THRESHOLD = 500 // amplitude units (0-32767)
+            val POLL_MS = 500L
+            val timer = java.util.Timer()
+            silenceTimer = timer
+            timer.scheduleAtFixedRate(object : java.util.TimerTask() {
+                override fun run() {
+                    val rec = mediaRecorder ?: run { cancel(); return }
+                    val amp = try { rec.maxAmplitude } catch (_: Exception) { -1 }
+                    if (amp < 0) return // recorder stopped externally
+                    if (amp < SILENCE_THRESHOLD) {
+                        silentFor += POLL_MS
+                        if (silentFor >= silenceMs) {
+                            cancel()
+                            handler.post {
+                                // Emit silence event so JS can auto-stop recording
+                                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                    .emit("recorderSilence", null)
+                            }
+                        }
+                    } else {
+                        silentFor = 0L
+                    }
+                }
+            }, POLL_MS, POLL_MS)
+
             promise.resolve(path)
         } catch (e: Exception) {
             promise.reject("RECORD_ERROR", e.message)
@@ -262,6 +296,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod fun stopRecorder(promise: Promise) {
+        silenceTimer?.cancel(); silenceTimer = null
         try {
             mediaRecorder?.stop()
             mediaRecorder?.release()

@@ -123,8 +123,29 @@ class CyberClawService : Service() {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("from_wake_word", true)
         }
-        startActivity(intent)
-        updateNotification("CyberClaw", "Wake phrase detected! Opening...")
+        val pendingIntent = PendingIntent.getActivity(
+            this, 99, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Try direct start first (works if app is already in recent tasks)
+        try { startActivity(intent) } catch (_: Exception) {}
+
+        // Also fire a high-priority notification so user can tap in even if direct start blocked
+        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Hey Claw heard! 🐾")
+            .setContentText("Tap to open CyberClaw")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .setFullScreenIntent(pendingIntent, true)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .build()
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.notify(1002, notif)
+
+        updateNotification("CyberClaw", "Listening for \"Hey Claw\"...")
     }
 
     private fun stopWakeListening() {

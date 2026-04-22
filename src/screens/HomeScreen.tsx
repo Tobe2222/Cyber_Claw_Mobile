@@ -211,6 +211,31 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const wakeSub = wakeEmitter?.addListener('wakeWordDetected', () => {
       handleWakeWord();
     });
+    // Auto-stop recording after silence detected
+    const silenceSub = wakeEmitter?.addListener('recorderSilence', () => {
+      addLogEntry('🧹 Silence detected, stopping recording...', 'info');
+      // Trigger the same stop flow as tapping the mic button
+      WakeWordModule.stopRecorder().then(async (resultPath: string) => {
+        setIsVoiceListening(false);
+        if (!resultPath) return;
+        const fs = require('react-native-fs');
+        const base64 = await fs.readFile(resultPath, 'base64');
+        syncClient.sendAudioInput(base64, 'audio/m4a');
+        addLogEntry('🎤 Audio sent (auto-stop)', 'sent');
+        // Resume wake word
+        const [ppn, mode, settingsRaw] = await Promise.all([
+          AsyncStorage.getItem('cyberclaw-ppn-path'),
+          AsyncStorage.getItem('cyberclaw-wake-mode'),
+          AsyncStorage.getItem('cyberclaw-audio-settings'),
+        ]);
+        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
+        if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
+        else WakeWordModule?.start?.(phrase).catch(() => {});
+      }).catch((e: any) => {
+        setIsVoiceListening(false);
+        addLogEntry(`Auto-stop error: ${e?.message}`, 'error');
+      });
+    });
     const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
       const label = e.text ? `${e.state}: "${e.text}"` : e.state;
       setWakeDebug(label);
@@ -305,6 +330,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
     return () => {
       wakeSub?.remove();
+      silenceSub?.remove();
       debugSub?.remove();
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
