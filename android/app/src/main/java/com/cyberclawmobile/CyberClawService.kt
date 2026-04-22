@@ -119,30 +119,35 @@ class CyberClawService : Service() {
     }
 
     private fun openApp() {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        // Use ACTION_MAIN + CATEGORY_LAUNCHER — best chance of bypassing background launch restrictions
+        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            putExtra("from_wake_word", true)
+        } ?: Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             putExtra("from_wake_word", true)
         }
+
         val pendingIntent = PendingIntent.getActivity(
             this, 99, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Try direct start (works if app already in recent tasks)
+        // Try direct start — works if screen on and app was recently used
         try { startActivity(intent) } catch (_: Exception) {}
 
-        // High-priority notification — shows on lock screen, tap opens app
-        // On Android 10+ background startActivity is blocked, notification is the reliable path
-        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+        // High-priority wake notification on dedicated IMPORTANCE_HIGH channel
+        // This makes full-screen intent actually fire (GrapheneOS needs IMPORTANCE_HIGH + CATEGORY_ALARM)
+        val notif = NotificationCompat.Builder(this, "cyberclaw_wake")
             .setContentTitle("Hey Claw heard! 🐾")
             .setContentText("Tap to open CyberClaw")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
-            .setFullScreenIntent(pendingIntent, true) // shows on lock screen immediately
+            .setFullScreenIntent(pendingIntent, true)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // visible on lock screen
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(1002, notif)
@@ -194,7 +199,8 @@ class CyberClawService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            // Persistent foreground service notification — silent, no badge
+            val bgChannel = NotificationChannel(
                 CHANNEL_ID,
                 "CyberClaw Background",
                 NotificationManager.IMPORTANCE_LOW
@@ -202,8 +208,19 @@ class CyberClawService : Service() {
                 description = "Listening for wake phrase in background"
                 setShowBadge(false)
             }
+            // Wake alert channel — high priority, makes full-screen intent fire
+            val wakeChannel = NotificationChannel(
+                "cyberclaw_wake",
+                "CyberClaw Wake Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Wake word detected alerts"
+                enableLights(true)
+                enableVibration(true)
+            }
             val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(channel)
+            nm.createNotificationChannel(bgChannel)
+            nm.createNotificationChannel(wakeChannel)
         }
     }
 }
