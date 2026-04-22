@@ -41,7 +41,7 @@
       <!-- Background service for persistent notification -->
       <service
         android:name=".CyberClawService"
-        android:foregroundServiceType="dataSync"
+        android:foregroundServiceType="microphone"
         android:exported="false" />
 
 

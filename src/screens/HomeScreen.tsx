@@ -174,7 +174,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   }, []);
 
   const [wakeDebug, setWakeDebug] = useState<string>('init');
-  const [wakePhrase, setWakePhrase] = useState<string>('hey clawsuu');
+  const [wakePhrase, setWakePhrase] = useState<string>('hey claw');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
 
   // toggleVoiceInput defined after sendMessage below
@@ -186,7 +186,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     // Start wake word listener
     AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
       const settings = raw ? JSON.parse(raw) : {};
-      const phrase = settings.wakeWord || 'hey clawsuu';
+      const phrase = settings.wakeWord || 'hey claw';
       setWakePhrase(phrase);
       WakeWordModule?.start?.(phrase).catch(() => {});
       addLogEntry(`[wake] starting, phrase: "${phrase}"`, 'info');
@@ -348,10 +348,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       return;
     }
     if (isVoiceListening) {
-      // Stop recording and send
+      // Stop recording, resume wake word
       try {
         const result = await WakeWordModule.stopRecorder();
         setIsVoiceListening(false);
+        // Resume wake word listening
+        WakeWordModule?.start?.('hey claw').catch(() => {});
         // Read file as base64
         const fs = require('react-native-fs');
         const base64 = await fs.readFile(result, 'base64');
@@ -359,17 +361,20 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         addLogEntry('🎤 Audio sent to desktop', 'sent');
       } catch (e: any) {
         setIsVoiceListening(false);
+        WakeWordModule?.start?.('hey claw').catch(() => {});
         addLogEntry(`Recording error: ${e?.message}`, 'error');
       }
     } else {
-      // Start recording
+      // Pause wake word, start recording
       try {
+        WakeWordModule?.stop?.().catch(() => {});
         const fs = require('react-native-fs');
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
         await WakeWordModule.startRecorder(recPath);
         setIsVoiceListening(true);
         addLogEntry('🎤 Recording...', 'info');
       } catch (e: any) {
+        WakeWordModule?.start?.('hey claw').catch(() => {});
         addLogEntry(`Mic error: ${e?.message}`, 'error');
         Alert.alert('Microphone Error', e?.message || 'Could not start recording');
       }
@@ -483,6 +488,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={false}
               onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
