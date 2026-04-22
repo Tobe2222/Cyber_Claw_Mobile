@@ -88,4 +88,36 @@ class AppControlModule(private val reactContext: ReactApplicationContext) :
             promise.reject("ERROR", e.message)
         }
     }
+
+    /**
+     * Show app on lock screen with keyguard dismiss (companion visible, PIN overlay on top)
+     */
+    @ReactMethod
+    fun showOnLockScreenWithDismiss(promise: Promise) {
+        try {
+            val activity = reactApplicationContext.currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
+            activity.runOnUiThread {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    activity.setShowWhenLocked(true)
+                    activity.setTurnScreenOn(true)
+                    val km = activity.getSystemService(android.app.KeyguardManager::class.java)
+                    km?.requestDismissKeyguard(activity, object : android.app.KeyguardManager.KeyguardDismissCallback() {
+                        override fun onDismissSucceeded() {} // user unlocked — companion stays visible
+                        override fun onDismissCancelled() {} // user cancelled — still visible behind keyguard
+                        override fun onDismissError() {}
+                    })
+                } else {
+                    @Suppress("DEPRECATION")
+                    activity.window.addFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                    )
+                }
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
 }

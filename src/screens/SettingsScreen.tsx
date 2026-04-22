@@ -5,8 +5,9 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
-  Switch, Alert, Platform, PermissionsAndroid, Linking,
+  Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules,
 } from 'react-native';
+const { BackgroundService } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/AudioBuffer';
@@ -29,6 +30,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ppnPath, setPpnPath] = useState<string>('');
   const [wakeMode, setWakeMode] = useState<'vosk' | 'porcupine'>('vosk');
+  const [bgListening, setBgListening] = useState(true);
 
   const checkPermissions = async () => {
     if (Platform.OS !== 'android') return;
@@ -62,6 +64,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
     AsyncStorage.getItem('cyberclaw-ppn-path').then(v => { if (v) setPpnPath(v); });
     AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); });
+    AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -340,6 +343,29 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         </View>
 
         <Text style={styles.label}>Wake Word</Text>
+        {/* Background listening toggle */}
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>🎧 Background Listening</Text>
+            <Text style={styles.toggleSub}>Listen for wake phrase even when app is closed</Text>
+          </View>
+          <Switch
+            value={bgListening}
+            onValueChange={async (val) => {
+              setBgListening(val);
+              await AsyncStorage.setItem('cyberclaw-bg-listening', String(val));
+              if (val) {
+                try { await BackgroundService?.start?.(); } catch {}
+                Alert.alert('✅ Enabled', 'Background listening is on. App will wake on your phrase.');
+              } else {
+                try { await BackgroundService?.stop?.(); } catch {}
+                Alert.alert('🔕 Disabled', 'Background listening is off.');
+              }
+            }}
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={bgListening ? '#fff' : '#666'}
+          />
+        </View>
         <TextInput
           style={styles.input}
           value={audioSettings.wakeWord}
@@ -641,8 +667,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
-  porcupineBox: {
-    backgroundColor: '#1a1a2e',
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#111', borderRadius: 10, padding: 12, marginBottom: 12,
+    borderWidth: 1, borderColor: '#222',
+  },
+  toggleInfo: { flex: 1, marginRight: 12 },
+  toggleTitle: { color: '#eee', fontSize: 14, fontWeight: '600' },
+  toggleSub: { color: '#666', fontSize: 12, marginTop: 2 },
+  porcupineBox: {    backgroundColor: '#1a1a2e',
     borderRadius: 10,
     padding: 14,
     marginBottom: 16,

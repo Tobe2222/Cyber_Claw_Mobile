@@ -128,19 +128,21 @@ class CyberClawService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Try direct start first (works if app is already in recent tasks)
+        // Try direct start (works if app already in recent tasks)
         try { startActivity(intent) } catch (_: Exception) {}
 
-        // Also fire a high-priority notification so user can tap in even if direct start blocked
+        // High-priority notification — shows on lock screen, tap opens app
+        // On Android 10+ background startActivity is blocked, notification is the reliable path
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Hey Claw heard! 🐾")
             .setContentText("Tap to open CyberClaw")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
-            .setFullScreenIntent(pendingIntent, true)
+            .setFullScreenIntent(pendingIntent, true) // shows on lock screen immediately
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // visible on lock screen
             .build()
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(1002, notif)

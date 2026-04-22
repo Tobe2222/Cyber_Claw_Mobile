@@ -17,7 +17,10 @@ import syncClient from '../services/SyncClient';
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
 async function startBgService() {
-  try { if (BackgroundService) await BackgroundService.start(); } catch {}
+  try {
+    const enabled = await AsyncStorage.getItem('cyberclaw-bg-listening');
+    if (enabled !== 'false' && BackgroundService) await BackgroundService.start();
+  } catch {}
 }
 async function bringToForeground() {
   try { if (AppControl) await AppControl.bringToForeground(); } catch {}
@@ -149,7 +152,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     setFullscreen(true);
     fullscreenRef.current = true;
     setLockScreenMode(true);
-    AppControl?.showOnLockScreen?.(true);
+    AppControl?.showOnLockScreenWithDismiss?.();
     AppControl?.keepScreenOn?.(true);
     setTimeout(() => {
       const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); true;`;
