@@ -28,6 +28,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [notifPerm, setNotifPerm] = useState<PermStatus>('unknown');
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ppnPath, setPpnPath] = useState<string>('');
+  const [wakeMode, setWakeMode] = useState<'vosk' | 'porcupine'>('vosk');
 
   const checkPermissions = async () => {
     if (Platform.OS !== 'android') return;
@@ -60,6 +61,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
     AsyncStorage.getItem('cyberclaw-ppn-path').then(v => { if (v) setPpnPath(v); });
+    AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); });
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -374,8 +376,43 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         <View style={styles.porcupineBox}>
           <Text style={styles.porcupineTitle}>🦔 Custom Wake Word (Porcupine)</Text>
           <Text style={styles.porcupineSub}>
-            For precise detection of any custom word/phrase — even made-up names. Works fully offline.
+            Precise detection of any word/phrase — even made-up names. Fully offline.
           </Text>
+
+          {/* Mode toggle — only show if ppn is imported */}
+          {ppnPath ? (
+            <View style={styles.modeToggleRow}>
+              <TouchableOpacity
+                style={[styles.modeBtn, wakeMode === 'vosk' && styles.modeBtnActive]}
+                onPress={async () => {
+                  setWakeMode('vosk');
+                  await AsyncStorage.setItem('cyberclaw-wake-mode', 'vosk');
+                  Alert.alert('✅ Switched', 'Using fuzzy matching (Vosk). Restart app to apply.');
+                }}
+              >
+                <Text style={[styles.modeBtnText, wakeMode === 'vosk' && styles.modeBtnTextActive]}>
+                  🎙️ Fuzzy (Vosk)
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modeBtn, wakeMode === 'porcupine' && styles.modeBtnActive]}
+                onPress={async () => {
+                  setWakeMode('porcupine');
+                  await AsyncStorage.setItem('cyberclaw-wake-mode', 'porcupine');
+                  Alert.alert('✅ Switched', 'Using Porcupine. Restart app to apply.');
+                }}
+              >
+                <Text style={[styles.modeBtnText, wakeMode === 'porcupine' && styles.modeBtnTextActive]}>
+                  🦔 Porcupine
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={styles.porcupineSteps}>
+              {'Import a .ppn file to unlock Porcupine mode'}
+            </Text>
+          )}
+
           <TouchableOpacity
             style={styles.guideBtn}
             onPress={() => Linking.openURL('https://console.picovoice.ai/')}
@@ -383,7 +420,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             <Text style={styles.guideBtnText}>📖 Get a free .ppn file at picovoice.ai →</Text>
           </TouchableOpacity>
           <Text style={styles.porcupineSteps}>
-            {'1. Sign up free at console.picovoice.ai\n2. Go to Wake Word → Create wake word\n3. Type your phrase, train it, download the .ppn file\n4. Transfer the .ppn to your phone and paste the path below'}
+            {'1. Sign up free at console.picovoice.ai\n2. Wake Word → Create → type your phrase\n3. Download the Android .ppn file\n4. Transfer to phone, paste path below'}
           </Text>
           <TextInput
             style={styles.input}
@@ -408,11 +445,16 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
                 return;
               }
               await AsyncStorage.setItem('cyberclaw-ppn-path', ppnPath.trim());
-              Alert.alert('✅ Saved', 'Porcupine wake word file saved. Restart the app to activate it.');
+              // Auto-switch to porcupine mode on first import
+              if (wakeMode !== 'porcupine') {
+                setWakeMode('porcupine');
+                await AsyncStorage.setItem('cyberclaw-wake-mode', 'porcupine');
+              }
+              Alert.alert('✅ Saved & Activated', 'Porcupine mode enabled. Restart the app to activate it.');
             }}
           >
             <Text style={styles.trainBtnText}>
-              {ppnPath ? '💾 Save .ppn path' : '📂 Set .ppn path'}
+              {ppnPath ? '💾 Save .ppn path' : '📂 Import .ppn file'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -636,5 +678,30 @@ const styles = StyleSheet.create({
     color: '#64b5f6',
     fontSize: 13,
     fontWeight: '600',
+  },
+  modeToggleRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  modeBtn: {
+    flex: 1,
+    padding: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#444',
+    alignItems: 'center',
+  },
+  modeBtnActive: {
+    borderColor: '#f7931a',
+    backgroundColor: '#2a1a00',
+  },
+  modeBtnText: {
+    color: '#888',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  modeBtnTextActive: {
+    color: '#f7931a',
   },
 });
