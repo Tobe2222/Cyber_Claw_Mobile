@@ -184,14 +184,18 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     startBgService();
 
     // Start wake word listener
-    AsyncStorage.multiGet(['cyberclaw-audio-settings', 'cyberclaw-ppn-path', 'cyberclaw-wake-mode']).then(pairs => {
-      const settings = pairs[0][1] ? JSON.parse(pairs[0][1]) : {};
-      const ppnPath = pairs[1][1] || '';
-      const wakeMode = pairs[2][1] || 'vosk'; // 'vosk' | 'porcupine'
+    Promise.all([
+      AsyncStorage.getItem('cyberclaw-audio-settings'),
+      AsyncStorage.getItem('cyberclaw-ppn-path'),
+      AsyncStorage.getItem('cyberclaw-wake-mode'),
+    ]).then(([settingsRaw, ppnPath, wakeModeRaw]) => {
+      const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+      const ppn = ppnPath || '';
+      const wakeMode = wakeModeRaw || 'vosk';
       const phrase = settings.wakeWord || 'hey claw';
       setWakePhrase(phrase);
-      if (wakeMode === 'porcupine' && ppnPath) {
-        WakeWordModule?.startPorcupine?.(ppnPath).catch((e: any) => {
+      if (wakeMode === 'porcupine' && ppn) {
+        WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
           addLogEntry(`[wake] Porcupine failed: ${e?.message}, falling back to Vosk`, 'error');
           WakeWordModule?.start?.(phrase).catch(() => {});
         });
@@ -397,9 +401,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         addLogEntry('🎤 Recording...', 'info');
       } catch (e: any) {
         // Resume wake word on error too
-        AsyncStorage.multiGet(['cyberclaw-ppn-path', 'cyberclaw-wake-mode', 'cyberclaw-audio-settings']).then(pairs => {
-          const ppn = pairs[0][1] || ''; const mode = pairs[1][1] || 'vosk';
-          const phrase = pairs[2][1] ? (JSON.parse(pairs[2][1]).wakeWord || 'hey claw') : 'hey claw';
+        Promise.all([
+          AsyncStorage.getItem('cyberclaw-ppn-path'),
+          AsyncStorage.getItem('cyberclaw-wake-mode'),
+          AsyncStorage.getItem('cyberclaw-audio-settings'),
+        ]).then(([ppn, mode, settingsRaw]) => {
+          const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
           if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
           else WakeWordModule?.start?.(phrase).catch(() => {});
         });
