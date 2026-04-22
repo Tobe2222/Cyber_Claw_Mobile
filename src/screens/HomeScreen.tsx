@@ -69,6 +69,10 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [lockScreenMode, setLockScreenMode] = useState(false);
+  // Voice pipeline status (shown in focus overlay)
+  type VoiceStatus = 'idle' | 'recording' | 'silence_countdown' | 'sending' | 'transcribing' | 'thinking' | 'responding' | 'playing';
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
+  const [silenceCountdown, setSilenceCountdown] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
@@ -104,6 +108,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   // When fullscreen closes, restore lock screen flags
   const closeFullscreen = useCallback(() => {
     setFullscreen(false);
+    fullscreenRef.current = false;
+    setVoiceStatus('idle');
     setLockScreenMode(false);
     AppControl?.showOnLockScreen?.(false);
     AppControl?.keepScreenOn?.(false);
@@ -136,10 +142,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     } catch {}
   }, [closeFullscreen]);
 
-  // Wake word → bring to foreground + show zoomed companion on lock screen
-  const handleWakeWord = useCallback(() => {
+  // Wake word → bring to foreground + start recording in focus mode
+  const fullscreenRef = useRef(false);
+  const handleWakeWord = useCallback(async () => {
     bringToForeground();
     setFullscreen(true);
+    fullscreenRef.current = true;
     setLockScreenMode(true);
     AppControl?.showOnLockScreen?.(true);
     AppControl?.keepScreenOn?.(true);
@@ -147,6 +155,15 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); true;`;
       webViewRef.current?.injectJavaScript(js);
     }, 300);
+    // Auto-start recording
+    try {
+      WakeWordModule?.stop?.().catch(() => {});
+      const fs = require('react-native-fs');
+      const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wake-${Date.now()}.m4a`;
+      await WakeWordModule.startRecorder(recPath);
+      setIsVoiceListening(true);
+      setVoiceStatus('recording');
+    } catch {}
   }, []);
 
   // Load persisted chat
@@ -213,28 +230,40 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     });
     // Auto-stop recording after silence detected
     const silenceSub = wakeEmitter?.addListener('recorderSilence', () => {
-      addLogEntry('🧹 Silence detected, stopping recording...', 'info');
-      // Trigger the same stop flow as tapping the mic button
-      WakeWordModule.stopRecorder().then(async (resultPath: string) => {
-        setIsVoiceListening(false);
-        if (!resultPath) return;
-        const fs = require('react-native-fs');
-        const base64 = await fs.readFile(resultPath, 'base64');
-        syncClient.sendAudioInput(base64, 'audio/m4a');
-        addLogEntry('🎤 Audio sent (auto-stop)', 'sent');
-        // Resume wake word
-        const [ppn, mode, settingsRaw] = await Promise.all([
-          AsyncStorage.getItem('cyberclaw-ppn-path'),
-          AsyncStorage.getItem('cyberclaw-wake-mode'),
-          AsyncStorage.getItem('cyberclaw-audio-settings'),
-        ]);
-        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-        if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
-        else WakeWordModule?.start?.(phrase).catch(() => {});
-      }).catch((e: any) => {
-        setIsVoiceListening(false);
-        addLogEntry(`Auto-stop error: ${e?.message}`, 'error');
-      });
+      setVoiceStatus('silence_countdown');
+      // Countdown from 3 to 0 visually, then stop
+      let count = 3;
+      setSilenceCountdown(count);
+      const tick = setInterval(() => {
+        count--;
+        setSilenceCountdown(count);
+        if (count <= 0) {
+          clearInterval(tick);
+          setVoiceStatus('sending');
+          WakeWordModule.stopRecorder().then(async (resultPath: string) => {
+            setIsVoiceListening(false);
+            if (!resultPath) { setVoiceStatus('idle'); return; }
+            const fs = require('react-native-fs');
+            const base64 = await fs.readFile(resultPath, 'base64');
+            setVoiceStatus('transcribing');
+            syncClient.sendAudioInput(base64, 'audio/m4a');
+            addLogEntry('🎤 Audio sent for transcription', 'sent');
+            // Resume wake word in background
+            const [ppn, mode, settingsRaw] = await Promise.all([
+              AsyncStorage.getItem('cyberclaw-ppn-path'),
+              AsyncStorage.getItem('cyberclaw-wake-mode'),
+              AsyncStorage.getItem('cyberclaw-audio-settings'),
+            ]);
+            const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
+            if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
+            else WakeWordModule?.start?.(phrase).catch(() => {});
+          }).catch((e: any) => {
+            setIsVoiceListening(false);
+            setVoiceStatus('idle');
+            addLogEntry(`Auto-stop error: ${e?.message}`, 'error');
+          });
+        }
+      }, 1000);
     });
     const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
       const label = e.text ? `${e.state}: "${e.text}"` : e.state;
@@ -271,6 +300,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const onTyping = (msg: any) => {
       setIsThinking(!!msg.active);
       setArenaThinking(!!msg.active);
+      if (fullscreenRef.current) setVoiceStatus(msg.active ? 'thinking' : 'responding');
     };
 
     const onChatHistory = (msg: any) => {
@@ -293,14 +323,17 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const onAudioResponse = async (msg: any) => {
       try {
         if (!msg.audioBase64) return;
+        if (fullscreenRef.current) setVoiceStatus('playing');
         const fs = require('react-native-fs');
         const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
         await WakeWordModule.startPlayer(tmpPath);
         addLogEntry('🔊 Playing audio response', 'received');
+        if (fullscreenRef.current) setVoiceStatus('idle');
       } catch (e: any) {
         addLogEntry(`Audio playback error: ${e?.message}`, 'error');
+        if (fullscreenRef.current) setVoiceStatus('idle');
       }
     };
 
@@ -313,9 +346,16 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);
     const onVoiceTranscriptResult = (msg: any) => {
-      if (msg.transcript) {
+      if (!msg.transcript) return;
+      addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
+      if (fullscreenRef.current) {
+        // Focus mode: auto-send to AI, show thinking status
+        setVoiceStatus('thinking');
+        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
+        syncClient.sendChat(msg.transcript);
+      } else {
+        // Chat mode: put in input box for review
         setInputText(msg.transcript);
-        addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
       }
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
@@ -512,6 +552,22 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               <Text style={styles.listeningText}>Mic: {wakeDebug}</Text>
             </View>
           )}
+          {fullscreen && voiceStatus !== 'idle' && (() => {
+            const statusMap: Record<string, string> = {
+              recording:          '🔴 Listening...',
+              silence_countdown:  `⏳ Sending in ${silenceCountdown}s...`,
+              sending:            '📤 Sending recording...',
+              transcribing:       '📝 Transcribing...',
+              thinking:           '💭 Companion is thinking...',
+              responding:         '💬 Response incoming...',
+              playing:            '🔊 Playing response...',
+            };
+            return (
+              <View style={styles.voicePipelineOverlay} pointerEvents="none">
+                <Text style={styles.voicePipelineText}>{statusMap[voiceStatus] || ''}</Text>
+              </View>
+            );
+          })()}
           {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>
               <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
@@ -757,6 +813,24 @@ const styles = StyleSheet.create({
     color: 'rgba(74,222,128,0.9)', fontSize: 10, fontFamily: 'monospace',
     backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 8, paddingVertical: 3,
     borderRadius: 8,
+  },
+  voicePipelineOverlay: {
+    position: 'absolute',
+    bottom: 40,
+    left: 0, right: 0,
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  voicePipelineText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+    overflow: 'hidden',
+    textAlign: 'center',
   },
   lockBadge: {
     position: 'absolute', top: 16, right: 12,
