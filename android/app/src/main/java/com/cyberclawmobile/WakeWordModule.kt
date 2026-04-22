@@ -1,150 +1,202 @@
 package com.cyberclawmobile
 
+import android.content.Context
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.util.Base64
 import android.util.Log
-import android.content.Intent
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.StorageService
 import java.io.File
-import java.io.FileInputStream
+import java.io.IOException
 
 class WakeWordModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     override fun getName() = "WakeWordModule"
 
-    // ── Wake Word ──────────────────────────────────────────────────────────
-
-    private var recognizer: SpeechRecognizer? = null
-    private var isListening = false
     private val handler = Handler(Looper.getMainLooper())
-    private var errorCount = 0
-    private var wakePhrase = "hey claw"
 
-    private fun emitDebug(state: String, text: String? = null) {
+    private fun emit(event: String, state: String, text: String? = null) {
         val map = Arguments.createMap()
         map.putString("state", state)
         if (text != null) map.putString("text", text)
         reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-            .emit("wakeWordDebug", map)
+            .emit(event, map)
     }
 
-    private fun buildIntent(partial: Boolean = true, maxResults: Int = 3): Intent {
-        return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, partial)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, maxResults)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-        }
+    private fun emitDebug(state: String, text: String? = null) = emit("wakeWordDebug", state, text)
+
+    // ── Vosk Wake Word ─────────────────────────────────────────────────────
+
+    private var voskModel: Model? = null
+    private var audioRecord: AudioRecord? = null
+    private var listenThread: Thread? = null
+    @Volatile private var isListening = false
+    private var wakePhrase = "hey clawsuu"
+
+    private fun getModelDir(): File {
+        val dir = File(reactContext.filesDir, "vosk-model-small-en")
+        dir.mkdirs()
+        return dir
     }
 
-    private fun checkResults(matches: List<String>?) {
-        if (matches == null) return
-        val phrase = wakePhrase.lowercase()
-        val hit = matches.any { it.lowercase().contains(phrase) }
-        if (hit) {
-            Log.d("WakeWord", "Wake phrase detected!")
-            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit("wakeWordDetected", null)
-        }
+    private fun isModelReady(): Boolean {
+        val dir = getModelDir()
+        // Vosk model directory must contain am/final.mdl
+        return File(dir, "am/final.mdl").exists()
     }
 
-    private fun scheduleRestart(delayMs: Long) {
-        if (!isListening) return
-        handler.postDelayed({ startRecognizer() }, delayMs)
-    }
-
-    private fun startRecognizer() {
-        if (!isListening) return
-        handler.post {
-            recognizer?.destroy()
-            recognizer = SpeechRecognizer.createSpeechRecognizer(reactContext)
-            recognizer?.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { emitDebug("ready") }
-                override fun onBeginningOfSpeech() { emitDebug("listening") }
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { emitDebug("processing") }
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    if (!matches.isNullOrEmpty()) emitDebug("partial", matches[0])
-                    checkResults(matches)
-                }
-                override fun onResults(results: Bundle?) {
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    if (!matches.isNullOrEmpty()) emitDebug("heard", matches[0])
-                    errorCount = 0
-                    checkResults(matches)
-                    scheduleRestart(300)
-                }
-
-                override fun onError(error: Int) {
-                    val msg = errorName(error)
-                    Log.d("WakeWord", "onError: $msg (count=$errorCount)")
-                    emitDebug("error", msg)
-                    if (error == 5) {
-                        Log.e("WakeWord", "Speech Recognition not available (client error) — wake word disabled")
-                        emitDebug("unavailable", "Speech Recognition not available on this device")
-                        stopListening(null)
-                        return
-                    }
-                    if (error == 6 || error == 7) {
-                        errorCount = 0
-                        scheduleRestart(500L)
-                    } else {
-                        errorCount++
-                        if (errorCount > 5) {
-                            Log.e("WakeWord", "Too many errors, pausing 60s")
-                            emitDebug("paused", "retry in 60s")
-                            errorCount = 0
-                            scheduleRestart(60_000L)
-                        } else {
-                            val delay = minOf(2000L * (1L shl (errorCount - 1)), 30_000L)
-                            scheduleRestart(delay)
-                        }
-                    }
-                }
-
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-            recognizer?.startListening(buildIntent(partial = true, maxResults = 3))
-        }
+    private fun downloadModel(onDone: (Boolean) -> Unit) {
+        emitDebug("downloading", "Downloading wake word model (~50MB)...")
+        StorageService.unpack(
+            reactContext,
+            "vosk-model-small-en-us-0.15.zip",
+            "vosk-model-small-en",
+            { model ->
+                voskModel = model
+                emitDebug("model_ready", "Wake word model ready")
+                onDone(true)
+            },
+            { e ->
+                Log.e("WakeWord", "Model download failed", e)
+                emitDebug("error", "Model download failed: ${e.message}")
+                onDone(false)
+            }
+        )
     }
 
     @ReactMethod fun start(phrase: String, promise: Promise) {
-        wakePhrase = phrase
+        wakePhrase = phrase.lowercase().trim()
         isListening = true
-        errorCount = 0
-        startRecognizer()
-        promise.resolve(null)
+
+        val startListening = {
+            try {
+                startVoskListening()
+                promise.resolve(null)
+            } catch (e: Exception) {
+                promise.reject("START_ERROR", e.message)
+            }
+        }
+
+        if (voskModel != null) {
+            startListening()
+        } else if (isModelReady()) {
+            try {
+                voskModel = Model(getModelDir().absolutePath)
+                startListening()
+            } catch (e: Exception) {
+                promise.reject("MODEL_ERROR", e.message)
+            }
+        } else {
+            downloadModel { success ->
+                if (success) {
+                    startListening()
+                } else {
+                    promise.reject("MODEL_DOWNLOAD_FAILED", "Could not download Vosk model")
+                }
+            }
+        }
+    }
+
+    private fun startVoskListening() {
+        stopAudioRecord()
+
+        val sampleRate = 16000
+        val bufferSize = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(4096)
+
+        val model = voskModel ?: throw IOException("Model not loaded")
+        val recognizer = Recognizer(model, sampleRate.toFloat())
+
+        // Only recognize words in the wake phrase to save CPU
+        val words = wakePhrase.split(" ").joinToString(" ") { "\"$it\"" }
+        recognizer.setGrammar("[$words, \"[unk]\"]")
+
+        val rec = AudioRecord(
+            android.media.MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSize
+        )
+        audioRecord = rec
+        rec.startRecording()
+
+        emitDebug("ready", "Listening for \"$wakePhrase\"")
+
+        listenThread = Thread {
+            val buf = ShortArray(bufferSize / 2)
+            val byteBuf = ByteArray(bufferSize)
+            while (isListening) {
+                val read = rec.read(buf, 0, buf.size)
+                if (read <= 0) continue
+
+                // Convert shorts to bytes (little-endian PCM)
+                for (i in 0 until read) {
+                    byteBuf[i * 2] = (buf[i].toInt() and 0xFF).toByte()
+                    byteBuf[i * 2 + 1] = (buf[i].toInt() shr 8 and 0xFF).toByte()
+                }
+
+                if (recognizer.acceptWaveForm(byteBuf, read * 2)) {
+                    val result = recognizer.result
+                    checkWakeWord(result)
+                } else {
+                    val partial = recognizer.partialResult
+                    checkWakeWord(partial)
+                }
+            }
+            recognizer.close()
+        }.also { it.isDaemon = true; it.start() }
+    }
+
+    private fun checkWakeWord(json: String) {
+        val text = Regex("\"(text|partial)\"\\s*:\\s*\"([^\"]+)\"")
+            .find(json)?.groupValues?.get(2)?.lowercase() ?: return
+        if (text.isBlank() || text == "[unk]") return
+
+        emitDebug("partial", text)
+
+        val phraseWords = wakePhrase.split(" ")
+        val heardWords = text.split(" ")
+        val matchCount = phraseWords.count { pw -> heardWords.any { hw -> hw.contains(pw) } }
+        if (matchCount >= phraseWords.size - 1) { // allow 1 word miss
+            Log.d("WakeWord", "Wake phrase detected: $text")
+            handler.post {
+                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("wakeWordDetected", null)
+            }
+            emitDebug("detected", text)
+        }
     }
 
     @ReactMethod fun stop(promise: Promise) {
-        stopListening(promise)
+        isListening = false
+        stopAudioRecord()
+        promise.resolve(null)
     }
 
-    private fun stopListening(promise: Promise?) {
-        isListening = false
-        handler.post {
-            recognizer?.destroy()
-            recognizer = null
-        }
-        promise?.resolve(null)
+    private fun stopAudioRecord() {
+        listenThread?.interrupt()
+        listenThread = null
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        audioRecord = null
     }
 
     @ReactMethod fun test(promise: Promise) {
@@ -164,10 +216,10 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             outFile.parentFile?.mkdirs()
             recordingPath = path
 
-            @Suppress("DEPRECATION")
             val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(reactContext)
             } else {
+                @Suppress("DEPRECATION")
                 MediaRecorder()
             }
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -231,20 +283,5 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Exception) {
             promise.reject("PLAY_STOP_ERROR", e.message)
         }
-    }
-
-    // ── Helpers ────────────────────────────────────────────────────────────
-
-    private fun errorName(code: Int) = when (code) {
-        1 -> "network timeout"
-        2 -> "network"
-        3 -> "audio"
-        4 -> "server"
-        5 -> "client"
-        6 -> "no speech"
-        7 -> "no match"
-        8 -> "recognizer busy"
-        9 -> "insufficient permissions"
-        else -> "unknown($code)"
     }
 }

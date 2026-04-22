@@ -26,5 +26,7 @@ allprojects {
             // async-storage ships shared_storage as a local Maven repo
             url = uri("${rootProject.projectDir}/../node_modules/@react-native-async-storage/async-storage/android/local_repo")
         }
+        maven { url = uri("https://alphacephei.com/maven/") }
+        mavenCentral()
     }
 }
