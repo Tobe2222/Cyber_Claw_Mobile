@@ -193,6 +193,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [wakeDebug, setWakeDebug] = useState<string>('init');
   const [wakePhrase, setWakePhrase] = useState<string>('hey claw');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
 
   // toggleVoiceInput defined after sendMessage below
 
@@ -413,14 +414,29 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     ]);
   }, []);
 
-  const sendMessage = useCallback(() => {
+  const sendMessage = useCallback(async () => {
+    if (!isConnected) return;
+    // If there's a pending voice recording, send that
+    if (pendingAudioPath) {
+      try {
+        const fs = require('react-native-fs');
+        const base64 = await fs.readFile(pendingAudioPath, 'base64');
+        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: '🎤 Voice message', isUser: true, ts: Date.now() }]);
+        syncClient.sendAudioInput(base64, 'audio/m4a');
+        addLogEntry('🎤 Voice message sent', 'sent');
+        setPendingAudioPath(null);
+      } catch (e: any) {
+        addLogEntry(`Send error: ${e?.message}`, 'error');
+      }
+      return;
+    }
     const text = inputText.trim();
-    if (!text || !isConnected) return;
+    if (!text) return;
     setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
     syncClient.sendChat(text);
     addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
     setInputText('');
-  }, [inputText, isConnected]);
+  }, [inputText, isConnected, pendingAudioPath]);
 
   const toggleVoiceInput = useCallback(async () => {
     if (!isConnected) {
@@ -428,11 +444,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       return;
     }
     if (isVoiceListening) {
-      // Stop recording, resume wake word
+      // Stop recording → save path as pending, show preview in input area
       try {
         const result = await WakeWordModule.stopRecorder();
         setIsVoiceListening(false);
-        // Resume wake word in correct mode
+        setPendingAudioPath(result || null);
+        // Resume wake word
         const [ppnRaw, modeRaw, settingsRaw] = await Promise.all([
           AsyncStorage.getItem('cyberclaw-ppn-path'),
           AsyncStorage.getItem('cyberclaw-wake-mode'),
@@ -441,23 +458,15 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         const wakeMode = modeRaw || 'vosk';
         const ppnPath = ppnRaw || '';
         const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-        if (wakeMode === 'porcupine' && ppnPath) {
-          WakeWordModule?.startPorcupine?.(ppnPath).catch(() => WakeWordModule?.start?.(phrase));
-        } else {
-          WakeWordModule?.start?.(phrase).catch(() => {});
-        }
-        // Read file as base64
-        const fs = require('react-native-fs');
-        const base64 = await fs.readFile(result, 'base64');
-        syncClient.sendAudioInput(base64, 'audio/m4a');
-        addLogEntry('🎤 Audio sent to desktop', 'sent');
+        if (wakeMode === 'porcupine' && ppnPath) WakeWordModule?.startPorcupine?.(ppnPath).catch(() => WakeWordModule?.start?.(phrase));
+        else WakeWordModule?.start?.(phrase).catch(() => {});
       } catch (e: any) {
         setIsVoiceListening(false);
-        WakeWordModule?.start?.('hey claw').catch(() => {});
         addLogEntry(`Recording error: ${e?.message}`, 'error');
       }
     } else {
-      // Pause wake word, start recording
+      // Discard any pending audio, pause wake word, start recording
+      setPendingAudioPath(null);
       try {
         WakeWordModule?.stop?.().catch(() => {});
         const fs = require('react-native-fs');
@@ -466,16 +475,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         setIsVoiceListening(true);
         addLogEntry('🎤 Recording...', 'info');
       } catch (e: any) {
-        // Resume wake word on error too
-        Promise.all([
-          AsyncStorage.getItem('cyberclaw-ppn-path'),
-          AsyncStorage.getItem('cyberclaw-wake-mode'),
-          AsyncStorage.getItem('cyberclaw-audio-settings'),
-        ]).then(([ppn, mode, settingsRaw]) => {
-          const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-          if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
-          else WakeWordModule?.start?.(phrase).catch(() => {});
-        });
         addLogEntry(`Mic error: ${e?.message}`, 'error');
         Alert.alert('Microphone Error', e?.message || 'Could not start recording');
       }
@@ -633,23 +632,32 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
                   {isVoiceListening ? '⏹ Stop' : 'Mic'}
                 </Text>
               </TouchableOpacity>
-              <TextInput
-                style={styles.textInput}
-                value={inputText}
-                onChangeText={setInputText}
-                placeholder={isConnected ? "Message Clawsuu..." : "Not connected"}
-                placeholderTextColor="#555"
-                editable={isConnected}
-                multiline
-                maxLength={2000}
-                returnKeyType="send"
-                onSubmitEditing={sendMessage}
-                blurOnSubmit={false}
-              />
+              {pendingAudioPath ? (
+                <View style={styles.voicePreview}>
+                  <Text style={styles.voicePreviewText}>🎤 Voice message ready</Text>
+                  <TouchableOpacity onPress={() => setPendingAudioPath(null)}>
+                    <Text style={styles.voicePreviewDiscard}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TextInput
+                  style={styles.textInput}
+                  value={inputText}
+                  onChangeText={setInputText}
+                  placeholder={isConnected ? "Message Clawsuu..." : "Not connected"}
+                  placeholderTextColor="#555"
+                  editable={isConnected}
+                  multiline
+                  maxLength={2000}
+                  returnKeyType="send"
+                  onSubmitEditing={sendMessage}
+                  blurOnSubmit={false}
+                />
+              )}
               <TouchableOpacity
-                style={[styles.sendButton, (!inputText.trim() || !isConnected) && styles.sendButtonDisabled]}
+                style={[styles.sendButton, (!pendingAudioPath && !inputText.trim() || !isConnected) && styles.sendButtonDisabled]}
                 onPress={sendMessage}
-                disabled={!inputText.trim() || !isConnected}
+                disabled={!pendingAudioPath && (!inputText.trim() || !isConnected)}
               >
                 <Text style={styles.sendButtonText}>▶</Text>
               </TouchableOpacity>
@@ -800,6 +808,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239,68,68,0.25)', borderColor: '#ef4444',
   },
   micButtonText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
+  voicePreview: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 12, paddingHorizontal: 14,
+    paddingVertical: 10, marginRight: 6, borderWidth: 1, borderColor: 'rgba(247,147,26,0.4)',
+  },
+  voicePreviewText: { color: '#f7931a', fontSize: 14, fontWeight: '600' },
+  voicePreviewDiscard: { color: '#888', fontSize: 18, paddingLeft: 12 },
   recordingBanner: {
     backgroundColor: 'rgba(239,68,68,0.15)', borderTopWidth: 1, borderTopColor: 'rgba(239,68,68,0.4)',
     paddingVertical: 6, alignItems: 'center',
