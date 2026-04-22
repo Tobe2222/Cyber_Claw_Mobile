@@ -50,7 +50,14 @@ class CyberClawService : Service() {
         // Start Vosk wake word in background thread
         Thread { initAndListen() }.also { it.isDaemon = true; it.start() }
 
-        return START_STICKY
+        return START_NOT_STICKY  // do NOT restart if killed; user must explicitly start
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // User swiped app away from recents — stop the service too
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun initAndListen() {
@@ -119,25 +126,25 @@ class CyberClawService : Service() {
     }
 
     private fun openApp() {
-        // Use ACTION_MAIN + CATEGORY_LAUNCHER — best chance of bypassing background launch restrictions
-        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+        // 1. Send local broadcast — WakeReceiver can start activity when phone is unlocked
+        //    (Broadcast receivers are exempt from background activity launch restrictions
+        //    when the app has a recent task in memory)
+        val broadcastIntent = Intent(WakeReceiver.ACTION_WAKE).apply {
+            setPackage(packageName)
+        }
+        sendBroadcast(broadcastIntent)
+
+        // 2. Also fire a high-priority notification for lock screen / GrapheneOS
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             putExtra("from_wake_word", true)
-        } ?: Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            putExtra("from_wake_word", true)
-        }
+        } ?: return
 
         val pendingIntent = PendingIntent.getActivity(
-            this, 99, intent,
+            this, 99, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Try direct start — works if screen on and app was recently used
-        try { startActivity(intent) } catch (_: Exception) {}
-
-        // High-priority wake notification on dedicated IMPORTANCE_HIGH channel
-        // This makes full-screen intent actually fire (GrapheneOS needs IMPORTANCE_HIGH + CATEGORY_ALARM)
         val notif = NotificationCompat.Builder(this, "cyberclaw_wake")
             .setContentTitle("Hey Claw heard! 🐾")
             .setContentText("Tap to open CyberClaw")

@@ -250,6 +250,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             const fs = require('react-native-fs');
             const base64 = await fs.readFile(resultPath, 'base64');
             setVoiceStatus('transcribing');
+            // Safety timeout — if we hear nothing back in 20s, reset to idle
+            const transcribeTimeout = setTimeout(() => {
+              setVoiceStatus('idle');
+              addLogEntry('⚠️ Transcription timed out', 'error');
+            }, 20000);
+            syncClient.once?.('voice_transcript_result', () => clearTimeout(transcribeTimeout));
+            syncClient.once?.('typing', () => clearTimeout(transcribeTimeout));
             syncClient.sendAudioInput(base64, 'audio/m4a');
             addLogEntry('🎤 Audio sent for transcription', 'sent');
             // Resume wake word in background
@@ -350,7 +357,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);
     const onVoiceTranscriptResult = (msg: any) => {
-      if (!msg.transcript) return;
+      if (!msg.transcript) {
+        // Empty transcript = transcription failed or silence
+        setVoiceStatus('idle');
+        addLogEntry('⚠️ No speech detected', 'error');
+        return;
+      }
       addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
       if (fullscreenRef.current) {
         // Focus mode: auto-send to AI, show thinking status
@@ -360,6 +372,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       } else {
         // Chat mode: put in input box for review
         setInputText(msg.transcript);
+        setVoiceStatus('idle');
       }
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
@@ -512,7 +525,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       <StatusBar hidden={fullscreen} />
       {/* Header */}
       <View style={styles.headerBar}>
-        <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
+        <View style={styles.headerTitleGroup}>
+          <Text style={styles.headerTitleLeft}>Cyber</Text>
+          <View style={styles.headerCameraSpace} />
+          <Text style={styles.headerTitleRight}>Claw</Text>
+        </View>
         <View style={styles.headerRight}>
           <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
           <Text style={styles.statusLabel}>{statusLabel}</Text>
@@ -718,6 +735,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#111', borderBottomWidth: 1, borderBottomColor: '#222',
   },
   headerTitle: { color: '#f7931a', fontSize: 16, fontWeight: 'bold' },
+  headerTitleGroup: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    flex: 1,
+  },
+  headerTitleLeft: { color: '#f7931a', fontSize: 16, fontWeight: 'bold' },
+  headerTitleRight: { color: '#f7931a', fontSize: 16, fontWeight: 'bold' },
+  headerCameraSpace: { width: 32 }, // room for camera cutout
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
   dotOnline: { backgroundColor: '#4ade80' },
@@ -834,19 +858,19 @@ const styles = StyleSheet.create({
   },
   voicePipelineOverlay: {
     position: 'absolute',
-    bottom: 40,
+    top: 60,
     left: 0, right: 0,
     alignItems: 'center',
     pointerEvents: 'none',
   },
   voicePipelineText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 24,
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 13,
+    fontWeight: '600',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 16,
     overflow: 'hidden',
     textAlign: 'center',
   },

@@ -44,7 +44,16 @@
       <service
         android:name=".CyberClawService"
         android:foregroundServiceType="microphone"
+        android:stopWithTask="true"
         android:exported="false" />
+
+      <receiver
+        android:name=".WakeReceiver"
+        android:exported="false">
+        <intent-filter>
+          <action android:name="com.cyberclawmobile.ACTION_WAKE" />
+        </intent-filter>
+      </receiver>
 
 
     </application>
