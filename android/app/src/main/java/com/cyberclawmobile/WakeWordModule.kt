@@ -154,11 +154,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
         val model = voskModel ?: throw IOException("Model not loaded")
         val recognizer = Recognizer(model, sampleRate.toFloat())
-
-        // Only recognize words in the wake phrase to save CPU
-        val words = wakePhrase.split(" ").joinToString(" ") { "\"$it\"" }
-        recognizer.setGrammar("[$words, \"[unk]\"]")
-
+        // No grammar/setGrammar — causes SIGSEGV with standard models
         val rec = AudioRecord(
             android.media.MediaRecorder.AudioSource.MIC,
             sampleRate,
