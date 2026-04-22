@@ -273,6 +273,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);
+    const onVoiceTranscriptResult = (msg: any) => {
+      if (msg.transcript) {
+        setInputText(msg.transcript);
+        addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
+      }
+    };
+    syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
     onLogEntry(onLogUpdate);
 
     syncClient.loadSaved().then(({ host }) => {
@@ -291,6 +298,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       syncClient.off('chat_history', onChatHistory);
       syncClient.off('arena', onArena);
       syncClient.off('audio_response', onAudioResponse);
+      syncClient.off('voice_transcript_result', onVoiceTranscriptResult);
       offLogEntry(onLogUpdate);
     };
   }, [speak, setArenaThinking]);
