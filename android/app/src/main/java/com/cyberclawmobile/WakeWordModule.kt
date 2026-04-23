@@ -264,7 +264,9 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
             // Auto-stop on silence: poll amplitude every 500ms, stop after silenceMs of quiet
             var silentFor = 0L
-            val SILENCE_THRESHOLD = 500 // amplitude units (0-32767)
+            var recordingFor = 0L
+            val SILENCE_THRESHOLD = 2000 // ~6% of max; filters out mic hiss/room noise
+            val MIN_RECORDING_MS = 1500L  // always record at least 1.5s before silence check
             val POLL_MS = 500L
             val timer = java.util.Timer()
             silenceTimer = timer
@@ -273,6 +275,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     val rec = mediaRecorder ?: run { cancel(); return }
                     val amp = try { rec.maxAmplitude } catch (_: Exception) { -1 }
                     if (amp < 0) return // recorder stopped externally
+                    recordingFor += POLL_MS
+                    if (recordingFor < MIN_RECORDING_MS) return // don't silence-check yet
+                    if (recordingFor >= 60_000L) { // hard cap: 60s max recording
+                        cancel()
+                        handler.post {
+                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                .emit("recorderSilence", null)
+                        }
+                        return
+                    }
                     if (amp < SILENCE_THRESHOLD) {
                         silentFor += POLL_MS
                         if (silentFor >= silenceMs) {

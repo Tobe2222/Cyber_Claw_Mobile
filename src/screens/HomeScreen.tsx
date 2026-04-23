@@ -69,6 +69,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [activeTab, setActiveTab] = useState<TabId>('chat');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [lockScreenMode, setLockScreenMode] = useState(false);
@@ -293,24 +294,21 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
     const onChat = (msg: any) => {
       if (msg.isUser) return;
+      setChatVoiceStatus(null); // clear status when response arrives
       setMessages(prev => {
         const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
         if (dupe) return prev;
         return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
       });
       addLogEntry(`← ${msg.text.substring(0, 80)}`, 'received');
-      // Always speak if last input was voice; otherwise respect ttsEnabled setting
-      if (lastInputWasVoice) {
-        speak(msg.text);
-        setLastInputWasVoice(false);
-      } else {
-        speak(msg.text);
-      }
+      speak(msg.text);
     };
 
     const onTyping = (msg: any) => {
       setIsThinking(!!msg.active);
       setArenaThinking(!!msg.active);
+      if (!fullscreenRef.current && msg.active) setChatVoiceStatus('🧠 Clawsuu is thinking...');
+      if (!fullscreenRef.current && !msg.active) { /* keep until message arrives */ }
       if (fullscreenRef.current) setVoiceStatus(msg.active ? 'thinking' : 'responding');
     };
 
@@ -358,24 +356,30 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     syncClient.on('audio_response', onAudioResponse);
     const onVoiceTranscriptResult = (msg: any) => {
       if (!msg.transcript) {
-        // Empty transcript = transcription failed or silence
         setVoiceStatus('idle');
+        setChatVoiceStatus(null);
         addLogEntry('⚠️ No speech detected', 'error');
         return;
       }
       addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
       if (fullscreenRef.current) {
-        // Focus mode: auto-send to AI, show thinking status
         setVoiceStatus('thinking');
         setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
         syncClient.sendChat(msg.transcript);
       } else {
-        // Chat mode: put in input box for review
-        setInputText(msg.transcript);
+        // Chat mode: show transcript as new user message, auto-send
+        setChatVoiceStatus('🧠 Clawsuu is thinking...');
+        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
+        syncClient.sendChat(msg.transcript);
         setVoiceStatus('idle');
       }
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
+
+    const onVoiceReceived = () => {
+      setChatVoiceStatus('💻 Received at desktop, transcribing...');
+    };
+    syncClient.on('voice_received', onVoiceReceived);
     onLogEntry(onLogUpdate);
 
     syncClient.loadSaved().then(({ host }) => {
@@ -396,6 +400,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       syncClient.off('arena', onArena);
       syncClient.off('audio_response', onAudioResponse);
       syncClient.off('voice_transcript_result', onVoiceTranscriptResult);
+      syncClient.off('voice_received', onVoiceReceived);
       offLogEntry(onLogUpdate);
     };
   }, [speak, setArenaThinking]);
@@ -438,10 +443,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         const fs = require('react-native-fs');
         const base64 = await fs.readFile(pendingAudioPath, 'base64');
         setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: '🎤 Voice message', isUser: true, ts: Date.now() }]);
+        setChatVoiceStatus('📤 Sending to desktop...');
         syncClient.sendAudioInput(base64, 'audio/m4a');
         addLogEntry('🎤 Voice message sent', 'sent');
         setPendingAudioPath(null);
+        // Status will update via mobile-voice-incoming / transcript events
       } catch (e: any) {
+        setChatVoiceStatus(null);
         addLogEntry(`Send error: ${e?.message}`, 'error');
       }
       return;
@@ -634,6 +642,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             {isVoiceListening && (
               <View style={styles.recordingBanner}>
                 <Text style={styles.recordingBannerText}>⏹ Recording… tap Stop when done</Text>
+              </View>
+            )}
+            {chatVoiceStatus && (
+              <View style={styles.chatStatusBar}>
+                <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
               </View>
             )}
             <View style={styles.inputContainer}>
@@ -840,6 +853,14 @@ const styles = StyleSheet.create({
   },
   voicePreviewText: { color: '#f7931a', fontSize: 14, fontWeight: '600' },
   voicePreviewDiscard: { color: '#888', fontSize: 18, paddingLeft: 12 },
+  chatStatusBar: {
+    paddingHorizontal: 16, paddingVertical: 6,
+    backgroundColor: 'rgba(247,147,26,0.08)',
+    borderTopWidth: 1, borderTopColor: 'rgba(247,147,26,0.15)',
+  },
+  chatStatusText: {
+    color: 'rgba(247,147,26,0.85)', fontSize: 12, fontStyle: 'italic',
+  },
   recordingBanner: {
     backgroundColor: 'rgba(239,68,68,0.15)', borderTopWidth: 1, borderTopColor: 'rgba(239,68,68,0.4)',
     paddingVertical: 6, alignItems: 'center',
