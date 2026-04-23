@@ -525,11 +525,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       <StatusBar hidden={fullscreen} />
       {/* Header */}
       <View style={styles.headerBar}>
-        <View style={styles.headerTitleGroup}>
-          <Text style={styles.headerTitleLeft}>Cyber</Text>
-          <View style={styles.headerCameraSpace} />
-          <Text style={styles.headerTitleRight}>Claw</Text>
-        </View>
+        <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
         <View style={styles.headerRight}>
           <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
           <Text style={styles.statusLabel}>{statusLabel}</Text>
@@ -589,7 +585,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           })()}
           {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>
-              <Text style={styles.lockBadgeText}>🐾 CyberClaw</Text>
+              <Text style={styles.lockBadgeText}>Cyber</Text>
+              <View style={styles.headerCameraSpace} />
+              <Text style={styles.lockBadgeText}>Claw</Text>
             </View>
           )}
         </View>
@@ -875,7 +873,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   lockBadge: {
-    position: 'absolute', top: 16, right: 12,
+    position: 'absolute', top: 16, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
   },
   lockBadgeText: {
     color: 'rgba(247,147,26,0.6)', fontSize: 13,
