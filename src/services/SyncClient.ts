@@ -218,6 +218,10 @@ class SyncClient {
   }
 
   sendAudioInput(audioBase64: string, mimeType: string = 'audio/m4a') {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.emit('send_error', { type: 'audio_input', reason: 'not_connected' });
+      return;
+    }
     this.send({ type: 'audio_input', audioBase64, mimeType });
   }
 
@@ -306,7 +310,11 @@ class SyncClient {
 
   private send(obj: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(obj));
+      try {
+        this.ws.send(JSON.stringify(obj));
+      } catch (e: any) {
+        this.emit('send_error', { type: obj.type, reason: e?.message });
+      }
     }
   }
 

@@ -127,12 +127,24 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === 'fullscreen') {
         setFullscreen(true);
+        fullscreenRef.current = true;
         AppControl?.keepScreenOn?.(true);
         webViewRef.current?.injectJavaScript(`
           window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})}));
           document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})}));
           true;
         `);
+        // Auto-start listening when focus screen opens
+        (async () => {
+          try {
+            WakeWordModule?.stop?.().catch(() => {});
+            const fs = require('react-native-fs');
+            const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-focus-${Date.now()}.m4a`;
+            await WakeWordModule.startRecorder(recPath);
+            setIsVoiceListening(true);
+            setVoiceStatus('recording');
+          } catch {}
+        })();
       }
       if (msg.type === 'exitFullscreen') {
         closeFullscreen();
@@ -231,6 +243,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     // Wake word event → bring app to front in focus mode
     const wakeEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
     const wakeSub = wakeEmitter?.addListener('wakeWordDetected', () => {
+      handleWakeWord();
+    });
+    // Also listen for wake-word-opened-app from MainActivity (broadcast receiver path)
+    const { DeviceEventEmitter } = require('react-native');
+    const wakeOpenSub = DeviceEventEmitter.addListener('wakeWordOpenedApp', () => {
       handleWakeWord();
     });
     // Auto-stop recording after silence detected
@@ -380,6 +397,15 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       setChatVoiceStatus('💻 Received at desktop, transcribing...');
     };
     syncClient.on('voice_received', onVoiceReceived);
+
+    const onSendError = (e: any) => {
+      if (e?.type === 'audio_input') {
+        setChatVoiceStatus(null);
+        setVoiceStatus('idle');
+        addLogEntry('❌ Not connected — reconnect and try again', 'error');
+      }
+    };
+    syncClient.on('send_error', onSendError);
     onLogEntry(onLogUpdate);
 
     syncClient.loadSaved().then(({ host }) => {
@@ -391,6 +417,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
     return () => {
       wakeSub?.remove();
+      wakeOpenSub?.remove();
       silenceSub?.remove();
       debugSub?.remove();
       syncClient.off('state_change', onState);
@@ -401,6 +428,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       syncClient.off('audio_response', onAudioResponse);
       syncClient.off('voice_transcript_result', onVoiceTranscriptResult);
       syncClient.off('voice_received', onVoiceReceived);
+      syncClient.off('send_error', onSendError);
       offLogEntry(onLogUpdate);
     };
   }, [speak, setArenaThinking]);
