@@ -219,10 +219,17 @@ class SyncClient {
 
   sendAudioInput(audioBase64: string, mimeType: string = 'audio/m4a') {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('[SyncClient] Audio input failed: WebSocket not open (state: ' + (this.ws?.readyState || 'none') + ')');
       this.emit('send_error', { type: 'audio_input', reason: 'not_connected' });
       return;
     }
-    this.send({ type: 'audio_input', audioBase64, mimeType });
+    try {
+      this.send({ type: 'audio_input', audioBase64, mimeType });
+      console.log('[SyncClient] Audio input sent (' + (audioBase64.length / 1024).toFixed(1) + ' KB)');
+    } catch (e: any) {
+      console.error('[SyncClient] Audio input send failed:', e.message);
+      this.emit('send_error', { type: 'audio_input', reason: e?.message });
+    }
   }
 
   requestChatHistory() {

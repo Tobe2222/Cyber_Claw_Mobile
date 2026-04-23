@@ -122,29 +122,44 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   }, []);
 
   // Open fullscreen from arena WebView message
+  // Enter Voice Mode (fullscreen dedicated to voice interaction)
+  const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus', showLockScreen = false) => {
+    if (source === 'wakeword') {
+      bringToForeground();
+      setLockScreenMode(true);
+      AppControl?.showOnLockScreenWithDismiss?.();
+    }
+    setFullscreen(true);
+    fullscreenRef.current = true;
+    AppControl?.keepScreenOn?.(true);
+    
+    // Inject fullscreen state into arena
+    webViewRef.current?.injectJavaScript(`
+      window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true${source === 'wakeword' ? ',focused:true' : ''}})}));
+      document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true${source === 'wakeword' ? ',focused:true' : ''}})}));
+      true;
+    `);
+    
+    // Auto-start listening
+    try {
+      WakeWordModule?.stop?.().catch(() => {});
+      const fs = require('react-native-fs');
+      const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
+      await WakeWordModule.startRecorder(recPath);
+      setIsVoiceListening(true);
+      setVoiceStatus('recording');
+    } catch (e) {
+      addLogEntry(`[Voice] Failed to start recording: ${e?.message}`, 'error');
+    }
+  }, []);
+
+  // Handle messages from arena (companion screen)
   const handleArenaMessage = useCallback((e: any) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === 'fullscreen') {
-        setFullscreen(true);
-        fullscreenRef.current = true;
-        AppControl?.keepScreenOn?.(true);
-        webViewRef.current?.injectJavaScript(`
-          window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})}));
-          document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true})}));
-          true;
-        `);
-        // Auto-start listening when focus screen opens
-        (async () => {
-          try {
-            WakeWordModule?.stop?.().catch(() => {});
-            const fs = require('react-native-fs');
-            const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-focus-${Date.now()}.m4a`;
-            await WakeWordModule.startRecorder(recPath);
-            setIsVoiceListening(true);
-            setVoiceStatus('recording');
-          } catch {}
-        })();
+        // Arena requested to enter voice mode
+        enterVoiceMode('focus');
       }
       if (msg.type === 'exitFullscreen') {
         closeFullscreen();
@@ -156,31 +171,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
     } catch {}
-  }, [closeFullscreen]);
+  }, [enterVoiceMode, closeFullscreen]);
 
-  // Wake word → bring to foreground + start recording in focus mode
-  const fullscreenRef = useRef(false);
+  // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
-    bringToForeground();
-    setFullscreen(true);
-    fullscreenRef.current = true;
-    setLockScreenMode(true);
-    AppControl?.showOnLockScreenWithDismiss?.();
-    AppControl?.keepScreenOn?.(true);
-    setTimeout(() => {
-      const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})})); true;`;
-      webViewRef.current?.injectJavaScript(js);
-    }, 300);
-    // Auto-start recording
-    try {
-      WakeWordModule?.stop?.().catch(() => {});
-      const fs = require('react-native-fs');
-      const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wake-${Date.now()}.m4a`;
-      await WakeWordModule.startRecorder(recPath);
-      setIsVoiceListening(true);
-      setVoiceStatus('recording');
-    } catch {}
-  }, []);
+    await enterVoiceMode('wakeword', true);
+  }, [enterVoiceMode]);
 
   // Load persisted chat
   useEffect(() => {
@@ -379,9 +375,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         return;
       }
       addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
+      // Always add to messages and update voice status
+      setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
+      setVoiceStatus('thinking');
+      setChatVoiceStatus('🧠 Clawsuu is thinking...');
       if (fullscreenRef.current) {
-        setVoiceStatus('thinking');
-        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
         syncClient.sendChat(msg.transcript);
       } else {
         // Chat mode: show transcript as new user message, auto-send
@@ -395,6 +393,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
     const onVoiceReceived = () => {
       setChatVoiceStatus('💻 Received at desktop, transcribing...');
+      if (fullscreenRef.current) setVoiceStatus('transcribing');
     };
     syncClient.on('voice_received', onVoiceReceived);
 
@@ -571,7 +570,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         </View>
       </View>
 
-      {/* Arena — expands to fullscreen when fullscreen state is active */}
+      {/* Voice Screen (fullscreen) - Hands-free voice interaction via wake word or arena focus */}
       {(!keyboardVisible || fullscreen) && (
         <View style={fullscreen
           ? [StyleSheet.absoluteFill, { zIndex: 100 }]
