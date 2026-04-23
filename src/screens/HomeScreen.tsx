@@ -265,14 +265,27 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             const base64 = await fs.readFile(resultPath, 'base64');
             setVoiceStatus('transcribing');
             // Safety timeout — if we hear nothing back in 20s, reset to idle
+            const transcribeStart = Date.now();
+            // Set up listeners BEFORE sending to catch immediate responses
+            let transcribeResolved = false;
+            const clearTranscribeTimeout = () => {
+              if (!transcribeResolved) {
+                transcribeResolved = true;
+                clearTimeout(transcribeTimeout);
+              }
+            };
             const transcribeTimeout = setTimeout(() => {
-              setVoiceStatus('idle');
-              addLogEntry('⚠️ Transcription timed out', 'error');
-            }, 20000);
-            syncClient.once?.('voice_transcript_result', () => clearTimeout(transcribeTimeout));
-            syncClient.once?.('typing', () => clearTimeout(transcribeTimeout));
+              if (!transcribeResolved) {
+                transcribeResolved = true;
+                const elapsed = Math.round((Date.now() - transcribeStart) / 1000);
+                setVoiceStatus('idle');
+                addLogEntry(`⚠️ Transcription timed out after ${elapsed}s — no response from desktop`, 'error');
+              }
+            }, 30000); // 30s timeout
+            syncClient.once?.('voice_transcript_result', clearTranscribeTimeout);
+            syncClient.once?.('typing', clearTranscribeTimeout);
             syncClient.sendAudioInput(base64, 'audio/m4a');
-            addLogEntry('🎤 Audio sent for transcription', 'sent');
+            addLogEntry('🎤 Audio sent to desktop', 'sent');
             // Resume wake word in background
             const [ppn, mode, settingsRaw] = await Promise.all([
               AsyncStorage.getItem('cyberclaw-ppn-path'),
