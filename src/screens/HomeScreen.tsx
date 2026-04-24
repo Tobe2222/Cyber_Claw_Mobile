@@ -7,7 +7,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert,
-  NativeModules, StatusBar, NativeEventEmitter,
+  NativeModules, StatusBar, NativeEventEmitter, BackHandler,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -167,6 +167,16 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       }
     } catch {}
   }, [closeFullscreen]);
+
+  // Handle Android back button in fullscreen mode
+  useEffect(() => {
+    if (!fullscreen) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeFullscreen();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [fullscreen, closeFullscreen]);
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
@@ -585,7 +595,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             }}
           />
           {fullscreen && (
-            <TouchableOpacity style={styles.voiceModeCloseBtn} onPress={closeFullscreen}>
+            <TouchableOpacity style={styles.voiceModeCloseBtn} onPress={closeFullscreen} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
               <Text style={styles.voiceModeBtnText}>✕</Text>
             </TouchableOpacity>
           )}
@@ -923,13 +933,13 @@ const styles = StyleSheet.create({
   voiceLogError: { color: '#ef4444' },
   // Voice Mode Close Button
   voiceModeCloseBtn: {
-    position: 'absolute', top: 16, right: 16,
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    borderWidth: 1, borderColor: 'rgba(239,68,68,0.5)',
+    position: 'absolute', bottom: 20, right: 16,
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderWidth: 2, borderColor: '#ef4444',
     justifyContent: 'center', alignItems: 'center',
   },
   voiceModeCloseBtnText: {
-    color: '#ef4444', fontSize: 20, fontWeight: 'bold',
+    color: '#ef4444', fontSize: 24, fontWeight: 'bold',
   },
 });
