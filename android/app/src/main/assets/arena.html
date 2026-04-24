@@ -54,11 +54,10 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
     <button class="btn" id="settingsBtn" title="Settings">Settings</button>
   </div>
   <div id="ctrlRight">
-    <button class="btn" id="fsBtn" title="Fullscreen">Fullscreen</button>
+    <button class="btn" id="voiceBtn" title="Voice Mode">Voice</button>
   </div>
   <div id="ctrlFs">
-    <button class="btn" id="focusBtn" title="Focus companion">Focus</button>
-    <button class="btn" id="exitFsBtn" title="Exit">Exit</button>
+    <button class="btn" id="exitVoiceBtn" title="Exit">Exit</button>
   </div>
   <div id="thinking">thinking...</div>
 
@@ -316,13 +315,14 @@ function setFocusMode(on) {
   btn.textContent=on?'Arena':'Focus';
   btn.title=on?'Show arena':'Focus companion';
 }
-document.getElementById('fsBtn').addEventListener('click',()=>{
+document.getElementById('voiceBtn').addEventListener('click',()=>{
   setFullscreenMode(true);
+  setFocusMode(true);
   window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'}));
 });
-document.getElementById('focusBtn').addEventListener('click',()=>setFocusMode(!focused));
-document.getElementById('exitFsBtn').addEventListener('click',()=>{
-  setFocusMode(false); setFullscreenMode(false);
+document.getElementById('exitVoiceBtn').addEventListener('click',()=>{
+  setFocusMode(false);
+  setFullscreenMode(false);
   window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'}));
 });
 

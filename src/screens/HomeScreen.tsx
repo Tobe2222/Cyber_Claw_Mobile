@@ -71,8 +71,10 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [isThinking, setIsThinking] = useState(false);
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  // Legacy state - kept for compatibility but not used for fullscreen overlay
+  const [fullscreen, setFullscreen] = useState(false);
   const [lockScreenMode, setLockScreenMode] = useState(false);
+  const [silenceCountdown, setSilenceCountdown] = useState(0);
+  const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
@@ -106,8 +108,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     webViewRef.current?.injectJavaScript(inject);
   }, []);
 
-  // Simplified: just close focus mode by messaging arena
+  // Close fullscreen mode and reset state
   const closeFullscreen = useCallback(() => {
+    setFullscreen(false);
+    fullscreenRef.current = false;
+    AppControl?.keepScreenOn?.(false);
     const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
     webViewRef.current?.injectJavaScript(js);
   }, []);
@@ -144,9 +149,15 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const handleArenaMessage = useCallback((e: any) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
+      if (msg.type === 'fullscreen') {
+        // User clicked Voice button in arena → enter fullscreen
+        setFullscreen(true);
+        fullscreenRef.current = true;
+        AppControl?.keepScreenOn?.(true);
+      }
       if (msg.type === 'exitFullscreen') {
-        fullscreenRef.current = false;
-        AppControl?.keepScreenOn?.(false);
+        // User clicked Exit in voice mode → exit fullscreen
+        closeFullscreen();
       }
       if (msg.type === 'saveBg') {
         AsyncStorage.setItem('cyberclaw-arena-bg', msg.value);
@@ -155,7 +166,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
     } catch {}
-  }, []);
+  }, [closeFullscreen]);
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
@@ -547,9 +558,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         </View>
       </View>
 
-      {/* Arena - Always visible at ARENA_HEIGHT */}
+      {/* Arena - Conditional rendering based on fullscreen */}
       {!keyboardVisible && (
-        <View style={{ height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
+        <View style={fullscreen ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
           <WebView
             ref={webViewRef}
             source={{ uri: 'file:///android_asset/arena.html' }}
@@ -571,29 +582,36 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               });
             }}
           />
+          {fullscreen && (
+            <TouchableOpacity style={styles.voiceModeCloseBtn} onPress={closeFullscreen}>
+              <Text style={styles.voiceModeBtnText}>✕</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
-      {/* Thinking indicator */}
-      {isThinking && (
+      {/* Thinking indicator - Hidden when fullscreen */}
+      {!fullscreen && isThinking && (
         <View style={styles.thinkingBar}>
           <Text style={styles.thinkingText}>💭 Clawsuu is thinking...</Text>
         </View>
       )}
 
+      {/* Tabs - Hidden when fullscreen */}
+      {!fullscreen && (
+        <View style={styles.tabBar}>
+          {(['chat', 'events', 'log'] as TabId[]).map(tab => (
+            <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
+              <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+                {tab === 'chat' ? '💬 Chat' : tab === 'events' ? '📜 Events' : '📋 Log'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
-
-      {/* Tabs */}
-      <View style={styles.tabBar}>
-        {(['chat', 'events', 'log'] as TabId[]).map(tab => (
-          <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-              {tab === 'chat' ? '💬 Chat' : tab === 'events' ? '📜 Events' : '📋 Log'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
+      {/* Tab content - Hidden when fullscreen */}
+      {!fullscreen && (
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
         {activeTab === 'chat' && (
           <>
@@ -707,6 +725,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           </>
         )}
       </KeyboardAvoidingView>
+      )}
     </View>
   );
 }
