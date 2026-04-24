@@ -7,7 +7,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert,
-  NativeModules, StatusBar, NativeEventEmitter, BackHandler,
+  NativeModules, StatusBar, NativeEventEmitter, BackHandler, AppState,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -266,6 +266,42 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
   // toggleVoiceInput defined after sendMessage below
 
+  // AppState listener to pause/resume wake word based on app foreground/background
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        // App came to foreground → STOP wake word listening
+        WakeWordModule?.stop?.().catch(() => {});
+        addLogEntry('Wake word paused (app in foreground)', 'info');
+      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+        // App went to background → RESUME wake word listening
+        Promise.all([
+          AsyncStorage.getItem('cyberclaw-audio-settings'),
+          AsyncStorage.getItem('cyberclaw-ppn-path'),
+          AsyncStorage.getItem('cyberclaw-wake-mode'),
+        ]).then(([settingsRaw, ppnPath, wakeModeRaw]) => {
+          const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+          const ppn = ppnPath || '';
+          const wakeMode = wakeModeRaw || 'vosk';
+          const phrase = settings.wakeWord || 'hey claw';
+          if (wakeMode === 'porcupine' && ppn) {
+            WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
+              WakeWordModule?.start?.(phrase).catch(() => {});
+            });
+          } else {
+            WakeWordModule?.start?.(phrase).catch(() => {});
+          }
+          addLogEntry('Wake word resumed (app in background)', 'info');
+        });
+      }
+      appStateRef.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
   // Sync & background service
   useEffect(() => {
     startBgService();
@@ -292,6 +328,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         addLogEntry(`Starting wake detection, phrase: "${phrase}"`, 'info');
       }
     });
+
+    // Check if app is already in background (e.g., freshly opened from wakeword)
+    // If so, don't start wake word yet — wait for transition
+    if (appStateRef.current !== 'active') {
+      // App is backgrounded — wake word will be started by AppState listener
+    }
 
     // Wake word event → bring app to front in focus mode
     const wakeEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
@@ -441,6 +483,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   }, [messages.length, activeTab]);
 
   const [lastInputWasVoice, setLastInputWasVoice] = useState(false);
+  const appStateRef = useRef<string>(AppState.currentState);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
@@ -687,11 +730,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
                 </View>
               }
             />
-            {isVoiceListening && (
-              <View style={styles.recordingBanner}>
-                <Text style={styles.recordingBannerText}>⏹ Recording… tap Stop when done</Text>
-              </View>
-            )}
             {chatVoiceStatus && (
               <View style={styles.chatStatusBar}>
                 <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
