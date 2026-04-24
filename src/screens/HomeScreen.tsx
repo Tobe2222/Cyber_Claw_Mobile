@@ -124,6 +124,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       bringToForeground();
       AppControl?.showOnLockScreenWithDismiss?.();
       AppControl?.keepScreenOn?.(true);
+      setFullscreen(true);  // Set state so overlay renders
       fullscreenRef.current = true;
       
       // Tell arena to enter focus mode
