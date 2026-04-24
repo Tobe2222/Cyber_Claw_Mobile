@@ -188,8 +188,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         
         await recorder.start(recPath, 5000); // 5s silence timeout
         setIsVoiceListening(true);
-        setVoiceStatus('recording');
-        addLogEntry('Voice mode recording started', 'info');
+        setVoiceStatus('listening');
+        addLogEntry('Voice mode: listening for audio', 'info');
       } catch (e) {
         setVoiceStatus('idle');
         addLogEntry(`Voice recording failed: ${e?.message}`, 'error');
@@ -202,6 +202,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     try {
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === 'fullscreen') {
+        // Ignore fullscreen request if already recording in chat mode
+        if (isVoiceListening) {
+          addLogEntry('Ignored: Voice fullscreen blocked during chat recording', 'info');
+          return;
+        }
         // User clicked Voice button in arena → enter fullscreen
         setFullscreen(true);
         fullscreenRef.current = true;
@@ -561,11 +566,14 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         addLogEntry(`Stop recording error: ${e?.message}`, 'error');
       }
     } else {
-      // Discard any pending audio, start recording with SimpleAudioRecorder
+      // Discard any pending audio, PAUSE wake word, start recording with SimpleAudioRecorder
       setPendingAudioPath(null);
       try {
+        // PAUSE wake word while recording in chat - prevent conflicts
+        WakeWordModule?.stop?.().catch(() => {});
+        
         const fs = require('react-native-fs');
-        const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
+        const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-chat-voice-${Date.now()}.m4a`;
         const recorder = getSimpleAudioRecorder();
         
         // Set up silence detection listener for chat mode
@@ -676,12 +684,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           {fullscreen && (isVoiceListening || voiceStatus !== 'idle') && (
             <View style={styles.voiceStatusOverlay} pointerEvents="none">
               <Text style={styles.voiceStatusText}>
-                {isVoiceListening ? '🔴 Recording...' : 
+                {voiceStatus === 'listening' ? '🎧 Listening for audio...' :
+                 voiceStatus === 'recording' ? '🔴 Recording...' :
                  voiceStatus === 'silence_countdown' ? `⏳ Sending in ${silenceCountdown}s...` :
                  voiceStatus === 'transcribing' ? '📝 Transcribing...' :
                  voiceStatus === 'thinking' ? '💭 Thinking...' :
                  voiceStatus === 'responding' ? '💬 Response incoming...' :
-                 '🎤 Recording...'}
+                 '🎤 Ready...'}
               </Text>
             </View>
           )}
