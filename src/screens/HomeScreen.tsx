@@ -71,16 +71,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [isThinking, setIsThinking] = useState(false);
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  const [fullscreen, setFullscreen] = useState(false);
+  // Legacy state - kept for compatibility but not used for fullscreen overlay
   const [lockScreenMode, setLockScreenMode] = useState(false);
-  // Voice pipeline status (shown in focus overlay)
-  type VoiceStatus = 'idle' | 'recording' | 'silence_countdown' | 'sending' | 'transcribing' | 'thinking' | 'responding' | 'playing';
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
-  const [silenceCountdown, setSilenceCountdown] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
+  const fullscreenRef = useRef(false);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -109,47 +106,37 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     webViewRef.current?.injectJavaScript(inject);
   }, []);
 
-  // When fullscreen closes, restore lock screen flags
+  // Simplified: just close focus mode by messaging arena
   const closeFullscreen = useCallback(() => {
-    setFullscreen(false);
-    fullscreenRef.current = false;
-    setVoiceStatus('idle');
-    setLockScreenMode(false);
-    AppControl?.showOnLockScreen?.(false);
-    AppControl?.keepScreenOn?.(false);
     const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
     webViewRef.current?.injectJavaScript(js);
   }, []);
 
-  // Open fullscreen from arena WebView message
-  // Enter Voice Mode (fullscreen dedicated to voice interaction)
-  const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus', showLockScreen = false) => {
+  // Simplified enterVoiceMode - only handles wakeword wake-up
+  const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     if (source === 'wakeword') {
       bringToForeground();
-      setLockScreenMode(true);
       AppControl?.showOnLockScreenWithDismiss?.();
-    }
-    setFullscreen(true);
-    fullscreenRef.current = true;
-    AppControl?.keepScreenOn?.(true);
-    
-    // Inject fullscreen state into arena
-    webViewRef.current?.injectJavaScript(`
-      window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true${source === 'wakeword' ? ',focused:true' : ''}})}));
-      document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true${source === 'wakeword' ? ',focused:true' : ''}})}));
-      true;
-    `);
-    
-    // Auto-start listening
-    try {
-      WakeWordModule?.stop?.().catch(() => {});
-      const fs = require('react-native-fs');
-      const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
-      await WakeWordModule.startRecorder(recPath);
-      setIsVoiceListening(true);
-      setVoiceStatus('recording');
-    } catch (e) {
-      addLogEntry(`[Voice] Failed to start recording: ${e?.message}`, 'error');
+      AppControl?.keepScreenOn?.(true);
+      fullscreenRef.current = true;
+      
+      // Tell arena to enter focus mode
+      webViewRef.current?.injectJavaScript(`
+        window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
+        document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
+        true;
+      `);
+      
+      // Auto-start listening
+      try {
+        WakeWordModule?.stop?.().catch(() => {});
+        const fs = require('react-native-fs');
+        const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
+        await WakeWordModule.startRecorder(recPath);
+        setIsVoiceListening(true);
+      } catch (e) {
+        addLogEntry(`[Voice] Failed to start recording: ${e?.message}`, 'error');
+      }
     }
   }, []);
 
@@ -157,12 +144,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const handleArenaMessage = useCallback((e: any) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
-      if (msg.type === 'fullscreen') {
-        // Arena requested to enter voice mode
-        enterVoiceMode('focus');
-      }
       if (msg.type === 'exitFullscreen') {
-        closeFullscreen();
+        fullscreenRef.current = false;
+        AppControl?.keepScreenOn?.(false);
       }
       if (msg.type === 'saveBg') {
         AsyncStorage.setItem('cyberclaw-arena-bg', msg.value);
@@ -171,7 +155,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
     } catch {}
-  }, [enterVoiceMode, closeFullscreen]);
+  }, []);
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
@@ -257,13 +241,11 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         setSilenceCountdown(count);
         if (count <= 0) {
           clearInterval(tick);
-          setVoiceStatus('sending');
           WakeWordModule.stopRecorder().then(async (resultPath: string) => {
             setIsVoiceListening(false);
-            if (!resultPath) { setVoiceStatus('idle'); return; }
+            if (!resultPath) { return; }
             const fs = require('react-native-fs');
             const base64 = await fs.readFile(resultPath, 'base64');
-            setVoiceStatus('transcribing');
             // Safety timeout — if we hear nothing back in 20s, reset to idle
             const transcribeStart = Date.now();
             // Set up listeners BEFORE sending to catch immediate responses
@@ -278,14 +260,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               if (!transcribeResolved) {
                 transcribeResolved = true;
                 const elapsed = Math.round((Date.now() - transcribeStart) / 1000);
-                setVoiceStatus('idle');
                 addLogEntry(`⚠️ Transcription timed out after ${elapsed}s — no response from desktop`, 'error');
               }
             }, 30000); // 30s timeout
             syncClient.once?.('voice_transcript_result', clearTranscribeTimeout);
             syncClient.once?.('typing', clearTranscribeTimeout);
             syncClient.sendAudioInput(base64, 'audio/m4a');
-            addLogEntry('🎤 Audio sent to desktop', 'sent');
             // Resume wake word in background
             const [ppn, mode, settingsRaw] = await Promise.all([
               AsyncStorage.getItem('cyberclaw-ppn-path'),
@@ -335,7 +315,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       setArenaThinking(!!msg.active);
       if (!fullscreenRef.current && msg.active) setChatVoiceStatus('🧠 Clawsuu is thinking...');
       if (!fullscreenRef.current && !msg.active) { /* keep until message arrives */ }
-      if (fullscreenRef.current) setVoiceStatus(msg.active ? 'thinking' : 'responding');
     };
 
     const onChatHistory = (msg: any) => {
@@ -358,17 +337,14 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const onAudioResponse = async (msg: any) => {
       try {
         if (!msg.audioBase64) return;
-        if (fullscreenRef.current) setVoiceStatus('playing');
         const fs = require('react-native-fs');
         const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
         await WakeWordModule.startPlayer(tmpPath);
         addLogEntry('🔊 Playing audio response', 'received');
-        if (fullscreenRef.current) setVoiceStatus('idle');
       } catch (e: any) {
         addLogEntry(`Audio playback error: ${e?.message}`, 'error');
-        if (fullscreenRef.current) setVoiceStatus('idle');
       }
     };
 
@@ -382,38 +358,26 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     syncClient.on('audio_response', onAudioResponse);
     const onVoiceTranscriptResult = (msg: any) => {
       if (!msg.transcript) {
-        setVoiceStatus('idle');
         setChatVoiceStatus(null);
         addLogEntry('⚠️ No speech detected', 'error');
         return;
       }
       addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
-      // Always add to messages and update voice status
+      // Add to messages and auto-send
       setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
-      setVoiceStatus('thinking');
       setChatVoiceStatus('🧠 Clawsuu is thinking...');
-      if (fullscreenRef.current) {
-        syncClient.sendChat(msg.transcript);
-      } else {
-        // Chat mode: show transcript as new user message, auto-send
-        setChatVoiceStatus('🧠 Clawsuu is thinking...');
-        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
-        syncClient.sendChat(msg.transcript);
-        setVoiceStatus('idle');
-      }
+      syncClient.sendChat(msg.transcript);
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
 
     const onVoiceReceived = () => {
       setChatVoiceStatus('💻 Received at desktop, transcribing...');
-      if (fullscreenRef.current) setVoiceStatus('transcribing');
     };
     syncClient.on('voice_received', onVoiceReceived);
 
     const onSendError = (e: any) => {
       if (e?.type === 'audio_input') {
         setChatVoiceStatus(null);
-        setVoiceStatus('idle');
         addLogEntry('❌ Not connected — reconnect and try again', 'error');
       }
     };
@@ -570,7 +534,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
   return (
     <View style={styles.container}>
-      <StatusBar hidden={fullscreen} />
+      <StatusBar hidden={false} />
       {/* Header */}
       <View style={styles.headerBar}>
         <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
@@ -583,12 +547,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         </View>
       </View>
 
-      {/* Voice Screen (fullscreen) - Hands-free voice interaction via wake word or arena focus */}
-      {(!keyboardVisible || fullscreen) && (
-        <View style={fullscreen
-          ? [StyleSheet.absoluteFill, { zIndex: 100 }]
-          : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }
-        }>
+      {/* Arena - Always visible at ARENA_HEIGHT */}
+      {!keyboardVisible && (
+        <View style={{ height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
           <WebView
             ref={webViewRef}
             source={{ uri: 'file:///android_asset/arena.html' }}
@@ -610,59 +571,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               });
             }}
           />
-          {fullscreen && (
-            <View style={styles.listeningBadge} pointerEvents="none">
-              <Text style={styles.listeningText}>Mic: {wakeDebug}</Text>
-            </View>
-          )}
-          {fullscreen && voiceStatus !== 'idle' && (() => {
-            const statusMap: Record<string, string> = {
-              recording:          '🔴 Listening...',
-              silence_countdown:  `⏳ Sending in ${silenceCountdown}s...`,
-              sending:            '📤 Sending recording...',
-              transcribing:       '📝 Transcribing...',
-              thinking:           '💭 Companion is thinking...',
-              responding:         '💬 Response incoming...',
-              playing:            '🔊 Playing response...',
-            };
-            return (
-              <View style={styles.voicePipelineOverlay} pointerEvents="none">
-                <Text style={styles.voicePipelineText}>{statusMap[voiceStatus] || ''}</Text>
-              </View>
-            );
-          })()}
-          {/* Voice Mode Log View (fullscreen only, bottom-right) */}
-          {fullscreen && (
-            <View style={styles.voiceLogContainer} pointerEvents="box-none">
-              <FlatList
-                data={logEntries.slice(-8)}
-                keyExtractor={(_, i) => `vlog-${i}`}
-                renderItem={({ item }) => (
-                  <Text style={[styles.voiceLogLine, item.type === 'error' && styles.voiceLogError]}>
-                    {item.text}
-                  </Text>
-                )}
-                scrollEnabled={false}
-              />
-            </View>
-          )}
-          {/* Voice Mode Close Button */}
-          {fullscreen && (
-            <TouchableOpacity
-              style={styles.voiceModeCloseBtn}
-              onPress={closeFullscreen}
-              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
-            >
-              <Text style={styles.voiceModeCloseBtnText}>✕</Text>
-            </TouchableOpacity>
-          )}
-          {fullscreen && lockScreenMode && (
-            <View style={styles.lockBadge}>
-              <Text style={styles.lockBadgeText}>Cyber</Text>
-              <View style={styles.headerCameraSpace} />
-              <Text style={styles.lockBadgeText}>Claw</Text>
-            </View>
-          )}
         </View>
       )}
 
@@ -673,16 +581,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         </View>
       )}
 
-      {/* Voice Mode Button (when not in fullscreen) */}
-      {!fullscreen && (
-        <TouchableOpacity
-          style={styles.voiceModeBtn}
-          onPress={() => enterVoiceMode('focus')}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.voiceModeBtnText}>🎤 Voice Mode</Text>
-        </TouchableOpacity>
-      )}
+
 
       {/* Tabs */}
       <View style={styles.tabBar}>
