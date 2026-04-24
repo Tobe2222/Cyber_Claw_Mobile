@@ -310,10 +310,10 @@ function setFullscreenMode(on) {
 }
 function setFocusMode(on) {
   focused=on;
-  const btn=document.getElementById('focusBtn');
+  const btn=document.getElementById('voiceBtn');
   btn.classList.toggle('active',on);
-  btn.textContent=on?'Arena':'Focus';
-  btn.title=on?'Show arena':'Focus companion';
+  btn.textContent=on?'Arena':'Voice';
+  btn.title=on?'Show arena':'Voice mode';
 }
 document.getElementById('voiceBtn').addEventListener('click',()=>{
   setFullscreenMode(true);

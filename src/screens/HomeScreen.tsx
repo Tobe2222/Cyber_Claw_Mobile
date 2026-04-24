@@ -547,16 +547,18 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     <View style={styles.container}>
       <StatusBar hidden={false} />
       {/* Header */}
-      <View style={styles.headerBar}>
-        <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
-        <View style={styles.headerRight}>
-          <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
-          <Text style={styles.statusLabel}>{statusLabel}</Text>
-          <TouchableOpacity style={styles.settingsBtn} onPress={onOpenSettings}>
-            <Text style={styles.settingsIcon}>⚙️</Text>
-          </TouchableOpacity>
+      {!fullscreen && (
+        <View style={styles.headerBar}>
+          <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
+          <View style={styles.headerRight}>
+            <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
+            <Text style={styles.statusLabel}>{statusLabel}</Text>
+            <TouchableOpacity style={styles.settingsBtn} onPress={onOpenSettings}>
+              <Text style={styles.settingsIcon}>⚙️</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Arena - Conditional rendering based on fullscreen */}
       {!keyboardVisible && (
