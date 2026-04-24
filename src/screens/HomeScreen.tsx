@@ -522,6 +522,8 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
         await WakeWordModule.startRecorder(recPath);
         setIsVoiceListening(true);
+        setVoiceStatus('recording');
+        setChatVoiceStatus('🔴 Recording...');
         addLogEntry('🎤 Recording...', 'info');
       } catch (e: any) {
         addLogEntry(`Mic error: ${e?.message}`, 'error');
@@ -598,6 +600,19 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             <TouchableOpacity style={styles.voiceModeCloseBtn} onPress={closeFullscreen} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
               <Text style={styles.voiceModeBtnText}>✕</Text>
             </TouchableOpacity>
+          )}
+          {/* Voice status indicator in fullscreen mode */}
+          {fullscreen && (isVoiceListening || voiceStatus !== 'idle') && (
+            <View style={styles.voiceStatusOverlay} pointerEvents="none">
+              <Text style={styles.voiceStatusText}>
+                {isVoiceListening ? '🔴 Recording...' : 
+                 voiceStatus === 'silence_countdown' ? `⏳ Sending in ${silenceCountdown}s...` :
+                 voiceStatus === 'transcribing' ? '📝 Transcribing...' :
+                 voiceStatus === 'thinking' ? '💭 Thinking...' :
+                 voiceStatus === 'responding' ? '💬 Response incoming...' :
+                 '🎤 Recording...'}
+              </Text>
+            </View>
           )}
         </View>
       )}
@@ -933,7 +948,7 @@ const styles = StyleSheet.create({
   voiceLogError: { color: '#ef4444' },
   // Voice Mode Close Button
   voiceModeCloseBtn: {
-    position: 'absolute', bottom: 20, right: 16,
+    position: 'absolute', top: 24, right: 16,
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: 'rgba(0,0,0,0.7)',
     borderWidth: 2, borderColor: '#ef4444',
@@ -941,5 +956,21 @@ const styles = StyleSheet.create({
   },
   voiceModeCloseBtnText: {
     color: '#ef4444', fontSize: 24, fontWeight: 'bold',
+  },
+  // Voice status indicator during recording/transcribing
+  voiceStatusOverlay: {
+    position: 'absolute', top: 80, left: 0, right: 0,
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  voiceStatusText: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 16,
+    fontWeight: '600',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    textAlign: 'center',
   },
 });
