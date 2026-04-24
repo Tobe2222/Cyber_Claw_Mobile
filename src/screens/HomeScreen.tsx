@@ -13,6 +13,7 @@ import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import syncClient from '../services/SyncClient';
+import { getSimpleAudioRecorder, disposeSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
@@ -132,15 +133,66 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         true;
       `);
       
-      // Auto-start listening
+      // Auto-start listening with SimpleAudioRecorder + countdown on silence
       try {
-        WakeWordModule?.stop?.().catch(() => {});
         const fs = require('react-native-fs');
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
-        await WakeWordModule.startRecorder(recPath);
+        const recorder = getSimpleAudioRecorder();
+        
+        // Set up silence detection: start countdown and auto-send
+        let countdownInterval: NodeJS.Timeout | null = null;
+        const unsubSilence = recorder.once('silence', async () => {
+          setVoiceStatus('silence_countdown');
+          let count = 3;
+          setSilenceCountdown(count);
+          
+          countdownInterval = setInterval(() => {
+            count--;
+            setSilenceCountdown(count);
+            if (count <= 0) {
+              if (countdownInterval) clearInterval(countdownInterval);
+              // Auto-stop and send
+              recorder.stop().then(async (resultPath: string) => {
+                setIsVoiceListening(false);
+                if (!resultPath) {
+                  setVoiceStatus('idle');
+                  return;
+                }
+                try {
+                  const base64 = await fs.readFile(resultPath, 'base64');
+                  setVoiceStatus('transcribing');
+                  syncClient.sendAudioInput(base64, 'audio/m4a');
+                  addLogEntry('Voice message sent for transcription', 'sent');
+                  
+                  // Resume wake word in background
+                  const [ppn, mode, settingsRaw] = await Promise.all([
+                    AsyncStorage.getItem('cyberclaw-ppn-path'),
+                    AsyncStorage.getItem('cyberclaw-wake-mode'),
+                    AsyncStorage.getItem('cyberclaw-audio-settings'),
+                  ]);
+                  const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
+                  if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
+                  else WakeWordModule?.start?.(phrase).catch(() => {});
+                } catch (e: any) {
+                  setVoiceStatus('idle');
+                  addLogEntry(`Send error: ${e?.message}`, 'error');
+                }
+              }).catch((e: any) => {
+                setIsVoiceListening(false);
+                setVoiceStatus('idle');
+                addLogEntry(`Stop recording error: ${e?.message}`, 'error');
+              });
+            }
+          }, 1000);
+        });
+        
+        await recorder.start(recPath, 5000); // 5s silence timeout
         setIsVoiceListening(true);
+        setVoiceStatus('recording');
+        addLogEntry('Voice mode recording started', 'info');
       } catch (e) {
-        addLogEntry(`[Voice] Failed to start recording: ${e?.message}`, 'error');
+        setVoiceStatus('idle');
+        addLogEntry(`Voice recording failed: ${e?.message}`, 'error');
       }
     }
   }, []);
@@ -180,7 +232,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
-    await enterVoiceMode('wakeword', true);
+    await enterVoiceMode('wakeword');
   }, [enterVoiceMode]);
 
   // Load persisted chat
@@ -231,13 +283,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       setWakePhrase(phrase);
       if (wakeMode === 'porcupine' && ppn) {
         WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
-          addLogEntry(`[wake] Porcupine failed: ${e?.message}, falling back to Vosk`, 'error');
+          addLogEntry(`Porcupine failed: ${e?.message}, falling back to Vosk`, 'error');
           WakeWordModule?.start?.(phrase).catch(() => {});
         });
-        addLogEntry(`[wake] starting Porcupine mode`, 'info');
+        addLogEntry(`Starting Porcupine wake detection`, 'info');
       } else {
         WakeWordModule?.start?.(phrase).catch(() => {});
-        addLogEntry(`[wake] starting, phrase: "${phrase}"`, 'info');
+        addLogEntry(`Starting wake detection, phrase: "${phrase}"`, 'info');
       }
     });
 
@@ -251,67 +303,17 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const wakeOpenSub = DeviceEventEmitter.addListener('wakeWordOpenedApp', () => {
       handleWakeWord();
     });
-    // Auto-stop recording after silence detected
-    const silenceSub = wakeEmitter?.addListener('recorderSilence', () => {
-      setVoiceStatus('silence_countdown');
-      // Countdown from 3 to 0 visually, then stop
-      let count = 3;
-      setSilenceCountdown(count);
-      const tick = setInterval(() => {
-        count--;
-        setSilenceCountdown(count);
-        if (count <= 0) {
-          clearInterval(tick);
-          WakeWordModule.stopRecorder().then(async (resultPath: string) => {
-            setIsVoiceListening(false);
-            if (!resultPath) { return; }
-            const fs = require('react-native-fs');
-            const base64 = await fs.readFile(resultPath, 'base64');
-            // Safety timeout — if we hear nothing back in 20s, reset to idle
-            const transcribeStart = Date.now();
-            // Set up listeners BEFORE sending to catch immediate responses
-            let transcribeResolved = false;
-            const clearTranscribeTimeout = () => {
-              if (!transcribeResolved) {
-                transcribeResolved = true;
-                clearTimeout(transcribeTimeout);
-              }
-            };
-            const transcribeTimeout = setTimeout(() => {
-              if (!transcribeResolved) {
-                transcribeResolved = true;
-                const elapsed = Math.round((Date.now() - transcribeStart) / 1000);
-                addLogEntry(`⚠️ Transcription timed out after ${elapsed}s — no response from desktop`, 'error');
-              }
-            }, 30000); // 30s timeout
-            syncClient.once?.('voice_transcript_result', clearTranscribeTimeout);
-            syncClient.once?.('typing', clearTranscribeTimeout);
-            syncClient.sendAudioInput(base64, 'audio/m4a');
-            // Resume wake word in background
-            const [ppn, mode, settingsRaw] = await Promise.all([
-              AsyncStorage.getItem('cyberclaw-ppn-path'),
-              AsyncStorage.getItem('cyberclaw-wake-mode'),
-              AsyncStorage.getItem('cyberclaw-audio-settings'),
-            ]);
-            const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-            if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
-            else WakeWordModule?.start?.(phrase).catch(() => {});
-          }).catch((e: any) => {
-            setIsVoiceListening(false);
-            setVoiceStatus('idle');
-            addLogEntry(`Auto-stop error: ${e?.message}`, 'error');
-          });
-        }
-      }, 1000);
-    });
+    // Monitor silence detection for voice mode auto-stop
+    // SimpleAudioRecorder will emit 'recorderSilence' when silence is detected
+    // We set up a listener in the voice mode flow itself, not here
     const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
       const label = e.text ? `${e.state}: "${e.text}"` : e.state;
       setWakeDebug(label);
       // Don't spam 'error' or 'unavailable' to log — show once only
       if (e.state === 'unavailable') {
-        addLogEntry(`[wake] Speech Recognition not available on this device`, 'error');
+        addLogEntry(`Speech Recognition not available on this device`, 'error');
       } else if (e.state !== 'error') {
-        addLogEntry(`[wake] ${label}`, 'info');
+        addLogEntry(`Wake word: ${label}`, 'info');
       }
     });
     const onState = (data: any) => {
@@ -415,7 +417,6 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     return () => {
       wakeSub?.remove();
       wakeOpenSub?.remove();
-      silenceSub?.remove();
       debugSub?.remove();
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
@@ -427,6 +428,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       syncClient.off('voice_received', onVoiceReceived);
       syncClient.off('send_error', onSendError);
       offLogEntry(onLogUpdate);
+      disposeSimpleAudioRecorder();
     };
   }, [speak, setArenaThinking]);
 
@@ -495,10 +497,12 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     if (isVoiceListening) {
       // Stop recording → save path as pending, show preview in input area
       try {
-        const result = await WakeWordModule.stopRecorder();
+        const recorder = getSimpleAudioRecorder();
+        const result = await recorder.stop();
         setIsVoiceListening(false);
         setPendingAudioPath(result || null);
-        // Resume wake word
+        setVoiceStatus('idle');
+        // Resume wake word in background
         const [ppnRaw, modeRaw, settingsRaw] = await Promise.all([
           AsyncStorage.getItem('cyberclaw-ppn-path'),
           AsyncStorage.getItem('cyberclaw-wake-mode'),
@@ -511,22 +515,46 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         else WakeWordModule?.start?.(phrase).catch(() => {});
       } catch (e: any) {
         setIsVoiceListening(false);
-        addLogEntry(`Recording error: ${e?.message}`, 'error');
+        addLogEntry(`Stop recording error: ${e?.message}`, 'error');
       }
     } else {
-      // Discard any pending audio, pause wake word, start recording
+      // Discard any pending audio, start recording with SimpleAudioRecorder
       setPendingAudioPath(null);
       try {
-        WakeWordModule?.stop?.().catch(() => {});
         const fs = require('react-native-fs');
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
-        await WakeWordModule.startRecorder(recPath);
+        const recorder = getSimpleAudioRecorder();
+        
+        // Set up silence detection listener for chat mode
+        const unsubSilence = recorder.once('silence', async () => {
+          try {
+            const result = await recorder.stop();
+            setIsVoiceListening(false);
+            setPendingAudioPath(result || null);
+            setVoiceStatus('idle');
+            setChatVoiceStatus('🎤 Ready to send');
+            addLogEntry('Recording stopped by silence detection', 'info');
+            // Resume wake word
+            const [ppn, mode, settingsRaw] = await Promise.all([
+              AsyncStorage.getItem('cyberclaw-ppn-path'),
+              AsyncStorage.getItem('cyberclaw-wake-mode'),
+              AsyncStorage.getItem('cyberclaw-audio-settings'),
+            ]);
+            const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
+            if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
+            else WakeWordModule?.start?.(phrase).catch(() => {});
+          } catch (e: any) {
+            addLogEntry(`Error after silence: ${e?.message}`, 'error');
+          }
+        });
+        
+        await recorder.start(recPath, 5000);
         setIsVoiceListening(true);
         setVoiceStatus('recording');
         setChatVoiceStatus('🔴 Recording...');
-        addLogEntry('🎤 Recording...', 'info');
+        addLogEntry('Recording started', 'info');
       } catch (e: any) {
-        addLogEntry(`Mic error: ${e?.message}`, 'error');
+        addLogEntry(`Microphone error: ${e?.message}`, 'error');
         Alert.alert('Microphone Error', e?.message || 'Could not start recording');
       }
     }
