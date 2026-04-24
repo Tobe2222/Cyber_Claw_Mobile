@@ -165,15 +165,10 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
                   syncClient.sendAudioInput(base64, 'audio/m4a');
                   addLogEntry('Voice message sent for transcription', 'sent');
                   
-                  // Resume wake word in background
-                  const [ppn, mode, settingsRaw] = await Promise.all([
-                    AsyncStorage.getItem('cyberclaw-ppn-path'),
-                    AsyncStorage.getItem('cyberclaw-wake-mode'),
-                    AsyncStorage.getItem('cyberclaw-audio-settings'),
-                  ]);
-                  const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-                  if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
-                  else WakeWordModule?.start?.(phrase).catch(() => {});
+                  // IMPORTANT: Don't exit voice mode!
+                  // Set up listener for response and restart listening after
+                  // (Desktop will process and respond with audio)
+                  
                 } catch (e: any) {
                   setVoiceStatus('idle');
                   addLogEntry(`Send error: ${e?.message}`, 'error');
@@ -412,8 +407,49 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
+        
+        // If in voice mode, set status to 'playing'
+        if (fullscreenRef.current) {
+          setVoiceStatus('playing');
+        }
+        
         await WakeWordModule.startPlayer(tmpPath);
         addLogEntry('🔊 Playing audio response', 'received');
+        
+        // After playback, if still in voice mode, restart listening loop
+        if (fullscreenRef.current) {
+          addLogEntry('Voice: restarting listening loop', 'info');
+          setVoiceStatus('listening');
+          setSilenceCountdown(0);
+          setIsVoiceListening(true);
+          
+          // Restart SimpleAudioRecorder for voice mode
+          try {
+            const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
+            const recorder = getSimpleAudioRecorder();
+            
+            // Re-attach silence listener
+            const unsubSilence = recorder.once('silence', async () => {
+              // Silence detected - same flow as before
+              setVoiceStatus('silence_countdown');
+              let count = 3;
+              setSilenceCountdown(count);
+              const tick = setInterval(() => {
+                count--;
+                setSilenceCountdown(count);
+                if (count <= 0) {
+                  clearInterval(tick);
+                  // Send audio again (loop continues)
+                }
+              }, 1000);
+            });
+            
+            await recorder.start(recPath, 5000);
+          } catch (e: any) {
+            addLogEntry(`Voice: restart error: ${e?.message}`, 'error');
+            setVoiceStatus('idle');
+          }
+        }
       } catch (e: any) {
         addLogEntry(`Audio playback error: ${e?.message}`, 'error');
       }
