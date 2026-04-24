@@ -631,6 +631,31 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               </View>
             );
           })()}
+          {/* Voice Mode Log View (fullscreen only, bottom-right) */}
+          {fullscreen && (
+            <View style={styles.voiceLogContainer} pointerEvents="box-none">
+              <FlatList
+                data={logEntries.slice(-8)}
+                keyExtractor={(_, i) => `vlog-${i}`}
+                renderItem={({ item }) => (
+                  <Text style={[styles.voiceLogLine, item.type === 'error' && styles.voiceLogError]}>
+                    {item.text}
+                  </Text>
+                )}
+                scrollEnabled={false}
+              />
+            </View>
+          )}
+          {/* Voice Mode Close Button */}
+          {fullscreen && (
+            <TouchableOpacity
+              style={styles.voiceModeCloseBtn}
+              onPress={closeFullscreen}
+              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+            >
+              <Text style={styles.voiceModeCloseBtnText}>✕</Text>
+            </TouchableOpacity>
+          )}
           {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>
               <Text style={styles.lockBadgeText}>Cyber</Text>
@@ -646,6 +671,17 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         <View style={styles.thinkingBar}>
           <Text style={styles.thinkingText}>💭 Clawsuu is thinking...</Text>
         </View>
+      )}
+
+      {/* Voice Mode Button (when not in fullscreen) */}
+      {!fullscreen && (
+        <TouchableOpacity
+          style={styles.voiceModeBtn}
+          onPress={() => enterVoiceMode('focus')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.voiceModeBtnText}>🎤 Voice Mode</Text>
+        </TouchableOpacity>
       )}
 
       {/* Tabs */}
@@ -940,5 +976,40 @@ const styles = StyleSheet.create({
   lockBadgeText: {
     color: 'rgba(247,147,26,0.6)', fontSize: 13,
     fontFamily: 'monospace', letterSpacing: 2,
+  },
+  // Voice Mode Button
+  voiceModeBtn: {
+    marginHorizontal: 12, marginVertical: 8,
+    backgroundColor: 'rgba(247,147,26,0.2)',
+    borderWidth: 1, borderColor: '#f7931a',
+    borderRadius: 8, paddingVertical: 10,
+    alignItems: 'center',
+  },
+  voiceModeBtnText: {
+    color: '#f7931a', fontSize: 14, fontWeight: '600',
+  },
+  // Voice Log Container (fullscreen)
+  voiceLogContainer: {
+    position: 'absolute', bottom: 60, right: 12,
+    width: 160, maxHeight: 140,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderWidth: 1, borderColor: 'rgba(247,147,26,0.3)',
+    borderRadius: 8, padding: 8,
+  },
+  voiceLogLine: {
+    color: '#888', fontSize: 10, fontFamily: 'monospace',
+    lineHeight: 14, marginBottom: 2,
+  },
+  voiceLogError: { color: '#ef4444' },
+  // Voice Mode Close Button
+  voiceModeCloseBtn: {
+    position: 'absolute', top: 16, right: 16,
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.5)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  voiceModeCloseBtnText: {
+    color: '#ef4444', fontSize: 20, fontWeight: 'bold',
   },
 });
