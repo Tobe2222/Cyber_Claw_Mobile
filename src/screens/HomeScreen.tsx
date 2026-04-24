@@ -59,17 +59,6 @@ export function offLogEntry(fn: (e: LogEntry) => void) {
 }
 
 type TabId = 'chat' | 'events' | 'log';
-type VoiceStatus = 'idle' | 'recording' | 'silence_countdown' | 'sending' | 'transcribing' | 'thinking' | 'responding' | 'playing';
-
-/**
- * Delay voice status updates for better UX visibility (300-500ms)
- * Allows users to see status transitions happening
- */
-function delayVoiceStatus(status: VoiceStatus, delayMs: number = 400): Promise<VoiceStatus> {
-  return new Promise(resolve => {
-    setTimeout(() => resolve(status), delayMs);
-  });
-}
 
 export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -85,14 +74,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const [fullscreen, setFullscreen] = useState(false);
   const [lockScreenMode, setLockScreenMode] = useState(false);
   // Voice pipeline status (shown in focus overlay)
+  type VoiceStatus = 'idle' | 'recording' | 'silence_countdown' | 'sending' | 'transcribing' | 'thinking' | 'responding' | 'playing';
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
-  const voiceLogRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
-  const fullscreenRef = useRef<boolean>(false);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -133,17 +121,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     webViewRef.current?.injectJavaScript(js);
   }, []);
 
-  // Delayed voice status setter for 300-500ms transitions
-  const setVoiceStatusDelayed = useCallback(async (status: VoiceStatus, delayMs: number = 400) => {
-    const delayed = await delayVoiceStatus(status, delayMs);
-    setVoiceStatus(delayed);
-  }, []);
-
-  // Keep track of fullscreen state for faster checks
-  useEffect(() => {
-    fullscreenRef.current = fullscreen;
-  }, [fullscreen]);
-
+  // Open fullscreen from arena WebView message
   // Enter Voice Mode (fullscreen dedicated to voice interaction)
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus', showLockScreen = false) => {
     if (source === 'wakeword') {
@@ -279,13 +257,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         setSilenceCountdown(count);
         if (count <= 0) {
           clearInterval(tick);
-          void setVoiceStatusDelayed('sending', 400);
+          setVoiceStatus('sending');
           WakeWordModule.stopRecorder().then(async (resultPath: string) => {
             setIsVoiceListening(false);
-            if (!resultPath) { void setVoiceStatusDelayed('idle', 300); return; }
+            if (!resultPath) { setVoiceStatus('idle'); return; }
             const fs = require('react-native-fs');
             const base64 = await fs.readFile(resultPath, 'base64');
-            void setVoiceStatusDelayed('transcribing', 400);
+            setVoiceStatus('transcribing');
             // Safety timeout — if we hear nothing back in 20s, reset to idle
             const transcribeStart = Date.now();
             // Set up listeners BEFORE sending to catch immediate responses
@@ -319,7 +297,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             else WakeWordModule?.start?.(phrase).catch(() => {});
           }).catch((e: any) => {
             setIsVoiceListening(false);
-            void setVoiceStatusDelayed('idle', 300);
+            setVoiceStatus('idle');
             addLogEntry(`Auto-stop error: ${e?.message}`, 'error');
           });
         }
@@ -357,10 +335,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
       setArenaThinking(!!msg.active);
       if (!fullscreenRef.current && msg.active) setChatVoiceStatus('🧠 Clawsuu is thinking...');
       if (!fullscreenRef.current && !msg.active) { /* keep until message arrives */ }
-      if (fullscreenRef.current) {
-        if (msg.active) void setVoiceStatusDelayed('thinking', 350);
-        else void setVoiceStatusDelayed('responding', 350);
-      }
+      if (fullscreenRef.current) setVoiceStatus(msg.active ? 'thinking' : 'responding');
     };
 
     const onChatHistory = (msg: any) => {
@@ -383,17 +358,17 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     const onAudioResponse = async (msg: any) => {
       try {
         if (!msg.audioBase64) return;
-        if (fullscreenRef.current) void setVoiceStatusDelayed('playing', 350);
+        if (fullscreenRef.current) setVoiceStatus('playing');
         const fs = require('react-native-fs');
         const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
         await WakeWordModule.startPlayer(tmpPath);
         addLogEntry('🔊 Playing audio response', 'received');
-        if (fullscreenRef.current) void setVoiceStatusDelayed('idle', 400);
+        if (fullscreenRef.current) setVoiceStatus('idle');
       } catch (e: any) {
         addLogEntry(`Audio playback error: ${e?.message}`, 'error');
-        if (fullscreenRef.current) void setVoiceStatusDelayed('idle', 400);
+        if (fullscreenRef.current) setVoiceStatus('idle');
       }
     };
 
@@ -407,7 +382,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     syncClient.on('audio_response', onAudioResponse);
     const onVoiceTranscriptResult = (msg: any) => {
       if (!msg.transcript) {
-        void setVoiceStatusDelayed('idle', 300);
+        setVoiceStatus('idle');
         setChatVoiceStatus(null);
         addLogEntry('⚠️ No speech detected', 'error');
         return;
@@ -431,7 +406,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
     const onVoiceReceived = () => {
       setChatVoiceStatus('💻 Received at desktop, transcribing...');
-      if (fullscreenRef.current) void setVoiceStatusDelayed('transcribing', 350);
+      if (fullscreenRef.current) setVoiceStatus('transcribing');
     };
     syncClient.on('voice_received', onVoiceReceived);
 
@@ -656,71 +631,13 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               </View>
             );
           })()}
-          {/* Log view in bottom-right (semi-transparent, scrollable) */}
-          <View style={styles.voiceLogContainer} pointerEvents="box-none">
-            <FlatList
-              ref={voiceLogRef}
-              data={logEntries.slice(-10)}
-              keyExtractor={i => i.id}
-              renderItem={({ item }) => (
-                <Text style={[
-                  styles.voiceLogLine,
-                  item.type === 'sent' && styles.voiceLogSent,
-                  item.type === 'received' && styles.voiceLogReceived,
-                  item.type === 'error' && styles.voiceLogError,
-                ]}>
-                  {item.text}
-                </Text>
-              )}
-              scrollEnabled={true}
-              showsVerticalScrollIndicator={false}
-              onContentSizeChange={() => voiceLogRef.current?.scrollToEnd({ animated: false })}
-            />
-            <TouchableOpacity
-              style={styles.voiceScreenClose}
-              onPress={closeFullscreen}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Text style={styles.voiceScreenCloseIcon}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          {/* Listening indicator */}
-          <View style={styles.listeningBadge} pointerEvents="none">
-            <Text style={styles.listeningText}>Mic: {wakeDebug}</Text>
-          </View>
-          {/* Lock screen badge */}
-          {lockScreenMode && (
+          {fullscreen && lockScreenMode && (
             <View style={styles.lockBadge}>
-              <Text style={styles.lockBadgeText}>CyberClaw</Text>
+              <Text style={styles.lockBadgeText}>Cyber</Text>
+              <View style={styles.headerCameraSpace} />
+              <Text style={styles.lockBadgeText}>Claw</Text>
             </View>
           )}
-        </View>
-      )}
-      
-      {/* Normal arena display (non-fullscreen) */}
-      {!fullscreen && !keyboardVisible && (
-        <View style={{ height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
-          <WebView
-            ref={webViewRef}
-            source={{ uri: 'file:///android_asset/arena.html' }}
-            style={{ flex: 1, backgroundColor: '#0a0a2e' }}
-            scrollEnabled={false}
-            bounces={false}
-            javaScriptEnabled
-            allowFileAccess
-            originWhitelist={['*']}
-            onMessage={handleArenaMessage}
-            onLoadEnd={() => {
-              Promise.all([
-                AsyncStorage.getItem('cyberclaw-arena-bg'),
-                AsyncStorage.getItem('cyberclaw-arena-comp'),
-              ]).then(([bgId, compId]) => {
-                const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
-                const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
-                webViewRef.current?.injectJavaScript(js);
-              });
-            }}
-          />
         </View>
       )}
 
@@ -1017,21 +934,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   lockBadge: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 60,
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    paddingHorizontal: 20,
+    position: 'absolute', top: 16, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
   },
   lockBadgeText: {
-    color: 'rgba(247,147,26,0.8)',
-    fontSize: 14,
-    fontWeight: '600',
-    fontFamily: 'monospace',
-    letterSpacing: 1,
+    color: 'rgba(247,147,26,0.6)', fontSize: 13,
+    fontFamily: 'monospace', letterSpacing: 2,
   },
 });
