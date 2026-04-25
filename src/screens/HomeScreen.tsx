@@ -718,7 +718,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             </TouchableOpacity>
           )}
           {/* Voice status indicator in fullscreen mode */}
-          {fullscreen && (isVoiceListening || voiceStatus !== 'idle') && (
+          {fullscreen && (
             <View style={styles.voiceStatusOverlay} pointerEvents="none">
               <Text style={styles.voiceStatusText}>
                 {voiceStatus === 'listening' ? '🎧 Listening for audio...' :
