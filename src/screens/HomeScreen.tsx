@@ -434,12 +434,27 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               setVoiceStatus('silence_countdown');
               let count = 3;
               setSilenceCountdown(count);
-              const tick = setInterval(() => {
+              const tick = setInterval(async () => {
                 count--;
                 setSilenceCountdown(count);
                 if (count <= 0) {
                   clearInterval(tick);
-                  // Send audio again (loop continues)
+                  // FIXED: Actually stop and send audio
+                  try {
+                    const resultPath = await recorder.stop();
+                    if (!resultPath) {
+                      addLogEntry('Voice: no recording path', 'error');
+                      setVoiceStatus('listening');
+                      return;
+                    }
+                    const base64 = await fs.readFile(resultPath, 'base64');
+                    setVoiceStatus('transcribing');
+                    addLogEntry('Voice: sending audio in loop', 'sent');
+                    syncClient.sendAudioInput(base64, 'audio/m4a');
+                  } catch (e: any) {
+                    addLogEntry(`Voice: loop send error: ${e?.message}`, 'error');
+                    setVoiceStatus('listening');
+                  }
                 }
               }, 1000);
             });
@@ -727,7 +742,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
                  voiceStatus === 'transcribing' ? '📝 Transcribing...' :
                  voiceStatus === 'thinking' ? '💭 Thinking...' :
                  voiceStatus === 'responding' ? '💬 Response incoming...' :
-                 '🎤 Ready...'}
+                 '🎧 Listening for audio...'}
               </Text>
             </View>
           )}
