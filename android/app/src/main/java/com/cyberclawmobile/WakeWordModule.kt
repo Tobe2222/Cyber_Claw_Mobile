@@ -44,6 +44,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private var audioRecord: AudioRecord? = null
     private var listenThread: Thread? = null
     @Volatile private var isListening = false
+    @Volatile private var isRecording = false
     private var wakePhrase = "hey clawsuu"
 
     private fun getModelDir(): File {
@@ -211,16 +212,33 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod fun stop(promise: Promise) {
         isListening = false
+        
+        // FIX: Interrupt the blocked read() call to unblock the thread
+        listenThread?.interrupt()
+        
+        // FIX: Wait for thread to actually stop (up to 1 second)
+        try {
+            listenThread?.join(1000)
+        } catch (_: Exception) {}
+        
         stopAudioRecord()
         promise.resolve(null)
     }
 
     private fun stopAudioRecord() {
-        listenThread?.interrupt()
-        listenThread = null
+        isListening = false
+        
+        // Close audio input to unblock any pending read()
         try { audioRecord?.stop() } catch (_: Exception) {}
         try { audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
+        
+        // FIX: Properly interrupt and join the thread
+        try {
+            listenThread?.interrupt()
+            listenThread?.join(500)  // Wait up to 500ms for thread to exit
+        } catch (_: Exception) {}
+        listenThread = null
     }
 
     @ReactMethod fun test(promise: Promise) {
@@ -240,6 +258,10 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod fun startRecorderWithSilence(path: String, silenceMs: Int, promise: Promise) {
         try {
+            // FIX: Disable listening during recording to prevent dual audio reading from MIC
+            isRecording = true
+            isListening = false
+            
             mediaRecorder?.release()
             silenceTimer?.cancel(); silenceTimer = null
             val outFile = File(path)
@@ -308,6 +330,9 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod fun stopRecorder(promise: Promise) {
+        // FIX: Clear recording flag when stopping
+        isRecording = false
+        
         silenceTimer?.cancel(); silenceTimer = null
         try {
             mediaRecorder?.stop()
