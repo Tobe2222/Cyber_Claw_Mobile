@@ -140,9 +140,17 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
         const recorder = getSimpleAudioRecorder();
         
+        // FIXED: Track whether we've transitioned to 'recording' state
+        let hasTransitionedToRecording = false;
+        
         // Set up silence detection: start countdown and auto-send
         let countdownInterval: NodeJS.Timeout | null = null;
+        let silenceEventFired = false;
+        let maxDurationTimeout: NodeJS.Timeout | null = null;
+        
         const unsubSilence = recorder.once('silence', async () => {
+          silenceEventFired = true;
+          addLogEntry('[voice] Silence detected after 5s', 'info');
           setVoiceStatus('silence_countdown');
           let count = 3;
           setSilenceCountdown(count);
@@ -152,15 +160,24 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             setSilenceCountdown(count);
             if (count <= 0) {
               if (countdownInterval) clearInterval(countdownInterval);
+              if (maxDurationTimeout) clearTimeout(maxDurationTimeout);
+              addLogEntry('[voice] Countdown complete, sending audio', 'info');
               // Auto-stop and send
               recorder.stop().then(async (resultPath: string) => {
                 setIsVoiceListening(false);
                 if (!resultPath) {
                   setVoiceStatus('idle');
+                  addLogEntry('[voice] No recording path returned', 'error');
                   return;
                 }
                 try {
+                  const stats = await fs.stat(resultPath);
+                  addLogEntry(`[voice] Audio file: ${stats.size} bytes`, 'info');
                   const base64 = await fs.readFile(resultPath, 'base64');
+                  addLogEntry(`[voice] Base64 size: ${base64.length} chars`, 'info');
+                  if (base64.length < 100) {
+                    addLogEntry('[voice] ⚠️ Base64 audio very small', 'error');
+                  }
                   setVoiceStatus('transcribing');
                   syncClient.sendAudioInput(base64, 'audio/m4a');
                   addLogEntry('Voice message sent for transcription', 'sent');
@@ -184,6 +201,50 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         
         await recorder.start(recPath, 5000); // 5s silence timeout
         setIsVoiceListening(true);
+        
+        // FIXED #1: Add audio detection timer
+        // If still in 'listening' status after 500ms, assume audio is being captured
+        // This gives visual feedback that the recorder is active
+        let audioDetectTimer: NodeJS.Timeout | null = null;
+        audioDetectTimer = setTimeout(() => {
+          if (!hasTransitionedToRecording && fullscreenRef.current) {
+            hasTransitionedToRecording = true;
+            setVoiceStatus('recording');
+            addLogEntry('[voice] Audio detection timeout - status: recording', 'info');
+          }
+        }, 500);
+        
+        // FIXED #2: Add max duration fallback (30s)
+        // If silence event doesn't fire after 30s, auto-stop and send
+        maxDurationTimeout = setTimeout(() => {
+          if (!silenceEventFired && isVoiceListening) {
+            addLogEntry('[voice] ⚠️ Max duration (30s) reached - silence event may not have fired', 'error');
+            if (countdownInterval) clearInterval(countdownInterval);
+            if (audioDetectTimer) clearTimeout(audioDetectTimer);
+            
+            recorder.stop().then(async (resultPath: string) => {
+              setIsVoiceListening(false);
+              if (!resultPath) {
+                setVoiceStatus('idle');
+                return;
+              }
+              try {
+                const base64 = await fs.readFile(resultPath, 'base64');
+                setVoiceStatus('transcribing');
+                syncClient.sendAudioInput(base64, 'audio/m4a');
+                addLogEntry('[voice] Forced send after max duration', 'sent');
+              } catch (e: any) {
+                setVoiceStatus('idle');
+                addLogEntry(`Send error after timeout: ${e?.message}`, 'error');
+              }
+            }).catch((e: any) => {
+              setIsVoiceListening(false);
+              setVoiceStatus('idle');
+              addLogEntry(`Stop error after timeout: ${e?.message}`, 'error');
+            });
+          }
+        }, 30000);
+        
         setVoiceStatus('listening');
         addLogEntry('Voice mode: listening for audio', 'info');
       } catch (e) {
@@ -411,6 +472,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         // If in voice mode, set status to 'playing'
         if (fullscreenRef.current) {
           setVoiceStatus('playing');
+          addLogEntry('[voice] Response audio status: playing', 'info');
         }
         
         await WakeWordModule.startPlayer(tmpPath);
@@ -418,7 +480,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
         
         // After playback, if still in voice mode, restart listening loop
         if (fullscreenRef.current) {
-          addLogEntry('Voice: restarting listening loop', 'info');
+          addLogEntry('[voice] Playback finished, restarting listening loop', 'info');
           setVoiceStatus('listening');
           setSilenceCountdown(0);
           setIsVoiceListening(true);
@@ -428,38 +490,95 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
             const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
             const recorder = getSimpleAudioRecorder();
             
-            // Re-attach silence listener
+            // Re-attach silence listener with state tracking
+            let hasTransitionedToRecording = false;
+            let silenceEventFired = false;
+            let countdownInterval: NodeJS.Timeout | null = null;
+            let maxDurationTimeout: NodeJS.Timeout | null = null;
+            let audioDetectTimer: NodeJS.Timeout | null = null;
+            
             const unsubSilence = recorder.once('silence', async () => {
+              silenceEventFired = true;
+              addLogEntry('[voice] Silence detected in loop', 'info');
               // Silence detected - same flow as before
               setVoiceStatus('silence_countdown');
               let count = 3;
               setSilenceCountdown(count);
-              const tick = setInterval(async () => {
+              countdownInterval = setInterval(async () => {
                 count--;
                 setSilenceCountdown(count);
                 if (count <= 0) {
-                  clearInterval(tick);
+                  clearInterval(countdownInterval);
+                  if (maxDurationTimeout) clearTimeout(maxDurationTimeout);
+                  if (audioDetectTimer) clearTimeout(audioDetectTimer);
+                  addLogEntry('[voice] Loop countdown complete, sending audio', 'info');
                   // FIXED: Actually stop and send audio
                   try {
                     const resultPath = await recorder.stop();
                     if (!resultPath) {
-                      addLogEntry('Voice: no recording path', 'error');
+                      addLogEntry('[voice] No recording path returned in loop', 'error');
                       setVoiceStatus('listening');
                       return;
                     }
+                    const stats = await fs.stat(resultPath);
+                    addLogEntry(`[voice] Loop audio file: ${stats.size} bytes`, 'info');
                     const base64 = await fs.readFile(resultPath, 'base64');
+                    addLogEntry(`[voice] Loop base64 size: ${base64.length} chars`, 'info');
+                    if (base64.length < 100) {
+                      addLogEntry('[voice] ⚠️ Loop base64 audio very small', 'error');
+                    }
                     setVoiceStatus('transcribing');
-                    addLogEntry('Voice: sending audio in loop', 'sent');
+                    addLogEntry('[voice] Loop: sending audio', 'sent');
                     syncClient.sendAudioInput(base64, 'audio/m4a');
                   } catch (e: any) {
-                    addLogEntry(`Voice: loop send error: ${e?.message}`, 'error');
+                    addLogEntry(`[voice] Loop send error: ${e?.message}`, 'error');
                     setVoiceStatus('listening');
                   }
                 }
               }, 1000);
             });
             
+            // FIXED #1: Add audio detection timer for loop
+            audioDetectTimer = setTimeout(() => {
+              if (!hasTransitionedToRecording && fullscreenRef.current) {
+                hasTransitionedToRecording = true;
+                setVoiceStatus('recording');
+                addLogEntry('[voice] Loop: audio detection - status: recording', 'info');
+              }
+            }, 500);
+            
+            // FIXED #2: Add max duration fallback for loop
+            maxDurationTimeout = setTimeout(() => {
+              if (!silenceEventFired && isVoiceListening) {
+                addLogEntry('[voice] ⚠️ Loop: Max duration (30s) reached - forcing send', 'error');
+                if (countdownInterval) clearInterval(countdownInterval);
+                if (audioDetectTimer) clearTimeout(audioDetectTimer);
+                
+                recorder.stop().then(async (resultPath: string) => {
+                  setIsVoiceListening(false);
+                  if (!resultPath) {
+                    setVoiceStatus('listening');
+                    return;
+                  }
+                  try {
+                    const base64 = await fs.readFile(resultPath, 'base64');
+                    setVoiceStatus('transcribing');
+                    syncClient.sendAudioInput(base64, 'audio/m4a');
+                    addLogEntry('[voice] Loop: forced send after max duration', 'sent');
+                  } catch (e: any) {
+                    setVoiceStatus('listening');
+                    addLogEntry(`[voice] Loop: send error after timeout: ${e?.message}`, 'error');
+                  }
+                }).catch((e: any) => {
+                  setIsVoiceListening(false);
+                  setVoiceStatus('listening');
+                  addLogEntry(`[voice] Loop: stop error: ${e?.message}`, 'error');
+                });
+              }
+            }, 30000);
+            
             await recorder.start(recPath, 5000);
+            addLogEntry('[voice] Loop: listening restarted', 'info');
           } catch (e: any) {
             addLogEntry(`Voice: restart error: ${e?.message}`, 'error');
             setVoiceStatus('idle');
