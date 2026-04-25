@@ -116,11 +116,31 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     AppControl?.keepScreenOn?.(false);
     const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
     webViewRef.current?.injectJavaScript(js);
+    
+    // Resume wake word when exiting voice mode
+    AsyncStorage.getItem('cyberclaw-wake-mode').then(mode => {
+      AsyncStorage.getItem('cyberclaw-audio-settings').then(settingsRaw => {
+        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
+        if (mode === 'porcupine') {
+          AsyncStorage.getItem('cyberclaw-ppn-path').then(ppn => {
+            if (ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
+            else WakeWordModule?.start?.(phrase).catch(() => {});
+          });
+        } else {
+          WakeWordModule?.start?.(phrase).catch(() => {});
+        }
+      });
+    }).catch(() => WakeWordModule?.start?.('hey claw').catch(() => {}));
+    addLogEntry('[voice] Wake word resumed after voice mode', 'info');
   }, []);
 
   // Simplified enterVoiceMode - only handles wakeword wake-up
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     if (source === 'wakeword') {
+      // CRITICAL: Pause wake word module when entering voice mode
+      WakeWordModule?.stop?.().catch(() => {});
+      addLogEntry('[voice] Wake word paused during voice mode', 'info');
+      
       bringToForeground();
       AppControl?.showOnLockScreenWithDismiss?.();
       AppControl?.keepScreenOn?.(true);
