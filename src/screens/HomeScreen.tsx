@@ -81,6 +81,7 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
   const logRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
   const fullscreenRef = useRef(false);
+  const isWakeWordStoppedRef = useRef<boolean>(true);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -116,36 +117,18 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
     AppControl?.keepScreenOn?.(false);
     const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
     webViewRef.current?.injectJavaScript(js);
-    
-    // Resume wake word when exiting voice mode
-    AsyncStorage.getItem('cyberclaw-wake-mode').then(mode => {
-      AsyncStorage.getItem('cyberclaw-audio-settings').then(settingsRaw => {
-        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-        if (mode === 'porcupine') {
-          AsyncStorage.getItem('cyberclaw-ppn-path').then(ppn => {
-            if (ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
-            else WakeWordModule?.start?.(phrase).catch(() => {});
-          });
-        } else {
-          WakeWordModule?.start?.(phrase).catch(() => {});
-        }
-      });
-    }).catch(() => WakeWordModule?.start?.('hey claw').catch(() => {}));
-    addLogEntry('[voice] Wake word resumed after voice mode', 'info');
+    addLogEntry('[voice] Exited voice mode', 'info');
   }, []);
 
   // Simplified enterVoiceMode - only handles wakeword wake-up
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     if (source === 'wakeword') {
-      // CRITICAL: Pause wake word module when entering voice mode
-      WakeWordModule?.stop?.().catch(() => {});
-      addLogEntry('[voice] Wake word paused during voice mode', 'info');
-      
       bringToForeground();
       AppControl?.showOnLockScreenWithDismiss?.();
       AppControl?.keepScreenOn?.(true);
       setFullscreen(true);  // Set state so overlay renders
       fullscreenRef.current = true;
+      addLogEntry('[voice] Entering voice mode', 'info');
       
       // Tell arena to enter focus mode
       webViewRef.current?.injectJavaScript(`
@@ -348,33 +331,39 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
 
   // toggleVoiceInput defined after sendMessage below
 
-  // AppState listener to pause/resume wake word based on app foreground/background
+  // AppState listener to manage wake word based on app foreground/background
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
-        // App came to foreground → STOP wake word listening
-        WakeWordModule?.stop?.().catch(() => {});
-        addLogEntry('Wake word paused (app in foreground)', 'info');
+        // App came to foreground → STOP wake word ONCE (unless already stopped)
+        if (!isWakeWordStoppedRef.current) {
+          WakeWordModule?.stop?.().catch(() => {});
+          isWakeWordStoppedRef.current = true;
+          addLogEntry('[lifecycle] App in foreground', 'info');
+        }
       } else if (nextAppState === 'background' || nextAppState === 'inactive') {
-        // App went to background → RESUME wake word listening
-        Promise.all([
-          AsyncStorage.getItem('cyberclaw-audio-settings'),
-          AsyncStorage.getItem('cyberclaw-ppn-path'),
-          AsyncStorage.getItem('cyberclaw-wake-mode'),
-        ]).then(([settingsRaw, ppnPath, wakeModeRaw]) => {
-          const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
-          const ppn = ppnPath || '';
-          const wakeMode = wakeModeRaw || 'vosk';
-          const phrase = settings.wakeWord || 'hey claw';
-          if (wakeMode === 'porcupine' && ppn) {
-            WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
+        // App went to background → START wake word ONCE (unless in fullscreen/voice mode)
+        if (isWakeWordStoppedRef.current && !fullscreenRef.current) {
+          Promise.all([
+            AsyncStorage.getItem('cyberclaw-audio-settings'),
+            AsyncStorage.getItem('cyberclaw-ppn-path'),
+            AsyncStorage.getItem('cyberclaw-wake-mode'),
+          ]).then(([settingsRaw, ppnPath, wakeModeRaw]) => {
+            const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+            const ppn = ppnPath || '';
+            const wakeMode = wakeModeRaw || 'vosk';
+            const phrase = settings.wakeWord || 'hey claw';
+            if (wakeMode === 'porcupine' && ppn) {
+              WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
+                WakeWordModule?.start?.(phrase).catch(() => {});
+              });
+            } else {
               WakeWordModule?.start?.(phrase).catch(() => {});
-            });
-          } else {
-            WakeWordModule?.start?.(phrase).catch(() => {});
-          }
-          addLogEntry('Wake word resumed (app in background)', 'info');
-        });
+            }
+            isWakeWordStoppedRef.current = false;
+            addLogEntry('[lifecycle] App in background', 'info');
+          });
+        }
       }
       appStateRef.current = nextAppState;
     });
