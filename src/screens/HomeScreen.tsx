@@ -736,11 +736,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           AsyncStorage.getItem('cyberclaw-wake-mode'),
           AsyncStorage.getItem('cyberclaw-audio-settings'),
         ]);
-        const wakeMode = modeRaw || 'vosk';
-        const ppnPath = ppnRaw || '';
-        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-        if (wakeMode === 'porcupine' && ppnPath) WakeWordModule?.startPorcupine?.(ppnPath).catch(() => WakeWordModule?.start?.(phrase));
-        else WakeWordModule?.start?.(phrase).catch(() => {});
+        // FIXED: Don't manually resume wake word here
+        // AppState listener will handle it when app goes to background
+        addLogEntry('[voice] Chat mic stopped, wake word managed by AppState', 'info');
       } catch (e: any) {
         setIsVoiceListening(false);
         addLogEntry(`Stop recording error: ${e?.message}`, 'error');
@@ -772,8 +770,10 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
               AsyncStorage.getItem('cyberclaw-audio-settings'),
             ]);
             const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
-            if (mode === 'porcupine' && ppn) WakeWordModule?.startPorcupine?.(ppn).catch(() => WakeWordModule?.start?.(phrase));
-            else WakeWordModule?.start?.(phrase).catch(() => {});
+            // FIXED: Don't restart wake word during voice loop
+            // Wake word is paused while in voice mode (fullscreen is true)
+            // It will resume when app goes to background or voice mode exits
+            addLogEntry('[voice] Restarting voice loop (wake word stays paused)', 'info');
           } catch (e: any) {
             addLogEntry(`Error after silence: ${e?.message}`, 'error');
           }
