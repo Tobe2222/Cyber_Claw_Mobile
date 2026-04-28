@@ -31,6 +31,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [ppnPath, setPpnPath] = useState<string>('');
   const [wakeMode, setWakeMode] = useState<'vosk' | 'porcupine'>('vosk');
   const [bgListening, setBgListening] = useState(true);
+  const [ttsVoice, setTtsVoice] = useState<'lessac' | 'ryan' | 'glow-tts'>('lessac');
 
   const checkPermissions = async () => {
     if (Platform.OS !== 'android') return;
@@ -62,6 +63,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
+    AsyncStorage.getItem('cyberclaw-tts-voice').then(v => { if (v) setTtsVoice(v as any); });
     AsyncStorage.getItem('cyberclaw-ppn-path').then(v => { if (v) setPpnPath(v); });
     AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); });
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
@@ -321,6 +323,18 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             trackColor={{ false: '#333', true: '#f7931a' }}
             thumbColor={ttsEnabled ? '#fff' : '#666'}
           />
+        <Text style={styles.label}>TTS Voice</Text>
+        <View style={styles.voiceSelectRow}>
+          <TouchableOpacity style={[styles.voiceBtn, ttsVoice === "lessac" && styles.voiceBtnActive]} onPress={() => { setTtsVoice("lessac"); AsyncStorage.setItem("cyberclaw-tts-voice", "lessac"); }}>
+            <Text style={[styles.voiceBtnText, ttsVoice === "lessac" && styles.voiceBtnTextActive]}>🎙️ Lessac</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.voiceBtn, ttsVoice === "ryan" && styles.voiceBtnActive]} onPress={() => { setTtsVoice("ryan"); AsyncStorage.setItem("cyberclaw-tts-voice", "ryan"); }}>
+            <Text style={[styles.voiceBtnText, ttsVoice === "ryan" && styles.voiceBtnTextActive]}>👨 Ryan</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.voiceBtn, ttsVoice === "glow-tts" && styles.voiceBtnActive]} onPress={() => { setTtsVoice("glow-tts"); AsyncStorage.setItem("cyberclaw-tts-voice", "glow-tts"); }}>
+            <Text style={[styles.voiceBtnText, ttsVoice === "glow-tts" && styles.voiceBtnTextActive]}>👩 Glow</Text>
+          </TouchableOpacity>
+        </View>
         </View>
         <Text style={styles.sectionDesc}>Uses your device's built-in text-to-speech engine. Go to Settings → Accessibility → Text-to-speech to change the voice.</Text>
       </View>
@@ -737,4 +751,9 @@ const styles = StyleSheet.create({
   modeBtnTextActive: {
     color: '#f7931a',
   },
+  voiceSelectRow: { flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 12 },
+  voiceBtn: { flex: 1, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, backgroundColor: '#1a1a2e', borderWidth: 1, borderColor: '#333', alignItems: 'center' },
+  voiceBtnActive: { backgroundColor: 'rgba(247,147,26,0.2)', borderColor: '#f7931a' },
+  voiceBtnText: { color: '#888', fontSize: 12, fontWeight: '600' },
+  voiceBtnTextActive: { color: '#f7931a' },
 });
