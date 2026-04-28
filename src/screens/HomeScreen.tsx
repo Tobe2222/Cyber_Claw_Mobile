@@ -61,7 +61,7 @@ export function offLogEntry(fn: (e: LogEntry) => void) {
 
 type TabId = 'chat' | 'events' | 'log';
 
-export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { onOpenSettings: () => void; onOpenArenaSettings: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
@@ -824,6 +824,9 @@ export default function HomeScreen({ onOpenSettings }: { onOpenSettings: () => v
           <View style={styles.headerRight}>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
             <Text style={styles.statusLabel}>{statusLabel}</Text>
+            <TouchableOpacity style={styles.settingsBtn} onPress={onOpenArenaSettings}>
+              <Text style={styles.settingsIcon}>🎮</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.settingsBtn} onPress={onOpenSettings}>
               <Text style={styles.settingsIcon}>⚙️</Text>
             </TouchableOpacity>
