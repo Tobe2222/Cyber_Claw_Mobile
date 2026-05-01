@@ -36,8 +36,6 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   const [companionId, setCompanionId] = useState('boar');
   const [ttsVoice, setTtsVoice] = useState('lessac');
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  const [hiveToken, setHiveToken] = useState('');
-  const [tokenCopied, setTokenCopied] = useState(false);
 
   useEffect(() => {
     // Load saved settings
@@ -45,24 +43,6 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     AsyncStorage.getItem('cyberclaw-arena-companion').then(v => { if (v) setCompanionId(v); });
     AsyncStorage.getItem('cyberclaw-tts-voice').then(v => { if (v) setTtsVoice(v); });
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
-    
-    // Load Hive token
-    AsyncStorage.getItem('cyberclaw-hive-token').then(v => { if (v) setHiveToken(v); });
-    
-    // Try to fetch fresh Hive token from desktop
-    AsyncStorage.getItem('cyberclaw-desktop-host').then(host => {
-      if (host) {
-        fetch(`http://${host}:5000/api/hive/config`)
-          .then(r => r.json())
-          .then(data => {
-            if (data.hive_token) {
-              setHiveToken(data.hive_token);
-              AsyncStorage.setItem('cyberclaw-hive-token', data.hive_token);
-            }
-          })
-          .catch(() => {});
-      }
-    });
   }, []);
 
   const saveBg = (id: string) => {
@@ -165,39 +145,6 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
                 Desktop will use your selected voice for AI responses.
               </Text>
             </View>
-          )}
-        </View>
-
-        {/* Hive Token Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>🐝 The Hive - Mobile Token</Text>
-          
-          {hiveToken ? (
-            <View style={styles.tokenContainer}>
-              <Text style={styles.tokenLabel}>Your Hive Token (for mobile app)</Text>
-              <View style={styles.tokenBox}>
-                <Text style={styles.tokenText} selectable>{hiveToken}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.copyButton}
-                onPress={() => {
-                  require('react-native').Share.share({
-                    message: hiveToken,
-                  }).catch(() => {});
-                  setTokenCopied(true);
-                  setTimeout(() => setTokenCopied(false), 2000);
-                }}
-              >
-                <Text style={styles.copyButtonText}>{tokenCopied ? '✓ Copied' : '📋 Copy Token'}</Text>
-              </TouchableOpacity>
-              <Text style={styles.description}>
-                Use this token in the Hive Control mobile app to connect to your workers.
-              </Text>
-            </View>
-          ) : (
-            <Text style={styles.description}>
-              No token yet. Connect to The Hive on the desktop first.
-            </Text>
           )}
         </View>
       </ScrollView>
@@ -316,42 +263,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 8,
     fontStyle: 'italic',
-  },
-  tokenContainer: {
-    marginTop: 12,
-  },
-  tokenLabel: {
-    color: '#f7931a',
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  tokenBox: {
-    backgroundColor: '#1a1a2e',
-    borderWidth: 1,
-    borderColor: '#f7931a',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-  },
-  tokenText: {
-    color: '#f7931a',
-    fontSize: 11,
-    fontFamily: 'monospace',
-    lineHeight: 16,
-  },
-  copyButton: {
-    backgroundColor: '#f7931a',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  copyButtonText: {
-    color: '#000',
-    fontWeight: '700',
-    fontSize: 14,
   },
 });
