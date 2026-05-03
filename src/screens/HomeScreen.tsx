@@ -75,6 +75,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [fullscreen, setFullscreen] = useState(false);
   const [lockScreenMode, setLockScreenMode] = useState(false);
   const [silenceCountdown, setSilenceCountdown] = useState(0);
+  const [isLandscape, setIsLandscape] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
@@ -292,7 +293,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       closeFullscreen();
       return true;
     });
-    return () => subscription.remove();
+    return () => {
+      subscription?.remove?.();
+      keyboardShow.remove();
+      keyboardHide.remove();
+    };
   }, [fullscreen, closeFullscreen]);
 
   // Wake word → enter voice mode with lock screen
@@ -818,7 +823,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     <View style={styles.container}>
       <StatusBar hidden={false} />
       {/* Header */}
-      {!fullscreen && (
+      {!fullscreen && !isLandscape && (
         <View style={styles.headerBar}>
           <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
           <View style={styles.headerRight}>
@@ -831,9 +836,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         </View>
       )}
 
-      {/* Arena - Conditional rendering based on fullscreen */}
+      {/* Arena - Conditional rendering based on fullscreen or landscape */}
       {!keyboardVisible && (
-        <View style={fullscreen ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
+        <View style={fullscreen || isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
           <WebView
             ref={webViewRef}
             source={{ uri: 'file:///android_asset/arena.html' }}
@@ -884,8 +889,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         </View>
       )}
 
-      {/* Tabs - Hidden when fullscreen */}
-      {!fullscreen && (
+      {/* Tabs - Hidden when fullscreen or landscape */}
+      {!fullscreen && !isLandscape && (
         <View style={styles.tabBar}>
           {(['chat', 'events', 'log'] as TabId[]).map(tab => (
             <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
@@ -897,8 +902,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         </View>
       )}
 
-      {/* Tab content - Hidden when fullscreen */}
-      {!fullscreen && (
+      {/* Tab content - Hidden when fullscreen or landscape */}
+      {!fullscreen && !isLandscape && (
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
         {activeTab === 'chat' && (
           <>

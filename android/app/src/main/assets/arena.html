@@ -49,8 +49,20 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
 </style>
 </head><body>
 <canvas id="c"></canvas>
+<script>
+// Arena Settings button - send message to React Native
+document.addEventListener('DOMContentLoaded', () => {
+  const settingsBtn = document.getElementById('arenaSettingsBtn');
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', () => {
+      window.ReactNativeWebView?.postMessage(JSON.stringify({type: 'openArenaSettings'}));
+    });
+  }
+});
+</script>
 <div id="ui">
   <div id="ctrlLeft">
+    <button class="btn" id="arenaSettingsBtn" title="Arena Settings">⚙️</button>
   </div>
   <div id="ctrlRight">
     <button class="btn" id="voiceBtn" title="Voice Mode">Voice</button>
