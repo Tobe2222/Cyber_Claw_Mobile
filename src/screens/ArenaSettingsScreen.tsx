@@ -31,10 +31,17 @@ const VOICE_OPTIONS = [
   { id: 'glow-tts', label: '👩 Glow-TTS (Female)' },
 ];
 
+const COMPANION_VOICE_OPTIONS = [
+  { id: 'lessac', label: '🎙️ Lessac (Deep, Authoritative)' },
+  { id: 'ryan', label: '👨 Ryan (Young, Friendly)' },
+  { id: 'glow-tts', label: '👩 Glow-TTS (Warm, Curious)' },
+];
+
 export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps) {
   const [bgId, setBgId] = useState('dark-forest');
   const [companionId, setCompanionId] = useState('boar');
   const [ttsVoice, setTtsVoice] = useState('lessac');
+  const [companionVoice, setCompanionVoice] = useState('lessac');
   const [ttsEnabled, setTtsEnabled] = useState(true);
 
   useEffect(() => {
@@ -42,6 +49,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     AsyncStorage.getItem('cyberclaw-arena-bg').then(v => { if (v) setBgId(v); });
     AsyncStorage.getItem('cyberclaw-arena-companion').then(v => { if (v) setCompanionId(v); });
     AsyncStorage.getItem('cyberclaw-tts-voice').then(v => { if (v) setTtsVoice(v); });
+    AsyncStorage.getItem('cyberclaw-companion-voice').then(v => { if (v) setCompanionVoice(v); });
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
   }, []);
 
@@ -58,6 +66,11 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   const saveVoice = (id: string) => {
     setTtsVoice(id);
     AsyncStorage.setItem('cyberclaw-tts-voice', id);
+  };
+
+  const saveCompanionVoice = (id: string) => {
+    setCompanionVoice(id);
+    AsyncStorage.setItem('cyberclaw-companion-voice', id);
   };
 
   const saveTtsEnabled = (v: boolean) => {
@@ -109,6 +122,29 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
                 </Text>
               </TouchableOpacity>
             ))}
+          </View>
+        </View>
+
+        {/* Companion Voice Settings */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>🎤 Companion Voice</Text>
+          <View style={styles.pickerContainer}>
+            <Text style={styles.label}>How does your companion sound?</Text>
+            <View style={styles.picker}>
+              <Picker
+                selectedValue={companionVoice}
+                onValueChange={saveCompanionVoice}
+                style={styles.pickerElement}
+                itemStyle={styles.pickerItem}
+              >
+                {COMPANION_VOICE_OPTIONS.map(opt => (
+                  <Picker.Item key={opt.id} label={opt.label} value={opt.id} />
+                ))}
+              </Picker>
+            </View>
+            <Text style={styles.description}>
+              Affects how the companion responds and reacts in the arena.
+            </Text>
           </View>
         </View>
 
