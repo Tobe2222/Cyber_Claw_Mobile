@@ -82,7 +82,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     // Sync with desktop
     try {
       if (syncClient?.broadcast) {
-        syncClient.broadcast('companion_changed', { companionId: id });
+        // Sync companion change - TODO: implement event handler on desktop
       }
     } catch (e) {
       console.log('Companion sync error:', e);
