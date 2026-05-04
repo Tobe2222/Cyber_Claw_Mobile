@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
-  Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules,
+  Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules, BackHandler,
 } from 'react-native';
 const { BackgroundService } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,6 +18,15 @@ const SETTINGS_KEY = 'cyberclaw-mobile-settings';
 type PermStatus = 'granted' | 'denied' | 'never_ask_again' | 'unknown';
 
 export default function SettingsScreen({ onBack }: { onBack: () => void }) {
+  // Handle Android back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      onBack();
+      return true;
+    });
+    return () => backHandler.remove();
+  }, [onBack]);
+
   const [hostIp, setHostIp] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('Disconnected');

@@ -931,10 +931,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               keyExtractor={i => i.id}
               renderItem={renderMessage}
               contentContainerStyle={styles.chatList}
-              showsVerticalScrollIndicator={false}
-              inverted={false}
-              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-              ListHeaderComponent={
+              showsVerticalScrollIndicator={true}
+              scrollEnabled={true}
+              ListFooterComponent={
                 messages.length > 0 ? (
                   <TouchableOpacity style={styles.loadMoreBtn} onPress={() => { setShouldAutoScroll(false); /* Load older messages */ }}>
                     <Text style={styles.loadMoreText}>📜 Load Earlier Messages</Text>
