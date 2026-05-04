@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform,
-  Switch, Alert,
+  Switch, Alert, SafeAreaView,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,6 +24,9 @@ const BG_OPTIONS = [
 const COMPANION_OPTIONS = [
   { id: 'fox', label: '🦊 Fox' },
   { id: 'boar', label: '🐗 Boar' },
+  { id: 'deer', label: '🦌 Deer' },
+  { id: 'hare', label: '🐰 Hare' },
+  { id: 'black_grouse', label: '🐦 Black Grouse' },
 ];
 
 const VOICE_OPTIONS = [
@@ -80,7 +83,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack}>
           <Text style={styles.backButton}>← Back</Text>
@@ -185,7 +188,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
           )}
         </View>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
