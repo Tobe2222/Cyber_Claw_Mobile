@@ -54,7 +54,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   useEffect(() => {
     // Load saved settings
     AsyncStorage.getItem('cyberclaw-arena-bg').then(v => { if (v) setBgId(v); });
-    AsyncStorage.getItem('cyberclaw-arena-companion').then(v => { if (v) setCompanionId(v); });
+    AsyncStorage.getItem('cyberclaw-arena-comp').then(v => { if (v) setCompanionId(v); });
     AsyncStorage.getItem('cyberclaw-tts-voice').then(v => { if (v) setTtsVoice(v); });
     AsyncStorage.getItem('cyberclaw-companion-voice').then(v => { if (v) setCompanionVoice(v); });
 
