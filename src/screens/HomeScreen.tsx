@@ -497,18 +497,24 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onCompanionChanged = (msg: any) => {
-      if (msg.companionId) {
-        AsyncStorage.setItem('cyberclaw-arena-comp', msg.companionId);
-        addLogEntry(`Companion changed to ${msg.companionId}`, 'info');
-        // Reload arena to show new companion
-        webViewRef.current?.reload();
+      try {
+        if (msg?.companionId) {
+          AsyncStorage.setItem('cyberclaw-arena-comp', msg.companionId);
+          addLogEntry(`Companion changed to ${msg.companionId}`, 'info');
+        }
+      } catch (e) {
+        console.log('Companion changed error:', e);
       }
     };
 
     const onCompanionVoiceChanged = (msg: any) => {
-      if (msg.companionVoice) {
-        AsyncStorage.setItem('cyberclaw-companion-voice', msg.companionVoice);
-        addLogEntry(`Companion voice changed to ${msg.companionVoice}`, 'info');
+      try {
+        if (msg?.companionVoice) {
+          AsyncStorage.setItem('cyberclaw-companion-voice', msg.companionVoice);
+          addLogEntry(`Companion voice changed to ${msg.companionVoice}`, 'info');
+        }
+      } catch (e) {
+        console.log('Voice changed error:', e);
       }
     };
 
@@ -851,25 +857,16 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [isConnected, isVoiceListening]);
 
-  const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
+  const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
       return <View />;
     }
     
-    // Show date separator if different from previous message
-    const prevItem = index > 0 ? messages[index - 1] : null;
-    const showDateSeparator = !prevItem || getRelativeDate(prevItem.ts) !== getRelativeDate(item.ts);
-    
     return (
-      <View>
-        {showDateSeparator && (
-          <Text style={styles.dateSeparator}>{getRelativeDate(item.ts)}</Text>
-        )}
-        <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
+      <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
           {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
           <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
           <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-        </View>
       </View>
     );
   }, [messages]);

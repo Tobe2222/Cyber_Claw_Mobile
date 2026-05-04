@@ -79,7 +79,13 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     setCompanionId(id);
     AsyncStorage.setItem('cyberclaw-arena-comp', id);
     // Sync with desktop
-    syncClient.broadcast('companion_changed', { companionId: id });
+    try {
+      if (syncClient?.broadcast) {
+        syncClient.broadcast('companion_changed', { companionId: id });
+      }
+    } catch (e) {
+      console.log('Companion sync error:', e);
+    }
   };
 
 
