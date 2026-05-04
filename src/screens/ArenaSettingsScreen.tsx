@@ -30,15 +30,29 @@ const COMPANION_OPTIONS = [
 ];
 
 const VOICE_OPTIONS = [
-  { id: 'lessac', label: '🎙️ Lessac (Professional Male)' },
-  { id: 'ryan', label: '👨 Ryan (Young Male)' },
-  { id: 'glow-tts', label: '👩 Glow-TTS (Female)' },
+  // Male voices
+  { id: 'lessac', label: '🎙️ Lessac (Male - Professional)', gender: 'male' },
+  { id: 'ryan', label: '👨 Ryan (Male - Young)', gender: 'male' },
+  { id: 'adam', label: '🧑 Adam (Male - Calm)', gender: 'male' },
+  { id: 'arnold', label: '💪 Arnold (Male - Deep)', gender: 'male' },
+  { id: 'brian', label: '👔 Brian (Male - Friendly)', gender: 'male' },
+  // Female voices
+  { id: 'glow-tts', label: '👩 Glow-TTS (Female - Warm)', gender: 'female' },
+  { id: 'nova', label: '✨ Nova (Female - Bright)', gender: 'female' },
+  { id: 'sage', label: '🧙 Sage (Female - Wise)', gender: 'female' },
 ];
 
 const COMPANION_VOICE_OPTIONS = [
-  { id: 'lessac', label: '🎙️ Lessac (Deep, Authoritative)' },
-  { id: 'ryan', label: '👨 Ryan (Young, Friendly)' },
-  { id: 'glow-tts', label: '👩 Glow-TTS (Warm, Curious)' },
+  // Male voices
+  { id: 'lessac', label: '🎙️ Lessac (Male - Deep, Authoritative)', gender: 'male' },
+  { id: 'ryan', label: '👨 Ryan (Male - Young, Friendly)', gender: 'male' },
+  { id: 'adam', label: '🧑 Adam (Male - Calm, Gentle)', gender: 'male' },
+  { id: 'arnold', label: '💪 Arnold (Male - Deep, Bold)', gender: 'male' },
+  { id: 'brian', label: '👔 Brian (Male - Warm, Thoughtful)', gender: 'male' },
+  // Female voices
+  { id: 'glow-tts', label: '👩 Glow-TTS (Female - Warm, Curious)', gender: 'female' },
+  { id: 'nova', label: '✨ Nova (Female - Bright, Energetic)', gender: 'female' },
+  { id: 'sage', label: '🧙 Sage (Female - Wise, Reflective)', gender: 'female' },
 ];
 
 export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps) {
@@ -203,6 +217,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
+    paddingTop: 16,
+    marginTop: Platform.OS === 'android' ? 8 : 0,
     backgroundColor: '#0d0d1f',
     borderBottomWidth: 1,
     borderBottomColor: '#333',
