@@ -67,7 +67,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
   const saveCompanion = (id: string) => {
     setCompanionId(id);
-    AsyncStorage.setItem('cyberclaw-arena-companion', id);
+    AsyncStorage.setItem('cyberclaw-arena-comp', id);
   };
 
 
