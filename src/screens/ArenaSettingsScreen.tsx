@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform,
-  Switch, Alert, SafeAreaView,
+  Switch, Alert, SafeAreaView, BackHandler,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -29,19 +29,6 @@ const COMPANION_OPTIONS = [
   { id: 'black_grouse', label: '🐦 Black Grouse' },
 ];
 
-const VOICE_OPTIONS = [
-  // Male voices
-  { id: 'lessac', label: '🎙️ Lessac (Male - Professional)', gender: 'male' },
-  { id: 'ryan', label: '👨 Ryan (Male - Young)', gender: 'male' },
-  { id: 'adam', label: '🧑 Adam (Male - Calm)', gender: 'male' },
-  { id: 'arnold', label: '💪 Arnold (Male - Deep)', gender: 'male' },
-  { id: 'brian', label: '👔 Brian (Male - Friendly)', gender: 'male' },
-  // Female voices
-  { id: 'glow-tts', label: '👩 Glow-TTS (Female - Warm)', gender: 'female' },
-  { id: 'nova', label: '✨ Nova (Female - Bright)', gender: 'female' },
-  { id: 'sage', label: '🧙 Sage (Female - Wise)', gender: 'female' },
-];
-
 const COMPANION_VOICE_OPTIONS = [
   // Male voices
   { id: 'lessac', label: '🎙️ Lessac (Male - Deep, Authoritative)', gender: 'male' },
@@ -60,7 +47,6 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   const [companionId, setCompanionId] = useState('boar');
   const [ttsVoice, setTtsVoice] = useState('lessac');
   const [companionVoice, setCompanionVoice] = useState('lessac');
-  const [ttsEnabled, setTtsEnabled] = useState(true);
 
   useEffect(() => {
     // Load saved settings
@@ -68,7 +54,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     AsyncStorage.getItem('cyberclaw-arena-companion').then(v => { if (v) setCompanionId(v); });
     AsyncStorage.getItem('cyberclaw-tts-voice').then(v => { if (v) setTtsVoice(v); });
     AsyncStorage.getItem('cyberclaw-companion-voice').then(v => { if (v) setCompanionVoice(v); });
-    AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
+
   }, []);
 
   const saveBg = (id: string) => {
@@ -81,20 +67,12 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     AsyncStorage.setItem('cyberclaw-arena-companion', id);
   };
 
-  const saveVoice = (id: string) => {
-    setTtsVoice(id);
-    AsyncStorage.setItem('cyberclaw-tts-voice', id);
-  };
 
   const saveCompanionVoice = (id: string) => {
     setCompanionVoice(id);
     AsyncStorage.setItem('cyberclaw-companion-voice', id);
   };
 
-  const saveTtsEnabled = (v: boolean) => {
-    setTtsEnabled(v);
-    AsyncStorage.setItem('cyberclaw-tts-enabled', String(v));
-  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -143,11 +121,11 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
           </View>
         </View>
 
-        {/* Companion Voice Settings */}
+        {/* Voice Settings */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>🎤 Companion Voice</Text>
+          <Text style={styles.sectionTitle}>🎤 Voice</Text>
           <View style={styles.pickerContainer}>
-            <Text style={styles.label}>How does your companion sound?</Text>
+            <Text style={styles.label}>Select your voice</Text>
             <View style={styles.picker}>
               <Picker
                 selectedValue={companionVoice}
@@ -161,46 +139,12 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
               </Picker>
             </View>
             <Text style={styles.description}>
-              Affects how the companion responds and reacts in the arena.
+              Used for companion voice in arena and AI responses on desktop.
             </Text>
           </View>
         </View>
 
-        {/* TTS Voice Settings */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>🔊 Voice Response</Text>
 
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Speak AI Responses</Text>
-            <Switch
-              value={ttsEnabled}
-              onValueChange={saveTtsEnabled}
-              trackColor={{ false: '#333', true: '#f7931a' }}
-              thumbColor={ttsEnabled ? '#fff' : '#666'}
-            />
-          </View>
-
-          {ttsEnabled && (
-            <View style={styles.pickerContainer}>
-              <Text style={styles.label}>Select Voice</Text>
-              <View style={styles.picker}>
-                <Picker
-                  selectedValue={ttsVoice}
-                  onValueChange={saveVoice}
-                  style={styles.pickerElement}
-                  itemStyle={styles.pickerItem}
-                >
-                  {VOICE_OPTIONS.map(opt => (
-                    <Picker.Item key={opt.id} label={opt.label} value={opt.id} />
-                  ))}
-                </Picker>
-              </View>
-              <Text style={styles.description}>
-                Desktop will use your selected voice for AI responses.
-              </Text>
-            </View>
-          )}
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -217,8 +161,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    paddingTop: 16,
-    marginTop: Platform.OS === 'android' ? 8 : 0,
     backgroundColor: '#0d0d1f',
     borderBottomWidth: 1,
     borderBottomColor: '#333',
