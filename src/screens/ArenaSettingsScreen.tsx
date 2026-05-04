@@ -8,7 +8,7 @@ import {
   Switch, Alert, SafeAreaView, BackHandler,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
-import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
+
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -78,9 +78,8 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
 
   return (
-    <PanGestureHandler onHandlerStateChange={handleSwipe}>
-      <SafeAreaView style={styles.container}>
-        <View style={[styles.header, { marginTop: insets.top * 0.5 }]}>
+    <SafeAreaView style={styles.container}>
+      <View style={[styles.header, { marginTop: insets.top * 0.5 }]}>
             <TouchableOpacity onPress={onBack}>
               <Text style={styles.backButton}>← Back</Text>
             </TouchableOpacity>
@@ -149,9 +148,8 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
         </View>
 
 
-        </ScrollView>
-      </SafeAreaView>
-    </PanGestureHandler>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 

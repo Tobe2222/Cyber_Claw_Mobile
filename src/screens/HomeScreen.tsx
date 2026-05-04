@@ -329,6 +329,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [messages]);
 
+  // Orientation listener
+  useEffect(() => {
+    const subscription = Dimensions.addEventListener('change', ({ window }) => {
+      setIsLandscape(window.width > window.height);
+    });
+    // Check initial orientation
+    const { width, height } = Dimensions.get('window');
+    setIsLandscape(width > height);
+    return () => subscription?.remove?.();
+  }, []);
+
   // Keyboard
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
