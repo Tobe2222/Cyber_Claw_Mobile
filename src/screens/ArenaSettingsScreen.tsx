@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Alert,
-  Switch, Alert, SafeAreaView, BackHandler,
+  Switch, SafeAreaView, BackHandler,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 
@@ -79,14 +79,6 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     console.log('Saving companion:', id);
     setCompanionId(id);
     AsyncStorage.setItem('cyberclaw-arena-comp', id).catch(e => console.log('Error saving:', e));
-    // Sync with desktop
-    try {
-      if (syncClient?.broadcast) {
-        // Sync companion change - TODO: implement event handler on desktop
-      }
-    } catch (e) {
-      console.log('Companion sync error:', e);
-    }
   };
 
 
