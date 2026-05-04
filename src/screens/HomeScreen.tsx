@@ -290,7 +290,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
     } catch {}
-  }, [closeFullscreen]);
+  }, [closeFullscreen, onOpenArenaSettings]);
 
   // Handle Android back button in fullscreen mode
   useEffect(() => {
