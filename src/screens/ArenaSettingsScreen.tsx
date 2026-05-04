@@ -5,9 +5,10 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform,
-  Switch, Alert, SafeAreaView, BackHandler,
+  Switch, Alert, SafeAreaView, BackHandler, useSafeAreaInsets,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
+import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface ArenaSettingsScreenProps {
@@ -43,6 +44,7 @@ const COMPANION_VOICE_OPTIONS = [
 ];
 
 export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps) {
+  const insets = useSafeAreaInsets();
   const [bgId, setBgId] = useState('dark-forest');
   const [companionId, setCompanionId] = useState('boar');
   const [ttsVoice, setTtsVoice] = useState('lessac');
@@ -75,8 +77,11 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+    <GestureHandlerRootView style={styles.container}>
+      <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
+        <PanGestureHandler onHandlerStateChange={handleSwipe}>
+          <View style={styles.container}>
+            <View style={[styles.header, { marginTop: insets.top * 0.5 }]}>
         <TouchableOpacity onPress={onBack}>
           <Text style={styles.backButton}>← Back</Text>
         </TouchableOpacity>
@@ -146,7 +151,11 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
 
       </ScrollView>
-    </SafeAreaView>
+            </View>
+          </View>
+        </PanGestureHandler>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
