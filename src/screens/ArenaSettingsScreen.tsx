@@ -120,7 +120,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
         {/* Companion Settings */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>🐾 Companion</Text>
-          <View style={styles.optionGrid} pointerEvents="box-only">
+          <View style={styles.optionGrid}>
             {COMPANION_OPTIONS.map(opt => (
               <TouchableOpacity
                 key={opt.id}

@@ -864,11 +864,16 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       return <View />;
     }
     
+    const dateStr = getRelativeDate(item.ts);
+    
     return (
-      <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
+      <View>
+        <Text style={styles.dateSeparator}>{dateStr}</Text>
+        <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
           {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
           <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
           <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+        </View>
       </View>
     );
   }, [messages]);
