@@ -688,13 +688,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
   }, [speak, setArenaThinking]);
 
-  // Scroll to bottom
-  useEffect(() => {
-    if (messages.length > 0 && activeTab === 'chat') {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-      setTimeout(() => logRef.current?.scrollToEnd({ animated: false }), 100);
-    }
-  }, [messages.length, activeTab]);
+
 
   const [lastInputWasVoice, setLastInputWasVoice] = useState(false);
   const appStateRef = useRef<string>(AppState.currentState);

@@ -51,6 +51,15 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   const [ttsVoice, setTtsVoice] = useState('lessac');
   const [companionVoice, setCompanionVoice] = useState('lessac');
 
+  // Handle Android back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      onBack();
+      return true;
+    });
+    return () => backHandler.remove();
+  }, [onBack]);
+
   useEffect(() => {
     // Load saved settings
     AsyncStorage.getItem('cyberclaw-arena-bg').then(v => { if (v) setBgId(v); });
