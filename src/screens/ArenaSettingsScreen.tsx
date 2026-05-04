@@ -76,8 +76,9 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   };
 
   const saveCompanion = (id: string) => {
+    console.log('Saving companion:', id);
     setCompanionId(id);
-    AsyncStorage.setItem('cyberclaw-arena-comp', id);
+    AsyncStorage.setItem('cyberclaw-arena-comp', id).catch(e => console.log('Error saving:', e));
     // Sync with desktop
     try {
       if (syncClient?.broadcast) {

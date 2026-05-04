@@ -321,12 +321,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         try { 
           const loaded = JSON.parse(raw);
           const filtered = loaded.filter((m: any) => m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
-          const withDates = filtered.map((m: any) => ({
-            ...m,
-            dateLabel: getRelativeDate(m.ts)
-          }));
-          setMessages(withDates);
-        } catch {} 
+          setMessages(filtered);
+        } catch (e) {
+          console.log('Error loading messages:', e);
+        }
       }
     });
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => {
@@ -989,10 +987,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                     if (archived) {
                       const archivedMsgs = JSON.parse(archived);
                       if (archivedMsgs.length > 0) {
-                        const toLoad = archivedMsgs.slice(-10).map((m: any) => ({
-                          ...m,
-                          dateLabel: getRelativeDate(m.ts)
-                        }));
+                        const toLoad = archivedMsgs.slice(-10);
                         setMessages(prev => [...toLoad, ...prev]);
                       }
                     }
