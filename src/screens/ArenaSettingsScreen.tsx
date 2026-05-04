@@ -132,8 +132,12 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
             {COMPANION_OPTIONS.map(opt => (
               <TouchableOpacity
                 key={opt.id}
+                activeOpacity={0.6}
                 style={[styles.optionBtn, companionId === opt.id && styles.optionBtnActive]}
-                onPress={() => saveCompanion(opt.id)}
+                onPress={() => {
+                  console.log('Button pressed for:', opt.id, 'Current:', companionId);
+                  saveCompanion(opt.id);
+                }}
               >
                 <Text style={[styles.optionText, companionId === opt.id && styles.optionTextActive]}>
                   {opt.label}

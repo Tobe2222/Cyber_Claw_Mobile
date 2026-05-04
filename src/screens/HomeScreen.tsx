@@ -989,6 +989,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
+              inverted={true}
               ListHeaderComponent={
                 messages.length > 0 ? (
                   <TouchableOpacity style={styles.loadMoreBtn} onPress={async () => {
