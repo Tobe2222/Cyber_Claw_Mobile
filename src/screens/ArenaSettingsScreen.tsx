@@ -78,18 +78,17 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
-        <PanGestureHandler onHandlerStateChange={handleSwipe}>
-          <View style={styles.container}>
-            <View style={[styles.header, { marginTop: insets.top * 0.5 }]}>
-        <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>🎮 Arena Settings</Text>
-        <View style={{ width: 60 }} />
-      </View>
+      <PanGestureHandler onHandlerStateChange={handleSwipe}>
+        <SafeAreaView style={styles.container}>
+          <View style={[styles.header, { marginTop: insets.top * 0.5 }]}>
+            <TouchableOpacity onPress={onBack}>
+              <Text style={styles.backButton}>← Back</Text>
+            </TouchableOpacity>
+            <Text style={styles.title}>🎮 Arena Settings</Text>
+            <View style={{ width: 60 }} />
+          </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Background Settings */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>🖼️ Background</Text>
@@ -150,11 +149,9 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
         </View>
 
 
-      </ScrollView>
-            </View>
-          </View>
-        </PanGestureHandler>
-      </SafeAreaView>
+          </ScrollView>
+        </SafeAreaView>
+      </PanGestureHandler>
     </GestureHandlerRootView>
   );
 }
