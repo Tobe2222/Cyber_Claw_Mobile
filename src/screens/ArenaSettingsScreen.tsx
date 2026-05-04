@@ -78,10 +78,9 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
 
   return (
-    <GestureHandlerRootView style={styles.container}>
-      <PanGestureHandler onHandlerStateChange={handleSwipe}>
-        <SafeAreaView style={styles.container}>
-          <View style={[styles.header, { marginTop: insets.top * 0.5 }]}>
+    <PanGestureHandler onHandlerStateChange={handleSwipe}>
+      <SafeAreaView style={styles.container}>
+        <View style={[styles.header, { marginTop: insets.top * 0.5 }]}>
             <TouchableOpacity onPress={onBack}>
               <Text style={styles.backButton}>← Back</Text>
             </TouchableOpacity>
@@ -150,10 +149,9 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
         </View>
 
 
-          </ScrollView>
-        </SafeAreaView>
-      </PanGestureHandler>
-    </GestureHandlerRootView>
+        </ScrollView>
+      </SafeAreaView>
+    </PanGestureHandler>
   );
 }
 
