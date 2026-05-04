@@ -5,10 +5,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform,
-  Switch, Alert, SafeAreaView, BackHandler, useSafeAreaInsets,
+  Switch, Alert, SafeAreaView, BackHandler,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface ArenaSettingsScreenProps {
