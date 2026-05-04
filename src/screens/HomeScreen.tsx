@@ -990,7 +990,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               inverted={true}
-              ListHeaderComponent={
+              ListFooterComponent={
                 messages.length > 0 ? (
                   <TouchableOpacity style={styles.loadMoreBtn} onPress={async () => {
                     const archived = await AsyncStorage.getItem(ARCHIVE_STORAGE_KEY);

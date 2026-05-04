@@ -4,7 +4,7 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform,
+  View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Alert,
   Switch, Alert, SafeAreaView, BackHandler,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
@@ -128,7 +128,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
         {/* Companion Settings */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>🐾 Companion</Text>
-          <View style={styles.optionGrid}>
+          <View style={styles.optionGrid} pointerEvents="box-only">
             {COMPANION_OPTIONS.map(opt => (
               <TouchableOpacity
                 key={opt.id}
@@ -136,6 +136,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
                 style={[styles.optionBtn, companionId === opt.id && styles.optionBtnActive]}
                 onPress={() => {
                   console.log('Button pressed for:', opt.id, 'Current:', companionId);
+                  Alert.alert('Companion', `Switching to ${opt.label}...`);
                   saveCompanion(opt.id);
                 }}
               >
