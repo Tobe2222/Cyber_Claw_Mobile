@@ -45,6 +45,8 @@ interface LogEntry {
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.52, 230);
 const CHAT_STORAGE_KEY = 'cyberclaw-chat-history';
+const ARCHIVE_STORAGE_KEY = 'cyberclaw-chat-archive';
+const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
 
 export const syncLog: LogEntry[] = [];
 const logListeners: ((e: LogEntry) => void)[] = [];
@@ -319,7 +321,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         try { 
           const loaded = JSON.parse(raw);
           const filtered = loaded.filter((m: any) => m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
-          setMessages(filtered);
+          const withDates = filtered.map((m: any) => ({
+            ...m,
+            dateLabel: getRelativeDate(m.ts)
+          }));
+          setMessages(withDates);
         } catch {} 
       }
     });
@@ -331,7 +337,22 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Persist chat
   useEffect(() => {
     if (messages.length > 0) {
-      AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-100)));
+      // Archive messages older than 2 weeks
+      const now = Date.now();
+      const recentMessages = messages.filter(m => (now - m.ts) < TWO_WEEKS_MS);
+      const archivedMessages = messages.filter(m => (now - m.ts) >= TWO_WEEKS_MS);
+      
+      // Save recent (keep last 100)
+      AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(recentMessages.slice(-100)));
+      
+      // Save archived separately (keep all)
+      if (archivedMessages.length > 0) {
+        AsyncStorage.getItem(ARCHIVE_STORAGE_KEY).then(raw => {
+          const existing = raw ? JSON.parse(raw) : [];
+          const combined = [...existing, ...archivedMessages].filter((v, i, a) => a.findIndex(x => x.id === v.id) === i);
+          AsyncStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(combined.slice(-1000)));
+        });
+      }
     }
   }, [messages]);
 
@@ -473,6 +494,22 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       });
       addLogEntry(`← ${msg.text.substring(0, 80)}`, 'received');
       speak(msg.text);
+    };
+
+    const onCompanionChanged = (msg: any) => {
+      if (msg.companionId) {
+        AsyncStorage.setItem('cyberclaw-arena-comp', msg.companionId);
+        addLogEntry(`Companion changed to ${msg.companionId}`, 'info');
+        // Reload arena to show new companion
+        webViewRef.current?.reload();
+      }
+    };
+
+    const onCompanionVoiceChanged = (msg: any) => {
+      if (msg.companionVoice) {
+        AsyncStorage.setItem('cyberclaw-companion-voice', msg.companionVoice);
+        addLogEntry(`Companion voice changed to ${msg.companionVoice}`, 'info');
+      }
     };
 
     const onTyping = (msg: any) => {
@@ -814,19 +851,28 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [isConnected, isVoiceListening]);
 
-  const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {
-    // Safeguard: only render valid chat messages
+  const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
       return <View />;
     }
+    
+    // Show date separator if different from previous message
+    const prevItem = index > 0 ? messages[index - 1] : null;
+    const showDateSeparator = !prevItem || getRelativeDate(prevItem.ts) !== getRelativeDate(item.ts);
+    
     return (
-      <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
-        {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
-        <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
-        <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+      <View>
+        {showDateSeparator && (
+          <Text style={styles.dateSeparator}>{getRelativeDate(item.ts)}</Text>
+        )}
+        <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
+          {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
+          <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
+          <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+        </View>
       </View>
     );
-  }, []);
+  }, [messages]);
 
   const renderLog = useCallback(({ item }: { item: LogEntry }) => (
     <Text style={[styles.logLine,
@@ -939,9 +985,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
-              ListFooterComponent={
+              ListHeaderComponent={
                 messages.length > 0 ? (
-                  <TouchableOpacity style={styles.loadMoreBtn} onPress={() => { setShouldAutoScroll(false); /* Load older messages */ }}>
+                  <TouchableOpacity style={styles.loadMoreBtn} onPress={async () => {
+                    const archived = await AsyncStorage.getItem(ARCHIVE_STORAGE_KEY);
+                    if (archived) {
+                      const archivedMsgs = JSON.parse(archived);
+                      if (archivedMsgs.length > 0) {
+                        const toLoad = archivedMsgs.slice(-10).map((m: any) => ({
+                          ...m,
+                          dateLabel: getRelativeDate(m.ts)
+                        }));
+                        setMessages(prev => [...toLoad, ...prev]);
+                      }
+                    }
+                  }}>
                     <Text style={styles.loadMoreText}>📜 Load Earlier Messages</Text>
                   </TouchableOpacity>
                 ) : null

@@ -11,6 +11,7 @@ import { Picker } from '@react-native-picker/picker';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import syncClient from '../services/SyncClient';
 
 interface ArenaSettingsScreenProps {
   onBack: () => void;
@@ -77,6 +78,8 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   const saveCompanion = (id: string) => {
     setCompanionId(id);
     AsyncStorage.setItem('cyberclaw-arena-comp', id);
+    // Sync with desktop
+    syncClient.broadcast('companion_changed', { companionId: id });
   };
 
 
