@@ -480,6 +480,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const onState = (data: any) => {
       setConnState(data.state);
       addLogEntry(`State → ${data.state}`, 'info');
+      // Request chat history when connected
+      if (data.state === 'connected') {
+        try {
+          syncClient.broadcast('request_chat_history', {});
+          addLogEntry('Requesting chat history...', 'info');
+        } catch (e) {
+          console.log('Error requesting chat history:', e);
+        }
+      }
     };
 
     const onChat = (msg: any) => {
