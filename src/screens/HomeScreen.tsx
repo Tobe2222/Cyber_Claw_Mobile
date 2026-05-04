@@ -262,6 +262,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const handleArenaMessage = useCallback((e: any) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
+      if (msg.type === 'openArenaSettings') {
+        // Arena Settings button clicked - open full-screen Arena Settings
+        onOpenArenaSettings();
+        return;
+      }
+      
       if (msg.type === 'fullscreen') {
         // Ignore fullscreen request if already recording in chat mode
         if (isVoiceListening) {
@@ -820,8 +826,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     connState === 'lost' ? 'Lost' : 'Offline';
 
   return (
-    <View style={styles.container}>
-      <StatusBar hidden={false} />
+    <View style={isLandscape ? [styles.container, { flex: 1 }] : styles.container}>
+      <StatusBar hidden={isLandscape} />
       {/* Header */}
       {!fullscreen && !isLandscape && (
         <View style={styles.headerBar}>
