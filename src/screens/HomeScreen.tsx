@@ -315,7 +315,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Load persisted chat
   useEffect(() => {
     AsyncStorage.getItem(CHAT_STORAGE_KEY).then(raw => {
-      if (raw) { try { setMessages(JSON.parse(raw)); } catch {} }
+      if (raw) { 
+        try { 
+          const loaded = JSON.parse(raw);
+          const filtered = loaded.filter((m: any) => m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
+          setMessages(filtered);
+        } catch {} 
+      }
     });
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => {
       if (v !== null) setTtsEnabled(v === 'true');
@@ -814,13 +820,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [isConnected, isVoiceListening]);
 
-  const renderMessage = useCallback(({ item }: { item: ChatMessage }) => (
-    <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
-      {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
-      <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
-      <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-    </View>
-  ), []);
+  const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {
+    // Safeguard: only render valid chat messages
+    if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
+      return <View />;
+    }
+    return (
+      <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
+        {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
+        <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
+        <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+      </View>
+    );
+  }, []);
 
   const renderLog = useCallback(({ item }: { item: LogEntry }) => (
     <Text style={[styles.logLine,
