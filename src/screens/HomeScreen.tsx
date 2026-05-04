@@ -77,6 +77,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const [isLandscape, setIsLandscape] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
@@ -920,8 +921,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               renderItem={renderMessage}
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={false}
-              onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              inverted={false}
+              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+              ListHeaderComponent={
+                messages.length > 0 ? (
+                  <TouchableOpacity style={styles.loadMoreBtn} onPress={() => { setShouldAutoScroll(false); /* Load older messages */ }}>
+                    <Text style={styles.loadMoreText}>📜 Load Earlier Messages</Text>
+                  </TouchableOpacity>
+                ) : null
+              }
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
@@ -1238,5 +1246,17 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     textAlign: 'center',
+  },
+  loadMoreBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(247,147,26,0.2)',
+  },
+  loadMoreText: {
+    color: 'rgba(247,147,26,0.7)',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
