@@ -27,6 +27,11 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Clean Gradle Wrapper Cache
+        run: |
+          rm -rf ~/.gradle/wrapper/
+          rm -rf ~/.gradle/caches/
+
       - name: Install dependencies
         run: npm ci
 
