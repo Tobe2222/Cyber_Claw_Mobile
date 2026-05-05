@@ -750,6 +750,28 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
   }, [speak, setArenaThinking]);
 
+  // Watch for companion changes in AsyncStorage
+  useEffect(() => {
+    const checkCompanionChange = async () => {
+      try {
+        const saved = await AsyncStorage.getItem('cyberclaw-arena-comp');
+        if (saved && saved !== companionId) {
+          addLogEntry('🔄 Companion changed externally, reloading arena...', 'info');
+          setCompanionId(saved);
+          // Force WebView reload by changing key
+          setWebViewKey(k => k + 1);
+        }
+      } catch (e) {
+        console.log('Error checking companion:', e);
+      }
+    };
+    
+    // Check on interval (every 2 seconds)
+    const interval = setInterval(checkCompanionChange, 2000);
+    return () => clearInterval(interval);
+  }, [companionId]);
+
+
 
 
   const [lastInputWasVoice, setLastInputWasVoice] = useState(false);
@@ -931,6 +953,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       {!keyboardVisible && (
         <View style={fullscreen || isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
           <WebView
+            key={webViewKey}
             ref={webViewRef}
             source={{ uri: 'file:///android_asset/arena.html' }}
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
