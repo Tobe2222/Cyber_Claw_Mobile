@@ -695,23 +695,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     syncClient.on('state_change', onState);
     syncClient.on('chat', onChat);
-
-  // Listen for companion changes from desktop
-  useEffect(() => {
     const onCompanionChange = (msg: any) => {
       if (msg.companionId && msg.companionId !== companionId) {
         addLogEntry('🖥️ → 📱 Desktop changed companion to ' + msg.companionId, 'info');
         setCompanionId(msg.companionId);
-        // Reload WebView to show new companion
         setWebViewKey(k => k + 1);
       }
     };
-    
     syncClient.on('companion_id', onCompanionChange);
-    return () => {
-      syncClient.off('companion_id', onCompanionChange);
-    };
-  }, [companionId]);
+
     syncClient.on('typing', onTyping);
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
