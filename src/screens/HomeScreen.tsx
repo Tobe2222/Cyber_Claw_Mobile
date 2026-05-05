@@ -695,6 +695,23 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     syncClient.on('state_change', onState);
     syncClient.on('chat', onChat);
+
+  // Listen for companion changes from desktop
+  useEffect(() => {
+    const onCompanionChange = (msg: any) => {
+      if (msg.companionId && msg.companionId !== companionId) {
+        addLogEntry('🖥️ → 📱 Desktop changed companion to ' + msg.companionId, 'info');
+        setCompanionId(msg.companionId);
+        // Reload WebView to show new companion
+        setWebViewKey(k => k + 1);
+      }
+    };
+    
+    syncClient.on('companion_id', onCompanionChange);
+    return () => {
+      syncClient.off('companion_id', onCompanionChange);
+    };
+  }, [companionId]);
     syncClient.on('typing', onTyping);
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
@@ -752,26 +769,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
   }, [speak, setArenaThinking]);
 
-  // Watch for companion changes in AsyncStorage
-  useEffect(() => {
-    const checkCompanionChange = async () => {
-      try {
-        const saved = await AsyncStorage.getItem('cyberclaw-arena-comp');
-        if (saved && saved !== companionId) {
-          addLogEntry('🔄 Companion changed externally, reloading arena...', 'info');
-          setCompanionId(saved);
-          // Force WebView reload by changing key
-          setWebViewKey(k => k + 1);
-        }
-      } catch (e) {
-        console.log('Error checking companion:', e);
-      }
-    };
-    
-    // Check on interval (every 2 seconds)
-    const interval = setInterval(checkCompanionChange, 2000);
-    return () => clearInterval(interval);
-  }, [companionId]);
 
 
 

@@ -78,10 +78,11 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
   const saveCompanion = async (id: string) => {
     try {
-      addLogEntry('🦌 Switching to ' + id, 'info');
+      addLogEntry('📱 → 🖥️ Requesting companion change to ' + id + ' on desktop', 'info');
+      // Send to desktop - it will handle the change and broadcast back
+      syncClient.send('set_companion_id', { companionId: id });
+      // Update local UI immediately for responsiveness
       setCompanionId(id);
-      await AsyncStorage.setItem('cyberclaw-arena-comp', id);
-      addLogEntry('✅ Companion changed to ' + id, 'info');
     } catch (e) {
       addLogEntry('❌ Error changing companion: ' + String(e), 'error');
     }
