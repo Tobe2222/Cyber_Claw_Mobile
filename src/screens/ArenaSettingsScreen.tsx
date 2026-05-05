@@ -12,6 +12,7 @@ import { Picker } from '@react-native-picker/picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
+import { addLogEntry } from './HomeScreen';
 
 interface ArenaSettingsScreenProps {
   onBack: () => void;
@@ -75,10 +76,15 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     AsyncStorage.setItem('cyberclaw-arena-bg', id);
   };
 
-  const saveCompanion = (id: string) => {
-    console.log('Saving companion:', id);
-    setCompanionId(id);
-    AsyncStorage.setItem('cyberclaw-arena-comp', id).catch(e => console.log('Error saving:', e));
+  const saveCompanion = async (id: string) => {
+    try {
+      addLogEntry('🦌 Switching to ' + id, 'info');
+      setCompanionId(id);
+      await AsyncStorage.setItem('cyberclaw-arena-comp', id);
+      addLogEntry('✅ Companion changed to ' + id, 'info');
+    } catch (e) {
+      addLogEntry('❌ Error changing companion: ' + String(e), 'error');
+    }
   };
 
 
