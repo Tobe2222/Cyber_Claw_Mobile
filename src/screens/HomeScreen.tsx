@@ -946,7 +946,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           <WebView
             key={webViewKey}
             ref={webViewRef}
-            source={{ uri: 'file:///android_asset/arena.html' }}
+            source={{ uri: `file:///android_asset/arena.html?companion=${companionId}` }}
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
             scrollEnabled={false}
             bounces={false}

@@ -99,8 +99,18 @@ let horizonLine = 0.55;
 let focused    = false;
 let fullscreen = false;
 let frameCount = 0;
-let companionId = 'fox';
-let companionData = CATALOG.find(c=>c.id==='fox');
+// Load companion from URL or localStorage or default to fox
+let companionId = (() => {
+  const params = new URLSearchParams(window.location.search);
+  const urlCompanion = params.get('companion');
+  if (urlCompanion && CATALOG.find(c=>c.id===urlCompanion)) return urlCompanion;
+  try {
+    const saved = localStorage.getItem('cyberclaw-arena-comp');
+    if (saved && CATALOG.find(c=>c.id===saved)) return saved;
+  } catch {}
+  return 'fox';
+})();
+let companionData = CATALOG.find(c=>c.id===companionId);
 
 // Companion state — desktop-style
 // Direction rows: 0=down, 1=up, 2=left, 3=right
