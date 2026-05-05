@@ -406,7 +406,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         if (!isWakeWordStoppedRef.current) {
           WakeWordModule?.stop?.().catch(() => {});
           isWakeWordStoppedRef.current = true;
-          addLogEntry('[lifecycle] App in foreground', 'info');
+          // Lifecycle: app in foreground
         }
       } else if (nextAppState === 'background' || nextAppState === 'inactive') {
         // App went to background → START wake word ONCE (unless in fullscreen/voice mode)
@@ -428,7 +428,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               WakeWordModule?.start?.(phrase).catch(() => {});
             }
             isWakeWordStoppedRef.current = false;
-            addLogEntry('[lifecycle] App in background', 'info');
+            // Lifecycle: app in background
           });
         }
       }
