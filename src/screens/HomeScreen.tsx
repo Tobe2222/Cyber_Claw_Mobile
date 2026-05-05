@@ -939,10 +939,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
     // Check if we need a date separator
     let showDateSeparator = false;
-    if (index === 0 || !log[index - 1]) {
+    if (index === 0 || !logEntries[index - 1]) {
       showDateSeparator = true;
     } else {
-      const prevDay = new Date(log[index - 1].ts).toDateString();
+      const prevDay = new Date(logEntries[index - 1].ts).toDateString();
       const currDay = new Date(item.ts).toDateString();
       showDateSeparator = prevDay !== currDay;
     }
@@ -961,7 +961,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         </Text>
       </View>
     );
-  }, [log]);
+  }, [logEntries]);
 
   const statusLabel = connState === 'connected' ? 'Connected' :
     connState === 'reconnecting' ? 'Connected' :
