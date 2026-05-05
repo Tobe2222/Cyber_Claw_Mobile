@@ -696,10 +696,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     syncClient.on('state_change', onState);
     syncClient.on('chat', onChat);
     const onCompanionChange = (msg: any) => {
-      if (msg.companionId && msg.companionId !== companionId) {
-        addLogEntry('🖥️ → 📱 Desktop changed companion to ' + msg.companionId, 'info');
-        setCompanionId(msg.companionId);
-        setWebViewKey(k => k + 1);
+      addLogEntry('📨 Received companion_id message: ' + JSON.stringify(msg), 'info');
+      if (msg.companionId) {
+        if (msg.companionId !== companionId) {
+          addLogEntry('🖥️ → 📱 Changing to ' + msg.companionId + ' (was ' + companionId + ')', 'info');
+          setCompanionId(msg.companionId);
+          setWebViewKey(k => k + 1);
+        } else {
+          addLogEntry('⚠️ Same companion, skipping update', 'info');
+        }
+      } else {
+        addLogEntry('⚠️ No companionId in message', 'error');
       }
     };
     syncClient.on('companion_id', onCompanionChange);
