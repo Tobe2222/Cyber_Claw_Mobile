@@ -96,6 +96,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const [isLandscape, setIsLandscape] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
+  const [companionId, setCompanionId] = useState('boar');
+  const [webViewKey, setWebViewKey] = useState(0);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
