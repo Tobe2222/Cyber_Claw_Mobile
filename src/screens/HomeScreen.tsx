@@ -896,16 +896,26 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [isConnected, isVoiceListening]);
 
-  const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {
+  const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
       return <View />;
+    }
+    
+    // Check if we need a date separator (when day changes from previous message)
+    let showDateSeparator = false;
+    if (index === 0 || !messages[index - 1]) {
+      showDateSeparator = true;
+    } else {
+      const prevDay = new Date(messages[index - 1].ts).toDateString();
+      const currDay = new Date(item.ts).toDateString();
+      showDateSeparator = prevDay !== currDay;
     }
     
     const dateStr = getRelativeDate(item.ts);
     
     return (
       <View>
-        <Text style={styles.dateSeparator}>{dateStr}</Text>
+        {showDateSeparator && <Text style={styles.dateSeparator}>{dateStr}</Text>}
         <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
           {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
           <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
@@ -915,15 +925,32 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     );
   }, [messages]);
 
-  const renderLog = useCallback(({ item }: { item: LogEntry }) => (
-    <Text style={[styles.logLine,
-      item.type === 'sent' && styles.logSent,
-      item.type === 'received' && styles.logReceived,
-      item.type === 'error' && styles.logError,
-    ]}>
-      [{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] {item.text}
-    </Text>
-  ), []);
+  const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
+    // Check if we need a date separator
+    let showDateSeparator = false;
+    if (index === 0 || !log[index - 1]) {
+      showDateSeparator = true;
+    } else {
+      const prevDay = new Date(log[index - 1].ts).toDateString();
+      const currDay = new Date(item.ts).toDateString();
+      showDateSeparator = prevDay !== currDay;
+    }
+    
+    const dateStr = getRelativeDate(item.ts);
+    
+    return (
+      <View>
+        {showDateSeparator && <Text style={styles.dateSeparator}>{dateStr}</Text>}
+        <Text style={[styles.logLine,
+          item.type === 'sent' && styles.logSent,
+          item.type === 'received' && styles.logReceived,
+          item.type === 'error' && styles.logError,
+        ]}>
+          [{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] {item.text}
+        </Text>
+      </View>
+    );
+  }, [log]);
 
   const statusLabel = connState === 'connected' ? 'Connected' :
     connState === 'reconnecting' ? 'Connected' :
