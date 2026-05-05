@@ -49,19 +49,30 @@ const ARCHIVE_STORAGE_KEY = 'cyberclaw-chat-archive';
 const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
 
 const getRelativeDate = (ts: number): string => {
-  const now = Date.now();
-  const diff = now - ts;
-  const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-  const weeks = Math.floor(days / 7);
-  const months = Math.floor(days / 30);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days} days ago`;
-  if (weeks === 1) return 'Last week';
-  if (weeks < 4) return `${weeks} weeks ago`;
-  if (months === 1) return 'Last month';
-  return `${months} months ago`;
+  const checkDate = new Date(ts);
+  checkDate.setHours(0, 0, 0, 0);
+  
+  const diffMs = today.getTime() - checkDate.getTime();
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  
+  const diffWeeks = Math.floor(diffDays / 7);
+  const diffMonths = Math.floor(diffDays / 30);
+  
+  if (diffDays < 7) {
+    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    return daysOfWeek[checkDate.getDay()];
+  }
+  if (diffWeeks === 1) return 'Last week';
+  if (diffWeeks < 4) return `${diffWeeks} weeks ago`;
+  if (diffMonths === 1) return 'Last month';
+  if (diffMonths < 12) return `${diffMonths} months ago`;
+  return checkDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 };
 
 
