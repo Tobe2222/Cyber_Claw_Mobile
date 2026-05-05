@@ -244,6 +244,10 @@ class SyncClient {
     this.send({ type: 'companion_interaction', action });
   }
 
+  setCompanionId(companionId: string) {
+    this.send({ type: 'set_companion_id', companionId });
+  }
+
   get state(): ConnectionState { return this._state; }
   get connected(): boolean { return this._state === 'connected' || this._state === 'reconnecting'; }
   get authenticated(): boolean { return this._authenticated; }

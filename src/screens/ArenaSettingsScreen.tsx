@@ -80,7 +80,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     try {
       addLogEntry('📱 → 🖥️ Requesting companion change to ' + id + ' on desktop', 'info');
       // Send to desktop - it will handle the change and broadcast back
-      syncClient.send('set_companion_id', { companionId: id });
+      syncClient.setCompanionId(id);
       // Update local UI immediately for responsiveness
       setCompanionId(id);
     } catch (e) {
