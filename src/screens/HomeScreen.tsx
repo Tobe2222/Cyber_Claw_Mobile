@@ -96,6 +96,22 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
   const [inputText, setInputText] = useState('');
+
+  // Define listener handlers OUTSIDE useEffect so they're stable references
+  const makeCompanionChangeHandler = () => {
+    return (msg: any) => {
+      addLogEntry('📨 companion_id listener fired! msg=' + JSON.stringify(msg), 'info');
+      if (msg && msg.companionId) {
+        addLogEntry('🖥️ → 📱 msg.companionId = ' + msg.companionId, 'info');
+        addLogEntry('🖥️ → 📱 Calling setCompanionId(' + msg.companionId + ')', 'info');
+        setCompanionId(msg.companionId);
+      } else {
+        addLogEntry('⚠️ Invalid message: ' + JSON.stringify(msg), 'error');
+      }
+    };
+  };
+  const onCompanionChangeStable = makeCompanionChangeHandler();
+
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -720,13 +736,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry('⚠️ Invalid message: ' + JSON.stringify(msg), 'error');
       }
     };
-    addLogEntry('🔗 About to register companion_id listener, handler=' + (onCompanionChange ? 'yes' : 'no'), 'info');
-    try {
-      syncClient.on('companion_id', onCompanionChange);
-      addLogEntry('✅ Successfully registered companion_id listener', 'info');
-    } catch (e: any) {
-      addLogEntry('❌ Failed to register listener: ' + e?.message, 'error');
-    }
+    addLogEntry('🔗 Registering companion_id listener (stable)', 'info');
+    syncClient.on('companion_id', onCompanionChangeStable);
 
     syncClient.on('typing', onTyping);
     syncClient.on('chat_history', onChatHistory);
@@ -771,10 +782,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       wakeSub?.remove();
       wakeOpenSub?.remove();
       debugSub?.remove();
-      syncClient.off('debug', () => {});
+      syncClient.off('companion_id', onCompanionChangeStable);
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
-      syncClient.off('companion_id', onCompanionChange);
       syncClient.off('typing', onTyping);
       syncClient.off('chat_history', onChatHistory);
       syncClient.off('arena', onArena);
