@@ -512,7 +512,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       addLogEntry(`State → ${data.state}`, 'info');
       // Request chat history when connected
       if (data.state === 'connected') {
-        addLogEntry('Connected - ready to sync', 'info');
+        addLogEntry('Connected - receiving updates from desktop', 'info');
       }
     };
 
@@ -971,9 +971,23 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Watch companionId changes and reload WebView when it updates
   useEffect(() => {
+    addLogEntry('✨ companionId state updated to: ' + companionId, 'info');
     setWebViewKey(k => k + 1);
     addLogEntry('🔄 Reloading arena with companion: ' + companionId, 'info');
   }, [companionId]);
+
+  // Periodic sync - request state from desktop every 60 seconds
+  useEffect(() => {
+    if (connState !== 'connected') return;
+    
+    const syncInterval = setInterval(() => {
+      addLogEntry('🔄 Periodic sync - requesting state from desktop', 'info');
+      syncClient.requestState();
+    }, 60000); // Every 60 seconds
+    
+    return () => clearInterval(syncInterval);
+  }, [connState]);
+
 
   return (
     <View style={isLandscape ? [styles.container, { flex: 1 }] : styles.container}>
