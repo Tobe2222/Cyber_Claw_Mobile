@@ -704,6 +704,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     const onLogUpdate = (e: LogEntry) => setLogEntries(prev => [...prev, e]);
 
+    syncClient.on('debug', (msg: any) => {
+      addLogEntry(msg, 'info');
+    });
+    
     syncClient.on('state_change', onState);
     syncClient.on('chat', onChat);
     const onCompanionChange = (msg: any) => {
@@ -765,6 +769,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       wakeSub?.remove();
       wakeOpenSub?.remove();
       debugSub?.remove();
+      syncClient.off('debug', () => {});
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
       syncClient.off('companion_id', onCompanionChange);

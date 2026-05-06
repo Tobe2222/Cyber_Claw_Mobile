@@ -253,6 +253,10 @@ class SyncClient {
   get authenticated(): boolean { return this._authenticated; }
 
   private _handleMessage(msg: any) {
+    // Log all incoming messages
+    if (msg.type !== 'state_change' && msg.type !== 'pong') {
+      this.emit('debug', `[ws] Message: ${msg.type}`);
+    }
     switch (msg.type) {
       case 'hello':
         console.log(`[SyncClient] Server version ${msg.version}`);
