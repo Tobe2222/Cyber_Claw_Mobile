@@ -767,6 +767,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       debugSub?.remove();
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
+      syncClient.off('companion_id', onCompanionChange);
       syncClient.off('typing', onTyping);
       syncClient.off('chat_history', onChatHistory);
       syncClient.off('arena', onArena);
