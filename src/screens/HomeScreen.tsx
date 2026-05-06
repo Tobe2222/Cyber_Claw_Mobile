@@ -720,8 +720,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry('⚠️ Invalid message: ' + JSON.stringify(msg), 'error');
       }
     };
-    addLogEntry('🔗 Registering companion_id listener', 'info');
-    syncClient.on('companion_id', onCompanionChange);
+    addLogEntry('🔗 About to register companion_id listener, handler=' + (onCompanionChange ? 'yes' : 'no'), 'info');
+    try {
+      syncClient.on('companion_id', onCompanionChange);
+      addLogEntry('✅ Successfully registered companion_id listener', 'info');
+    } catch (e: any) {
+      addLogEntry('❌ Failed to register listener: ' + e?.message, 'error');
+    }
 
     syncClient.on('typing', onTyping);
     syncClient.on('chat_history', onChatHistory);

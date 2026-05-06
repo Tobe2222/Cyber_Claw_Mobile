@@ -36,6 +36,7 @@ class SyncClient {
   on(type: string, handler: MessageHandler) {
     if (!this.handlers.has(type)) this.handlers.set(type, []);
     this.handlers.get(type)!.push(handler);
+    console.log(`[SyncClient] Registered listener for: ${type}, total handlers: ${this.handlers.get(type)!.length}`);
   }
 
   off(type: string, handler: MessageHandler) {
@@ -48,6 +49,7 @@ class SyncClient {
 
   private emit(type: string, data: any) {
     const list = this.handlers.get(type);
+    console.log(`[SyncClient] Emitting: ${type}, handlers: ${list ? list.length : 0}`);
     if (list) list.forEach(h => h(data));
   }
 
@@ -316,6 +318,11 @@ class SyncClient {
         break;
 
       case 'pong':
+        break;
+
+      case 'companion_id':
+        console.log(`[SyncClient] Got companion_id: ${msg.companionId}`);
+        this.emit('companion_id', msg);
         break;
 
       default:
