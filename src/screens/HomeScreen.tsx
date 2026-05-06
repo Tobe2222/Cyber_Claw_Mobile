@@ -711,13 +711,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     syncClient.on('state_change', onState);
     syncClient.on('chat', onChat);
     const onCompanionChange = (msg: any) => {
-      addLogEntry('📨 Received companion_id message: ' + JSON.stringify(msg), 'info');
-      if (msg.companionId) {
-        addLogEntry('🖥️ → 📱 Setting companion to: ' + msg.companionId, 'info');
+      addLogEntry('📨 companion_id listener fired! msg=' + JSON.stringify(msg), 'info');
+      if (msg && msg.companionId) {
+        addLogEntry('🖥️ → 📱 msg.companionId = ' + msg.companionId, 'info');
+        addLogEntry('🖥️ → 📱 Calling setCompanionId(' + msg.companionId + ')', 'info');
         setCompanionId(msg.companionId);
-        // Don't reload WebView here - let useEffect handle it when companionId updates
       } else {
-        addLogEntry('⚠️ No companionId in message', 'error');
+        addLogEntry('⚠️ Invalid message: ' + JSON.stringify(msg), 'error');
       }
     };
     addLogEntry('🔗 Registering companion_id listener', 'info');
