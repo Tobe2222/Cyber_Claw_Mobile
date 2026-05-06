@@ -713,17 +713,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const onCompanionChange = (msg: any) => {
       addLogEntry('📨 Received companion_id message: ' + JSON.stringify(msg), 'info');
       if (msg.companionId) {
-        if (msg.companionId !== companionId) {
-          addLogEntry('🖥️ → 📱 Changing to ' + msg.companionId + ' (was ' + companionId + ')', 'info');
-          setCompanionId(msg.companionId);
-          // Don't reload WebView here - let useEffect handle it when companionId updates
-        } else {
-          addLogEntry('⚠️ Same companion, skipping update', 'info');
-        }
+        addLogEntry('🖥️ → 📱 Setting companion to: ' + msg.companionId, 'info');
+        setCompanionId(msg.companionId);
+        // Don't reload WebView here - let useEffect handle it when companionId updates
       } else {
         addLogEntry('⚠️ No companionId in message', 'error');
       }
     };
+    addLogEntry('🔗 Registering companion_id listener', 'info');
     syncClient.on('companion_id', onCompanionChange);
 
     syncClient.on('typing', onTyping);
