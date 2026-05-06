@@ -712,7 +712,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         if (msg.companionId !== companionId) {
           addLogEntry('🖥️ → 📱 Changing to ' + msg.companionId + ' (was ' + companionId + ')', 'info');
           setCompanionId(msg.companionId);
-          setWebViewKey(k => k + 1);
+          // Don't reload WebView here - let useEffect handle it when companionId updates
         } else {
           addLogEntry('⚠️ Same companion, skipping update', 'info');
         }
@@ -967,6 +967,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     connState === 'reconnecting' ? 'Connected' :
     connState === 'connecting' ? 'Connecting...' :
     connState === 'lost' ? 'Lost' : 'Offline';
+
+  // Watch companionId changes and reload WebView when it updates
+  useEffect(() => {
+    setWebViewKey(k => k + 1);
+    addLogEntry('🔄 Reloading arena with companion: ' + companionId, 'info');
+  }, [companionId]);
 
   return (
     <View style={isLandscape ? [styles.container, { flex: 1 }] : styles.container}>
