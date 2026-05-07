@@ -526,11 +526,20 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onChat = (msg: any) => {
-      if (msg.isUser) return;
+      console.log('[onChat] Received message:', msg);
+      if (msg.isUser) {
+        console.log('[onChat] Ignoring user message');
+        return;
+      }
+      console.log('[onChat] Adding agent response to chat');
       setChatVoiceStatus(null); // clear status when response arrives
       setMessages(prev => {
         const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
-        if (dupe) return prev;
+        if (dupe) {
+          console.log('[onChat] Duplicate detected, skipping');
+          return prev;
+        }
+        console.log('[onChat] Adding message to state, total messages:', prev.length + 1);
         return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
       });
       addLogEntry(`← ${msg.text.substring(0, 80)}`, 'received');
@@ -1052,6 +1061,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
         {activeTab === 'chat' && (
           <>
+            {messages.length > 0 && console.log('[Chat Tab] Displaying', messages.length, 'messages')}
             <FlatList
               data={messages}
               keyExtractor={i => i.id}
