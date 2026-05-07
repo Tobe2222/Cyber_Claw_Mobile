@@ -71,6 +71,21 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
   }, []);
 
+  useEffect(() => {
+    // Listen for companion_id updates from server
+    const handleCompanionChange = (msg: any) => {
+      if (msg && msg.companionId) {
+        setCompanionId(msg.companionId);
+        AsyncStorage.setItem('cyberclaw-arena-comp', msg.companionId);
+      }
+    };
+
+    syncClient.on('companion_id', handleCompanionChange);
+    return () => {
+      syncClient.removeListener('companion_id', handleCompanionChange);
+    };
+  }, []);
+
   const saveBg = (id: string) => {
     setBgId(id);
     AsyncStorage.setItem('cyberclaw-arena-bg', id);
@@ -133,11 +148,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
                 key={opt.id}
                 activeOpacity={0.6}
                 style={[styles.optionBtn, companionId === opt.id && styles.optionBtnActive]}
-                onPress={() => {
-                  console.log('Button pressed for:', opt.id, 'Current:', companionId);
-                  Alert.alert('Companion', `Switching to ${opt.label}...`);
-                  saveCompanion(opt.id);
-                }}
+                onPress={() => saveCompanion(opt.id)}
               >
                 <Text style={[styles.optionText, companionId === opt.id && styles.optionTextActive]}>
                   {opt.label}
