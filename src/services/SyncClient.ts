@@ -36,7 +36,6 @@ class SyncClient {
   on(type: string, handler: MessageHandler) {
     if (!this.handlers.has(type)) this.handlers.set(type, []);
     this.handlers.get(type)!.push(handler);
-    console.log(`[SyncClient] Registered listener for: ${type}, total handlers: ${this.handlers.get(type)!.length}`);
   }
 
   off(type: string, handler: MessageHandler) {
@@ -49,7 +48,6 @@ class SyncClient {
 
   private emit(type: string, data: any) {
     const list = this.handlers.get(type);
-    console.log(`[SyncClient] Emitting: ${type}, handlers: ${list ? list.length : 0}`);
     if (list) list.forEach(h => h(data));
   }
 
@@ -113,7 +111,6 @@ class SyncClient {
 
         const wsHost = isIPv6 ? `[${this.host}]` : this.host;
         const url = `ws://${wsHost}:${this.port}`;
-        console.log(`[SyncClient] Connecting to ${url}`);
 
         if (!this._isReconnecting) {
           this.setState('connecting');
@@ -131,7 +128,6 @@ class SyncClient {
 
         this.ws.onopen = () => {
           clearTimeout(connectTimeout);
-          console.log('[SyncClient] WebSocket open');
           this._reconnectAttempts = 0;
 
           // Auto-authenticate if we have a saved token
@@ -150,9 +146,8 @@ class SyncClient {
           }
         };
 
-        this.ws.onclose = (event) => {
+        this.ws.onclose = () => {
           clearTimeout(connectTimeout);
-          console.log(`[SyncClient] Closed (code: ${event.code})`);
           this.ws = null;
 
           // If we were authenticated, this is a temporary disconnect — reconnect silently
@@ -227,7 +222,6 @@ class SyncClient {
     }
     try {
       this.send({ type: 'audio_input', audioBase64, mimeType });
-      console.log('[SyncClient] Audio input sent (' + (audioBase64.length / 1024).toFixed(1) + ' KB)');
     } catch (e: any) {
       console.error('[SyncClient] Audio input send failed:', e.message);
       this.emit('send_error', { type: 'audio_input', reason: e?.message });
@@ -255,13 +249,8 @@ class SyncClient {
   get authenticated(): boolean { return this._authenticated; }
 
   private _handleMessage(msg: any) {
-    // Log all incoming messages
-    if (msg.type !== 'state_change' && msg.type !== 'pong') {
-      this.emit('debug', `[ws] Message: ${msg.type}`);
-    }
     switch (msg.type) {
       case 'hello':
-        console.log(`[SyncClient] Server version ${msg.version}`);
         break;
 
       case 'pair_result':
@@ -321,7 +310,6 @@ class SyncClient {
         break;
 
       case 'companion_id':
-        console.log(`[SyncClient] Got companion_id: ${msg.companionId}`);
         this.emit('companion_id', msg);
         break;
 
@@ -347,7 +335,6 @@ class SyncClient {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.host) {
-        console.log(`[SyncClient] Reconnecting (attempt ${this._reconnectAttempts})...`);
         this._doConnect().catch(() => {});
       }
     }, delay);

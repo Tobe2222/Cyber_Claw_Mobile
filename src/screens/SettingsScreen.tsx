@@ -40,7 +40,41 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [ppnPath, setPpnPath] = useState<string>('');
   const [wakeMode, setWakeMode] = useState<'vosk' | 'porcupine'>('vosk');
   const [bgListening, setBgListening] = useState(true);
-  const [ttsVoice, setTtsVoice] = useState<'lessac' | 'ryan' | 'glow-tts'>('lessac');
+  const [testVoiceIndex, setTestVoiceIndex] = useState(0);
+
+  const availableVoices = [
+    { key: 'en-US', label: 'English (US)' },
+    { key: 'en-GB', label: 'English (UK)' },
+  ];
+
+  const runVoiceTest = () => {
+    const phrase = 'Tobe is the coolest and most handsome man on the planet';
+    const voice = availableVoices[testVoiceIndex % availableVoices.length];
+
+    Alert.alert('Test Voice', `Testing voice: ${voice.label}`);
+
+    const escaped = phrase.replace(/'/g, "\\'");
+    const voiceScript = `
+      if ('speechSynthesis' in window) {
+        const allVoices = window.speechSynthesis.getVoices();
+        const selected = allVoices.find(v => v.lang === '${voice.key}') || allVoices[0];
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance('${escaped}');
+        if (selected) u.voice = selected;
+        u.rate = 0.95;
+        u.pitch = 1.0;
+        window.speechSynthesis.speak(u);
+      }
+      true;
+    `;
+
+    syncClient.sendCompanionAction({
+      type: 'eval_js',
+      script: voiceScript,
+    });
+
+    setTestVoiceIndex((prev) => (prev + 1) % availableVoices.length);
+  };
 
   const checkPermissions = async () => {
     if (Platform.OS !== 'android') return;
@@ -72,7 +106,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
-    AsyncStorage.getItem('cyberclaw-tts-voice').then(v => { if (v) setTtsVoice(v as any); });
     AsyncStorage.getItem('cyberclaw-ppn-path').then(v => { if (v) setPpnPath(v); });
     AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); });
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
@@ -333,6 +366,12 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             thumbColor={ttsEnabled ? '#fff' : '#666'}
           />
         </View>
+        <TouchableOpacity style={styles.button} onPress={runVoiceTest}>
+          <Text style={styles.buttonText}>Test Voice</Text>
+        </TouchableOpacity>
+        <Text style={styles.hint}>
+          Current test voice: {availableVoices[testVoiceIndex % availableVoices.length].label}
+        </Text>
         <Text style={styles.sectionDesc}>Uses your device's built-in text-to-speech engine. Go to Settings → Accessibility → Text-to-speech to change the voice.</Text>
       </View>
 

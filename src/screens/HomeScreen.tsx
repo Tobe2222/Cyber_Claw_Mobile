@@ -48,31 +48,46 @@ const CHAT_STORAGE_KEY = 'cyberclaw-chat-history';
 const ARCHIVE_STORAGE_KEY = 'cyberclaw-chat-archive';
 const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
 
-const getRelativeDate = (ts: number): string => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  const checkDate = new Date(ts);
-  checkDate.setHours(0, 0, 0, 0);
-  
-  const diffMs = today.getTime() - checkDate.getTime();
-  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  
-  const diffWeeks = Math.floor(diffDays / 7);
-  const diffMonths = Math.floor(diffDays / 30);
-  
-  if (diffDays < 7) {
-    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return daysOfWeek[checkDate.getDay()];
-  }
-  if (diffWeeks === 1) return 'Last week';
-  if (diffWeeks < 4) return `${diffWeeks} weeks ago`;
-  if (diffMonths === 1) return 'Last month';
-  if (diffMonths < 12) return `${diffMonths} months ago`;
-  return checkDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+type DateBucket = 'today' | 'yesterday' | 'thisWeek' | 'lastWeek' | 'older';
+
+const startOfDay = (d: Date) => {
+  const c = new Date(d);
+  c.setHours(0, 0, 0, 0);
+  return c;
+};
+
+const startOfWeek = (d: Date) => {
+  const c = startOfDay(d);
+  const day = c.getDay(); // 0 = Sunday
+  const diffToMonday = (day + 6) % 7;
+  c.setDate(c.getDate() - diffToMonday);
+  return c;
+};
+
+const getDateBucket = (ts: number): DateBucket => {
+  const now = new Date();
+  const dayStartNow = startOfDay(now).getTime();
+  const dayStartTs = startOfDay(new Date(ts)).getTime();
+
+  if (dayStartTs === dayStartNow) return 'today';
+  if (dayStartTs === dayStartNow - 24 * 60 * 60 * 1000) return 'yesterday';
+
+  const weekStartNow = startOfWeek(now).getTime();
+  const weekStartTs = startOfWeek(new Date(ts)).getTime();
+
+  if (weekStartTs === weekStartNow) return 'thisWeek';
+  if (weekStartTs === weekStartNow - 7 * 24 * 60 * 60 * 1000) return 'lastWeek';
+
+  return 'older';
+};
+
+const getDateBucketLabel = (ts: number): string => {
+  const bucket = getDateBucket(ts);
+  if (bucket === 'today') return 'Today';
+  if (bucket === 'yesterday') return 'Yesterday';
+  if (bucket === 'thisWeek') return 'This Week';
+  if (bucket === 'lastWeek') return 'Last Week';
+  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
 
@@ -97,21 +112,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
   const [inputText, setInputText] = useState('');
 
-  // Define listener handlers OUTSIDE useEffect so they're stable references
-  const makeCompanionChangeHandler = () => {
-    return (msg: any) => {
-      addLogEntry('📨 companion_id listener fired! msg=' + JSON.stringify(msg), 'info');
-      if (msg && msg.companionId) {
-        addLogEntry('🖥️ → 📱 msg.companionId = ' + msg.companionId, 'info');
-        addLogEntry('🖥️ → 📱 Calling setCompanionId(' + msg.companionId + ')', 'info');
-        setCompanionId(msg.companionId);
-      } else {
-        addLogEntry('⚠️ Invalid message: ' + JSON.stringify(msg), 'error');
-      }
-    };
-  };
-  const onCompanionChangeStable = makeCompanionChangeHandler();
-
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -119,14 +119,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
-  const [lockScreenMode, setLockScreenMode] = useState(false);
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const [isLandscape, setIsLandscape] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const [companionId, setCompanionId] = useState('boar');
   const [webViewKey, setWebViewKey] = useState(0);
-  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
-  const flatListRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
@@ -153,7 +150,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Propagate thinking state to both WebViews
   const setArenaThinking = useCallback((active: boolean) => {
-    const js = `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: ${false} }) })); document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: ${false} }) })); true;`;
     const jsActive = `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: true }) })); document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: true }) })); true;`;
     const jsInactive = `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: false }) })); document.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'thinking', active: false }) })); true;`;
     const inject = active ? jsActive : jsInactive;
@@ -167,7 +163,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     AppControl?.keepScreenOn?.(false);
     const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
     webViewRef.current?.injectJavaScript(js);
-    addLogEntry('[voice] Exited voice mode', 'info');
+    addLogEntry('Voice mode exited', 'info');
   }, []);
 
   // Simplified enterVoiceMode - only handles wakeword wake-up
@@ -178,7 +174,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       AppControl?.keepScreenOn?.(true);
       setFullscreen(true);  // Set state so overlay renders
       fullscreenRef.current = true;
-      addLogEntry('[voice] Entering voice mode', 'info');
+      addLogEntry('Entering voice mode', 'info');
       
       // Tell arena to enter focus mode
       webViewRef.current?.injectJavaScript(`
@@ -203,7 +199,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         
         const unsubSilence = recorder.once('silence', async () => {
           silenceEventFired = true;
-          addLogEntry('[voice] Silence detected after 5s', 'info');
+          addLogEntry('Silence detected after 5s', 'info');
           setVoiceStatus('silence_countdown');
           let count = 3;
           setSilenceCountdown(count);
@@ -214,22 +210,22 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             if (count <= 0) {
               if (countdownInterval) clearInterval(countdownInterval);
               if (maxDurationTimeout) clearTimeout(maxDurationTimeout);
-              addLogEntry('[voice] Countdown complete, sending audio', 'info');
+              addLogEntry('Countdown complete, sending audio', 'info');
               // Auto-stop and send
               recorder.stop().then(async (resultPath: string) => {
                 setIsVoiceListening(false);
                 if (!resultPath) {
                   setVoiceStatus('idle');
-                  addLogEntry('[voice] No recording path returned', 'error');
+                  addLogEntry('No recording path returned', 'error');
                   return;
                 }
                 try {
                   const stats = await fs.stat(resultPath);
-                  addLogEntry(`[voice] Audio file: ${stats.size} bytes`, 'info');
+                  addLogEntry(`Audio file: ${stats.size} bytes`, 'info');
                   const base64 = await fs.readFile(resultPath, 'base64');
-                  addLogEntry(`[voice] Base64 size: ${base64.length} chars`, 'info');
+                  addLogEntry(`Base64 size: ${base64.length} chars`, 'info');
                   if (base64.length < 100) {
-                    addLogEntry('[voice] ⚠️ Base64 audio very small', 'error');
+                    addLogEntry('Base64 audio very small', 'error');
                   }
                   setVoiceStatus('transcribing');
                   syncClient.sendAudioInput(base64, 'audio/m4a');
@@ -263,7 +259,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           if (!hasTransitionedToRecording && fullscreenRef.current) {
             hasTransitionedToRecording = true;
             setVoiceStatus('recording');
-            addLogEntry('[voice] Audio detection timeout - status: recording', 'info');
+            addLogEntry('Audio detection timeout - status: recording', 'info');
           }
         }, 500);
         
@@ -271,7 +267,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         // If silence event doesn't fire after 30s, auto-stop and send
         maxDurationTimeout = setTimeout(() => {
           if (!silenceEventFired && isVoiceListening) {
-            addLogEntry('[voice] ⚠️ Max duration (30s) reached - silence event may not have fired', 'error');
+            addLogEntry('Max duration (30s) reached - silence event may not have fired', 'error');
             if (countdownInterval) clearInterval(countdownInterval);
             if (audioDetectTimer) clearTimeout(audioDetectTimer);
             
@@ -285,7 +281,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 const base64 = await fs.readFile(resultPath, 'base64');
                 setVoiceStatus('transcribing');
                 syncClient.sendAudioInput(base64, 'audio/m4a');
-                addLogEntry('[voice] Forced send after max duration', 'sent');
+                addLogEntry('Forced send after max duration', 'sent');
               } catch (e: any) {
                 setVoiceStatus('idle');
                 addLogEntry(`Send error after timeout: ${e?.message}`, 'error');
@@ -350,8 +346,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     });
     return () => {
       subscription?.remove?.();
-      keyboardShow.remove();
-      keyboardHide.remove();
     };
   }, [fullscreen, closeFullscreen]);
 
@@ -419,7 +413,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   }, []);
 
   const [wakeDebug, setWakeDebug] = useState<string>('init');
-  const [wakePhrase, setWakePhrase] = useState<string>('hey claw');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
 
@@ -481,7 +474,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       const ppn = ppnPath || '';
       const wakeMode = wakeModeRaw || 'vosk';
       const phrase = settings.wakeWord || 'hey claw';
-      setWakePhrase(phrase);
       if (wakeMode === 'porcupine' && ppn) {
         WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
           addLogEntry(`Porcupine failed: ${e?.message}, falling back to Vosk`, 'error');
@@ -544,32 +536,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       speak(msg.text);
     };
 
-    const onCompanionChanged = (msg: any) => {
-      try {
-        if (msg?.companionId) {
-          AsyncStorage.setItem('cyberclaw-arena-comp', msg.companionId);
-          addLogEntry(`Companion changed to ${msg.companionId}`, 'info');
-        }
-      } catch (e) {
-        console.log('Companion changed error:', e);
-      }
-    };
-
-    const onCompanionVoiceChanged = (msg: any) => {
-      try {
-        if (msg?.companionVoice) {
-          AsyncStorage.setItem('cyberclaw-companion-voice', msg.companionVoice);
-          addLogEntry(`Companion voice changed to ${msg.companionVoice}`, 'info');
-        }
-      } catch (e) {
-        console.log('Voice changed error:', e);
-      }
-    };
-
     const onTyping = (msg: any) => {
       setIsThinking(!!msg.active);
       setArenaThinking(!!msg.active);
-      if (!fullscreenRef.current && msg.active) setChatVoiceStatus('🧠 Clawsuu is thinking...');
+      if (!fullscreenRef.current && msg.active) setChatVoiceStatus('Clawsuu is thinking...');
       if (!fullscreenRef.current && !msg.active) { /* keep until message arrives */ }
     };
 
@@ -601,15 +571,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         // If in voice mode, set status to 'playing'
         if (fullscreenRef.current) {
           setVoiceStatus('playing');
-          addLogEntry('[voice] Response audio status: playing', 'info');
+          addLogEntry('Response audio status: playing', 'info');
         }
         
         await WakeWordModule.startPlayer(tmpPath);
-        addLogEntry('🔊 Playing audio response', 'received');
+        addLogEntry('Playing audio response', 'received');
         
         // After playback, if still in voice mode, restart listening loop
         if (fullscreenRef.current) {
-          addLogEntry('[voice] Playback finished, restarting listening loop', 'info');
+          addLogEntry('Playback finished, restarting listening loop', 'info');
           setVoiceStatus('listening');
           setSilenceCountdown(0);
           setIsVoiceListening(true);
@@ -628,7 +598,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             
             const unsubSilence = recorder.once('silence', async () => {
               silenceEventFired = true;
-              addLogEntry('[voice] Silence detected in loop', 'info');
+              addLogEntry('Silence detected in loop', 'info');
               // Silence detected - same flow as before
               setVoiceStatus('silence_countdown');
               let count = 3;
@@ -640,27 +610,27 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                   clearInterval(countdownInterval);
                   if (maxDurationTimeout) clearTimeout(maxDurationTimeout);
                   if (audioDetectTimer) clearTimeout(audioDetectTimer);
-                  addLogEntry('[voice] Loop countdown complete, sending audio', 'info');
+                  addLogEntry('Loop countdown complete, sending audio', 'info');
                   // FIXED: Actually stop and send audio
                   try {
                     const resultPath = await recorder.stop();
                     if (!resultPath) {
-                      addLogEntry('[voice] No recording path returned in loop', 'error');
+                      addLogEntry('No recording path returned in loop', 'error');
                       setVoiceStatus('listening');
                       return;
                     }
                     const stats = await fs.stat(resultPath);
-                    addLogEntry(`[voice] Loop audio file: ${stats.size} bytes`, 'info');
+                    addLogEntry(`Loop audio file: ${stats.size} bytes`, 'info');
                     const base64 = await fs.readFile(resultPath, 'base64');
-                    addLogEntry(`[voice] Loop base64 size: ${base64.length} chars`, 'info');
+                    addLogEntry(`Loop base64 size: ${base64.length} chars`, 'info');
                     if (base64.length < 100) {
-                      addLogEntry('[voice] ⚠️ Loop base64 audio very small', 'error');
+                      addLogEntry('Loop base64 audio very small', 'error');
                     }
                     setVoiceStatus('transcribing');
-                    addLogEntry('[voice] Loop: sending audio', 'sent');
+                    addLogEntry('Loop: sending audio', 'sent');
                     syncClient.sendAudioInput(base64, 'audio/m4a');
                   } catch (e: any) {
-                    addLogEntry(`[voice] Loop send error: ${e?.message}`, 'error');
+                    addLogEntry(`Loop send error: ${e?.message}`, 'error');
                     setVoiceStatus('listening');
                   }
                 }
@@ -672,14 +642,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               if (!hasTransitionedToRecording && fullscreenRef.current) {
                 hasTransitionedToRecording = true;
                 setVoiceStatus('recording');
-                addLogEntry('[voice] Loop: audio detection - status: recording', 'info');
+                addLogEntry('Loop: audio detection - status: recording', 'info');
               }
             }, 500);
             
             // FIXED #2: Add max duration fallback for loop
             maxDurationTimeout = setTimeout(() => {
               if (!silenceEventFired && isVoiceListening) {
-                addLogEntry('[voice] ⚠️ Loop: Max duration (30s) reached - forcing send', 'error');
+                addLogEntry('Loop: Max duration (30s) reached - forcing send', 'error');
                 if (countdownInterval) clearInterval(countdownInterval);
                 if (audioDetectTimer) clearTimeout(audioDetectTimer);
                 
@@ -693,21 +663,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                     const base64 = await fs.readFile(resultPath, 'base64');
                     setVoiceStatus('transcribing');
                     syncClient.sendAudioInput(base64, 'audio/m4a');
-                    addLogEntry('[voice] Loop: forced send after max duration', 'sent');
+                    addLogEntry('Loop: forced send after max duration', 'sent');
                   } catch (e: any) {
                     setVoiceStatus('listening');
-                    addLogEntry(`[voice] Loop: send error after timeout: ${e?.message}`, 'error');
+                    addLogEntry(`Loop: send error after timeout: ${e?.message}`, 'error');
                   }
                 }).catch((e: any) => {
                   setIsVoiceListening(false);
                   setVoiceStatus('listening');
-                  addLogEntry(`[voice] Loop: stop error: ${e?.message}`, 'error');
+                  addLogEntry(`Loop: stop error: ${e?.message}`, 'error');
                 });
               }
             }, 30000);
             
             await recorder.start(recPath, 5000);
-            addLogEntry('[voice] Loop: listening restarted', 'info');
+            addLogEntry('Loop: listening restarted', 'info');
           } catch (e: any) {
             addLogEntry(`Voice: restart error: ${e?.message}`, 'error');
             setVoiceStatus('idle');
@@ -720,24 +690,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     const onLogUpdate = (e: LogEntry) => setLogEntries(prev => [...prev, e]);
 
-    syncClient.on('debug', (msg: any) => {
-      addLogEntry(msg, 'info');
-    });
     
     syncClient.on('state_change', onState);
     syncClient.on('chat', onChat);
     const onCompanionChange = (msg: any) => {
-      addLogEntry('📨 companion_id listener fired! msg=' + JSON.stringify(msg), 'info');
-      if (msg && msg.companionId) {
-        addLogEntry('🖥️ → 📱 msg.companionId = ' + msg.companionId, 'info');
-        addLogEntry('🖥️ → 📱 Calling setCompanionId(' + msg.companionId + ')', 'info');
-        setCompanionId(msg.companionId);
-      } else {
-        addLogEntry('⚠️ Invalid message: ' + JSON.stringify(msg), 'error');
-      }
+      if (!msg?.companionId) return;
+      setCompanionId(msg.companionId);
+      AsyncStorage.setItem('cyberclaw-arena-comp', msg.companionId).catch(() => {});
     };
-    addLogEntry('🔗 Registering companion_id listener (stable)', 'info');
-    syncClient.on('companion_id', onCompanionChangeStable);
+    syncClient.on('companion_id', onCompanionChange);
 
     syncClient.on('typing', onTyping);
     syncClient.on('chat_history', onChatHistory);
@@ -746,26 +707,26 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const onVoiceTranscriptResult = (msg: any) => {
       if (!msg.transcript) {
         setChatVoiceStatus(null);
-        addLogEntry('⚠️ No speech detected', 'error');
+        addLogEntry('No speech detected', 'error');
         return;
       }
-      addLogEntry(`🗣️ Transcribed: "${msg.transcript}"`, 'received');
+      addLogEntry(`Transcribed: "${msg.transcript}"`, 'received');
       // Add to messages and auto-send
       setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
-      setChatVoiceStatus('🧠 Clawsuu is thinking...');
+      setChatVoiceStatus('Clawsuu is thinking...');
       syncClient.sendChat(msg.transcript);
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
 
     const onVoiceReceived = () => {
-      setChatVoiceStatus('💻 Received at desktop, transcribing...');
+      setChatVoiceStatus('Received at desktop, transcribing...');
     };
     syncClient.on('voice_received', onVoiceReceived);
 
     const onSendError = (e: any) => {
       if (e?.type === 'audio_input') {
         setChatVoiceStatus(null);
-        addLogEntry('❌ Not connected — reconnect and try again', 'error');
+        addLogEntry('Not connected — reconnect and try again', 'error');
       }
     };
     syncClient.on('send_error', onSendError);
@@ -782,7 +743,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       wakeSub?.remove();
       wakeOpenSub?.remove();
       debugSub?.remove();
-      syncClient.off('companion_id', onCompanionChangeStable);
+      syncClient.off('companion_id', onCompanionChange);
       syncClient.off('state_change', onState);
       syncClient.off('chat', onChat);
       syncClient.off('typing', onTyping);
@@ -801,7 +762,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
 
 
-  const [lastInputWasVoice, setLastInputWasVoice] = useState(false);
   const appStateRef = useRef<string>(AppState.currentState);
 
   const handleAttach = useCallback(() => {
@@ -809,14 +769,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
         if (res.assets?.[0]) {
           const asset = res.assets[0];
-          addLogEntry(`[attach] ${asset.fileName} (${asset.type})`, 'info');
+          addLogEntry(`Attachment selected: ${asset.fileName} (${asset.type})`, 'info');
           syncClient.sendChat(`[Image: ${asset.fileName}]`);
         }
       })},
       { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 1 }, (res) => {
         if (res.assets?.[0]) {
           const asset = res.assets[0];
-          addLogEntry(`[attach] ${asset.fileName} (${asset.type})`, 'info');
+          addLogEntry(`Attachment selected: ${asset.fileName} (${asset.type})`, 'info');
           syncClient.sendChat(`[Image: ${asset.fileName}]`);
         }
       })},
@@ -831,10 +791,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       try {
         const fs = require('react-native-fs');
         const base64 = await fs.readFile(pendingAudioPath, 'base64');
-        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: '🎤 Voice message', isUser: true, ts: Date.now() }]);
-        setChatVoiceStatus('📤 Sending to desktop...');
+        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: 'Voice message', isUser: true, ts: Date.now() }]);
+        setChatVoiceStatus('Sending to desktop...');
         syncClient.sendAudioInput(base64, 'audio/m4a');
-        addLogEntry('🎤 Voice message sent', 'sent');
+        addLogEntry('Voice message sent', 'sent');
         setPendingAudioPath(null);
         // Status will update via mobile-voice-incoming / transcript events
       } catch (e: any) {
@@ -872,7 +832,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         ]);
         // FIXED: Don't manually resume wake word here
         // AppState listener will handle it when app goes to background
-        addLogEntry('[voice] Chat mic stopped, wake word managed by AppState', 'info');
+        addLogEntry('Chat mic stopped; wake word managed by AppState', 'info');
       } catch (e: any) {
         setIsVoiceListening(false);
         addLogEntry(`Stop recording error: ${e?.message}`, 'error');
@@ -895,7 +855,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             setIsVoiceListening(false);
             setPendingAudioPath(result || null);
             setVoiceStatus('idle');
-            setChatVoiceStatus('🎤 Ready to send');
+            setChatVoiceStatus('Ready to send');
             addLogEntry('Recording stopped by silence detection', 'info');
             // Resume wake word
             const [ppn, mode, settingsRaw] = await Promise.all([
@@ -907,7 +867,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             // FIXED: Don't restart wake word during voice loop
             // Wake word is paused while in voice mode (fullscreen is true)
             // It will resume when app goes to background or voice mode exits
-            addLogEntry('[voice] Restarting voice loop (wake word stays paused)', 'info');
+            addLogEntry('Voice recording ready to send', 'info');
           } catch (e: any) {
             addLogEntry(`Error after silence: ${e?.message}`, 'error');
           }
@@ -916,7 +876,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         await recorder.start(recPath, 5000);
         setIsVoiceListening(true);
         setVoiceStatus('recording');
-        setChatVoiceStatus('🔴 Recording...');
+        setChatVoiceStatus('Recording...');
         addLogEntry('Recording started', 'info');
       } catch (e: any) {
         addLogEntry(`Microphone error: ${e?.message}`, 'error');
@@ -930,17 +890,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       return <View />;
     }
     
-    // Check if we need a date separator (when day changes from previous message)
+    // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)
     let showDateSeparator = false;
     if (index === 0 || !messages[index - 1]) {
       showDateSeparator = true;
     } else {
-      const prevDay = new Date(messages[index - 1].ts).toDateString();
-      const currDay = new Date(item.ts).toDateString();
-      showDateSeparator = prevDay !== currDay;
+      const prevBucket = getDateBucket(messages[index - 1].ts);
+      const currBucket = getDateBucket(item.ts);
+      showDateSeparator = prevBucket !== currBucket;
     }
     
-    const dateStr = getRelativeDate(item.ts);
+    const dateStr = getDateBucketLabel(item.ts);
     
     return (
       <View>
@@ -955,17 +915,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   }, [messages]);
 
   const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
-    // Check if we need a date separator
+    // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)
     let showDateSeparator = false;
     if (index === 0 || !logEntries[index - 1]) {
       showDateSeparator = true;
     } else {
-      const prevDay = new Date(logEntries[index - 1].ts).toDateString();
-      const currDay = new Date(item.ts).toDateString();
-      showDateSeparator = prevDay !== currDay;
+      const prevBucket = getDateBucket(logEntries[index - 1].ts);
+      const currBucket = getDateBucket(item.ts);
+      showDateSeparator = prevBucket !== currBucket;
     }
     
-    const dateStr = getRelativeDate(item.ts);
+    const dateStr = getDateBucketLabel(item.ts);
     
     return (
       <View>
@@ -988,9 +948,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Watch companionId changes and reload WebView when it updates
   useEffect(() => {
-    addLogEntry('✨ companionId state updated to: ' + companionId, 'info');
+    addLogEntry(`Companion updated: ${companionId}`, 'info');
     setWebViewKey(k => k + 1);
-    addLogEntry('🔄 Reloading arena with companion: ' + companionId, 'info');
   }, [companionId]);
 
   // Periodic sync - request state from desktop every 60 seconds
@@ -998,7 +957,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     if (connState !== 'connected') return;
     
     const syncInterval = setInterval(() => {
-      addLogEntry('🔄 Periodic sync - requesting state from desktop', 'info');
+      addLogEntry('Requesting latest state from desktop', 'info');
       syncClient.requestState();
     }, 60000); // Every 60 seconds
     
@@ -1096,7 +1055,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         {activeTab === 'chat' && (
           <>
             <FlatList
-              ref={flatListRef}
               data={messages}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
@@ -1116,14 +1074,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                       }
                     }
                   }}>
-                    <Text style={styles.loadMoreText}>📜 Load Earlier Messages</Text>
+                    <Text style={styles.loadMoreText}>📜 📜 Load Earlier Messages</Text>
                   </TouchableOpacity>
                 ) : null
               }
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
-                    {isConnected ? "Say hi to Clawsuu! 🐾" : "Connect to desktop CyberClaw to chat"}
+                    {isConnected ? "Say hi to Clawsuu! 🐾🐾" : "Connect to desktop CyberClaw to chat"}
                   </Text>
                 </View>
               }
@@ -1196,12 +1154,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           <>
             <View style={styles.wakeDebugBar}>
               <Text style={styles.wakeDebugText} numberOfLines={1}>Mic: {wakeDebug}</Text>
-              <TouchableOpacity style={styles.wakeTestBtn} onPress={() => {
-                addLogEntry('[wake] test button pressed', 'info');
-                WakeWordModule?.test?.().catch((e: any) => addLogEntry(`[wake] test error: ${e?.message}`, 'error'));
-              }}>
-                <Text style={styles.wakeTestBtnText}>test wake</Text>
-              </TouchableOpacity>
             </View>
             <FlatList
               ref={logRef}
@@ -1261,13 +1213,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#222',
   },
   wakeDebugText: { flex: 1, color: '#4ade80', fontSize: 11, fontFamily: 'monospace' },
-  wakeTestBtn: {
-    backgroundColor: 'rgba(247,147,26,0.15)', borderRadius: 6,
-    paddingHorizontal: 14, paddingVertical: 6,
-    borderWidth: 1, borderColor: 'rgba(247,147,26,0.6)',
-    minWidth: 80, alignItems: 'center',
-  },
-  wakeTestBtnText: { color: '#f7931a', fontSize: 12, fontWeight: '600' },
   tabBar: {
     flexDirection: 'row', backgroundColor: '#111',
     borderBottomWidth: 1, borderBottomColor: '#222',
@@ -1278,6 +1223,16 @@ const styles = StyleSheet.create({
   tabTextActive: { color: '#f7931a', fontWeight: 'bold' },
   tabContent: { flex: 1 },
   chatList: { padding: 12, paddingBottom: 8 },
+  dateSeparator: {
+    color: '#f7931a',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+    marginVertical: 10,
+    opacity: 0.85,
+  },
   messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 12, marginBottom: 8 },
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#1a3a5c', borderBottomRightRadius: 4 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: '#1a1a2e', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#333' },
@@ -1310,18 +1265,6 @@ const styles = StyleSheet.create({
   logSent: { color: '#4a9eff' },
   logReceived: { color: '#4ade80' },
   logError: { color: '#ef4444' },
-  // Fullscreen modal
-  fsContainer: { flex: 1, backgroundColor: '#0a0a2e' },
-  fsControls: {
-    position: 'absolute', top: 40, right: 12,
-    flexDirection: 'row', gap: 8,
-  },
-  fsBtn: {
-    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 8,
-    width: 36, height: 36, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(247,147,26,0.3)',
-  },
-  fsBtnText: { color: '#f7931a', fontSize: 16 },
   micButton: {
     backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 20,
     width: 48, height: 48, justifyContent: 'center', alignItems: 'center',
@@ -1346,70 +1289,9 @@ const styles = StyleSheet.create({
   chatStatusText: {
     color: 'rgba(247,147,26,0.85)', fontSize: 12, fontStyle: 'italic',
   },
-  recordingBanner: {
-    backgroundColor: 'rgba(239,68,68,0.15)', borderTopWidth: 1, borderTopColor: 'rgba(239,68,68,0.4)',
-    paddingVertical: 6, alignItems: 'center',
-  },
-  recordingBannerText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
-  listeningBadge: {
-    position: 'absolute', top: 16, left: 12,
-    pointerEvents: 'none',
-  },
-  listeningText: {
-    color: 'rgba(74,222,128,0.9)', fontSize: 10, fontFamily: 'monospace',
-    backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 8, paddingVertical: 3,
-    borderRadius: 8,
-  },
-  voicePipelineOverlay: {
-    position: 'absolute',
-    top: 60,
-    left: 0, right: 0,
-    alignItems: 'center',
-    pointerEvents: 'none',
-  },
-  voicePipelineText: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 13,
-    fontWeight: '600',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 16,
-    overflow: 'hidden',
-    textAlign: 'center',
-  },
-  lockBadge: {
-    position: 'absolute', top: 16, left: 0, right: 0,
-    flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
-  },
-  lockBadgeText: {
-    color: 'rgba(247,147,26,0.6)', fontSize: 13,
-    fontFamily: 'monospace', letterSpacing: 2,
-  },
-  // Voice Mode Button
-  voiceModeBtn: {
-    marginHorizontal: 12, marginVertical: 8,
-    backgroundColor: 'rgba(247,147,26,0.2)',
-    borderWidth: 1, borderColor: '#f7931a',
-    borderRadius: 8, paddingVertical: 10,
-    alignItems: 'center',
-  },
   voiceModeBtnText: {
     color: '#f7931a', fontSize: 14, fontWeight: '600',
   },
-  // Voice Log Container (fullscreen)
-  voiceLogContainer: {
-    position: 'absolute', bottom: 60, right: 12,
-    width: 160, maxHeight: 140,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    borderWidth: 1, borderColor: 'rgba(247,147,26,0.3)',
-    borderRadius: 8, padding: 8,
-  },
-  voiceLogLine: {
-    color: '#888', fontSize: 10, fontFamily: 'monospace',
-    lineHeight: 14, marginBottom: 2,
-  },
-  voiceLogError: { color: '#ef4444' },
   // Voice Mode Close Button
   voiceModeCloseBtn: {
     position: 'absolute', top: 24, right: 16,
