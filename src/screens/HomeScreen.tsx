@@ -1,6 +1,6 @@
 /**
  * HomeScreen — CyberClaw mobile companion
- * Arena (real sprites) + Chat/Events/Log tabs + TTS + background service
+ * Arena (real companions) + Chat/Events/Log tabs + TTS + background service
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
