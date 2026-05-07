@@ -787,4 +787,34 @@ const styles = StyleSheet.create({
   modeBtnTextActive: {
     color: '#f7931a',
   },
+  voiceSelector: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginVertical: 12,
+  },
+  voiceOption: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: '#1a1a2e',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 2,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  voiceOptionSelected: {
+    backgroundColor: '#f7931a',
+    borderColor: '#f7931a',
+  },
+  voiceOptionText: {
+    color: '#888',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  voiceOptionTextSelected: {
+    color: '#000',
+    fontWeight: 'bold',
+  },
 });

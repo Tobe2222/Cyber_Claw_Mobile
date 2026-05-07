@@ -197,7 +197,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         let silenceEventFired = false;
         let maxDurationTimeout: NodeJS.Timeout | null = null;
         
-        const unsubSilence = recorder.once('silence', async () => {
+        recorder.once('silence', async () => {
           silenceEventFired = true;
           addLogEntry('Silence detected after 5s', 'info');
           setVoiceStatus('silence_countdown');
@@ -266,7 +266,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         // FIXED #2: Add max duration fallback (30s)
         // If silence event doesn't fire after 30s, auto-stop and send
         maxDurationTimeout = setTimeout(() => {
-          if (!silenceEventFired && isVoiceListening) {
+          if (!silenceEventFired && isVoiceListeningRef.current) {
             addLogEntry('Max duration (30s) reached - silence event may not have fired', 'error');
             if (countdownInterval) clearInterval(countdownInterval);
             if (audioDetectTimer) clearTimeout(audioDetectTimer);
@@ -335,7 +335,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
     } catch {}
-  }, [closeFullscreen, onOpenArenaSettings]);
+  }, [closeFullscreen, onOpenArenaSettings, isVoiceListening]);
 
   // Handle Android back button in fullscreen mode
   useEffect(() => {
@@ -414,6 +414,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   const [wakeDebug, setWakeDebug] = useState<string>('init');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const isVoiceListeningRef = useRef(false);
   const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
 
   // toggleVoiceInput defined after sendMessage below
@@ -441,7 +442,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             const wakeMode = wakeModeRaw || 'vosk';
             const phrase = settings.wakeWord || 'hey claw';
             if (wakeMode === 'porcupine' && ppn) {
-              WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
+              WakeWordModule?.startPorcupine?.(ppn).catch(() => {
                 WakeWordModule?.start?.(phrase).catch(() => {});
               });
             } else {
@@ -596,7 +597,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             let maxDurationTimeout: NodeJS.Timeout | null = null;
             let audioDetectTimer: NodeJS.Timeout | null = null;
             
-            const unsubSilence = recorder.once('silence', async () => {
+            recorder.once('silence', async () => {
               silenceEventFired = true;
               addLogEntry('Silence detected in loop', 'info');
               // Silence detected - same flow as before
@@ -648,7 +649,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             
             // FIXED #2: Add max duration fallback for loop
             maxDurationTimeout = setTimeout(() => {
-              if (!silenceEventFired && isVoiceListening) {
+              if (!silenceEventFired && isVoiceListeningRef.current) {
                 addLogEntry('Loop: Max duration (30s) reached - forcing send', 'error');
                 if (countdownInterval) clearInterval(countdownInterval);
                 if (audioDetectTimer) clearTimeout(audioDetectTimer);
@@ -756,13 +757,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       offLogEntry(onLogUpdate);
       disposeSimpleAudioRecorder();
     };
-  }, [speak, setArenaThinking]);
+  }, [speak, setArenaThinking, handleWakeWord]);
 
 
 
 
 
   const appStateRef = useRef<string>(AppState.currentState);
+
+  useEffect(() => {
+    isVoiceListeningRef.current = isVoiceListening;
+  }, [isVoiceListening]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
@@ -824,12 +829,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         setIsVoiceListening(false);
         setPendingAudioPath(result || null);
         setVoiceStatus('idle');
-        // Resume wake word in background
-        const [ppnRaw, modeRaw, settingsRaw] = await Promise.all([
-          AsyncStorage.getItem('cyberclaw-ppn-path'),
-          AsyncStorage.getItem('cyberclaw-wake-mode'),
-          AsyncStorage.getItem('cyberclaw-audio-settings'),
-        ]);
         // FIXED: Don't manually resume wake word here
         // AppState listener will handle it when app goes to background
         addLogEntry('Chat mic stopped; wake word managed by AppState', 'info');
@@ -849,7 +848,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         const recorder = getSimpleAudioRecorder();
         
         // Set up silence detection listener for chat mode
-        const unsubSilence = recorder.once('silence', async () => {
+        recorder.once('silence', async () => {
           try {
             const result = await recorder.stop();
             setIsVoiceListening(false);
@@ -857,13 +856,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             setVoiceStatus('idle');
             setChatVoiceStatus('Ready to send');
             addLogEntry('Recording stopped by silence detection', 'info');
-            // Resume wake word
-            const [ppn, mode, settingsRaw] = await Promise.all([
-              AsyncStorage.getItem('cyberclaw-ppn-path'),
-              AsyncStorage.getItem('cyberclaw-wake-mode'),
-              AsyncStorage.getItem('cyberclaw-audio-settings'),
-            ]);
-            const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey claw') : 'hey claw';
             // FIXED: Don't restart wake word during voice loop
             // Wake word is paused while in voice mode (fullscreen is true)
             // It will resume when app goes to background or voice mode exits
