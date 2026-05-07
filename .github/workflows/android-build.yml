@@ -30,18 +30,21 @@ jobs:
       - name: Install dependencies
         run: npm install
       
-      - name: Start Metro bundler
-        run: npm start &
-        timeout-minutes: 1
-      
-      - name: Wait for bundler
-        run: sleep 10
+      - name: Create release bundle
+        run: |
+          mkdir -p android/app/src/main/assets
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/assets
       
       - name: Build Android APK
         run: |
           cd android
           ./gradlew clean
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug
       
       - name: Upload APK artifact
         if: success()
