@@ -696,8 +696,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     syncClient.on('chat', onChat);
     const onCompanionChange = (msg: any) => {
       if (!msg?.companionId) return;
+      console.log('[HomeScreen] Companion changed to:', msg.companionId);
       setCompanionId(msg.companionId);
       AsyncStorage.setItem('cyberclaw-arena-comp', msg.companionId).catch(() => {});
+      // Update the WebView with new companion
+      if (webViewRef.current) {
+        const js = `window.companionId = '${msg.companionId}'; window.onCompanionChange?.('${msg.companionId}');`;
+        webViewRef.current.injectJavaScript(js);
+      }
     };
     syncClient.on('companion_id', onCompanionChange);
 
