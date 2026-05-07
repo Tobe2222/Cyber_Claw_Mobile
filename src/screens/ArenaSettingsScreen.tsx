@@ -82,7 +82,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
 
     syncClient.on('companion_id', handleCompanionChange);
     return () => {
-      syncClient.removeListener('companion_id', handleCompanionChange);
+      syncClient.off('companion_id', handleCompanionChange);
     };
   }, []);
 
