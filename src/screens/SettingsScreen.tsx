@@ -43,8 +43,12 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [testVoiceIndex, setTestVoiceIndex] = useState(0);
 
   const availableVoices = [
-    { key: 'en-US', label: 'English (US)' },
-    { key: 'en-GB', label: 'English (UK)' },
+    { key: 'nova', label: 'Nova' },
+    { key: 'alloy', label: 'Alloy' },
+    { key: 'echo', label: 'Echo' },
+    { key: 'fable', label: 'Fable' },
+    { key: 'onyx', label: 'Onyx' },
+    { key: 'shimmer', label: 'Shimmer' },
   ];
 
   const runVoiceTest = () => {
@@ -56,11 +60,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     const escaped = phrase.replace(/'/g, "\\'");
     const voiceScript = `
       if ('speechSynthesis' in window) {
-        const allVoices = window.speechSynthesis.getVoices();
-        const selected = allVoices.find(v => v.lang === '${voice.key}') || allVoices[0];
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance('${escaped}');
-        if (selected) u.voice = selected;
+        u.voice = '${voice.key}';
         u.rate = 0.95;
         u.pitch = 1.0;
         window.speechSynthesis.speak(u);
