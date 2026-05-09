@@ -513,6 +513,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       // Request chat history when connected
       if (data.state === 'connected') {
         addLogEntry('Connected - receiving updates from desktop', 'info');
+        // Request current chat history from desktop
+        syncClient.requestChatHistory?.();
       }
     };
 
@@ -1061,7 +1063,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
-              inverted={true}
+              inverted={false}
               ListFooterComponent={
                 messages.length > 0 ? (
                   <TouchableOpacity style={styles.loadMoreBtn} onPress={async () => {
