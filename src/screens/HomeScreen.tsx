@@ -550,7 +550,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onChatHistory = (msg: any) => {
+      console.log('[onChatHistory] Received:', msg);
       addLogEntry(`📨 Chat history event received (${msg?.messages?.length || 0} messages)`, 'info');
+      console.log('[onChatHistory] Messages array:', msg?.messages);
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         addLogEntry(`✅ Loading ${msg.messages.length} messages from desktop`, 'info');
         
@@ -702,7 +704,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     
     syncClient.on('state_change', onState);
+    console.log('[HomeScreen] Registered state_change and chat listeners');
     syncClient.on('chat', onChat);
+    console.log('[HomeScreen] All main listeners registered');
+
     const onCompanionChange = (msg: any) => {
       if (!msg?.companionId) return;
       console.log('[HomeScreen] Companion changed to:', msg.companionId);
@@ -717,7 +722,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     syncClient.on('companion_id', onCompanionChange);
 
     syncClient.on('typing', onTyping);
+    console.log('[HomeScreen] Registering chat_history listener');
     syncClient.on('chat_history', onChatHistory);
+    console.log('[HomeScreen] chat_history listener registered');
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);
     const onVoiceTranscriptResult = (msg: any) => {
