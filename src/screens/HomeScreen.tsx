@@ -514,7 +514,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       if (data.state === 'connected') {
         addLogEntry('Connected - receiving updates from desktop', 'info');
         // Request current chat history from desktop
-        syncClient.requestChatHistory?.();
+        console.log('[onState] Requesting chat history from desktop');
+        if (syncClient && typeof syncClient.requestChatHistory === 'function') {
+          syncClient.requestChatHistory();
+          console.log('[onState] Chat history request sent');
+        } else {
+          console.log('[onState] requestChatHistory not available');
+        }
       }
     };
 
@@ -544,6 +550,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onChatHistory = (msg: any) => {
+      console.log('[onChatHistory] Event received with msg:', msg);
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         console.log('[onChatHistory] Replacing all messages with', msg.messages.length, 'from desktop');
         addLogEntry(`← Synced ${msg.messages.length} messages from desktop`, 'info');
