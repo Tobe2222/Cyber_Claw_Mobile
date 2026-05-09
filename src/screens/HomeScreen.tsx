@@ -555,14 +555,29 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     const onChatHistory = (msg: any) => {
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
+        console.log('[onChatHistory] Received', msg.messages.length, 'messages from desktop');
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
-        setMessages(msg.messages.map((m: any) => ({
+        
+        const historyMsgs = msg.messages.map((m: any) => ({
           id: `hist-${m.ts}-${Math.random()}`,
           text: m.text,
           isUser: m.isUser,
           agentId: m.agentId,
           ts: m.ts,
-        })));
+        }));
+        
+        setMessages(prev => {
+          // Get the newest timestamp from history
+          const newestHistTs = Math.max(...historyMsgs.map(m => m.ts), 0);
+          
+          // Keep any new messages that arrived after history was loaded
+          const newMsgs = prev.filter(m => m.ts > newestHistTs);
+          
+          console.log('[onChatHistory] Merging history (${historyMsgs.length}) with new messages (${newMsgs.length})');
+          
+          // Return history + new messages (history first, so newest is last)
+          return [...historyMsgs, ...newMsgs];
+        });
       }
     };
 
