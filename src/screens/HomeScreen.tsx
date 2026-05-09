@@ -556,31 +556,42 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const onChatHistory = (msg: any) => {
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         console.log('[onChatHistory] Received', msg.messages.length, 'messages from desktop');
-        console.log('[onChatHistory] Message timestamps:', msg.messages.map((m: any) => ({ text: m.text.substring(0, 30), ts: new Date(m.ts).toISOString() })));
+        const newestHistTs = Math.max(...msg.messages.map((m: any) => m.ts), 0);
+        console.log('[onChatHistory] Newest history ts:', new Date(newestHistTs).toISOString());
+        
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
         
-        const historyMsgs = msg.messages.map((m: any) => ({
-          id: `hist-${m.ts}-${Math.random()}`,
-          text: m.text,
-          isUser: m.isUser,
-          agentId: m.agentId,
-          ts: m.ts,
-        }));
-        
         setMessages(prev => {
-          // Get the newest timestamp from history
-          const newestHistTs = Math.max(...historyMsgs.map(m => m.ts), 0);
+          // If we already have newer messages, don't replace - just merge
+          const oldestExistingTs = prev.length > 0 ? Math.min(...prev.map(m => m.ts)) : Infinity;
+          const newestHistoryTs = Math.max(...msg.messages.map((m: any) => m.ts), 0);
           
-          // Keep any new messages that arrived after history was loaded
-          const newMsgs = prev.filter(m => m.ts > newestHistTs);
-          
-          console.log('[onChatHistory] Newest history ts:', new Date(newestHistTs).toISOString());
-          console.log('[onChatHistory] Merging history (${historyMsgs.length}) with new messages (${newMsgs.length})');
-          if (newMsgs.length > 0) {
-            console.log('[onChatHistory] New messages:', newMsgs.map(m => ({ text: m.text.substring(0, 30), ts: new Date(m.ts).toISOString() })));
+          // If all existing messages are newer than all history, something is wrong - just use history
+          if (oldestExistingTs > newestHistoryTs) {
+            console.log('[onChatHistory] Existing messages are newer than history, replacing');
+            const historyMsgs = msg.messages.map((m: any) => ({
+              id: `hist-${m.ts}-${Math.random()}`,
+              text: m.text,
+              isUser: m.isUser,
+              agentId: m.agentId,
+              ts: m.ts,
+            }));
+            return historyMsgs;
           }
           
-          // Return history + new messages (history first, so newest is last)
+          // Merge: keep existing messages newer than history, prepend history
+          const newMsgs = prev.filter(m => m.ts > newestHistoryTs);
+          const historyMsgs = msg.messages
+            .filter((m: any) => !prev.some(existing => Math.abs(existing.ts - m.ts) < 1000 && existing.text === m.text))
+            .map((m: any) => ({
+              id: `hist-${m.ts}-${Math.random()}`,
+              text: m.text,
+              isUser: m.isUser,
+              agentId: m.agentId,
+              ts: m.ts,
+            }));
+          
+          console.log('[onChatHistory] Merging: history (${historyMsgs.length}) + newer (${newMsgs.length})');
           return [...historyMsgs, ...newMsgs];
         });
       }
