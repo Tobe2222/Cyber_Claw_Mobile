@@ -356,17 +356,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Load persisted chat
   useEffect(() => {
-    AsyncStorage.getItem(CHAT_STORAGE_KEY).then(raw => {
-      if (raw) { 
-        try { 
-          const loaded = JSON.parse(raw);
-          const filtered = loaded.filter((m: any) => m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
-          setMessages(filtered);
-        } catch (e) {
-          console.log('Error loading messages:', e);
-        }
-      }
-    });
+    // Don't load old chat history - let mobile request from desktop when connected
+    // This prevents showing stale messages
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => {
       if (v !== null) setTtsEnabled(v === 'true');
     });
@@ -534,13 +525,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       console.log('[onChat] Adding agent response to chat');
       setChatVoiceStatus(null); // clear status when response arrives
       setMessages(prev => {
-        const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
-        if (dupe) {
-          console.log('[onChat] Duplicate detected, skipping');
-          return prev;
-        }
-        console.log('[onChat] Adding message to state, total messages:', prev.length + 1);
-        return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
+        // Simple append - no deduplication, no merging
+        const newMsg = { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts };
+        console.log('[onChat] Adding message, total now:', prev.length + 1);
+        return [...prev, newMsg];
       });
       addLogEntry(`← ${msg.text.substring(0, 80)}`, 'received');
       speak(msg.text);
@@ -555,45 +543,18 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     const onChatHistory = (msg: any) => {
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
-        console.log('[onChatHistory] Received', msg.messages.length, 'messages from desktop');
-        const newestHistTs = Math.max(...msg.messages.map((m: any) => m.ts), 0);
-        console.log('[onChatHistory] Newest history ts:', new Date(newestHistTs).toISOString());
+        console.log('[onChatHistory] Replacing all messages with', msg.messages.length, 'from desktop');
+        addLogEntry(`← Synced ${msg.messages.length} messages from desktop`, 'info');
         
-        addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
+        const historyMsgs = msg.messages.map((m: any) => ({
+          id: `hist-${m.ts}-${Math.random()}`,
+          text: m.text,
+          isUser: m.isUser,
+          agentId: m.agentId,
+          ts: m.ts,
+        }));
         
-        setMessages(prev => {
-          // If we already have newer messages, don't replace - just merge
-          const oldestExistingTs = prev.length > 0 ? Math.min(...prev.map(m => m.ts)) : Infinity;
-          const newestHistoryTs = Math.max(...msg.messages.map((m: any) => m.ts), 0);
-          
-          // If all existing messages are newer than all history, something is wrong - just use history
-          if (oldestExistingTs > newestHistoryTs) {
-            console.log('[onChatHistory] Existing messages are newer than history, replacing');
-            const historyMsgs = msg.messages.map((m: any) => ({
-              id: `hist-${m.ts}-${Math.random()}`,
-              text: m.text,
-              isUser: m.isUser,
-              agentId: m.agentId,
-              ts: m.ts,
-            }));
-            return historyMsgs;
-          }
-          
-          // Merge: keep existing messages newer than history, prepend history
-          const newMsgs = prev.filter(m => m.ts > newestHistoryTs);
-          const historyMsgs = msg.messages
-            .filter((m: any) => !prev.some(existing => Math.abs(existing.ts - m.ts) < 1000 && existing.text === m.text))
-            .map((m: any) => ({
-              id: `hist-${m.ts}-${Math.random()}`,
-              text: m.text,
-              isUser: m.isUser,
-              agentId: m.agentId,
-              ts: m.ts,
-            }));
-          
-          console.log('[onChatHistory] Merging: history (${historyMsgs.length}) + newer (${newMsgs.length})');
-          return [...historyMsgs, ...newMsgs];
-        });
+        setMessages(historyMsgs);
       }
     };
 
