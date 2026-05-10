@@ -510,17 +510,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const onState = (data: any) => {
       setConnState(data.state);
       addLogEntry(`State → ${data.state}`, 'info');
-      // Request chat history when connected
+      // Connected to desktop
       if (data.state === 'connected') {
-        addLogEntry('Connected - receiving updates from desktop', 'info');
-        // Request current chat history from desktop
-        addLogEntry('📥 Requesting chat history from desktop', 'info');
-        if (syncClient && typeof syncClient.requestChatHistory === 'function') {
-          syncClient.requestChatHistory();
-          addLogEntry('✅ Chat history request sent', 'info');
-        } else {
-          addLogEntry('❌ requestChatHistory not available', 'error');
-        }
+        addLogEntry('Connected to desktop - ready for real-time messages', 'info');
       }
     };
 
@@ -550,9 +542,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onChatHistory = (msg: any) => {
-      console.log('[onChatHistory] Received:', msg);
-      addLogEntry(`📨 Chat history event received (${msg?.messages?.length || 0} messages)`, 'info');
-      console.log('[onChatHistory] Messages array:', msg?.messages);
+      addLogEntry(`📥 Chat history synced: ${msg?.messages?.length || 0} messages`, 'info');
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         addLogEntry(`✅ Loading ${msg.messages.length} messages from desktop`, 'info');
         
@@ -704,9 +694,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     
     syncClient.on('state_change', onState);
-    console.log('[HomeScreen] Registered state_change and chat listeners');
     syncClient.on('chat', onChat);
-    console.log('[HomeScreen] All main listeners registered');
 
     const onCompanionChange = (msg: any) => {
       if (!msg?.companionId) return;
@@ -722,9 +710,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     syncClient.on('companion_id', onCompanionChange);
 
     syncClient.on('typing', onTyping);
-    console.log('[HomeScreen] Registering chat_history listener');
     syncClient.on('chat_history', onChatHistory);
-    console.log('[HomeScreen] chat_history listener registered');
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);
     const onVoiceTranscriptResult = (msg: any) => {
