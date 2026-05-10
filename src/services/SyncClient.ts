@@ -273,8 +273,6 @@ class SyncClient {
           this._reconnectAttempts = 0;
           this.setState('connected');
           this.emit('authenticated', { name: msg.name });
-          // Auto-request chat history from desktop
-          setTimeout(() => this.requestChatHistory(), 300);
         } else {
           this.token = null;
           AsyncStorage.removeItem(STORAGE_KEY_TOKEN);
