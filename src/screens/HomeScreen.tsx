@@ -517,20 +517,18 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onChat = (msg: any) => {
-      console.log('[onChat] Received message:', msg);
+      addLogEntry(`🔔 onChat received: isUser=${msg.isUser}`, 'info');
       if (msg.isUser) {
-        console.log('[onChat] Ignoring user message');
+        addLogEntry('↙️ Ignoring user message', 'info');
         return;
       }
-      console.log('[onChat] Adding agent response to chat');
+      addLogEntry(`📨 Adding to chat: "${msg.text.substring(0, 50)}..."`, 'info');
       setChatVoiceStatus(null); // clear status when response arrives
       setMessages(prev => {
-        // Simple append - no deduplication, no merging
         const newMsg = { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts };
-        console.log('[onChat] Adding message, total now:', prev.length + 1);
+        addLogEntry(`✅ Chat updated, total: ${prev.length + 1}`, 'info');
         return [...prev, newMsg];
       });
-      addLogEntry(`← ${msg.text.substring(0, 80)}`, 'received');
       speak(msg.text);
     };
 
@@ -694,6 +692,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     
     syncClient.on('state_change', onState);
+    addLogEntry('📡 Chat listener registered', 'info');
     syncClient.on('chat', onChat);
 
     const onCompanionChange = (msg: any) => {
