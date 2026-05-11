@@ -517,19 +517,23 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onChat = (msg: any) => {
-      addLogEntry(`🔔 onChat received: isUser=${msg.isUser}`, 'info');
-      if (msg.isUser) {
-        addLogEntry('↙️ Ignoring user message', 'info');
-        return;
-      }
-      addLogEntry(`📨 Adding to chat: "${msg.text.substring(0, 50)}..."`, 'info');
+      // Show all messages - user messages from desktop are part of conversation history
+      addLogEntry(`📨 Chat message received (${msg.isUser ? 'user' : 'agent'})`, 'info');
       setChatVoiceStatus(null); // clear status when response arrives
       setMessages(prev => {
-        const newMsg = { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts };
-        addLogEntry(`✅ Chat updated, total: ${prev.length + 1}`, 'info');
+        const newMsg = { 
+          id: `${msg.ts}-${Math.random()}`, 
+          text: msg.text, 
+          isUser: msg.isUser ?? false, 
+          agentId: msg.agentId, 
+          ts: msg.ts 
+        };
         return [...prev, newMsg];
       });
-      speak(msg.text);
+      // Only speak agent messages, not user messages
+      if (!msg.isUser) {
+        speak(msg.text);
+      }
     };
 
     const onTyping = (msg: any) => {
