@@ -273,6 +273,8 @@ class SyncClient {
           this._reconnectAttempts = 0;
           this.setState('connected');
           this.emit('authenticated', { name: msg.name });
+          // Request chat history from desktop (don't await, just fire and forget)
+          this.requestChatHistory();
         } else {
           this.token = null;
           AsyncStorage.removeItem(STORAGE_KEY_TOKEN);
