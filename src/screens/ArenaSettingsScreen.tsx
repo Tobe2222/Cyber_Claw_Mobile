@@ -83,6 +83,9 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
       syncClient.setCompanionId(id);
       // Update local UI immediately for responsiveness
       setCompanionId(id);
+      // Save to AsyncStorage so settings screen stays in sync
+      await AsyncStorage.setItem('cyberclaw-arena-comp', id);
+      addLogEntry('✅ Companion saved and sent to desktop', 'info');
     } catch (e) {
       addLogEntry('❌ Error changing companion: ' + String(e), 'error');
     }
