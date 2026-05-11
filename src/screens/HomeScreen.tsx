@@ -1070,22 +1070,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               inverted={true}
-              ListFooterComponent={
-                messages.length > 0 ? (
-                  <TouchableOpacity style={styles.loadMoreBtn} onPress={async () => {
-                    const archived = await AsyncStorage.getItem(ARCHIVE_STORAGE_KEY);
-                    if (archived) {
-                      const archivedMsgs = JSON.parse(archived);
-                      if (archivedMsgs.length > 0) {
-                        const toLoad = archivedMsgs.slice(-10);
-                        setMessages(prev => [...toLoad, ...prev]);
-                      }
-                    }
-                  }}>
-                    <Text style={styles.loadMoreText}>📜 📜 Load Earlier Messages</Text>
-                  </TouchableOpacity>
-                ) : null
-              }
+              ListFooterComponent={null} // Disabled: old messages mix with current session
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
