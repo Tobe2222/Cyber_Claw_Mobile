@@ -709,6 +709,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     syncClient.on('companion_id', onCompanionChange);
 
     syncClient.on('typing', onTyping);
+    addLogEntry('📖 Chat history listener registered', 'info');
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);

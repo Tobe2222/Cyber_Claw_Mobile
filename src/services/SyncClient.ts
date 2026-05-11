@@ -229,6 +229,7 @@ class SyncClient {
   }
 
   requestChatHistory() {
+    console.log('[SyncClient] requestChatHistory called');
     this.send({ type: 'request_chat_history' });
   }
 
