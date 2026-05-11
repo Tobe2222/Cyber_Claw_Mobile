@@ -525,14 +525,22 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onChat = (msg: any) => {
-      if (msg.isUser) return;
+      addLogEntry(`📨 Chat message received from server`, 'received');
+      if (msg.isUser) {
+        addLogEntry(`📨 Skipping user message`, 'received');
+        return;
+      }
+      addLogEntry(`📨 Adding to chat: "${msg.text.substring(0, 50)}..."`, 'received');
       setChatVoiceStatus(null); // clear status when response arrives
       setMessages(prev => {
         const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
-        if (dupe) return prev;
+        if (dupe) {
+          addLogEntry(`📨 Skipping duplicate message`, 'received');
+          return prev;
+        }
+        addLogEntry(`📨 Chat updated, total: ${prev.length + 1}`, 'received');
         return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
       });
-      addLogEntry(`← ${msg.text.substring(0, 80)}`, 'received');
       speak(msg.text);
     };
 

@@ -295,6 +295,7 @@ class SyncClient {
         break;
 
       case 'chat_message':
+        console.log('[SyncClient] Received chat_message:', msg.text?.substring(0, 50));
         this.emit('chat', msg);
         break;
 
