@@ -152,16 +152,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [messages, activeTab]);
 
-  // Stop speech when component unmounts to prevent crashes
+  // Stop speech and cleanup when component unmounts
   useEffect(() => {
     return () => {
       try {
-        if (webViewRef.current) {
-          webViewRef.current.injectJavaScript('if (window.speechSynthesis) window.speechSynthesis.cancel(); true;');
+        if (webViewRef?.current) {
+          webViewRef.current.injectJavaScript('if (window.speechSynthesis) { window.speechSynthesis.pause?.(); window.speechSynthesis.cancel?.(); } true;');
         }
       } catch (e) {
-        // Silently fail - component is unmounting anyway
+        // Silently fail - component is unmounting
       }
+      try {
+        isWakeWordStoppedRef.current = true;
+      } catch {}
     };
   }, []);
 

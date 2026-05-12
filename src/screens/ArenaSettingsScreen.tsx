@@ -81,22 +81,26 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   }, []);
 
   const saveBg = (id: string) => {
-    setBgId(id);
-    AsyncStorage.setItem('cyberclaw-arena-bg', id);
+    try {
+      setBgId(id);
+      AsyncStorage.setItem('cyberclaw-arena-bg', id).catch(() => {});
+    } catch (e) {
+      // Silently fail
+    }
   };
 
   const saveCompanion = async (id: string) => {
     try {
-      addLogEntry('📱 → 🖥️ Requesting companion change to ' + id + ' on desktop', 'info');
+      try { addLogEntry('📱 → 🖥️ Requesting companion change to ' + id + ' on desktop', 'info'); } catch {}
       // Send to desktop - it will handle the change and broadcast back
       syncClient.setCompanionId(id);
       // Update local UI immediately for responsiveness
       setCompanionId(id);
       // Save to AsyncStorage so settings screen stays in sync
       await AsyncStorage.setItem('cyberclaw-arena-comp', id);
-      addLogEntry('✅ Companion saved and sent to desktop', 'info');
+      try { addLogEntry('✅ Companion saved and sent to desktop', 'info'); } catch {}
     } catch (e) {
-      addLogEntry('❌ Error changing companion: ' + String(e), 'error');
+      try { addLogEntry('❌ Error changing companion: ' + String(e), 'error'); } catch {}
     }
   };
 
