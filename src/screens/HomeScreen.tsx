@@ -124,6 +124,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const [companionId, setCompanionId] = useState('boar');
   const [webViewKey, setWebViewKey] = useState(0);
+  const chatRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
@@ -141,6 +142,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       }
     }).catch(() => {});
   }, []);
+
+  // Scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (messages.length > 0 && activeTab === 'chat') {
+      chatRef.current?.scrollToEnd({ animated: true });
+    }
+  }, [messages, activeTab]);
 
   // Speak via WebView TTS
   const speak = useCallback((text: string) => {
@@ -1073,6 +1081,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         {activeTab === 'chat' && (
           <>
             <FlatList
+              ref={chatRef}
               data={messages}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
