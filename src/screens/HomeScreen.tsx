@@ -123,6 +123,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [isLandscape, setIsLandscape] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const [companionId, setCompanionId] = useState('boar');
+  const [bgId, setBgId] = useState('forest');
   const [webViewKey, setWebViewKey] = useState(0);
   const chatRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
@@ -133,7 +134,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
-  // Load companion selection from storage on mount
+  // Load settings from storage on mount
   useEffect(() => {
     AsyncStorage.getItem('cyberclaw-arena-comp').then(v => {
       if (v) {
@@ -141,14 +142,33 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         setCompanionId(v);
       }
     }).catch(() => {});
+    
+    AsyncStorage.getItem('cyberclaw-arena-bg').then(v => {
+      if (v) {
+        addLogEntry('Loaded background from storage: ' + v, 'info');
+        setBgId(v);
+      }
+    }).catch(() => {});
   }, []);
 
-  // Scroll to bottom when new messages arrive
+  // Scroll to bottom when new messages arrive or when switching to chat tab
   useEffect(() => {
-    if (messages.length > 0 && activeTab === 'chat') {
-      chatRef.current?.scrollToEnd({ animated: true });
+    if (messages.length > 0) {
+      // Use setTimeout to ensure layout is done before scrolling
+      setTimeout(() => {
+        chatRef.current?.scrollToEnd({ animated: activeTab === 'chat' });
+      }, 0);
     }
-  }, [messages, activeTab]);
+  }, [messages]);
+
+  // Also scroll when switching to chat tab
+  useEffect(() => {
+    if (activeTab === 'chat' && messages.length > 0) {
+      setTimeout(() => {
+        chatRef.current?.scrollToEnd({ animated: false });
+      }, 100);
+    }
+  }, [activeTab]);
 
   // Speak via WebView TTS
   const speak = useCallback((text: string) => {
@@ -972,11 +992,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     connState === 'connecting' ? 'Connecting...' :
     connState === 'lost' ? 'Lost' : 'Offline';
 
-  // Watch companionId changes and reload WebView when it updates
+  // Watch companionId/bgId changes and reload WebView when they update
   useEffect(() => {
-    addLogEntry(`Companion updated: ${companionId}`, 'info');
+    addLogEntry(`Companion updated: ${companionId}, BG: ${bgId}`, 'info');
     setWebViewKey(k => k + 1);
-  }, [companionId]);
+  }, [companionId, bgId]);
 
   // Periodic sync - request state from desktop every 60 seconds
   useEffect(() => {
@@ -1014,7 +1034,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           <WebView
             key={webViewKey}
             ref={webViewRef}
-            source={{ uri: `file:///android_asset/arena.html?companion=${companionId}` }}
+            source={{ uri: `file:///android_asset/arena.html?companion=${companionId}&bg=${bgId}` }}
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
             scrollEnabled={false}
             bounces={false}

@@ -18,11 +18,11 @@ interface ArenaSettingsScreenProps {
   onBack: () => void;
 }
 
+// Match desktop background IDs exactly
 const BG_OPTIONS = [
-  { id: 'summer', label: '🌞 Summer Meadow' },
-  { id: 'forest', label: '🌲 Forest Edge' },
-  { id: 'dark-forest', label: '🌙 Dark Forest' },
-  { id: 'dark', label: '⚫ Dark' },
+  { id: 'meadow', label: '🌞 Summer Meadow' },
+  { id: 'grove', label: '🌲 Forest Edge' },
+  { id: 'forest', label: '🌙 Dark Forest' },
 ];
 
 const COMPANION_OPTIONS = [
@@ -48,7 +48,7 @@ const COMPANION_VOICE_OPTIONS = [
 
 export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps) {
   const insets = useSafeAreaInsets();
-  const [bgId, setBgId] = useState('dark-forest');
+  const [bgId, setBgId] = useState('forest');
   const [companionId, setCompanionId] = useState('boar');
   const [ttsVoice, setTtsVoice] = useState('lessac');
   const [companionVoice, setCompanionVoice] = useState('lessac');
