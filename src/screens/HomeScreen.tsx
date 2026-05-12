@@ -152,6 +152,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [messages, activeTab]);
 
+  // Stop speech when component unmounts to prevent crashes
+  useEffect(() => {
+    return () => {
+      try {
+        if (webViewRef.current) {
+          webViewRef.current.injectJavaScript('if (window.speechSynthesis) window.speechSynthesis.cancel(); true;');
+        }
+      } catch (e) {
+        // Silently fail - component is unmounting anyway
+      }
+    };
+  }, []);
+
   // Speak via WebView TTS
   const speak = useCallback((text: string) => {
     if (!ttsEnabled || !webViewRef.current) return;
