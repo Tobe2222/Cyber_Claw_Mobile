@@ -1069,7 +1069,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
-              inverted={true}
+              inverted={false}
               ListFooterComponent={null} // Disabled: old messages mix with current session
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
