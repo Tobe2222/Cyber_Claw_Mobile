@@ -107,22 +107,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   };
 
   const playTestVoice = (voiceId: string) => {
-    const testText = "Hello, I am your companion speaking with this voice!";
-    const escaped = testText.replace(/'/g, "\'").replace(/
-/g, ' ');
-    // Note: Using browser speechSynthesis for test. On mobile, this uses device voice.
-    // Different from desktop Piper TTS, but good for testing voice pitch/rate
-    if ('speechSynthesis' in (global as any)) {
-      const synth = (global as any).speechSynthesis;
-      synth.cancel();
-      const utterance = new ((global as any).SpeechSynthesisUtterance)(testText);
-      utterance.rate = 0.95;
-      utterance.pitch = 1.1;
-      synth.speak(utterance);
-      Alert.alert('Voice Test', `Playing "${voiceId}" (device voice)...`);
-    } else {
-      Alert.alert('Error', 'Speech synthesis not available');
-    }
+    Alert.alert('Voice Test', `Preview: "${voiceId}" voice will be used when Clawsuu responds on desktop and plays audio on mobile.`);
   };
 
 
