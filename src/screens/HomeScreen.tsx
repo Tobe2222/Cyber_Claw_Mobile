@@ -132,6 +132,16 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
+  // Load companion selection from storage on mount
+  useEffect(() => {
+    AsyncStorage.getItem('cyberclaw-arena-comp').then(v => {
+      if (v) {
+        addLogEntry('Loaded companion from storage: ' + v, 'info');
+        setCompanionId(v);
+      }
+    }).catch(() => {});
+  }, []);
+
   // Speak via WebView TTS
   const speak = useCallback((text: string) => {
     if (!ttsEnabled || !webViewRef.current) return;
