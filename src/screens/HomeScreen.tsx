@@ -143,10 +143,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }).catch(() => {});
   }, []);
 
-  // Scroll to bottom when new messages arrive
+  // Scroll to bottom when new messages arrive or tab changes
   useEffect(() => {
     if (messages.length > 0 && activeTab === 'chat') {
-      chatRef.current?.scrollToEnd({ animated: true });
+      setTimeout(() => {
+        chatRef.current?.scrollToEnd({ animated: true });
+      }, 0);
     }
   }, [messages, activeTab]);
 
@@ -1089,6 +1091,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               inverted={false}
+              onLayout={() => {
+                if (messages.length > 0) {
+                  setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
+                }
+              }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
