@@ -194,6 +194,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     webViewRef.current?.injectJavaScript(inject);
   }, []);
 
+  // Cleanup on unmount - stop speech, dispose recorder, stop background service
+  useEffect(() => {
+    return () => {
+      stopSpeech();
+      try { disposeSimpleAudioRecorder(); } catch {}
+      try { BackgroundService?.stop?.(); } catch {}
+    };
+  }, [stopSpeech]);
+
   // Close fullscreen mode and reset state
   const closeFullscreen = useCallback(() => {
     setFullscreen(false);

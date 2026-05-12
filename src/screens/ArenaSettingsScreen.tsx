@@ -106,6 +106,25 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     AsyncStorage.setItem('cyberclaw-companion-voice', id);
   };
 
+  const playTestVoice = (voiceId: string) => {
+    const testText = "Hello, I am your companion speaking with this voice!";
+    const escaped = testText.replace(/'/g, "\'").replace(/
+/g, ' ');
+    // Note: Using browser speechSynthesis for test. On mobile, this uses device voice.
+    // Different from desktop Piper TTS, but good for testing voice pitch/rate
+    if ('speechSynthesis' in (global as any)) {
+      const synth = (global as any).speechSynthesis;
+      synth.cancel();
+      const utterance = new ((global as any).SpeechSynthesisUtterance)(testText);
+      utterance.rate = 0.95;
+      utterance.pitch = 1.1;
+      synth.speak(utterance);
+      Alert.alert('Voice Test', `Playing "${voiceId}" (device voice)...`);
+    } else {
+      Alert.alert('Error', 'Speech synthesis not available');
+    }
+  };
+
 
   return (
     <SafeAreaView style={styles.container}>
@@ -176,6 +195,12 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
                 ))}
               </Picker>
             </View>
+            <TouchableOpacity 
+              style={styles.testVoiceBtn}
+              onPress={() => playTestVoice(companionVoice)}
+            >
+              <Text style={styles.testVoiceText}>🔊 Test Voice</Text>
+            </TouchableOpacity>
             <Text style={styles.description}>
               Used for companion voice in arena and AI responses on desktop.
             </Text>
@@ -299,5 +324,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 8,
     fontStyle: 'italic',
+  },
+  testVoiceBtn: {
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(247,147,26,0.15)',
+    borderWidth: 1,
+    borderColor: '#f7931a',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  testVoiceText: {
+    color: '#f7931a',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
