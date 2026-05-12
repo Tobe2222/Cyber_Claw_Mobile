@@ -2,8 +2,7 @@
  * ArenaSettingsScreen — Companion arena appearance and TTS voice
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Alert,
   Switch, SafeAreaView, BackHandler,
@@ -63,30 +62,23 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     return () => backHandler.remove();
   }, [onBack]);
 
-  const loadSettings = useCallback(async () => {
-    // Load saved settings every time screen comes into focus
-    const bg = await AsyncStorage.getItem('cyberclaw-arena-bg');
-    if (bg) setBgId(bg);
-    
-    const comp = await AsyncStorage.getItem('cyberclaw-arena-comp');
-    if (comp) setCompanionId(comp);
-    
-    const tts = await AsyncStorage.getItem('cyberclaw-tts-voice');
-    if (tts) setTtsVoice(tts);
-    
-    const voice = await AsyncStorage.getItem('cyberclaw-companion-voice');
-    if (voice) setCompanionVoice(voice);
-  }, []);
-
   useEffect(() => {
+    // Load saved settings on mount
+    const loadSettings = async () => {
+      const bg = await AsyncStorage.getItem('cyberclaw-arena-bg');
+      if (bg) setBgId(bg);
+      
+      const comp = await AsyncStorage.getItem('cyberclaw-arena-comp');
+      if (comp) setCompanionId(comp);
+      
+      const tts = await AsyncStorage.getItem('cyberclaw-tts-voice');
+      if (tts) setTtsVoice(tts);
+      
+      const voice = await AsyncStorage.getItem('cyberclaw-companion-voice');
+      if (voice) setCompanionVoice(voice);
+    };
     loadSettings();
-  }, [loadSettings]);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadSettings();
-    }, [loadSettings])
-  );
+  }, []);
 
   const saveBg = (id: string) => {
     setBgId(id);
