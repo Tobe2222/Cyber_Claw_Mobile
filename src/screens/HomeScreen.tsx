@@ -197,11 +197,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Cleanup on unmount - stop speech, dispose recorder, stop background service
   useEffect(() => {
     return () => {
-      stopSpeech();
-      try { disposeSimpleAudioRecorder(); } catch {}
-      try { BackgroundService?.stop?.(); } catch {}
-    };
-  }, [stopSpeech]);
+    try { if (webViewRef.current) { webViewRef.current.injectJavaScript("if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); } true;"); }} catch {}
+    try { disposeSimpleAudioRecorder(); } catch {}
+    try { BackgroundService?.stop?.(); } catch {}
+    try { if (webViewRef.current) { webViewRef.current.injectJavaScript("if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); } true;"); }} catch {}
+    try { disposeSimpleAudioRecorder(); } catch {}
+    try { BackgroundService?.stop?.(); } catch {}
+    try { if (webViewRef.current) { webViewRef.current.injectJavaScript("if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); } true;"); }} catch {}
+    try { disposeSimpleAudioRecorder(); } catch {}
+    try { BackgroundService?.stop?.(); } catch {}
+    try { if (webViewRef.current) { webViewRef.current.injectJavaScript("if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); } true;"); }} catch {}
+    try { disposeSimpleAudioRecorder(); } catch {}
+    try { BackgroundService?.stop?.(); } catch {}
+    try { if (webViewRef.current) { webViewRef.current.injectJavaScript("if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); } true;"); }} catch {}
+    try { disposeSimpleAudioRecorder(); } catch {}
+    try { BackgroundService?.stop?.(); } catch {}
 
   // Close fullscreen mode and reset state
   const closeFullscreen = useCallback(() => {
