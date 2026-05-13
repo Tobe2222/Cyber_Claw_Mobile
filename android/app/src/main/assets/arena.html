@@ -317,15 +317,17 @@ function setFullscreenMode(on) {
   document.getElementById('settingsModal').classList.remove('open');
   if(!on) setFocusMode(false);
 }
-function setVoiceMode(isLocal) {
+function setFocusMode(on) {
+  focused=on;
   const btn=document.getElementById('voiceBtn');
-  btn.classList.toggle('active',isLocal);
-  btn.textContent=isLocal?'Local':'API';
-  btn.title=isLocal?'Using local TTS':'Using API TTS';
+  btn.classList.toggle('active',on);
+  btn.textContent=on?'Arena':'Voice';
+  btn.title=on?'Show arena':'Voice mode';
 }
 document.getElementById('voiceBtn').addEventListener('click',()=>{
-  // Send message to React Native to toggle voice mode
-  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'toggleVoiceMode'}));
+  setFullscreenMode(true);
+  setFocusMode(true);
+  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'}));
 });
 document.getElementById('exitVoiceBtn').addEventListener('click',()=>{
   setFocusMode(false);

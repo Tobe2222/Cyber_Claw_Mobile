@@ -349,36 +349,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         return;
       }
       
-      if (msg.type === 'toggleVoiceMode') {
-        // Voice Mode button clicked in arena - toggle between Local and API
-        (async () => {
-          try {
-            const currentMode = await AsyncStorage.getItem('cyberclaw-voice-local');
-            const isLocal = currentMode === 'true' || currentMode === null; // default to local
-            const newMode = !isLocal; // toggle
-            await AsyncStorage.setItem('cyberclaw-voice-local', newMode.toString());
-            const modeLabel = newMode ? 'Local (Free)' : 'API (Premium)';
-            try { addLogEntry(`🎤 Voice Mode: ${modeLabel}`, 'info'); } catch {}
-            // Update button state
-            const status = newMode ? 'Local' : 'API';
-            webViewRef.current?.injectJavaScript(`
-              (function() {
-                const btn = document.getElementById('voiceBtn');
-                if (btn) {
-                  btn.classList.toggle('active', ${newMode});
-                  btn.textContent = '${status}';
-                  btn.title = 'Using ${modeLabel}';
-                }
-                true;
-              })()
-            `);
-          } catch (err) {
-            try { addLogEntry('❌ Error: ' + String(err), 'error'); } catch {}
-          }
-        })();
-        return;
-      }
-      
       if (msg.type === 'fullscreen') {
         // Ignore fullscreen request if already recording in chat mode
         if (isVoiceListening) {
@@ -1074,24 +1044,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               Promise.all([
                 AsyncStorage.getItem('cyberclaw-arena-bg'),
                 AsyncStorage.getItem('cyberclaw-arena-comp'),
-                AsyncStorage.getItem('cyberclaw-voice-local'),
-              ]).then(([bgId, compId, voiceMode]) => {
+              ]).then(([bgId, compId]) => {
                 const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
                 const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
-                const isLocal = voiceMode === 'true' || voiceMode === null;
-                const voiceStatus = isLocal ? 'Local' : 'API';
-                const fullJs = js + `
-                  (function() {
-                    const btn = document.getElementById('voiceBtn');
-                    if (btn) {
-                      btn.classList.toggle('active', ${isLocal});
-                      btn.textContent = '${voiceStatus}';
-                      btn.title = '${isLocal ? 'Local' : 'API'}';
-                    }
-                  })();
-                  true;
-                `;
-                webViewRef.current?.injectJavaScript(fullJs);
+                webViewRef.current?.injectJavaScript(js);
               });
             }}
           />
