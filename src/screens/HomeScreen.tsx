@@ -349,6 +349,23 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         return;
       }
       
+      if (msg.type === 'toggleVoiceMode') {
+        // Voice Mode button clicked in arena - toggle between Local and API
+        (async () => {
+          try {
+            const currentMode = await AsyncStorage.getItem('cyberclaw-voice-local');
+            const isLocal = currentMode === 'true' || currentMode === null; // default to local
+            const newMode = !isLocal; // toggle
+            await AsyncStorage.setItem('cyberclaw-voice-local', newMode.toString());
+            const modeLabel = newMode ? 'Local 🎤' : 'API 🌐';
+            try { addLogEntry(`Voice Mode: ${modeLabel}`, 'info'); } catch {}
+          } catch (err) {
+            try { addLogEntry('❌ Error: ' + String(err), 'error'); } catch {}
+          }
+        })();
+        return;
+      }
+      
       if (msg.type === 'fullscreen') {
         // Ignore fullscreen request if already recording in chat mode
         if (isVoiceListening) {

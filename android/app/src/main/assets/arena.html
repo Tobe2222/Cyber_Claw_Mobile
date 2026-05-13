@@ -65,7 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <button class="btn" id="arenaSettingsBtn" title="Arena Settings">⚙️</button>
   </div>
   <div id="ctrlRight">
-    <button class="btn" id="voiceBtn" title="Voice Mode">Voice</button>
+    <button class="btn" id="voiceBtn" title="Toggle Voice Mode">🎤 Mode</button>
   </div>
   <div id="ctrlFs">
     <button class="btn" id="exitVoiceBtn" title="Exit">Exit</button>
@@ -325,9 +325,8 @@ function setFocusMode(on) {
   btn.title=on?'Show arena':'Voice mode';
 }
 document.getElementById('voiceBtn').addEventListener('click',()=>{
-  setFullscreenMode(true);
-  setFocusMode(true);
-  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'}));
+  // Voice Mode button - toggle between Local and API
+  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'toggleVoiceMode'}));
 });
 document.getElementById('exitVoiceBtn').addEventListener('click',()=>{
   setFocusMode(false);
