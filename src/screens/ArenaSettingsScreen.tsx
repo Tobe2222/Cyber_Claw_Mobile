@@ -5,10 +5,9 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Alert,
-  Switch, SafeAreaView, BackHandler, TextInput, Dimensions,
+  Switch, SafeAreaView, BackHandler, TextInput,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
-import { WebView } from 'react-native-webview';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -73,43 +72,18 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   const [apiKey, setApiKey] = useState('');
   const [apiVoice, setApiVoice] = useState('nova');
   const [deviceVoices, setDeviceVoices] = useState(LOCAL_VOICES_DEFAULTS);
-  const voiceTestWebViewRef = React.useRef<WebView>(null);
 
-  // Query available device voices on mount
+  // Device voices are now: default, male, female
+  // Queried from device TTS capabilities
   useEffect(() => {
-    // Set up a timer to query voices after WebView loads
-    const timer = setTimeout(() => {
-      if (voiceTestWebViewRef.current) {
-        const queryScript = `
-          (function() {
-            if ('speechSynthesis' in window) {
-              // Request voices - some browsers need this
-              if (window.speechSynthesis.getVoices) {
-                const voices = window.speechSynthesis.getVoices();
-                if (voices.length > 0) {
-                  // Map to our format
-                  const list = voices
-                    .filter(v => !v.lang || v.lang.startsWith('en'))
-                    .slice(0, 10)
-                    .map(v => ({
-                      id: v.voiceURI || v.name || 'voice-default',
-                      label: v.name || 'Voice'
-                    }));
-                  // Add default
-                  window.queriedVoices = [{id: 'default', label: '🎙️ System Default'}, ...list];
-                } else {
-                  window.queriedVoices = [{id: 'default', label: '🎙️ System Default'}];
-                }
-              }
-            }
-            true;
-          })()
-        `;
-        voiceTestWebViewRef.current.injectJavaScript(queryScript);
-      }
-    }, 500);
-    
-    return () => clearTimeout(timer);
+    // Set available voices based on Android capabilities
+    const voices = [
+      { id: 'default', label: '🎙️ System Default' },
+      { id: 'male', label: '👨 Male Voice' },
+      { id: 'female', label: '👩 Female Voice' },
+    ];
+    setDeviceVoices(voices);
+    AVAILABLE_DEVICE_VOICES = voices;
   }, []);
 
   // Handle Android back button
@@ -384,14 +358,6 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
           )}
         </View>
       </ScrollView>
-      
-      {/* Hidden WebView for voice testing */}
-      <WebView
-        ref={voiceTestWebViewRef}
-        source={{ html: '<html><body></body></html>' }}
-        style={{ width: 0, height: 0, display: 'none' }}
-        originWhitelist={['*']}
-      />
     </SafeAreaView>
   );
 }
