@@ -326,16 +326,26 @@ function setFocusMode(on) {
 }
 // Initialize button listeners when page is ready
 function initializeButtonListeners() {
+  console.log('[Arena] initializeButtonListeners() called');
   const voiceBtn = document.getElementById('voiceBtn');
+  console.log('[Arena] voiceBtn element:', voiceBtn);
   if (voiceBtn) {
+    console.log('[Arena] Attaching click listener to voiceBtn');
     voiceBtn.addEventListener('click', function() {
+      console.log('[Arena] voiceBtn CLICKED!');
       setFullscreenMode(true);
       setFocusMode(true);
       const msg = {type:'fullscreen'};
+      console.log('[Arena] Sending to RN:', msg);
       if (window.ReactNativeWebView) {
         window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+        console.log('[Arena] Message sent');
+      } else {
+        console.log('[Arena] ReactNativeWebView NOT available!');
       }
     });
+  } else {
+    console.log('[Arena] voiceBtn NOT FOUND!');
   }
   
   const exitBtn = document.getElementById('exitVoiceBtn');
@@ -352,12 +362,22 @@ function initializeButtonListeners() {
 }
 
 // Try to initialize immediately, then use DOMContentLoaded as fallback
+console.log('[Arena] Page ready state:', document.readyState);
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initializeButtonListeners);
+  console.log('[Arena] DOM still loading, waiting for DOMContentLoaded');
+  document.addEventListener('DOMContentLoaded', function() {
+    console.log('[Arena] DOMContentLoaded fired, initializing buttons');
+    initializeButtonListeners();
+  });
 } else {
   // Already loaded
-  setTimeout(initializeButtonListeners, 100);
+  console.log('[Arena] DOM already loaded, scheduling button init');
+  setTimeout(function() {
+    console.log('[Arena] Timeout fired, initializing buttons');
+    initializeButtonListeners();
+  }, 100);
 }
+console.log('[Arena] Button initialization scheduled');
 
 // ── Messages from RN ──────────────────────────────────────────────────────────
 function handleMsg(raw) {
