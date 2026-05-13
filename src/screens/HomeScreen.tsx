@@ -784,21 +784,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     });
 
     return () => {
-      wakeSub?.remove();
-      wakeOpenSub?.remove();
-      debugSub?.remove();
-      syncClient.off('companion_id', onCompanionChange);
-      syncClient.off('state_change', onState);
-      syncClient.off('chat', onChat);
-      syncClient.off('typing', onTyping);
-      syncClient.off('chat_history', onChatHistory);
-      syncClient.off('arena', onArena);
-      syncClient.off('audio_response', onAudioResponse);
-      syncClient.off('voice_transcript_result', onVoiceTranscriptResult);
-      syncClient.off('voice_received', onVoiceReceived);
-      syncClient.off('send_error', onSendError);
-      offLogEntry(onLogUpdate);
-      disposeSimpleAudioRecorder();
+      try { wakeSub?.remove?.(); } catch {}
+      try { wakeOpenSub?.remove?.(); } catch {}
+      try { debugSub?.remove?.(); } catch {}
+      try { syncClient?.off?.('companion_id', onCompanionChange); } catch {}
+      try { syncClient?.off?.('state_change', onState); } catch {}
+      try { syncClient?.off?.('chat', onChat); } catch {}
+      try { syncClient?.off?.('typing', onTyping); } catch {}
+      try { syncClient?.off?.('chat_history', onChatHistory); } catch {}
+      try { syncClient?.off?.('arena', onArena); } catch {}
+      try { syncClient?.off?.('audio_response', onAudioResponse); } catch {}
+      try { syncClient?.off?.('voice_transcript_result', onVoiceTranscriptResult); } catch {}
+      try { syncClient?.off?.('voice_received', onVoiceReceived); } catch {}
+      try { syncClient?.off?.('send_error', onSendError); } catch {}
+      try { offLogEntry?.(onLogUpdate); } catch {}
+      try { disposeSimpleAudioRecorder?.(); } catch {}
     };
   }, [speak, setArenaThinking]);
 
