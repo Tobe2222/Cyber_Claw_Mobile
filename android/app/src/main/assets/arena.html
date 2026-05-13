@@ -327,12 +327,7 @@ function initializeButtonListeners() {
       setFocusMode(true);
       const msg = {type:'fullscreen'};
       console.log('[Arena] Sending to RN:', msg);
-      if (window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(JSON.stringify(msg));
-        console.log('[Arena] Message sent');
-      } else {
-        console.log('[Arena] ReactNativeWebView NOT available!');
-      }
+      sendToReactNative(msg);
     });
   } else {
     console.log('[Arena] voiceBtn NOT FOUND!');
@@ -401,12 +396,7 @@ function initializeButtonListeners() {
       setFocusMode(true);
       const msg = {type:'fullscreen'};
       console.log('[Arena] Sending to RN:', msg);
-      if (window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(JSON.stringify(msg));
-        console.log('[Arena] Message sent');
-      } else {
-        console.log('[Arena] ReactNativeWebView NOT available!');
-      }
+      sendToReactNative(msg);
     });
   } else {
     console.log('[Arena] voiceBtn NOT FOUND!');
@@ -420,12 +410,41 @@ function initializeButtonListeners() {
       setFocusMode(false);
       setFullscreenMode(false);
       const msg = {type:'exitFullscreen'};
-      if (window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(JSON.stringify(msg));
-      }
+      sendToReactNative(msg);
     });
   }
 }
+
+
+// DIAGNOSTIC: Test if we can communicate
+console.log('[Arena] Testing message communication...');
+console.log('[Arena] window.ReactNativeWebView:', typeof window.ReactNativeWebView);
+console.log('[Arena] window.webkit:', typeof window.webkit);
+
+// Try both methods
+function sendToReactNative(msg) {
+  console.log('[Arena] sendToReactNative called with:', msg);
+  
+  if (window.ReactNativeWebView) {
+    console.log('[Arena] Using ReactNativeWebView');
+    window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+    return;
+  }
+  
+  if (window.webkit && window.webkit.messageHandlers) {
+    console.log('[Arena] Using webkit messageHandlers');
+    window.webkit.messageHandlers.reactNative.postMessage(msg);
+    return;
+  }
+  
+  console.log('[Arena] NO communication channel available!');
+}
+
+// Test send on page load
+setTimeout(function() {
+  console.log('[Arena] Test message on page load');
+  sendToReactNative({type: 'test', from: 'arena'});
+}, 500);
 
 console.log('[Arena] Initializing buttons NOW (after all code loaded)');
 initializeButtonListeners();
