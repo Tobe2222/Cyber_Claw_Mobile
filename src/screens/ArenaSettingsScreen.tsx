@@ -33,12 +33,15 @@ const COMPANION_OPTIONS = [
   { id: 'black_grouse', label: '🐦 Black Grouse' },
 ];
 
-// Local Android voices (free)
-const LOCAL_VOICES = [
+// Local Android voices (free) - will be fetched from device
+const LOCAL_VOICES_DEFAULTS = [
   { id: 'default', label: '🎙️ System Default' },
   { id: 'female', label: '👩 Female' },
   { id: 'male', label: '👨 Male' },
 ];
+
+// This will be populated from device voices
+let AVAILABLE_DEVICE_VOICES: Array<{ id: string; label: string }> = LOCAL_VOICES_DEFAULTS;
 
 // 3rd party API voices (paid)
 const THIRTHPARTY_APIS = [
@@ -68,6 +71,31 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   const [apiProvider, setApiProvider] = useState('elevenlabs');
   const [apiKey, setApiKey] = useState('');
   const [apiVoice, setApiVoice] = useState('nova');
+  const [deviceVoices, setDeviceVoices] = useState(LOCAL_VOICES_DEFAULTS);
+
+  // Fetch available device voices
+  useEffect(() => {
+    const fetchDeviceVoices = async () => {
+      try {
+        // Try to get voices from speechSynthesis
+        // This requires communication with the WebView or native module
+        // For now, we'll use a predefined list but note this for future enhancement
+        const voices = [
+          { id: 'default', label: '🎙️ System Default' },
+          { id: 'en-US-1', label: '👩 Female 1' },
+          { id: 'en-US-2', label: '👩 Female 2' },
+          { id: 'en-US-3', label: '👨 Male 1' },
+          { id: 'en-US-4', label: '👨 Male 2' },
+          { id: 'en-US-5', label: '🎙️ Alternative' },
+        ];
+        setDeviceVoices(voices);
+        AVAILABLE_DEVICE_VOICES = voices;
+      } catch (e) {
+        // Silently fail - use defaults
+      }
+    };
+    fetchDeviceVoices();
+  }, []);
 
   // Handle Android back button
   useEffect(() => {
@@ -279,7 +307,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
                   style={styles.pickerElement}
                   itemStyle={styles.pickerItem}
                 >
-                  {LOCAL_VOICES.map(v => (
+                  {deviceVoices.map(v => (
                     <Picker.Item key={v.id} label={v.label} value={v.id} />
                   ))}
                 </Picker>
