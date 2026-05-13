@@ -197,7 +197,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setFullscreen(false);
     fullscreenRef.current = false;
     AppControl?.keepScreenOn?.(false);
-    const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
+    const js = `
+          (function() {
+            const canvas = document.getElementById('c');
+            const ui = document.getElementById('ui');
+            if (canvas) {
+              canvas.style.transform = 'scale(1)';
+            }
+            if (ui) {
+              ui.style.transform = 'scale(1)';
+            }
+            window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})}));
+            document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})}));
+            true;
+          })();
+        `;
     webViewRef.current?.injectJavaScript(js);
     addLogEntry('Voice mode exited', 'info');
   }, []);
@@ -1028,7 +1042,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
       {/* Arena - Conditional rendering based on fullscreen or landscape */}
       {!keyboardVisible && (
-        <View style={fullscreen || isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
+        <View style={fullscreen || isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100, justifyContent: 'center', alignItems: 'center' }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
           <WebView
             key={webViewKey}
             ref={webViewRef}
