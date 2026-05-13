@@ -1028,57 +1028,29 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
       {/* Arena - Conditional rendering based on fullscreen or landscape */}
       {!keyboardVisible && (
-        <View style={fullscreen ? { flex: 1, backgroundColor: '#0a0a2e', justifyContent: 'center', alignItems: 'center' } : (isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' })}>
-          {fullscreen && (
-            <View style={{ width: '50%', height: '50%', backgroundColor: '#0a0a2e', justifyContent: 'center', alignItems: 'center' }}>
-              <WebView
-                key={webViewKey}
-                ref={webViewRef}
-                source={{ uri: `file:///android_asset/arena.html?companion=${companionId}` }}
-                style={{ flex: 1, width: '100%', backgroundColor: '#0a0a2e' }}
-                scrollEnabled={false}
-                bounces={false}
-                javaScriptEnabled
-                allowFileAccess
-                originWhitelist={['*']}
-                onMessage={handleArenaMessage}
-                onLoadEnd={() => {
-                  Promise.all([
-                    AsyncStorage.getItem('cyberclaw-arena-bg'),
-                    AsyncStorage.getItem('cyberclaw-arena-comp'),
-                  ]).then(([bgId, compId]) => {
-                    const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
-                    const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); Document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
-                    webViewRef.current?.injectJavaScript(js);
-                  });
-                }}
-              />
-            </View>
-          )}
-          {!fullscreen && (
-            <WebView
-              key={webViewKey}
-              ref={webViewRef}
-              source={{ uri: `file:///android_asset/arena.html?companion=${companionId}` }}
-              style={{ flex: 1, backgroundColor: '#0a0a2e' }}
-              scrollEnabled={false}
-              bounces={false}
-              javaScriptEnabled
-              allowFileAccess
-              originWhitelist={['*']}
-              onMessage={handleArenaMessage}
-              onLoadEnd={() => {
-                Promise.all([
-                  AsyncStorage.getItem('cyberclaw-arena-bg'),
-                  AsyncStorage.getItem('cyberclaw-arena-comp'),
-                ]).then(([bgId, compId]) => {
-                  const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
-                  const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
-                  webViewRef.current?.injectJavaScript(js);
-                });
-              }}
-            />
-          )}
+        <View style={fullscreen || isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
+          <WebView
+            key={webViewKey}
+            ref={webViewRef}
+            source={{ uri: `file:///android_asset/arena.html?companion=${companionId}` }}
+            style={{ flex: 1, backgroundColor: '#0a0a2e' }}
+            scrollEnabled={false}
+            bounces={false}
+            javaScriptEnabled
+            allowFileAccess
+            originWhitelist={['*']}
+            onMessage={handleArenaMessage}
+            onLoadEnd={() => {
+              Promise.all([
+                AsyncStorage.getItem('cyberclaw-arena-bg'),
+                AsyncStorage.getItem('cyberclaw-arena-comp'),
+              ]).then(([bgId, compId]) => {
+                const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
+                const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
+                webViewRef.current?.injectJavaScript(js);
+              });
+            }}
+          />
           {fullscreen && (
             <TouchableOpacity style={styles.voiceModeCloseBtn} onPress={closeFullscreen} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
               <Text style={styles.voiceModeBtnText}>✕</Text>
