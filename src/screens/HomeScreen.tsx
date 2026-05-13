@@ -357,6 +357,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const handleArenaMessage = useCallback((e: any) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
+      // Debug logging for all messages
+      console.log('[Arena Message]', msg.type);
+      if (msg.type === 'fullscreen') {
+        console.log('[Arena] Fullscreen message received, entering fullscreen mode');
+      }
       if (msg.type === 'openArenaSettings') {
         // Arena Settings button clicked - open full-screen Arena Settings
         onOpenArenaSettings();
