@@ -324,16 +324,40 @@ function setFocusMode(on) {
   btn.textContent=on?'Arena':'Voice';
   btn.title=on?'Show arena':'Voice mode';
 }
-document.getElementById('voiceBtn').addEventListener('click',()=>{
-  setFullscreenMode(true);
-  setFocusMode(true);
-  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'}));
-});
-document.getElementById('exitVoiceBtn').addEventListener('click',()=>{
-  setFocusMode(false);
-  setFullscreenMode(false);
-  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'}));
-});
+// Initialize button listeners when page is ready
+function initializeButtonListeners() {
+  const voiceBtn = document.getElementById('voiceBtn');
+  if (voiceBtn) {
+    voiceBtn.addEventListener('click', function() {
+      setFullscreenMode(true);
+      setFocusMode(true);
+      const msg = {type:'fullscreen'};
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+      }
+    });
+  }
+  
+  const exitBtn = document.getElementById('exitVoiceBtn');
+  if (exitBtn) {
+    exitBtn.addEventListener('click', function() {
+      setFocusMode(false);
+      setFullscreenMode(false);
+      const msg = {type:'exitFullscreen'};
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+      }
+    });
+  }
+}
+
+// Try to initialize immediately, then use DOMContentLoaded as fallback
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeButtonListeners);
+} else {
+  // Already loaded
+  setTimeout(initializeButtonListeners, 100);
+}
 
 // ── Messages from RN ──────────────────────────────────────────────────────────
 function handleMsg(raw) {
