@@ -324,28 +324,44 @@ function setFocusMode(on) {
   btn.textContent=on?'Arena':'Voice';
   btn.title=on?'Show arena':'Voice mode';
 }
-document.getElementById('voiceBtn').addEventListener('click',()=>{
-  try {
-    console.log('Voice Mode button clicked');
-    setFullscreenMode(true);
-    setFocusMode(true);
-    console.log('setFullscreenMode and setFocusMode called');
-    const msg = {type:'fullscreen'};
-    console.log('Sending message:', msg);
-    if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(JSON.stringify(msg));
-      console.log('Message sent to React Native');
-    } else {
-      console.log('ReactNativeWebView not available!');
-    }
-  } catch (e) {
-    console.error('Error in voiceBtn click handler:', e);
+// All button event listeners wrapped in DOMContentLoaded
+document.addEventListener('DOMContentLoaded', function() {
+  // Voice Mode button
+  const voiceBtn = document.getElementById('voiceBtn');
+  if (voiceBtn) {
+    voiceBtn.addEventListener('click', function() {
+      try {
+        console.log('Voice Mode button clicked');
+        setFullscreenMode(true);
+        setFocusMode(true);
+        console.log('setFullscreenMode and setFocusMode called');
+        const msg = {type:'fullscreen'};
+        console.log('Sending message:', msg);
+        if (window.ReactNativeWebView) {
+          window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+          console.log('Message sent to React Native');
+        } else {
+          console.log('ReactNativeWebView not available!');
+        }
+      } catch (e) {
+        console.error('Error in voiceBtn click handler:', e);
+      }
+    });
   }
-});
-document.getElementById('exitVoiceBtn').addEventListener('click',()=>{
-  setFocusMode(false);
-  setFullscreenMode(false);
-  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'}));
+  
+  // Exit button
+  const exitBtn = document.getElementById('exitVoiceBtn');
+  if (exitBtn) {
+    exitBtn.addEventListener('click', function() {
+      try {
+        setFocusMode(false);
+        setFullscreenMode(false);
+        window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'}));
+      } catch (e) {
+        console.error('Error in exitBtn click handler:', e);
+      }
+    });
+  }
 });
 
 // ── Messages from RN ──────────────────────────────────────────────────────────
