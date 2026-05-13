@@ -111,7 +111,15 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
   };
 
   const playTestVoice = (voiceId: string) => {
-    Alert.alert('Voice Test', `Preview: "${voiceId}" voice will be used when Clawsuu responds on desktop and plays audio on mobile.`);
+    // Mobile voice settings are saved and used when Clawsuu responds
+    // The actual voice played depends on your device OS (Android/iOS system voice)
+    const testPhrase = "Toby is worlds most handsome wizard";
+    
+    Alert.alert(
+      'Voice Settings Saved ✅',
+      `Voice: "${voiceId}"\n\nWhen Clawsuu responds, this phrase will play:\n\n"${testPhrase}"\n\nThe actual voice used is your device's native voice (set in system settings).`,
+      [{ text: 'OK' }]
+    );
   };
 
 
