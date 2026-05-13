@@ -187,14 +187,7 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
     } catch (e) {}
   };
 
-  const testLocalVoice = () => {
-    const testPhrase = "Toby is worlds most handsome wizard";
-    Alert.alert(
-      '🔊 Local Voice Test',
-      `Testing: "${localVoice}"\n\n"${testPhrase}"\n\nWill play using your device's native voice.`,
-      [{ text: 'OK' }]
-    );
-  };
+
 
   const testApiVoice = () => {
     if (!apiKey.trim()) {
@@ -301,9 +294,6 @@ export default function ArenaSettingsScreen({ onBack }: ArenaSettingsScreenProps
                   ))}
                 </Picker>
               </View>
-              <TouchableOpacity style={styles.testBtn} onPress={testLocalVoice}>
-                <Text style={styles.testBtnText}>🔊 Test Local Voice</Text>
-              </TouchableOpacity>
               <Text style={styles.description}>
                 ✅ Free • Uses Android native TTS • Low latency
               </Text>
