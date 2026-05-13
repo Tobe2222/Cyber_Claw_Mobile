@@ -364,12 +364,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       }
       
       if (msg.type === 'fullscreen') {
-        // Ignore fullscreen request if already recording in chat mode
-        if (isVoiceListening) {
-          addLogEntry('Ignored: Voice fullscreen blocked during chat recording', 'info');
-          return;
-        }
-        // User clicked Voice button in arena → enter fullscreen
+        // User clicked Voice button in arena → enter fullscreen voice mode
+        // This is separate from chat voice input
         setFullscreen(true);
         fullscreenRef.current = true;
         AppControl?.keepScreenOn?.(true);
