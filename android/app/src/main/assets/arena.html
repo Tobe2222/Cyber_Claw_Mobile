@@ -65,7 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <button class="btn" id="arenaSettingsBtn" title="Arena Settings">⚙️</button>
   </div>
   <div id="ctrlRight">
-    <button class="btn" id="voiceBtn" title="Enter Voice Mode" onclick="if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', text:'[Voice] Button clicked'})); } setFullscreenMode(true); setFocusMode(true); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', text:'[Voice] Fullscreen mode set'})); window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', text:'[Voice] Fullscreen message sent'})); } else { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', text:'[Voice] ReactNativeWebView NOT available'})); }">Voice Mode</button>
+    <button class="btn" id="voiceBtn" title="Enter Voice Mode" onclick="try { setFullscreenMode(true); setFocusMode(true); if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); } catch(e) { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', text:'[Voice] Error: ' + e.message})); }">Voice Mode</button>
   </div>
   <div id="ctrlFs">
     <button class="btn" id="exitVoiceBtn" title="Exit" onclick="setFocusMode(false); setFullscreenMode(false); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'})); }">Exit</button>
