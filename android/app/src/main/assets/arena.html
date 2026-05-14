@@ -324,43 +324,12 @@ function setFocusMode(on) {
   btn.textContent=on?'Arena':'Voice';
   btn.title=on?'Show arena':'Voice mode';
 }
-// Voice button listener - wraps in try/catch and timeout safety
-(function() {
-  function attachListeners() {
-    const voiceBtn = document.getElementById('voiceBtn');
-    if (voiceBtn) {
-      voiceBtn.addEventListener('click', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        setFullscreenMode(true);
-        setFocusMode(true);
-        if (window.ReactNativeWebView) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'}));
-        }
-      });
-    }
-    
-    const exitBtn = document.getElementById('exitVoiceBtn');
-    if (exitBtn) {
-      exitBtn.addEventListener('click', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        setFocusMode(false);
-        setFullscreenMode(false);
-        if (window.ReactNativeWebView) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'}));
-        }
-      });
-    }
-  }
-  
-  // Try to attach immediately
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', attachListeners);
-  } else {
-    attachListeners();
-  }
-})();
+// SIMPLE TEST: Make button change color on click
+document.getElementById('voiceBtn').style.backgroundColor = 'blue';
+document.getElementById('voiceBtn').addEventListener('click', function() {
+  this.style.backgroundColor = 'red';
+  alert('Button clicked!');
+});
 
 // ── Messages from RN ──────────────────────────────────────────────────────────
 function handleMsg(raw) {
