@@ -65,7 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <button class="btn" id="arenaSettingsBtn" title="Arena Settings">⚙️</button>
   </div>
   <div id="ctrlRight">
-    <button class="btn" id="voiceBtn" title="Enter Voice Mode" onclick="setFullscreenMode(true); setFocusMode(true); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); }">🎤 Voice</button>
+    <button class="btn" id="voiceBtn" title="Enter Voice Mode" onclick="setFullscreenMode(true); setFocusMode(true); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); }">Voice Mode</button>
   </div>
   <div id="ctrlFs">
     <button class="btn" id="exitVoiceBtn" title="Exit" onclick="setFocusMode(false); setFullscreenMode(false); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'})); }">Exit</button>
@@ -324,12 +324,7 @@ function setFocusMode(on) {
   btn.textContent=on?'Arena':'Voice';
   btn.title=on?'Show arena':'Voice mode';
 }
-// SIMPLE TEST: Make button change color on click
-document.getElementById('voiceBtn').style.backgroundColor = 'blue';
-document.getElementById('voiceBtn').addEventListener('click', function() {
-  this.style.backgroundColor = 'red';
-  alert('Button clicked!');
-});
+// Old test code removed - using inline onclick instead
 
 // ── Messages from RN ──────────────────────────────────────────────────────────
 function handleMsg(raw) {
