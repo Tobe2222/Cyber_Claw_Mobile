@@ -349,6 +349,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         return;
       }
       
+      if (msg.type === 'log') {
+        // Log message from arena - display in app logs
+        addLogEntry(msg.text || 'Arena log', 'info');
+        return;
+      }
+      
       if (msg.type === 'fullscreen') {
         // User clicked Voice button in arena → enter fullscreen
         setFullscreen(true);
