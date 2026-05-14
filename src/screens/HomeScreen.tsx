@@ -1031,11 +1031,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
             scrollEnabled={false}
             bounces={false}
-            javaScriptEnabled
-            allowFileAccess
+            javaScriptEnabled={true}
+            allowFileAccess={true}
             originWhitelist={['*']}
             onMessage={handleArenaMessage}
             onLoadEnd={() => {
+              // Test that WebView is working
+              const testJs = `console.log('[Arena-WebView] Arena page loaded successfully'); window.ReactNativeWebView?.postMessage(JSON.stringify({type: 'arenaLoaded'}));`;
+              webViewRef.current?.injectJavaScript(testJs);
+              
               Promise.all([
                 AsyncStorage.getItem('cyberclaw-arena-bg'),
                 AsyncStorage.getItem('cyberclaw-arena-comp'),
