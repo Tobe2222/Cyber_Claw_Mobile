@@ -65,7 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <button class="btn" id="arenaSettingsBtn" title="Arena Settings">⚙️</button>
   </div>
   <div id="ctrlRight">
-    <button class="btn" id="voiceBtn" title="Voice Mode" style="width:100px;height:50px;font-size:16px;background:orange!important;border:3px solid red!important;" onclick="setFullscreenMode(true); setFocusMode(true); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); }">VOICE</button>
+    <button class="btn" id="voiceBtn" title="Enter Voice Mode" onclick="setFullscreenMode(true); setFocusMode(true); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); }">🎤 Voice</button>
   </div>
   <div id="ctrlFs">
     <button class="btn" id="exitVoiceBtn" title="Exit" onclick="setFocusMode(false); setFullscreenMode(false); if(window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'})); }">Exit</button>
