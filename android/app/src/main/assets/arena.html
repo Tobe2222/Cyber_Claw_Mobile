@@ -281,7 +281,13 @@ function drawComp() {
 function loop(now) {
   update(now);
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  drawBg(); drawComp();
+  if(document.getElementById('ui').classList.contains('fullscreen')) {
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+  } else {
+    drawBg();
+  }
+  drawComp();
   frameCount++;
   requestAnimationFrame(loop);
 }
