@@ -1052,11 +1052,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               });
             }}
           />
-          {fullscreen && (
-            <TouchableOpacity style={styles.voiceModeCloseBtn} onPress={closeFullscreen} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
-              <Text style={styles.voiceModeBtnText}>✕</Text>
-            </TouchableOpacity>
-          )}
+          {/* Close button removed - using arena Exit button instead */}
           {/* Voice status indicator in fullscreen mode */}
           {fullscreen && (
             <View style={styles.voiceStatusOverlay} pointerEvents="none">
