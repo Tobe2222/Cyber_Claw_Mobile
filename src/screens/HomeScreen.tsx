@@ -378,8 +378,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   useEffect(() => {
     if (!fullscreen) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      closeFullscreen();
-      return true;
+      if (fullscreen) {
+        closeFullscreen();
+        return true;
+      }
+      return false;
     });
     return () => {
       subscription?.remove?.();
