@@ -344,6 +344,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const handleArenaMessage = useCallback((e: any) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
+      addLogEntry(`🎬 Arena message: type=${msg.type}`, 'debug');
       if (msg.type === 'openArenaSettings') {
         // Arena Settings button clicked - open full-screen Arena Settings
         onOpenArenaSettings();
@@ -358,6 +359,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       
       if (msg.type === 'fullscreen') {
         // User clicked Voice button in arena → enter fullscreen
+        addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
         setFullscreen(true);
         fullscreenRef.current = true;
         AppControl?.keepScreenOn?.(true);

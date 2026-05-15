@@ -95,9 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
   <div id="ctrlRight">
     <button class="btn" id="voiceBtn" title="Enter Voice Mode" onclick="try { document.getElementById('ui').classList.add('fullscreen'); document.getElementById('c').classList.add('fullscreen'); if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); } catch(e) { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', text:'[Voice] Error: ' + e.message})); }">Voice Mode</button>
   </div>
-  <div id="ctrlFs">
-    <button class="btn" id="exitVoiceBtn" title="Exit" onclick="try { document.getElementById('ui').classList.remove('fullscreen'); document.getElementById('c').classList.remove('fullscreen'); if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'})); } catch(e) { }">Exit</button>
-  </div>
+  
   <div id="thinking">thinking...</div>
   <div id="voiceDebug" style="position: fixed; bottom: 20px; left: 20px; background: rgba(0,0,0,0.7); color: #0f0; font-family: monospace; font-size: 11px; padding: 8px; border-radius: 4px; max-width: 200px; z-index: 999; display: none; pointer-events: none;">
     <div>Status: <span id="debugStatus">-</span></div>
