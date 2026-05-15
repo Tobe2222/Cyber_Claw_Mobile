@@ -687,6 +687,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             
             // FIXED #1: Add audio detection timer for loop
             audioDetectTimer = setTimeout(() => {
+              addLogEntry(`Loop: audio timer fired (fullscreen=${fullscreenRef.current}, transitioned=${hasTransitionedToRecording})`, 'debug');
               if (!hasTransitionedToRecording && fullscreenRef.current) {
                 hasTransitionedToRecording = true;
                 setVoiceStatus('recording');
