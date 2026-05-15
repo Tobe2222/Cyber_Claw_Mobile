@@ -609,8 +609,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onAudioResponse = async (msg: any) => {
+      addLogEntry(`🔊 onAudioResponse called: fullscreen=${fullscreenRef.current}, hasAudio=${!!msg.audioBase64}`, 'debug');
       try {
-        if (!msg.audioBase64) return;
+        if (!msg.audioBase64) {
+          addLogEntry(`🔊 No audioBase64, returning`, 'debug');
+          return;
+        }
         const fs = require('react-native-fs');
         const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
@@ -627,6 +631,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         
         // After playback, if still in voice mode, restart listening loop
         if (fullscreenRef.current) {
+          addLogEntry(`🔊 Restarting listening loop (fullscreen=true)`, 'debug');
           addLogEntry('Playback finished, restarting listening loop', 'info');
           setVoiceStatus('listening');
           setSilenceCountdown(0);
