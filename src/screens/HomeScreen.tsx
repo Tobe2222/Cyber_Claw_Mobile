@@ -204,6 +204,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Simplified enterVoiceMode - only handles wakeword wake-up
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
+    addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
     if (source === 'wakeword') {
       bringToForeground();
       AppControl?.showOnLockScreenWithDismiss?.();
@@ -1061,6 +1062,16 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               });
             }}
           />
+          {/* Exit button overlay for Voice Mode - React Native (more reliable than WebView CSS) */}
+          {fullscreen && (
+            <TouchableOpacity
+              style={styles.voiceExitButton}
+              onPress={closeFullscreen}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.voiceExitButtonText}>✕</Text>
+            </TouchableOpacity>
+          )}
           {/* Close button removed - using arena Exit button instead */}
           {/* Voice status indicator in fullscreen mode */}
           {fullscreen && (
@@ -1359,6 +1370,26 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     textAlign: 'center',
+  },
+  voiceExitButton: {
+    position: 'absolute',
+    top: 40,
+    right: 40,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(247, 147, 26, 0.9)',
+    borderWidth: 2,
+    borderColor: '#f7931a',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1001,
+    elevation: 20,
+  },
+  voiceExitButtonText: {
+    fontSize: 32,
+    color: '#fff',
+    fontWeight: 'bold',
   },
   loadMoreBtn: {
     paddingVertical: 12,
