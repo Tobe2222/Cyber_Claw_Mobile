@@ -380,6 +380,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Handle Android back button in fullscreen mode
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      addLogEntry(`🎙️ hardwareBackPress event (fullscreen=${fullscreen})`, 'debug');
       if (fullscreen) {
         addLogEntry('🎙️ Back pressed in fullscreen, exiting', 'debug');
         closeFullscreen();
@@ -1062,15 +1063,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               });
             }}
           />
-          {/* Exit button overlay for Voice Mode - React Native (more reliable than WebView CSS) */}
-          {fullscreen && (
-            <TouchableOpacity
-              style={styles.voiceExitButton}
-              onPress={closeFullscreen}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.voiceExitButtonText}>✕</Text>
-            </TouchableOpacity>
           )}
           {/* Close button removed - using arena Exit button instead */}
           {/* Voice status indicator in fullscreen mode */}
