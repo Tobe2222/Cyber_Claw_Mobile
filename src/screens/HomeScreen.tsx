@@ -379,17 +379,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Handle Android back button in fullscreen mode
   useEffect(() => {
-    if (!fullscreen) return;
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (fullscreen) {
+        addLogEntry('🎙️ Back pressed in fullscreen, exiting', 'debug');
         closeFullscreen();
         return true;
       }
       return false;
     });
-    return () => {
-      subscription?.remove?.();
-    };
+    return () => backHandler.remove();
   }, [fullscreen, closeFullscreen]);
 
   // Wake word → enter voice mode with lock screen
