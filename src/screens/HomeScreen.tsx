@@ -251,9 +251,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
         true;
       `);
-      
-      // Auto-start listening with SimpleAudioRecorder + countdown on silence
-      try {
+    }
+    
+    // Auto-start listening with SimpleAudioRecorder + countdown on silence (runs always)
+    try {
         const fs = require('react-native-fs');
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
         const recorder = getSimpleAudioRecorder();
@@ -376,7 +377,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         setVoiceStatus('idle');
         addLogEntry(`Voice recording failed: ${e?.message}`, 'error');
       }
-    }
   }, []);
 
   // Handle messages from arena (companion screen)
