@@ -210,8 +210,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setVoiceStatus('idle');
     setIsVoiceListening(false);
     AppControl?.keepScreenOn?.(false);
-    // Properly inject into WebView to ensure cleanup
-    const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
+    
+    // CRITICAL: Remove fullscreen CSS classes from HTML
+    const js = `
+      document.getElementById('ui').classList.remove('fullscreen');
+      document.getElementById('c').classList.remove('fullscreen');
+      window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})}));
+      document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})}));
+      true;
+    `;
     webViewRef.current?.injectJavaScript(js);
     addLogEntry('Voice mode exited', 'info');
   }, []);
