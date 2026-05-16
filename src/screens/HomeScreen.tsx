@@ -221,12 +221,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
     setVoiceLogs([]);  // Clear logs on enter
     addVoiceLog('🎙️ Listening...');
+    
+    // FIXED: Set fullscreen ALWAYS, not just for wakeword
+    AppControl?.keepScreenOn?.(true);
+    setFullscreen(true);
+    fullscreenRef.current = true;
+    
     if (source === 'wakeword') {
       bringToForeground();
       AppControl?.showOnLockScreenWithDismiss?.();
-      AppControl?.keepScreenOn?.(true);
-      setFullscreen(true);  // Set state so overlay renders
-      fullscreenRef.current = true;
       addLogEntry('Entering voice mode', 'info');
       
       // Tell arena to enter focus mode
@@ -379,9 +382,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       if (msg.type === 'fullscreen') {
         // User clicked Voice button in arena → enter fullscreen
         addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
-        setFullscreen(true);
-        fullscreenRef.current = true;
-        AppControl?.keepScreenOn?.(true);
+        enterVoiceMode('focus');  // Call enterVoiceMode to start audio recording
       }
       if (msg.type === 'exitFullscreen') {
         // User clicked Exit in voice mode → exit fullscreen
