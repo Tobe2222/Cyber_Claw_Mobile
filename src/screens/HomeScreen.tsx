@@ -503,6 +503,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [wakeDebug, setWakeDebug] = useState<string>('init');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
+  
+  // Wake Word Mode - always listening, trigger on wake word
+  const [isWakeWordMode, setIsWakeWordMode] = useState(false);
+  const [wakeWordSession, setWakeWordSession] = useState<{ id: string; audioChunks: string[] } | null>(null);
 
   // toggleVoiceInput defined after sendMessage below
 
@@ -995,6 +999,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setAttachments([]);
   }, [inputText, isConnected, pendingAudioPath]);
 
+  // Toggle Wake Word Mode - intelligent multi-speaker listening
+  const toggleWakeWordMode = useCallback(() => {
+    if (!isConnected) {
+      Alert.alert('Not Connected', 'Please connect to your desktop first.');
+      return;
+    }
+    setIsWakeWordMode(!isWakeWordMode);
+    addLogEntry(`🗣️ Wake Word Mode: ${!isWakeWordMode ? 'ON' : 'OFF'}`, 'info');
+    if (!isWakeWordMode) {
+      addLogEntry('Listening for wake word in background...', 'info');
+    }
+  }, [isWakeWordMode, isConnected]);
+
   const toggleVoiceInput = useCallback(async () => {
     if (!isConnected) {
       Alert.alert('Not Connected', 'Please connect to your desktop first.');
@@ -1285,6 +1302,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                   {isVoiceListening ? '⏹ Stop' : 'Mic'}
                 </Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.micButton, isWakeWordMode && styles.wakeWordButtonActive]}
+                onPress={toggleWakeWordMode}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                activeOpacity={0.6}
+                title="Wake Word Mode"
+              >
+                <Text style={[styles.micButtonText, isWakeWordMode && { color: '#10b981' }]}>
+                  🗣️
+                </Text>
+              </TouchableOpacity>
               {attachments.length > 0 && (
               <View style={styles.attachmentPreview}>
                 <ScrollView horizontal style={{ flexDirection: 'row' }}>
@@ -1478,6 +1506,9 @@ const styles = StyleSheet.create({
   },
   micButtonActive: {
     backgroundColor: 'rgba(239,68,68,0.25)', borderColor: '#ef4444',
+  },
+  wakeWordButtonActive: {
+    backgroundColor: 'rgba(16,185,129,0.25)', borderColor: '#10b981',
   },
   micButtonText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
   voicePreview: {
