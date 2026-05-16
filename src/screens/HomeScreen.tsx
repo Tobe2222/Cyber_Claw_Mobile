@@ -262,9 +262,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         let hasTransitionedToRecording = false;
         
         // Set up silence detection: start countdown and auto-send
+        // TODO: Integrate VAD for smarter end-of-speech detection
         let countdownInterval: NodeJS.Timeout | null = null;
         let silenceEventFired = false;
         let maxDurationTimeout: NodeJS.Timeout | null = null;
+        
+        // VAD will replace this with frame-by-frame analysis
+        const vad = getVAD();
         
         const unsubSilence = recorder.once('silence', async () => {
           silenceEventFired = true;
