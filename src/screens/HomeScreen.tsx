@@ -14,6 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder, disposeSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
+import { getVAD, resetVAD } from '../services/SileroVAD';  // Voice Activity Detection
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
@@ -233,6 +234,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     AppControl?.keepScreenOn?.(true);
     setFullscreen(true);
     fullscreenRef.current = true;
+    
+    // Initialize Voice Activity Detection
+    const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
+    resetVAD();
+    addVoiceLog('🎙️ VAD ready');
     
     if (source === 'wakeword') {
       bringToForeground();
