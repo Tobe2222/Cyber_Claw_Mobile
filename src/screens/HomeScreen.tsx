@@ -5,7 +5,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
+  View, Text, TextInput, TouchableOpacity, FlatList, ScrollView, StyleSheet,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert,
   NativeModules, StatusBar, NativeEventEmitter, BackHandler, AppState,
 } from 'react-native';
@@ -15,6 +15,7 @@ import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder, disposeSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import { getVAD, resetVAD } from '../services/SileroVAD';  // Voice Activity Detection
+import Clipboard from '@react-native-clipboard/clipboard';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
@@ -26,6 +27,13 @@ async function startBgService() {
 }
 async function bringToForeground() {
   try { if (AppControl) await AppControl.bringToForeground(); } catch {}
+}
+
+interface AttachmentItem {
+  id: string;
+  uri: string;
+  name: string;
+  type: string;
 }
 
 interface ChatMessage {
@@ -112,6 +120,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
   const [inputText, setInputText] = useState('');
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);  // Chat attachments
 
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
@@ -875,20 +884,62 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   const appStateRef = useRef<string>(AppState.currentState);
 
+  // Add attachment to pending list
+  const addAttachment = useCallback((asset: any) => {
+    const attachment: AttachmentItem = {
+      id: Date.now().toString(),
+      uri: asset.uri || '',
+      name: asset.fileName || 'attachment',
+      type: asset.type || 'image/jpeg',
+    };
+    setAttachments(prev => [...prev, attachment]);
+    addLogEntry(`📎 Attachment added: ${attachment.name}`, 'info');
+  }, []);
+
+  // Remove attachment from pending
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id));
+  }, []);
+
+  // Handle paste from clipboard
+  const handlePaste = useCallback(async () => {
+    try {
+      const clipboardText = await Clipboard.getString();
+      if (clipboardText) {
+        // Check if it's a URL or file path
+        if (clipboardText.startsWith('file://') || clipboardText.startsWith('http')) {
+          const attachment: AttachmentItem = {
+            id: Date.now().toString(),
+            uri: clipboardText,
+            name: `pasted-${Date.now()}`,
+            type: 'text/url',
+          };
+          setAttachments(prev => [...prev, attachment]);
+          addLogEntry(`📎 Pasted: ${clipboardText.substring(0, 50)}...`, 'info');
+        } else {
+          // Regular text - add to input
+          setInputText(prev => prev + clipboardText);
+        }
+      }
+    } catch (e) {
+      console.log('Paste error:', e);
+    }
+  }, []);
+
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
       { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
         if (res.assets?.[0]) {
-          const asset = res.assets[0];
-          addLogEntry(`Attachment selected: ${asset.fileName} (${asset.type})`, 'info');
-          syncClient.sendChat(`[Image: ${asset.fileName}]`);
+          addAttachment(res.assets[0]);
         }
       })},
-      { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 1 }, (res) => {
-        if (res.assets?.[0]) {
-          const asset = res.assets[0];
-          addLogEntry(`Attachment selected: ${asset.fileName} (${asset.type})`, 'info');
-          syncClient.sendChat(`[Image: ${asset.fileName}]`);
+      { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 0 }, (res) => {
+        // selectionLimit: 0 = unlimited
+        if (res.assets && res.assets.length > 0) {
+          res.assets.forEach(asset => addAttachment(asset));
+        }
+      })},
+      { text: 'Paste', onPress: handlePaste },
         }
       })},
       { text: 'Cancel', style: 'cancel' },
@@ -915,11 +966,33 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       return;
     }
     const text = inputText.trim();
-    if (!text) return;
-    setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
-    syncClient.sendChat(text);
-    addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
+    if (!text && attachments.length === 0) return;
+    
+    // Send text message
+    if (text) {
+      setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
+      syncClient.sendChat(text);
+      addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
+    }
+    
+    // Send attachments
+    for (const attachment of attachments) {
+      try {
+        const fs = require('react-native-fs');
+        if (attachment.uri.startsWith('file://')) {
+          const base64 = await fs.readFile(attachment.uri, 'base64');
+          syncClient.sendAttachment(base64, attachment.type, attachment.name);
+          addLogEntry(`📎 Sent: ${attachment.name}`, 'info');
+        } else if (attachment.uri.startsWith('http')) {
+          syncClient.sendChat(`[Link: ${attachment.name}]\n${attachment.uri}`);
+        }
+      } catch (e: any) {
+        addLogEntry(`📎 Error: ${e?.message}`, 'error');
+      }
+    }
+    
     setInputText('');
+    setAttachments([]);
   }, [inputText, isConnected, pendingAudioPath]);
 
   const toggleVoiceInput = useCallback(async () => {
@@ -1212,7 +1285,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                   {isVoiceListening ? '⏹ Stop' : 'Mic'}
                 </Text>
               </TouchableOpacity>
-              {pendingAudioPath ? (
+              {attachments.length > 0 && (
+              <View style={styles.attachmentPreview}>
+                <ScrollView horizontal style={{ flexDirection: 'row' }}>
+                  {attachments.map(att => (
+                    <View key={att.id} style={styles.attachmentItem}>
+                      <Text style={styles.attachmentName}>{att.name.substring(0, 20)}</Text>
+                      <TouchableOpacity onPress={() => removeAttachment(att.id)}>
+                        <Text style={styles.attachmentRemove}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+            {pendingAudioPath ? (
                 <View style={styles.voicePreview}>
                   <Text style={styles.voicePreviewText}>🎤 Voice message ready</Text>
                   <TouchableOpacity onPress={() => setPendingAudioPath(null)}>
@@ -1344,10 +1431,22 @@ const styles = StyleSheet.create({
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#1a3a5c', borderBottomRightRadius: 4 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: '#1a1a2e', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#333' },
   agentLabel: { color: '#f7931a', fontSize: 11, marginBottom: 4, fontWeight: 'bold' },
-  messageText: { fontSize: 15, lineHeight: 20 },
+  messageText: { fontSize: 12, lineHeight: 16 },  // Reduced from 15
   userText: { color: '#e0e0e0' },
   aiText: { color: '#ccc' },
-  timestamp: { color: '#555', fontSize: 10, marginTop: 4, textAlign: 'right' },
+  timestamp: { color: '#555', fontSize: 9, marginTop: 2, textAlign: 'right' },  // Reduced
+  
+  // Attachment styles
+  attachmentPreview: {
+    backgroundColor: '#1a1a1a', borderRadius: 6, padding: 8, marginHorizontal: 12, marginBottom: 8,
+    borderLeftWidth: 2, borderLeftColor: '#f7931a', maxHeight: 60,
+  },
+  attachmentItem: {
+    backgroundColor: '#222', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4, marginRight: 6,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minWidth: 100,
+  },
+  attachmentName: { fontSize: 10, color: '#f7931a', fontWeight: '600', flex: 1 },
+  attachmentRemove: { fontSize: 12, color: '#999', fontWeight: 'bold', marginLeft: 6 },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
   emptyChatText: { color: '#555', fontSize: 14, textAlign: 'center' },
   inputContainer: {
