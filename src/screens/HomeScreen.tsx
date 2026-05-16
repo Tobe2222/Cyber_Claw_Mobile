@@ -122,6 +122,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const [isLandscape, setIsLandscape] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
+  const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
   const [companionId, setCompanionId] = useState('boar');
   const [webViewKey, setWebViewKey] = useState(0);
   const chatRef = useRef<FlatList>(null);
@@ -192,9 +193,18 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     webViewRef.current?.injectJavaScript(inject);
   }, []);
 
+  // Helper: Add log to voice logs display (only visible in voice mode)
+  const addVoiceLog = useCallback((text: string) => {
+    setVoiceLogs(prev => {
+      const updated = [...prev, text];
+      return updated.slice(-4);  // Keep last 4 logs
+    });
+  }, []);
+
   // Close fullscreen mode and reset state
   const closeFullscreen = useCallback(() => {
     addLogEntry('🎙️ Closing fullscreen - cleanup', 'debug');
+    addVoiceLog('Exit');
     setFullscreen(false);
     fullscreenRef.current = false;
     setVoiceStatus('idle');
@@ -240,6 +250,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         
         const unsubSilence = recorder.once('silence', async () => {
           silenceEventFired = true;
+          addVoiceLog('⏳ Silence detected...');
           addLogEntry('Silence detected after 5s', 'info');
           setVoiceStatus('silence_countdown');
           let count = 3;
@@ -268,6 +279,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                   if (base64.length < 100) {
                     addLogEntry('Base64 audio very small', 'error');
                   }
+                  addVoiceLog('📏 Sending...');
                   setVoiceStatus('transcribing');
                   syncClient.sendAudioInput(base64, 'audio/m4a');
                   addLogEntry('Voice message sent for transcription', 'sent');
@@ -300,6 +312,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           if (!hasTransitionedToRecording && fullscreenRef.current) {
             hasTransitionedToRecording = true;
             setVoiceStatus('recording');
+            addVoiceLog('🔴 Recording...');
             addLogEntry('Audio detection timeout - status: recording', 'info');
           }
         }, 500);
@@ -579,6 +592,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       // If in voice mode, treat text response as audio response
       if (fullscreenRef.current && !msg.isUser) {
         addLogEntry(`🎙️ Voice mode: Converting text to speech: "${msg.text.substring(0, 50)}..."`, 'info');
+        addVoiceLog(`🔊 Responding: "${msg.text.substring(0, 40)}..."`);
         setVoiceStatus('playing');
         speak(msg.text);  // Convert to speech
         
@@ -586,6 +600,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         setTimeout(() => {
           if (fullscreenRef.current) {
             setVoiceStatus('listening');
+            addVoiceLog('🎙️ Listening...');
             addLogEntry(`🎙️ Restarting voice loop after text response`, 'debug');
             // TODO: Restart listening here (same as audio response)
           }
@@ -1103,7 +1118,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           {fullscreen && (
             <View style={styles.voiceLogOverlay} pointerEvents="none">
               <Text style={styles.voiceLogText}>
-                {messages.filter(m => !m.isUser).slice(-1).map(m => `🗣️ ${m.text.substring(0, 60)}`).join('\n')}
+                {voiceLogs.slice(-3).map((log, i) => `${log}`).join('\n')}
               </Text>
             </View>
           )}
