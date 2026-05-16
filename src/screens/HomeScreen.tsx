@@ -194,9 +194,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Close fullscreen mode and reset state
   const closeFullscreen = useCallback(() => {
+    addLogEntry('🎙️ Closing fullscreen - cleanup', 'debug');
     setFullscreen(false);
     fullscreenRef.current = false;
+    setVoiceStatus('idle');
+    setIsVoiceListening(false);
     AppControl?.keepScreenOn?.(false);
+    // Properly inject into WebView to ensure cleanup
     const js = `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:false})})); true;`;
     webViewRef.current?.injectJavaScript(js);
     addLogEntry('Voice mode exited', 'info');
@@ -1095,6 +1099,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               </Text>
             </View>
           )}
+          {/* Voice mode log display - green terminal at bottom */}
+          {fullscreen && (
+            <View style={styles.voiceLogOverlay} pointerEvents="none">
+              <Text style={styles.voiceLogText}>
+                {messages.filter(m => !m.isUser).slice(-1).map(m => `🗣️ ${m.text.substring(0, 60)}`).join('\n')}
+              </Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -1378,6 +1390,25 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     textAlign: 'center',
+  },
+  voiceLogOverlay: {
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    right: 20,
+    maxHeight: 100,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#00ff00',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 4,
+  },
+  voiceLogText: {
+    color: '#00ff00',
+    fontSize: 11,
+    fontFamily: 'monospace',
+    lineHeight: 14,
   },
   voiceExitButton: {
     position: 'absolute',
