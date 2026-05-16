@@ -219,6 +219,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Simplified enterVoiceMode - only handles wakeword wake-up
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
+    setVoiceLogs([]);  // Clear logs on enter
+    addVoiceLog('🎙️ Listening...');
     if (source === 'wakeword') {
       bringToForeground();
       AppControl?.showOnLockScreenWithDismiss?.();
@@ -1411,7 +1413,7 @@ const styles = StyleSheet.create({
     bottom: 20,
     left: 20,
     right: 20,
-    maxHeight: 100,
+    maxHeight: 200,
     backgroundColor: 'rgba(0,0,0,0.8)',
     borderLeftWidth: 3,
     borderLeftColor: '#00ff00',
