@@ -120,7 +120,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
   const [inputText, setInputText] = useState('');
-  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);  // Chat attachments
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
 
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
@@ -504,7 +504,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
   
-  // Wake Word Mode - always listening, trigger on wake word
+  // Wake Word Mode
   const [isWakeWordMode, setIsWakeWordMode] = useState(false);
   const [wakeWordSession, setWakeWordSession] = useState<{ id: string; audioChunks: string[] } | null>(null);
 
@@ -888,8 +888,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   const appStateRef = useRef<string>(AppState.currentState);
 
-  // Add attachment to pending list
-  const addAttachment = useCallback((asset: any) => {
+  // Add attachment
+  const addAttachment = (asset: any) => {
     const attachment: AttachmentItem = {
       id: Date.now().toString(),
       uri: asset.uri || '',
@@ -897,53 +897,32 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       type: asset.type || 'image/jpeg',
     };
     setAttachments(prev => [...prev, attachment]);
-    addLogEntry(`📎 Attachment added: ${attachment.name}`, 'info');
-  }, []);
+    addLogEntry(`📎 Added: ${attachment.name}`, 'info');
+  };
 
-  // Remove attachment from pending
-  const removeAttachment = useCallback((id: string) => {
+  // Remove attachment
+  const removeAttachment = (id: string) => {
     setAttachments(prev => prev.filter(a => a.id !== id));
-  }, []);
+  };
 
-  // Handle paste from clipboard
-  const handlePaste = useCallback(async () => {
-    try {
-      const clipboardText = await Clipboard.getString();
-      if (clipboardText) {
-        // Check if it's a URL or file path
-        if (clipboardText.startsWith('file://') || clipboardText.startsWith('http')) {
-          const attachment: AttachmentItem = {
-            id: Date.now().toString(),
-            uri: clipboardText,
-            name: `pasted-${Date.now()}`,
-            type: 'text/url',
-          };
-          setAttachments(prev => [...prev, attachment]);
-          addLogEntry(`📎 Pasted: ${clipboardText.substring(0, 50)}...`, 'info');
-        } else {
-          // Regular text - add to input
-          setInputText(prev => prev + clipboardText);
-        }
-      }
-    } catch (e) {
-      console.log('Paste error:', e);
+  // Toggle Wake Word Mode
+  const toggleWakeWordMode = useCallback(() => {
+    if (!isConnected) {
+      Alert.alert('Not Connected', 'Connect to desktop first');
+      return;
     }
-  }, []);
+    setIsWakeWordMode(!isWakeWordMode);
+    addLogEntry(`🗣️ Wake Word: ${!isWakeWordMode ? 'ON' : 'OFF'}`, 'info');
+  }, [isWakeWordMode, isConnected]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
       { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
-        if (res.assets?.[0]) {
-          addAttachment(res.assets[0]);
-        }
+        if (res.assets?.[0]) addAttachment(res.assets[0]);
       })},
       { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 0 }, (res) => {
-        // selectionLimit: 0 = unlimited
         if (res.assets && res.assets.length > 0) {
           res.assets.forEach(asset => addAttachment(asset));
-        }
-      })},
-      { text: 'Paste', onPress: handlePaste },
         }
       })},
       { text: 'Cancel', style: 'cancel' },
@@ -972,45 +951,27 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const text = inputText.trim();
     if (!text && attachments.length === 0) return;
     
-    // Send text message
     if (text) {
       setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
       syncClient.sendChat(text);
       addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
     }
     
-    // Send attachments
-    for (const attachment of attachments) {
+    for (const att of attachments) {
       try {
         const fs = require('react-native-fs');
-        if (attachment.uri.startsWith('file://')) {
-          const base64 = await fs.readFile(attachment.uri, 'base64');
-          syncClient.sendAttachment(base64, attachment.type, attachment.name);
-          addLogEntry(`📎 Sent: ${attachment.name}`, 'info');
-        } else if (attachment.uri.startsWith('http')) {
-          syncClient.sendChat(`[Link: ${attachment.name}]\n${attachment.uri}`);
+        if (att.uri.startsWith('file://')) {
+          fs.readFile(att.uri, 'base64').then((b64: string) => {
+            syncClient.sendAttachment(b64, att.type, att.name);
+            addLogEntry(`📎 Sent: ${att.name}`, 'info');
+          });
         }
-      } catch (e: any) {
-        addLogEntry(`📎 Error: ${e?.message}`, 'error');
-      }
+      } catch (e) { console.log('attachment error', e); }
     }
     
     setInputText('');
     setAttachments([]);
   }, [inputText, isConnected, pendingAudioPath]);
-
-  // Toggle Wake Word Mode - intelligent multi-speaker listening
-  const toggleWakeWordMode = useCallback(() => {
-    if (!isConnected) {
-      Alert.alert('Not Connected', 'Please connect to your desktop first.');
-      return;
-    }
-    setIsWakeWordMode(!isWakeWordMode);
-    addLogEntry(`🗣️ Wake Word Mode: ${!isWakeWordMode ? 'ON' : 'OFF'}`, 'info');
-    if (!isWakeWordMode) {
-      addLogEntry('Listening for wake word in background...', 'info');
-    }
-  }, [isWakeWordMode, isConnected]);
 
   const toggleVoiceInput = useCallback(async () => {
     if (!isConnected) {
@@ -1307,27 +1268,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 onPress={toggleWakeWordMode}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 activeOpacity={0.6}
-                title="Wake Word Mode"
               >
                 <Text style={[styles.micButtonText, isWakeWordMode && { color: '#10b981' }]}>
                   🗣️
                 </Text>
               </TouchableOpacity>
-              {attachments.length > 0 && (
-              <View style={styles.attachmentPreview}>
-                <ScrollView horizontal style={{ flexDirection: 'row' }}>
-                  {attachments.map(att => (
-                    <View key={att.id} style={styles.attachmentItem}>
-                      <Text style={styles.attachmentName}>{att.name.substring(0, 20)}</Text>
-                      <TouchableOpacity onPress={() => removeAttachment(att.id)}>
-                        <Text style={styles.attachmentRemove}>✕</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </ScrollView>
-              </View>
-            )}
-            {pendingAudioPath ? (
+              {pendingAudioPath ? (
                 <View style={styles.voicePreview}>
                   <Text style={styles.voicePreviewText}>🎤 Voice message ready</Text>
                   <TouchableOpacity onPress={() => setPendingAudioPath(null)}>
@@ -1459,22 +1405,10 @@ const styles = StyleSheet.create({
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#1a3a5c', borderBottomRightRadius: 4 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: '#1a1a2e', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#333' },
   agentLabel: { color: '#f7931a', fontSize: 11, marginBottom: 4, fontWeight: 'bold' },
-  messageText: { fontSize: 12, lineHeight: 16 },  // Reduced from 15
+  messageText: { fontSize: 12, lineHeight: 16 },
   userText: { color: '#e0e0e0' },
   aiText: { color: '#ccc' },
-  timestamp: { color: '#555', fontSize: 9, marginTop: 2, textAlign: 'right' },  // Reduced
-  
-  // Attachment styles
-  attachmentPreview: {
-    backgroundColor: '#1a1a1a', borderRadius: 6, padding: 8, marginHorizontal: 12, marginBottom: 8,
-    borderLeftWidth: 2, borderLeftColor: '#f7931a', maxHeight: 60,
-  },
-  attachmentItem: {
-    backgroundColor: '#222', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4, marginRight: 6,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minWidth: 100,
-  },
-  attachmentName: { fontSize: 10, color: '#f7931a', fontWeight: '600', flex: 1 },
-  attachmentRemove: { fontSize: 12, color: '#999', fontWeight: 'bold', marginLeft: 6 },
+  timestamp: { color: '#555', fontSize: 9, marginTop: 2, textAlign: 'right' },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
   emptyChatText: { color: '#555', fontSize: 14, textAlign: 'center' },
   inputContainer: {
