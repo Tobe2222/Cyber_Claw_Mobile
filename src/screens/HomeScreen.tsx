@@ -572,6 +572,22 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry(`📨 Skipping user message`, 'received');
         return;
       }
+      // If in voice mode, treat text response as audio response
+      if (fullscreenRef.current && !msg.isUser) {
+        addLogEntry(`🎙️ Voice mode: Converting text to speech: "${msg.text.substring(0, 50)}..."`, 'info');
+        setVoiceStatus('playing');
+        speak(msg.text);  // Convert to speech
+        
+        // Then restart listening loop after speech
+        setTimeout(() => {
+          if (fullscreenRef.current) {
+            setVoiceStatus('listening');
+            addLogEntry(`🎙️ Restarting voice loop after text response`, 'debug');
+            // TODO: Restart listening here (same as audio response)
+          }
+        }, 2000);
+        return;
+      }
       addLogEntry(`📨 Adding to chat: "${msg.text.substring(0, 50)}..."`, 'received');
       setChatVoiceStatus(null); // clear status when response arrives
       setMessages(prev => {
