@@ -1067,6 +1067,22 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [isConnected, isVoiceListening]);
 
+  // Auto-scroll to bottom on mount/new messages
+  useEffect(() => {
+    if (messages.length > 0 && !hasManuallyScrolled) {
+      setTimeout(() => {
+        chatRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [messages.length, hasManuallyScrolled]);
+
+  const [hasManuallyScrolled, setHasManuallyScrolled] = useState(false);
+  const onChatScroll = useCallback((event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const isAtBottom = contentOffset.y >= contentSize.height - layoutMeasurement.height - 50;
+    setHasManuallyScrolled(!isAtBottom);
+  }, []);
+
   const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
       return <View />;
@@ -1088,7 +1104,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       <View>
         {showDateSeparator && <Text style={styles.dateSeparator}>{dateStr}</Text>}
         <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
-          {!item.isUser && <Text style={styles.agentLabel}>🐾 Clawsuu</Text>}
+          <Text style={[styles.agentLabel, item.isUser ? styles.userLabel : styles.aiLabel]}>
+            {item.isUser ? '👤 You' : '🐾 Clawsuu'}
+          </Text>
           <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
           <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
         </View>
@@ -1256,6 +1274,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
+              onScroll={onChatScroll}
+              scrollEventThrottle={16}
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
@@ -1414,11 +1434,13 @@ const styles = StyleSheet.create({
   messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 12, marginBottom: 8 },
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#1a3a5c', borderBottomRightRadius: 4 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: '#1a1a2e', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#333' },
-  agentLabel: { color: '#f7931a', fontSize: 11, marginBottom: 4, fontWeight: 'bold' },
+  agentLabel: { fontSize: 10, fontWeight: '700', marginBottom: 4 },
+  userLabel: { color: '#ffffff', fontWeight: 'bold' },
+  aiLabel: { color: '#f7931a', fontWeight: 'bold' },
   messageText: { fontSize: 12, lineHeight: 16 },
-  userText: { color: '#e0e0e0' },
-  aiText: { color: '#ccc' },
-  timestamp: { color: '#555', fontSize: 9, marginTop: 2, textAlign: 'right' },
+  userText: { color: '#ffffff', fontWeight: '500' },  // White for user
+  aiText: { color: '#f7931a' },  // Orange for companion
+  timestamp: { color: '#888', fontSize: 8, marginTop: 4, textAlign: 'right' },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
   emptyChatText: { color: '#555', fontSize: 14, textAlign: 'center' },
   inputContainer: {
@@ -1437,12 +1459,12 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: { backgroundColor: '#333' },
   sendButtonText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
-  eventLine: { color: '#aaa', fontSize: 12, fontFamily: 'monospace', lineHeight: 18, marginBottom: 4 },
+  eventLine: { color: '#3b82f6', fontSize: 12, fontFamily: 'monospace', lineHeight: 18, marginBottom: 4, fontWeight: '500' },  // Blue for events
   logList: { padding: 12 },
   logLine: { color: '#8a8', fontSize: 11, fontFamily: 'monospace', lineHeight: 16 },
   logSent: { color: '#4a9eff' },
   logReceived: { color: '#4ade80' },
-  logError: { color: '#ef4444' },
+  logError: { color: '#ff0000' },  // Red for error logs
   micButton: {
     backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 20,
     width: 48, height: 48, justifyContent: 'center', alignItems: 'center',
