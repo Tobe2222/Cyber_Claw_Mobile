@@ -421,9 +421,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       }
       
       if (msg.type === 'fullscreen') {
-        // User clicked Voice button in arena → enter fullscreen
+        // User clicked Voice Mode button in arena → enter fullscreen
         addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
         enterVoiceMode('focus');  // Call enterVoiceMode to start audio recording
+      }
+      if (msg.type === 'wakeword') {
+        // User clicked Wake Word Mode button in arena
+        addLogEntry(`🗣️ Wake Word Mode toggle from arena`, 'debug');
+        toggleWakeWordMode();
       }
       if (msg.type === 'exitFullscreen') {
         // User clicked Exit in voice mode → exit fullscreen
@@ -1278,16 +1283,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                   {isVoiceListening ? '⏹ Stop' : 'Mic'}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.micButton, isWakeWordMode && styles.wakeWordButtonActive]}
-                onPress={toggleWakeWordMode}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                activeOpacity={0.6}
-              >
-                <Text style={[styles.micButtonText, isWakeWordMode && { color: '#10b981' }]}>
-                  🗣️
-                </Text>
-              </TouchableOpacity>
               {pendingAudioPath ? (
                 <View style={styles.voicePreview}>
                   <Text style={styles.voicePreviewText}>🎤 Voice message ready</Text>
@@ -1456,9 +1451,7 @@ const styles = StyleSheet.create({
   micButtonActive: {
     backgroundColor: 'rgba(239,68,68,0.25)', borderColor: '#ef4444',
   },
-  wakeWordButtonActive: {
-    backgroundColor: 'rgba(16,185,129,0.25)', borderColor: '#10b981',
-  },
+
   micButtonText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
   voicePreview: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
