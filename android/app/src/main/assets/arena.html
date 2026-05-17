@@ -94,7 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
   </div>
   <div id="ctrlRight">
     <button class="btn" id="voiceBtn" title="Enter Voice Mode" onclick="try { document.getElementById('ui').classList.add('fullscreen'); document.getElementById('c').classList.add('fullscreen'); if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); } catch(e) { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'log', text:'[Voice] Error: ' + e.message})); }">Voice Mode</button>
-    <button class="btn" id="wakeWordBtn" title="Activate Wake Word Mode (listening)" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.4); color: #10b981; margin-left: 8px;" onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'wakeword'})); } catch(e) { }">🗣️ Activate</button>
+    <button class="btn" id="wakeWordBtn" title="Activate Wake Word Mode" onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'wakeword'})); } catch(e) { }">Wake Mode</button>
   </div>
   <div id="ctrlFs" style="position: fixed; top: 20px; right: 20px; z-index: 1001; pointer-events: all; display: none;">
     <button id="exitVoiceBtn" title="Exit" onclick="try { document.getElementById('ui').classList.remove('fullscreen'); document.getElementById('c').classList.remove('fullscreen'); if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'exitFullscreen'})); } catch(e) { }" style="width: 60px; height: 60px; border-radius: 50%; background: rgba(247, 147, 26, 0.95); border: 3px solid #f7931a; color: white; font-size: 28px; font-weight: bold; cursor: pointer; padding: 0; margin: 0; box-shadow: 0 0 20px rgba(247, 147, 26, 0.8); font-family: Arial, sans-serif;">✕</button>
@@ -388,24 +388,6 @@ function handleMsg(raw) {
 window.addEventListener('message',e=>handleMsg(e.data));
 document.addEventListener('message',e=>handleMsg(e.data));
 </script>
-// Wake Word button state
-let wakeWordActive = false;
-function setWakeWordActive(active) {
-  wakeWordActive = active;
-  const btn = document.getElementById('wakeWordBtn');
-  if (btn) {
-    if (active) {
-      btn.style.background = 'rgba(16, 185, 129, 0.3)';
-      btn.style.borderColor = '#10b981';
-      btn.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.6)';
-    } else {
-      btn.style.background = 'rgba(16, 185, 129, 0.12)';
-      btn.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-      btn.style.boxShadow = 'none';
-    }
-  }
-}
-
 // Debug display for voice mode
 window.debugVoiceStatus = function(status, timer, log) {
   const debug = document.getElementById('voiceDebug');

@@ -1067,20 +1067,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [isConnected, isVoiceListening]);
 
-  // Auto-scroll to bottom on mount/new messages
+  // Auto-scroll to bottom only on initial load
+  const [hasInitialScrolled, setHasInitialScrolled] = useState(false);
   useEffect(() => {
-    if (messages.length > 0 && !hasManuallyScrolled) {
+    if (messages.length > 0 && !hasInitialScrolled && activeTab === 'chat') {
       setTimeout(() => {
-        chatRef.current?.scrollToEnd({ animated: true });
+        chatRef.current?.scrollToEnd({ animated: false });
+        setHasInitialScrolled(true);
       }, 100);
     }
-  }, [messages.length, hasManuallyScrolled]);
+  }, [activeTab]);  // Only trigger when switching TO chat tab
 
-  const [hasManuallyScrolled, setHasManuallyScrolled] = useState(false);
   const onChatScroll = useCallback((event: any) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const isAtBottom = contentOffset.y >= contentSize.height - layoutMeasurement.height - 50;
-    setHasManuallyScrolled(!isAtBottom);
+    // Just track scroll events, don't interfere with position
   }, []);
 
   const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
@@ -1274,8 +1273,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
-              onScroll={onChatScroll}
-              scrollEventThrottle={16}
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
