@@ -211,15 +211,30 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     });
   }, []);
 
-  // Close fullscreen mode and reset state
-  const closeFullscreen = useCallback(() => {
-    addLogEntry('🎙️ Closing fullscreen - cleanup', 'debug');
+  // Close fullscreen mode and reset state - CANCEL any recording
+  const closeFullscreen = useCallback(async () => {
+    addLogEntry('🎙️ Closing fullscreen - cancel & cleanup', 'debug');
     addVoiceLog('Exit');
     setFullscreen(false);
     fullscreenRef.current = false;
     setVoiceStatus('idle');
     setIsVoiceListening(false);
+    setIsWakeWordMode(false);
     AppControl?.keepScreenOn?.(false);
+    
+    // CRITICAL: Stop any active recording
+    try {
+      const recorder = getSimpleAudioRecorder();
+      await recorder.stop();
+      addLogEntry('Recording cancelled on exit', 'info');
+    } catch (e) {
+      // Recording already stopped or not running
+    }
+    
+    // Clear pending audio/attachments
+    setPendingAudioPath(null);
+    setAttachments([]);
+    setWakeWordSession(null);
     
     // CRITICAL: Remove fullscreen CSS classes from HTML
     const js = `
@@ -230,7 +245,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       true;
     `;
     webViewRef.current?.injectJavaScript(js);
-    addLogEntry('Voice mode exited', 'info');
+    addLogEntry('Voice mode exited - all cancelled', 'info');
   }, []);
 
   // Simplified enterVoiceMode - only handles wakeword wake-up
