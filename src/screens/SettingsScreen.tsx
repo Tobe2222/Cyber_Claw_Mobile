@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/AudioBuffer';
 import WakeWordTrainer from '../components/WakeWordTrainer';
+import WakeWordTester from '../components/WakeWordTester';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
 
@@ -33,6 +34,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [showTrainer, setShowTrainer] = useState(false);
+  const [showTester, setShowTester] = useState(false);
+  const [wakePhrase, setWakePhrase] = useState('hey clawsuu');
   const [wakeTrained, setWakeTrained] = useState(false);
   const [micPerm, setMicPerm] = useState<PermStatus>('unknown');
   const [notifPerm, setNotifPerm] = useState<PermStatus>('unknown');
@@ -238,6 +241,16 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       return updated;
     });
   };
+
+  // Show tester if active
+  if (showTester) {
+    return (
+      <WakeWordTester
+        phrase={wakePhrase}
+        onClose={() => setShowTester(false)}
+      />
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
