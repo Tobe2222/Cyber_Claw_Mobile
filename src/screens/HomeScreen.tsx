@@ -860,16 +860,30 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
     syncClient.on('voice_received', onVoiceReceived);
 
-    // Handle wake word detected from desktop
-    const onWakeWordDetected = () => {
-      if (isWakeWordMode) {
-        addLogEntry(`🎯 Wake word detected on desktop - auto-recording`, 'info');
-        addVoiceLog('Wake detected!');
-        // Auto-start recording the sentence
-        enterVoiceMode('wakeword');
+    // NOTE: Wake word detection now happens locally on mobile in Wake Mode
+    
+    // Listen for wake word detected locally from native module
+    const setupWakeWordListener = async () => {
+      try {
+        const { WakeWordModule } = NativeModules;
+        if (WakeWordModule) {
+          const emitter = new NativeEventEmitter(WakeWordModule);
+          const subscription = emitter.addListener('recorderWakeWord', () => {
+            if (isWakeWordMode) {
+              addLogEntry(`🎯 Wake word detected locally - auto-recording`, 'info');
+              addVoiceLog('Wake detected!');
+              // Auto-start recording the sentence
+              enterVoiceMode('wakeword');
+            }
+          });
+          return subscription;
+        }
+      } catch (e: any) {
+        addLogEntry(`Wake word listener setup error: ${e?.message}`, 'error');
       }
     };
-    syncClient.on('wake_word_detected', onWakeWordDetected);
+    let wakeWordSubscription: any;
+    setupWakeWordListener().then(sub => { wakeWordSubscription = sub; });
 
     const onSendError = (e: any) => {
       if (e?.type === 'audio_input') {
@@ -900,7 +914,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       try { syncClient?.off?.('audio_response', onAudioResponse); } catch {}
       try { syncClient?.off?.('voice_transcript_result', onVoiceTranscriptResult); } catch {}
       try { syncClient?.off?.('voice_received', onVoiceReceived); } catch {}
-      try { syncClient?.off?.('wake_word_detected', onWakeWordDetected); } catch {}
+
       try { syncClient?.off?.('send_error', onSendError); } catch {}
       try { offLogEntry?.(onLogUpdate); } catch {}
       try { disposeSimpleAudioRecorder?.(); } catch {}
@@ -930,10 +944,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // Toggle Wake Word Mode - enters fullscreen listening mode
-  const toggleWakeWordMode = useCallback(() => {
+  // Toggle Wake Word Mode - enters fullscreen listening mode with wake word detection
+  const toggleWakeWordMode = useCallback(async () => {
     if (!isWakeWordMode) {
-      // Entering wake word mode - go fullscreen
+      // Entering wake word mode - go fullscreen and start wake word listening
       setFullscreen(true);
       fullscreenRef.current = true;
       setVoiceStatus('listening');
@@ -947,10 +961,27 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       `;
       webViewRef.current?.injectJavaScript(js);
       
-      addLogEntry('🗣️ Wake Word Mode: ACTIVE - listening for wake word', 'info');
+      addLogEntry('🗣️ Wake Word Mode: ACTIVE - listening locally for wake word', 'info');
       addVoiceLog('Wake listening...');
+      
+      // Start wake word detection on mobile (don't wait for desktop)
+      try {
+        const recorder = getSimpleAudioRecorder();
+        // Start listening with wake word detection
+        // This will emit 'recorderWakeWord' event when wake word is detected
+        await recorder.start('wake-detection.m4a', 30000); // 30s timeout
+        addLogEntry('Wake word detection started on mobile', 'debug');
+      } catch (e: any) {
+        addLogEntry(`Wake detection error: ${e?.message}`, 'error');
+      }
     } else {
       // Exiting wake word mode
+      try {
+        const recorder = getSimpleAudioRecorder();
+        await recorder.stop();
+      } catch (e) {
+        // Already stopped
+      }
       closeFullscreen();
       addLogEntry('🗣️ Wake Word Mode: OFF', 'info');
     }
@@ -1099,13 +1130,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [activeTab, messages.length]);
 
-  // Send wake word mode state to desktop
-  useEffect(() => {
-    if (syncClient) {
-      syncClient.sendState?.({ wakeWordMode: isWakeWordMode });
-      addLogEntry(`📤 Wake Word Mode state sent: ${isWakeWordMode ? 'ON' : 'OFF'}`, 'debug');
-    }
-  }, [isWakeWordMode]);
+
 
   const onChatScroll = useCallback((event: any) => {
     // Just track scroll events, don't interfere with position
