@@ -154,14 +154,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }).catch(() => {});
   }, []);
 
-  // Scroll to bottom when new messages arrive or tab changes
-  useEffect(() => {
-    if (messages.length > 0 && activeTab === 'chat') {
-      setTimeout(() => {
-        chatRef.current?.scrollToEnd({ animated: true });
-      }, 0);
-    }
-  }, [messages, activeTab]);
+  // NOTE: Scroll handled by hasInitialScrolled effect below
 
   // Stop speech and cleanup when component unmounts
   useEffect(() => {
@@ -925,15 +918,27 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // Toggle Wake Word Mode
+  // Toggle Wake Word Mode - enters fullscreen listening mode
   const toggleWakeWordMode = useCallback(() => {
     if (!isConnected) {
       Alert.alert('Not Connected', 'Connect to desktop first');
       return;
     }
+    if (!isWakeWordMode) {
+      // Entering wake word mode - go fullscreen
+      setFullscreen(true);
+      fullscreenRef.current = true;
+      setVoiceStatus('listening');
+      AppControl?.keepScreenOn?.(true);
+      addLogEntry('🗣️ Wake Word Mode: ACTIVE - listening for wake word', 'info');
+      addVoiceLog('Wake listening...');
+    } else {
+      // Exiting wake word mode
+      closeFullscreen();
+      addLogEntry('🗣️ Wake Word Mode: OFF', 'info');
+    }
     setIsWakeWordMode(!isWakeWordMode);
-    addLogEntry(`🗣️ Wake Word: ${!isWakeWordMode ? 'ON' : 'OFF'}`, 'info');
-  }, [isWakeWordMode, isConnected]);
+  }, [isWakeWordMode, isConnected, closeFullscreen]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
@@ -1067,16 +1072,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
   }, [isConnected, isVoiceListening]);
 
-  // Auto-scroll to bottom only on initial load
-  const [hasInitialScrolled, setHasInitialScrolled] = useState(false);
+  // Auto-scroll to bottom when switching to chat tab or getting new messages
   useEffect(() => {
-    if (messages.length > 0 && !hasInitialScrolled && activeTab === 'chat') {
+    if (activeTab === 'chat' && messages.length > 0) {
+      // Always scroll to bottom when entering chat tab
       setTimeout(() => {
         chatRef.current?.scrollToEnd({ animated: false });
-        setHasInitialScrolled(true);
-      }, 100);
+      }, 50);
     }
-  }, [activeTab]);  // Only trigger when switching TO chat tab
+  }, [activeTab, messages.length]);
 
   const onChatScroll = useCallback((event: any) => {
     // Just track scroll events, don't interfere with position
