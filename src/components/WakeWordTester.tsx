@@ -17,6 +17,7 @@ import {
   NativeEventEmitter,
   Alert,
 } from 'react-native';
+import { extractAudioFeatures, matchAgainstTraining, AudioFeatures } from '../services/AudioSampleMatcher';
 
 const { WakeWordModule } = NativeModules;
 
@@ -182,6 +183,9 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
         <Text style={styles.noteTitle}>🎯 Audio Sample Matching</Text>
         <Text style={styles.noteText}>
           Compares your incoming audio directly against the 3 training samples you recorded. Uses audio fingerprinting (energy + zero-crossing patterns) with Dynamic Time Warping for robust matching.
+        </Text>
+        <Text style={[styles.noteText, { marginTop: 8, fontSize: 10 }]}>
+          ⚠️ Currently in development - integration not yet active
         </Text>
       </View>
 
