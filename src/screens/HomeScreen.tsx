@@ -614,11 +614,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
       const label = e.text ? `${e.state}: "${e.text}"` : e.state;
       setWakeDebug(label);
-      // Don't spam 'error' or 'unavailable' to log — show once only
+      // Log all debug events to help track wake word recognition
       if (e.state === 'unavailable') {
         addLogEntry(`Speech Recognition not available on this device`, 'error');
+      } else if (e.state === 'downloading') {
+        addLogEntry(`Downloading Vosk model (~50MB)...`, 'info');
+      } else if (e.state === 'model_ready') {
+        addLogEntry(`Vosk model ready`, 'info');
+      } else if (e.state === 'ready') {
+        addLogEntry(`🎧 Vosk listening: "${e.text}"`, 'info');
+      } else if (e.state === 'partial') {
+        addLogEntry(`Vosk heard: "${e.text}"`, 'debug');
+      } else if (e.state === 'detected') {
+        addLogEntry(`✅ Wake word detected: "${e.text}"`, 'info');
       } else if (e.state !== 'error') {
-        addLogEntry(`Wake word: ${label}`, 'info');
+        addLogEntry(`Wake: ${label}`, 'debug');
       }
     });
     const onState = (data: any) => {
@@ -863,29 +873,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     // NOTE: Wake word detection now happens locally on mobile in Wake Mode
     
-    // Listen for wake word detected locally from native Vosk module
-    const setupWakeWordListener = async () => {
-      try {
-        const { WakeWordModule } = NativeModules;
-        if (WakeWordModule) {
-          const emitter = new NativeEventEmitter(WakeWordModule);
-          const subscription = emitter.addListener('wakeWordDetected', () => {
-            if (isWakeWordMode) {
-              addLogEntry(`🎯 Wake word 'hey clawsuu' detected! - auto-recording`, 'info');
-              addVoiceLog('Wake detected!');
-              // Auto-start recording the sentence
-              enterVoiceMode('wakeword');
-            }
-          });
-          addLogEntry('Wake word detector listening...', 'debug');
-          return subscription;
-        }
-      } catch (e: any) {
-        addLogEntry(`Wake word listener setup error: ${e?.message}`, 'error');
-      }
-    };
-    let wakeWordSubscription: any;
-    setupWakeWordListener().then(sub => { wakeWordSubscription = sub; });
+    // NOTE: Wake word listener already set up at line 603 (wakeSub)
+    // No need for duplicate listener here
 
     const onSendError = (e: any) => {
       if (e?.type === 'audio_input') {
@@ -970,13 +959,24 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       try {
         const { WakeWordModule } = NativeModules;
         if (WakeWordModule) {
-          await WakeWordModule.start('hey clawsuu');
-          addLogEntry('Native wake word detection started', 'info');
+          const phrase = 'hey clawsuu';
+          addLogEntry(`📱 Starting Vosk wake detection with phrase: "${phrase}"`, 'info');
+          
+          // Test if module is responsive (triggers model download if needed)
+          try {
+            await WakeWordModule.test();
+            addLogEntry(`✅ Vosk module test passed`, 'debug');
+          } catch (testE: any) {
+            addLogEntry(`⚠️ Vosk test failed: ${testE?.message}`, 'debug');
+          }
+          
+          await WakeWordModule.start(phrase);
+          addLogEntry(`📱 Native wake word detection initialized - listening for "${phrase}"`, 'info');
         } else {
-          addLogEntry('WakeWordModule not available', 'error');
+          addLogEntry('WakeWordModule not available - using fallback', 'error');
         }
       } catch (e: any) {
-        addLogEntry(`Wake detection start error: ${e?.message}`, 'error');
+        addLogEntry(`❌ Wake detection start error: ${e?.message}`, 'error');
       }
     } else {
       // Exiting wake word mode
