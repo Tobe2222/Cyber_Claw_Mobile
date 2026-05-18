@@ -367,26 +367,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       </View>
 
       {/* TTS */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>🔊 Voice Response</Text>
-        <Text style={styles.sectionDesc}>Clawsuu speaks responses out loud when you use voice chat.</Text>
-        <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Speak AI responses</Text>
-          <Switch
-            value={ttsEnabled}
-            onValueChange={v => { setTtsEnabled(v); AsyncStorage.setItem('cyberclaw-tts-enabled', String(v)); }}
-            trackColor={{ false: '#333', true: '#f7931a' }}
-            thumbColor={ttsEnabled ? '#fff' : '#666'}
-          />
-        </View>
-        <TouchableOpacity style={styles.button} onPress={runVoiceTest}>
-          <Text style={styles.buttonText}>Test Voice</Text>
-        </TouchableOpacity>
-        <Text style={styles.hint}>
-          Current test voice: {availableVoices[testVoiceIndex % availableVoices.length].label}
-        </Text>
-        <Text style={styles.sectionDesc}>Uses your device's built-in text-to-speech engine. Go to Settings → Accessibility → Text-to-speech to change the voice.</Text>
-      </View>
+      {/* Voice Response - Always Enabled (no toggle needed) */}
 
       {/* Always Listening */}
       <View style={styles.section}>
@@ -395,22 +376,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           Keep the microphone active in the background. Your companion wakes up when you say the wake word.
         </Text>
 
-        <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Enable Always Listening</Text>
-          <Switch
-            value={audioSettings.enabled}
-            onValueChange={v => updateAudio('enabled', v)}
-            trackColor={{ false: '#333', true: '#f7931a' }}
-            thumbColor={audioSettings.enabled ? '#fff' : '#666'}
-          />
-        </View>
-
-        <Text style={styles.label}>Wake Word</Text>
-        {/* Background listening toggle */}
+        {/* Single toggle for background listening */}
         <View style={styles.toggleRow}>
           <View style={styles.toggleInfo}>
             <Text style={styles.toggleTitle}>🎧 Background Listening</Text>
-            <Text style={styles.toggleSub}>Listen for wake phrase even when app is closed</Text>
+            <Text style={styles.toggleSub}>Keep microphone active in background - wake on phrase</Text>
           </View>
           <Switch
             value={bgListening}
@@ -429,6 +399,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             thumbColor={bgListening ? '#fff' : '#666'}
           />
         </View>
+
+        <Text style={styles.label}>Wake Word</Text>
         <TextInput
           style={styles.input}
           value={audioSettings.wakeWord}
@@ -460,6 +432,17 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             }}
           />
         )}
+
+        {/* Test Wake Word Button */}
+        <TouchableOpacity
+          style={[styles.button, { marginTop: 12, backgroundColor: 'rgba(16, 185, 129, 0.2)', borderColor: '#10b981', borderWidth: 1 }]}
+          onPress={() => setShowTester(true)}
+        >
+          <Text style={[styles.buttonText, { color: '#10b981' }]}>🎤 Test Wake Detection</Text>
+        </TouchableOpacity>
+        <Text style={styles.hint}>
+          Listen in real-time to see what the app hears. Helps debug wake word recognition.
+        </Text>
 
         {/* Porcupine custom wake word (.ppn) */}
         <View style={styles.porcupineBox}>
