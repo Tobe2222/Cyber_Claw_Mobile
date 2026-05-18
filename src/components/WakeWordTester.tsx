@@ -18,6 +18,8 @@ import {
   Alert,
 } from 'react-native';
 import { extractAudioFeatures, matchAgainstTraining, AudioFeatures } from '../services/AudioSampleMatcher';
+import { base64ToInt16Array, validateAudio, getAudioDuration } from '../services/AudioUtils';
+import RNFS from 'react-native-fs';
 
 const { WakeWordModule } = NativeModules;
 
@@ -31,8 +33,11 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
   const [partialResults, setPartialResults] = useState<string[]>([]);
   const [lastDetected, setLastDetected] = useState<string>('');
   const [testLog, setTestLog] = useState<string[]>([]);
+  const [matchScore, setMatchScore] = useState<number | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const emitterRef = useRef<any>(null);
   const subscriptionsRef = useRef<any[]>([]);
+  const recordedAudioRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Set up listeners
@@ -123,12 +128,41 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
 
     try {
       setIsListening(false);
+      setIsProcessing(true);
+      
       if (WakeWordModule) {
         await WakeWordModule.stop();
         setTestLog(prev => [...prev, 'Stopped listening']);
+        setTestLog(prev => [...prev, '']);
+        setTestLog(prev => [...prev, 'Processing audio...']);
       }
+
+      // Give time for audio to be saved, then process
+      setTimeout(async () => {
+        try {
+          // Load training samples
+          const trainingJson = await AsyncStorage.getItem('cyberclaw-wake-samples');
+          if (!trainingJson) {
+            setTestLog(prev => [...prev, '❌ No training data found']);
+            setIsProcessing(false);
+            return;
+          }
+
+          const training = JSON.parse(trainingJson);
+          setTestLog(prev => [...prev, `✅ Loaded ${training.samplePaths?.length || 0} training samples`]);
+
+          // TODO: Load recorded audio from SimpleAudioRecorder
+          // For now, show what needs to happen
+          setTestLog(prev => [...prev, '⚠️  Audio processing not yet integrated']);
+          setTestLog(prev => [...prev, 'Next: Load recorded audio + extract features + run DTW']);
+        } catch (e: any) {
+          setTestLog(prev => [...prev, `Error processing: ${e.message}`]);
+        }
+        setIsProcessing(false);
+      }, 500);
     } catch (e: any) {
       Alert.alert('Error', `Failed to stop: ${e.message}`);
+      setIsProcessing(false);
     }
   };
 
@@ -145,6 +179,18 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
           <View style={styles.detectedBox}>
             <Text style={styles.detectedLabel}>✅ Last Detected:</Text>
             <Text style={styles.detectedText}>"{lastDetected}"</Text>
+          </View>
+        ) : null}
+
+        {/* Match Score */}
+        {matchScore !== null ? (
+          <View style={[styles.detectedBox, { borderColor: matchScore > 0.65 ? '#10b981' : '#ef4444' }]}>
+            <Text style={[styles.detectedLabel, { color: matchScore > 0.65 ? '#10b981' : '#ef4444' }]}>
+              {matchScore > 0.65 ? '✅ Match Score:' : '❌ Match Score:'}
+            </Text>
+            <Text style={[styles.detectedText, { color: matchScore > 0.65 ? '#10b981' : '#ef4444' }]}>
+              {(matchScore * 100).toFixed(1)}% {matchScore > 0.65 ? '(Match!)' : '(No match)'}
+            </Text>
           </View>
         ) : null}
 
@@ -192,15 +238,16 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       {/* Controls */}
       <View style={styles.controls}>
         <TouchableOpacity
-          style={[styles.button, isListening && styles.buttonActive]}
+          style={[styles.button, isListening && styles.buttonActive, (isProcessing || isListening) && styles.buttonDisabled]}
           onPress={isListening ? stopTest : startTest}
+          disabled={isProcessing}
         >
           <Text style={styles.buttonText}>
-            {isListening ? '⏹ Stop' : '▶ Start Test'}
+            {isProcessing ? '⏳ Processing...' : isListening ? '⏹ Stop' : '▶ Start Test'}
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.button, styles.buttonSecondary]} onPress={onClose}>
+        <TouchableOpacity style={[styles.button, styles.buttonSecondary]} onPress={onClose} disabled={isListening}>
           <Text style={styles.buttonText}>✕ Close</Text>
         </TouchableOpacity>
       </View>
@@ -344,5 +391,8 @@ const styles = StyleSheet.create({
     color: '#f7931a',
     fontSize: 13,
     fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
 });
