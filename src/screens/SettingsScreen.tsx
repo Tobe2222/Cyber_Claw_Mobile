@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/AudioBuffer';
 import WakeWordTrainer from '../components/WakeWordTrainer';
+import WakeWordTrainerV2 from '../components/WakeWordTrainerV2';
 import WakeWordTester from '../components/WakeWordTester';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
@@ -34,6 +35,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [showTrainer, setShowTrainer] = useState(false);
+  const [showTrainerV2, setShowTrainerV2] = useState(false);
   const [showTester, setShowTester] = useState(false);
   const [wakePhrase, setWakePhrase] = useState('hey clawsuu');
   const [wakeTrained, setWakeTrained] = useState(false);
@@ -242,6 +244,21 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     });
   };
 
+  // Show V2 trainer if active
+  if (showTrainerV2) {
+    return (
+      <WakeWordTrainerV2
+        onComplete={(success) => {
+          setShowTrainerV2(false);
+          if (success) {
+            Alert.alert('Success', 'Wake word trained and ready!');
+          }
+        }}
+        onCancel={() => setShowTrainerV2(false)}
+      />
+    );
+  }
+
   // Show tester if active
   if (showTester) {
     return (
@@ -419,6 +436,19 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           </Text>
           <Text style={styles.trainBtnSub}>
             {wakeTrained ? 'Tap to retrain' : 'Record 3 voice samples'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* V2 Trainer with Quality Feedback */}
+        <TouchableOpacity
+          style={[styles.trainBtn, { marginTop: 8, borderColor: '#10b981' }]}
+          onPress={() => setShowTrainerV2(true)}
+        >
+          <Text style={[styles.trainBtnText, { color: '#10b981' }]}>
+            🆕 New Training (with Quality)
+          </Text>
+          <Text style={[styles.trainBtnSub, { color: '#666' }]}>
+            Record with instant feedback
           </Text>
         </TouchableOpacity>
 
