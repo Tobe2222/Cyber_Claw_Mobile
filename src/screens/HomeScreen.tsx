@@ -863,20 +863,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     // NOTE: Wake word detection now happens locally on mobile in Wake Mode
     
-    // Listen for wake word detected locally from native module
+    // Listen for wake word detected locally from native Vosk module
     const setupWakeWordListener = async () => {
       try {
         const { WakeWordModule } = NativeModules;
         if (WakeWordModule) {
           const emitter = new NativeEventEmitter(WakeWordModule);
-          const subscription = emitter.addListener('recorderWakeWord', () => {
+          const subscription = emitter.addListener('wakeWordDetected', () => {
             if (isWakeWordMode) {
-              addLogEntry(`🎯 Wake word detected locally - auto-recording`, 'info');
+              addLogEntry(`🎯 Wake word 'hey clawsuu' detected! - auto-recording`, 'info');
               addVoiceLog('Wake detected!');
               // Auto-start recording the sentence
               enterVoiceMode('wakeword');
             }
           });
+          addLogEntry('Wake word detector listening...', 'debug');
           return subscription;
         }
       } catch (e: any) {
@@ -965,23 +966,27 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       addLogEntry('🗣️ Wake Word Mode: ACTIVE - listening locally for wake word', 'info');
       addVoiceLog('Wake listening...');
       
-      // Start wake word detection on mobile (don't wait for desktop)
+      // Start native wake word detection on mobile using Vosk + PhoneticMatcher
       try {
-        const recorder = getSimpleAudioRecorder();
-        // Start listening with wake word detection
-        // This will emit 'recorderWakeWord' event when wake word is detected
-        const cachePath = `${RNFS.CachesDirectoryPath}/wake-detection.m4a`;
-        await recorder.start(cachePath, 30000); // 30s timeout
-        addLogEntry('Wake word detection started on mobile', 'debug');
+        const { WakeWordModule } = NativeModules;
+        if (WakeWordModule) {
+          await WakeWordModule.start('hey clawsuu');
+          addLogEntry('Native wake word detection started', 'info');
+        } else {
+          addLogEntry('WakeWordModule not available', 'error');
+        }
       } catch (e: any) {
-        addLogEntry(`Wake detection error: ${e?.message}`, 'error');
+        addLogEntry(`Wake detection start error: ${e?.message}`, 'error');
       }
     } else {
       // Exiting wake word mode
       try {
-        const recorder = getSimpleAudioRecorder();
-        await recorder.stop();
-      } catch (e) {
+        const { WakeWordModule } = NativeModules;
+        if (WakeWordModule) {
+          await WakeWordModule.stop();
+          addLogEntry('Native wake word detection stopped', 'debug');
+        }
+      } catch (e: any) {
         // Already stopped
       }
       closeFullscreen();
