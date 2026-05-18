@@ -16,6 +16,7 @@ import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder, disposeSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import { getVAD, resetVAD } from '../services/SileroVAD';  // Voice Activity Detection
 import Clipboard from '@react-native-clipboard/clipboard';
+import RNFS from 'react-native-fs';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
@@ -969,7 +970,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         const recorder = getSimpleAudioRecorder();
         // Start listening with wake word detection
         // This will emit 'recorderWakeWord' event when wake word is detected
-        await recorder.start('wake-detection.m4a', 30000); // 30s timeout
+        const cachePath = `${RNFS.CachesDirectoryPath}/wake-detection.m4a`;
+        await recorder.start(cachePath, 30000); // 30s timeout
         addLogEntry('Wake word detection started on mobile', 'debug');
       } catch (e: any) {
         addLogEntry(`Wake detection error: ${e?.message}`, 'error');
