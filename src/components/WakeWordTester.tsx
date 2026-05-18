@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -71,13 +72,33 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
     try {
       setIsListening(true);
       setPartialResults([]);
-      setTestLog(['Checking permissions...', 'Starting Vosk...']);
+      setTestLog(['Initializing...']);
       setLastDetected('');
 
+      // Load training data to confirm it exists
+      try {
+        const trainingJson = await AsyncStorage.getItem('cyberclaw-wake-samples');
+        if (trainingJson) {
+          const training = JSON.parse(trainingJson);
+          const trainDate = new Date(training.trainedAt);
+          const dateStr = trainDate.toLocaleString();
+          setTestLog(prev => [...prev, `✅ Training loaded`]);
+          setTestLog(prev => [...prev, `   Phrase: "${training.phrase}"`]);
+          setTestLog(prev => [...prev, `   Samples: ${training.samplePaths?.length || 0}`]);
+          setTestLog(prev => [...prev, `   Trained: ${dateStr}`]);
+        } else {
+          setTestLog(prev => [...prev, `⚠️  No training data found`]);
+          setTestLog(prev => [...prev, `   Train phrase first in Settings`]);
+        }
+      } catch (trainErr: any) {
+        setTestLog(prev => [...prev, `⚠️  Could not load training: ${trainErr.message}`]);
+      }
+
+      setTestLog(prev => [...prev, '']);
+      setTestLog(prev => [...prev, `Target phrase: "${phrase}"`]);
+      setTestLog(prev => [...prev, 'Starting Vosk recognition...']);
+
       if (WakeWordModule) {
-        setTestLog(prev => [...prev, `Target phrase: "${phrase}"`]);
-        setTestLog(prev => [...prev, 'Attempting to start listening...']);
-        
         try {
           await WakeWordModule.start(phrase);
           setTestLog(prev => [...prev, '✅ Vosk started']);
@@ -155,6 +176,16 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
           ))}
         </View>
       </ScrollView>
+
+      {/* Note about Vosk limitations */}
+      <View style={styles.noteBox}>
+        <Text style={styles.noteTitle}>ℹ️ Vosk Fuzzy Matching</Text>
+        <Text style={styles.noteText}>
+          Vosk uses speech-to-text + fuzzy phrase matching.{"
+"}
+          For better accuracy, consider using <Text style={{fontWeight: 'bold'}}>Porcupine mode</Text> which uses trained audio samples.
+        </Text>
+      </View>
 
       {/* Controls */}
       <View style={styles.controls}>
@@ -265,6 +296,25 @@ const styles = StyleSheet.create({
   },
   logSuccess: {
     color: '#51cf66',
+  },
+  noteBox: {
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+  },
+  noteTitle: {
+    color: '#3b82f6',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  noteText: {
+    color: '#3b82f6',
+    fontSize: 11,
+    lineHeight: 16,
   },
   controls: {
     flexDirection: 'row',
