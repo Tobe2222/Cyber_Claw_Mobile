@@ -920,16 +920,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Toggle Wake Word Mode - enters fullscreen listening mode
   const toggleWakeWordMode = useCallback(() => {
-    if (!isConnected) {
-      Alert.alert('Not Connected', 'Connect to desktop first');
-      return;
-    }
     if (!isWakeWordMode) {
       // Entering wake word mode - go fullscreen
       setFullscreen(true);
       fullscreenRef.current = true;
       setVoiceStatus('listening');
       AppControl?.keepScreenOn?.(true);
+      
+      // Tell arena to go fullscreen too
+      const js = `
+        document.getElementById('ui').classList.add('fullscreen');
+        document.getElementById('c').classList.add('fullscreen');
+        true;
+      `;
+      webViewRef.current?.injectJavaScript(js);
+      
       addLogEntry('🗣️ Wake Word Mode: ACTIVE - listening for wake word', 'info');
       addVoiceLog('Wake listening...');
     } else {
@@ -938,7 +943,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       addLogEntry('🗣️ Wake Word Mode: OFF', 'info');
     }
     setIsWakeWordMode(!isWakeWordMode);
-  }, [isWakeWordMode, isConnected, closeFullscreen]);
+  }, [isWakeWordMode, closeFullscreen]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
