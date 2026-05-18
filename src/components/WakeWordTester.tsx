@@ -181,9 +181,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       <View style={styles.noteBox}>
         <Text style={styles.noteTitle}>ℹ️ Vosk Fuzzy Matching</Text>
         <Text style={styles.noteText}>
-          Vosk uses speech-to-text + fuzzy phrase matching.{"
-"}
-          For better accuracy, consider using <Text style={{fontWeight: 'bold'}}>Porcupine mode</Text> which uses trained audio samples.
+          Vosk uses speech-to-text + fuzzy phrase matching. For better accuracy, consider using <Text style={{fontWeight: 'bold'}}>Porcupine mode</Text> which uses trained audio samples.
         </Text>
       </View>
 
