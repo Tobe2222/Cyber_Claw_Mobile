@@ -95,14 +95,14 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       }
 
       setTestLog(prev => [...prev, '']);
-      setTestLog(prev => [...prev, `Target phrase: "${phrase}"`]);
-      setTestLog(prev => [...prev, 'Starting Vosk recognition...']);
+      setTestLog(prev => [...prev, `Matching against: "${phrase}"`]);
+      setTestLog(prev => [...prev, 'Starting audio sample matching...']);
 
       if (WakeWordModule) {
         try {
           await WakeWordModule.start(phrase);
-          setTestLog(prev => [...prev, '✅ Vosk started']);
-          setTestLog(prev => [...prev, '🎤 Microphone active - speak now']);
+          setTestLog(prev => [...prev, '✅ Audio matcher started']);
+          setTestLog(prev => [...prev, '🎤 Listening for match - speak now']);
         } catch (startErr: any) {
           const errMsg = startErr?.message || String(startErr);
           setTestLog(prev => [...prev, `❌ Start error: ${errMsg}`]);
@@ -177,11 +177,11 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
         </View>
       </ScrollView>
 
-      {/* Note about Vosk limitations */}
+      {/* Note about audio sample matching */}
       <View style={styles.noteBox}>
-        <Text style={styles.noteTitle}>ℹ️ Vosk Fuzzy Matching</Text>
+        <Text style={styles.noteTitle}>🎯 Audio Sample Matching</Text>
         <Text style={styles.noteText}>
-          Vosk uses speech-to-text + fuzzy phrase matching. For better accuracy, consider using <Text style={{fontWeight: 'bold'}}>Porcupine mode</Text> which uses trained audio samples.
+          Compares your incoming audio directly against the 3 training samples you recorded. Uses audio fingerprinting (energy + zero-crossing patterns) with Dynamic Time Warping for robust matching.
         </Text>
       </View>
 
