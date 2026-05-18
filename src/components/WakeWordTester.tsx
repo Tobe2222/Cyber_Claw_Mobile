@@ -71,13 +71,24 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
     try {
       setIsListening(true);
       setPartialResults([]);
-      setTestLog([]);
+      setTestLog(['Checking permissions...', 'Starting Vosk...']);
       setLastDetected('');
 
       if (WakeWordModule) {
-        setTestLog(prev => [...prev, `Starting test for: "${phrase}"`]);
-        await WakeWordModule.start(phrase);
-        setTestLog(prev => [...prev, 'Listening... say the wake phrase now']);
+        setTestLog(prev => [...prev, `Target phrase: "${phrase}"`]);
+        setTestLog(prev => [...prev, 'Attempting to start listening...']);
+        
+        try {
+          await WakeWordModule.start(phrase);
+          setTestLog(prev => [...prev, '✅ Vosk started']);
+          setTestLog(prev => [...prev, '🎤 Microphone active - speak now']);
+        } catch (startErr: any) {
+          const errMsg = startErr?.message || String(startErr);
+          setTestLog(prev => [...prev, `❌ Start error: ${errMsg}`]);
+          throw startErr;
+        }
+      } else {
+        setTestLog(prev => [...prev, '❌ WakeWordModule not available']);
       }
     } catch (e: any) {
       Alert.alert('Error', `Failed to start listening: ${e.message}`);
@@ -168,7 +179,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0a0a1a',
-    padding: 12,
+    paddingTop: 50,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
   },
   header: {
     marginBottom: 12,
@@ -177,14 +190,14 @@ const styles = StyleSheet.create({
     borderBottomColor: '#333',
   },
   title: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#f7931a',
     marginBottom: 4,
   },
   phrase: {
-    fontSize: 14,
-    color: '#ccc',
+    fontSize: 13,
+    color: '#999',
   },
   logContainer: {
     flex: 1,

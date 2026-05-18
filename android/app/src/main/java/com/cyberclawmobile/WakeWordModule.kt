@@ -164,16 +164,47 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             bufferSize
         )
         audioRecord = rec
-        rec.startRecording()
+        
+        if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            throw IOException("AudioRecord failed to initialize (state=${rec.state})")
+        }
+        
+        try {
+            rec.startRecording()
+            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                throw IOException("AudioRecord.startRecording() failed (state=${rec.recordingState})")
+            }
+        } catch (e: Exception) {
+            Log.e("WakeWord", "Failed to start recording", e)
+            emitDebug("error", "Microphone failed: ${e.message}")
+            throw e
+        }
 
         emitDebug("ready", "Listening for \"$wakePhrase\"")
 
         listenThread = Thread {
             val buf = ShortArray(bufferSize / 2)
             val byteBuf = ByteArray(bufferSize)
+            var totalBytes = 0L
+            var silentFrames = 0
             while (isListening) {
                 val read = rec.read(buf, 0, buf.size)
-                if (read <= 0) continue
+                if (read <= 0) {
+                    silentFrames++
+                    if (silentFrames == 1) {
+                        // First silent frame - unexpected
+                        Log.w("WakeWord", "AudioRecord.read() returned $read")
+                    }
+                    if (silentFrames > 100) {
+                        // Consistent silence = microphone issue
+                        handler.post {
+                            emitDebug("error", "Microphone not providing audio after 100 frames")
+                        }
+                    }
+                    continue
+                }
+                silentFrames = 0
+                totalBytes += read * 2
 
                 // Convert shorts to bytes (little-endian PCM)
                 for (i in 0 until read) {
