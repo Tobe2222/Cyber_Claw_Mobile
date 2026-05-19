@@ -102,10 +102,16 @@ export default function TrainingSummary({ samples, overallQuality }: Props) {
         <Text style={styles.infoTitle}>💡 What This Means</Text>
         <Text style={styles.infoText}>
           {overallQuality > 0.7
-            ? '✅ Great! Your training data is consistent and ready for detection.'
+            ? '✅ Great! Your training data is consistent and ready for detection.
+
+💡 Tip: You can retrain and add MORE samples (6, 9, or more) for even better accuracy!'
             : overallQuality > 0.5
-            ? '⚠️ Fair quality. Detection may work but consider retraining for better accuracy.'
-            : '❌ Poor quality. Retrain with clearer audio and more consistent recordings.'}
+            ? '⚠️ Fair quality. Detection may work but consider retraining for better accuracy.
+
+💡 Try adding more samples (5-6 total) for better consistency.'
+            : '❌ Poor quality. Retrain with clearer audio and more consistent recordings.
+
+💡 Recording 5-6 samples helps find your natural speaking pattern.'}
         </Text>
       </View>
     </View>

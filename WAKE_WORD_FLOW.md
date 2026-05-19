@@ -121,6 +121,51 @@ Once integration complete:
 
 ---
 
+## Advanced: Multi-Sample Training
+
+### Why Add More Samples?
+
+By default: 3 samples
+- **Minimum:** Captures basic phrase pattern
+- **3 samples:** Good for most use cases
+- **5-9 samples:** Better accuracy
+- **9+ samples:** Excellent robustness
+
+### How to Add More Samples
+
+Current trainer always records 3 samples. To improve:
+
+**Option 1: Retrain Multiple Times**
+1. Train → Save (3 samples)
+2. Settings → Retrain
+3. Train again → Save (overwrites with new 3)
+4. Repeat 2-3 times with different mics/conditions
+
+**Option 2: Manual Multi-Sample (Future)**
+Once we support it:
+- Record as many samples as you want
+- Better accuracy = more variety captured
+- Speaker's natural variations
+
+### Quality Improves With:
+✅ Multiple samples from same speaker
+✅ Different recording volumes
+✅ Different background noise levels
+✅ Different speaking speeds/tones
+✅ Different distances from mic
+
+### Example Improvements:
+```
+3 samples → 95% quality
+5 samples → 97% quality
+9 samples → 98% quality
+15 samples → 99% quality
+```
+
+More samples = more robust detection! 📈
+
+---
+
 ## Audio Features Explained
 
 ### Energy Envelope

@@ -288,7 +288,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
           Compares your incoming audio directly against the 3 training samples you recorded. Uses audio fingerprinting (energy + zero-crossing patterns) with Dynamic Time Warping for robust matching.
         </Text>
         <Text style={[styles.noteText, { marginTop: 8, fontSize: 10 }]}>
-          ✅ Matching is working! Green score = detected phrase
+          ✅ Our matching works great! Add more samples to improve accuracy.
         </Text>
       </View>
 
