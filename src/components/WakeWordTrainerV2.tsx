@@ -23,6 +23,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { extractAudioFeatures, compareAudioFeatures, AudioFeatures } from '../services/AudioSampleMatcher';
+import { base64ToInt16Array, validateAudio } from '../services/AudioUtils';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import RNFS from 'react-native-fs';
 
@@ -89,19 +90,30 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
           // Read and process audio
           const base64 = await RNFS.readFile(finalPath, 'base64');
           
-          // Extract features (simplified - would need audio data)
-          const features: AudioFeatures = {
-            energy: [],
-            zcr: [],
-            duration: 0,
-          };
+          // Convert to audio data and extract features
+          try {
+            const pcm16 = base64ToInt16Array(base64);
+            
+            // Validate audio
+            const validation = validateAudio(pcm16);
+            if (!validation.valid) {
+              setMessage(`❌ ${validation.reason || 'Invalid audio'}`);
+              setIsRecording(false);
+              return;
+            }
+            
+            // Extract features
+            const features = extractAudioFeatures(pcm16);
+            setMessage(`✅ Extracted features from ${(features.duration / 16000).toFixed(1)}s audio`);
 
-          // Calculate quality by comparing to previous samples
-          let quality = 1.0;
-          if (samples.length > 0) {
-            const avgQuality = samples.reduce((sum, s) => sum + (s.quality || 0), 0) / samples.length;
-            quality = Math.max(0, avgQuality - 0.1); // Slight penalty for variation
-          }
+            // Calculate quality by comparing to previous samples
+            let quality = 1.0;
+            if (samples.length > 0) {
+              // Compare features to previous samples
+              const similarities = samples.map(s => compareAudioFeatures(features, s.features));
+              const avgSimilarity = similarities.reduce((a, b) => a + b, 0) / similarities.length;
+              quality = avgSimilarity; // Quality = how similar to other samples
+            }
 
           setSamples(prev => [...prev, {
             path: finalPath,
