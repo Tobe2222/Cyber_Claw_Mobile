@@ -81,16 +81,21 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       setTestLog(['Initializing...']);
       setLastDetected('');
 
-      // Load training data to confirm it exists
+      // Load training data to confirm it exists (supports both V1 and V2 formats)
       try {
         const trainingJson = await AsyncStorage.getItem('cyberclaw-wake-samples');
         if (trainingJson) {
           const training = JSON.parse(trainingJson);
           const trainDate = new Date(training.trainedAt);
           const dateStr = trainDate.toLocaleString();
+          
+          // Support both formats
+          const sampleCount = training.samplePaths?.length || training.sampleCount || 0;
+          const quality = training.overallQuality ? ` (${(training.overallQuality * 100).toFixed(0)}% quality)` : '';
+          
           setTestLog(prev => [...prev, `✅ Training loaded`]);
           setTestLog(prev => [...prev, `   Phrase: "${training.phrase}"`]);
-          setTestLog(prev => [...prev, `   Samples: ${training.samplePaths?.length || 0}`]);
+          setTestLog(prev => [...prev, `   Samples: ${sampleCount}${quality}`]);
           setTestLog(prev => [...prev, `   Trained: ${dateStr}`]);
         } else {
           setTestLog(prev => [...prev, `⚠️  No training data found`]);
