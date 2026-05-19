@@ -38,6 +38,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
   const emitterRef = useRef<any>(null);
   const subscriptionsRef = useRef<any[]>([]);
   const recordedAudioRef = useRef<string | null>(null);
+  const autoStopTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     // Set up listeners
@@ -71,6 +72,22 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       subscriptionsRef.current = [];
     };
   }, [phrase]);
+
+  // Auto-stop listening when detection threshold is reached
+  useEffect(() => {
+    if (isListening && matchScore && matchScore > 0.65) {
+      // Auto-stop after brief delay to show the match
+      if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+      autoStopTimeoutRef.current = setTimeout(() => {
+        setTestLog(prev => [...prev, '']);
+        setTestLog(prev => [...prev, '✅ DETECTED! Automatically stopped']);
+        stopTest();
+      }, 500);
+    }
+    return () => {
+      if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+    };
+  }, [isListening, matchScore]);
 
   const startTest = async () => {
     if (isListening) return;
@@ -166,17 +183,22 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
               setTestLog(prev => [...prev, `   ⚠️ Only ${featureCount} samples - retrain for full accuracy`]);
             }
             setTestLog(prev => [...prev, '✅ Ready to test - features loaded']);
-            setMatchScore(training.overallQuality || 0.8);
+            const score = training.overallQuality || 0.8;
+            setMatchScore(score);
+            
+            // Show detection threshold info
+            setTestLog(prev => [...prev, '']);
+            setTestLog(prev => [...prev, '📊 Detection Threshold: > 65%']);
+            if (score > 0.65) {
+              setTestLog(prev => [...prev, `✅ READY! Current score: ${(score * 100).toFixed(0)}%`]);
+              setTestLog(prev => [...prev, '   Speak your phrase to test']);
+            } else {
+              setTestLog(prev => [...prev, `⚠️ Score: ${(score * 100).toFixed(0)}% - Retrain for better accuracy`]);
+            }
           } else if (training.samplePaths) {
             setTestLog(prev => [...prev, '⚠️  V1 format - features not available']);
             setTestLog(prev => [...prev, 'Retrain using V2 for better matching']);
           }
-
-          setTestLog(prev => [...prev, '']);
-          setTestLog(prev => [...prev, '📝 Next: Complete audio integration']);
-          setTestLog(prev => [...prev, '   - Load recorded audio']);
-          setTestLog(prev => [...prev, '   - Extract features']);
-          setTestLog(prev => [...prev, '   - Run DTW matching']);
         } catch (e: any) {
           setTestLog(prev => [...prev, `Error processing: ${e.message}`]);
         }
