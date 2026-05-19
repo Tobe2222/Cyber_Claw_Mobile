@@ -2,6 +2,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -55,6 +58,20 @@
         </intent-filter>
       </receiver>
 
+      <!-- Wake Word Background Service -->
+      <service
+        android:name=".WakeWordBackgroundService"
+        android:foregroundServiceType="microphone"
+        android:exported="false" />
+
+      <!-- Wake Word Detection Receiver -->
+      <receiver
+        android:name=".WakeWordReceiver"
+        android:exported="false">
+        <intent-filter>
+          <action android:name="com.cyberclawmobile.WAKE_WORD_DETECTED" />
+        </intent-filter>
+      </receiver>
 
     </application>
 </manifest>
