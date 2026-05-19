@@ -25,6 +25,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { extractAudioFeatures, compareAudioFeatures, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array, validateAudio } from '../services/AudioUtils';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
+import TrainingSummary from './TrainingSummary';
 import RNFS from 'react-native-fs';
 
 const WAKE_SAMPLES_KEY = 'cyberclaw-wake-samples';
@@ -51,6 +52,7 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
   const [qualityScores, setQualityScores] = useState<number[]>([]);
   const [overallQuality, setOverallQuality] = useState(0);
   const [message, setMessage] = useState('');
+  const [showSummary, setShowSummary] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pulseRef = useRef<Animated.CompositeAnimation | null>(null);
 
@@ -134,14 +136,14 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
               // Calculate overall quality
               const overall = qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length;
               setOverallQuality(overall);
+              setShowSummary(true);
               
               if (overall > 0.7) {
-                setMessage(`✅ Excellent training data! (${(overall * 100).toFixed(0)}%)`);
-                saveSamples();
+                setMessage(`✅ Excellent training data!`);
               } else if (overall > 0.5) {
-                setMessage(`⚠️ Fair training data. Consider retrying.`);
+                setMessage(`⚠️ Fair training data.`);
               } else {
-                setMessage(`❌ Poor quality. Try again.`);
+                setMessage(`❌ Poor quality.`);
               }
             }
           } catch (e: any) {
@@ -249,8 +251,13 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
           Sample {currentSample + 1} of {REQUIRED_SAMPLES}
         </Text>
 
+        {/* Training Summary */}
+        {showSummary && (
+          <TrainingSummary samples={samples} overallQuality={overallQuality} />
+        )}
+
         {/* Quality Scores */}
-        {qualityScores.length > 0 && (
+        {qualityScores.length > 0 && !showSummary && (
           <View style={styles.qualityBox}>
             <Text style={styles.qualityTitle}>Quality Scores</Text>
             {qualityScores.map((score, i) => (
@@ -292,17 +299,32 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
 
       {/* Bottom Buttons */}
       <View style={styles.controls}>
-        {samples.length === REQUIRED_SAMPLES && (
-          <TouchableOpacity style={styles.saveBtn} onPress={saveSamples}>
-            <Text style={styles.saveBtnText}>✅ Save Training</Text>
+        {showSummary ? (
+          <>
+            <TouchableOpacity style={styles.saveBtn} onPress={() => { saveSamples(); setShowSummary(false); }}>
+              <Text style={styles.saveBtnText}>✅ Save Training</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.resetBtn} onPress={() => { resetTraining(); setShowSummary(false); }}>
+              <Text style={styles.resetBtnText}>↻ Retrain</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            {samples.length === REQUIRED_SAMPLES && (
+              <TouchableOpacity style={styles.saveBtn} onPress={saveSamples}>
+                <Text style={styles.saveBtnText}>✅ Save Training</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={styles.resetBtn} onPress={resetTraining}>
+              <Text style={styles.resetBtnText}>↻ Restart</Text>
+            </TouchableOpacity>
+          </>
+        )}
+        {!showSummary && (
+          <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
+            <Text style={styles.cancelBtnText}>✕ Cancel</Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={styles.resetBtn} onPress={resetTraining}>
-          <Text style={styles.resetBtnText}>↻ Restart</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
-          <Text style={styles.cancelBtnText}>✕ Cancel</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
