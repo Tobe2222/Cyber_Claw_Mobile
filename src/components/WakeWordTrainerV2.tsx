@@ -79,7 +79,7 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
 
       const recorder = getSimpleAudioRecorder();
       const path = `${RNFS.CachesDirectoryPath}/wake_sample_${currentSample}_temp.m4a`;
-      await recorder.start(path, 5000);
+      await recorder.start(path, 5000);  // Record for up to 5 seconds
 
       setTimeout(async () => {
         try {

@@ -81,7 +81,7 @@ export function normalizeAudio(pcm16: Int16Array): Float32Array {
 /**
  * Simple audio validation - check if audio has content
  */
-export function validateAudio(pcm16: Int16Array, minDuration: number = 0.3): {
+export function validateAudio(pcm16: Int16Array, minDuration: number = 0.15): {
   valid: boolean;
   reason?: string;
 } {
