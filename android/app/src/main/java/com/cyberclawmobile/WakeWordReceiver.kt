@@ -19,20 +19,19 @@ class WakeWordReceiver : BroadcastReceiver() {
       Log.d(TAG, "Received wake word broadcast")
       
       try {
-        // Launch main activity with special flag
-        val launchIntent = Intent(context, MainActivity::class.java)
-        launchIntent.action = Intent.ACTION_MAIN
-        launchIntent.addCategory(Intent.CATEGORY_LAUNCHER)
-        launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
-        
-        // Signal to show Wake Word Mode
-        launchIntent.putExtra("show_wake_mode", true)
-        
-        context?.startActivity(launchIntent)
-        Log.d(TAG, "Started MainActivity with wake mode")
+        if (context != null) {
+          val launchIntent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+            putExtra("show_wake_mode", true)
+          }
+          
+          context.startActivity(launchIntent)
+          Log.d(TAG, "Started MainActivity with wake mode")
+        }
       } catch (e: Exception) {
-        Log.e(TAG, "Error starting activity", e)
+        Log.e(TAG, "Error starting activity: ${e.message}", e)
       }
     }
   }
