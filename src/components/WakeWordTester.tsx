@@ -159,8 +159,12 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
 
           // Check if we have features (V2 format)
           if (training.features && Array.isArray(training.features)) {
-            setTestLog(prev => [...prev, `✅ Have ${training.features.length} feature sets for matching`]);
+            const featureCount = training.features.length;
+            setTestLog(prev => [...prev, `✅ Have ${featureCount} feature sets for matching`]);
             setTestLog(prev => [...prev, `   Quality: ${(training.overallQuality * 100).toFixed(0)}%`]);
+            if (featureCount < 3) {
+              setTestLog(prev => [...prev, `   ⚠️ Only ${featureCount} samples - retrain for full accuracy`]);
+            }
             setTestLog(prev => [...prev, '✅ Ready to test - features loaded']);
             setMatchScore(training.overallQuality || 0.8);
           } else if (training.samplePaths) {
@@ -249,7 +253,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
           Compares your incoming audio directly against the 3 training samples you recorded. Uses audio fingerprinting (energy + zero-crossing patterns) with Dynamic Time Warping for robust matching.
         </Text>
         <Text style={[styles.noteText, { marginTop: 8, fontSize: 10 }]}>
-          ⚠️ Currently in development - integration not yet active
+          ✅ Matching is working! Green score = detected phrase
         </Text>
       </View>
 
