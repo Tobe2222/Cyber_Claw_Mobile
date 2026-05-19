@@ -76,21 +76,28 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
   // Auto-stop listening when detection threshold is reached
   useEffect(() => {
     if (isListening && matchScore && matchScore > 0.65) {
+      console.log('[AUTO-STOP] Threshold reached:', matchScore);
+      setTestLog(prev => [...prev, `[DEBUG] Auto-stop triggered (score: ${(matchScore * 100).toFixed(0)}%)`]);
+      
       // Auto-stop after brief delay to show the match
       if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
       autoStopTimeoutRef.current = setTimeout(async () => {
+        console.log('[AUTO-STOP] Executing stop...');
+        setTestLog(prev => [...prev, '[DEBUG] Stopping recorder...']);
         setIsListening(false);
-        setTestLog(prev => [...prev, '']);
-        setTestLog(prev => [...prev, '✅ DETECTED! Automatically stopped']);
         
         // Stop the native module
         if (WakeWordModule) {
           try {
+            console.log('[AUTO-STOP] Calling WakeWordModule.stop()');
             await WakeWordModule.stop();
-            setTestLog(prev => [...prev, 'Stopped listening']);
+            setTestLog(prev => [...prev, '✅ DETECTED! Automatically stopped']);
           } catch (e: any) {
-            console.error('Error stopping:', e);
+            console.error('[AUTO-STOP] Error:', e);
+            setTestLog(prev => [...prev, `Error stopping: ${e.message}`]);
           }
+        } else {
+          setTestLog(prev => [...prev, 'Warning: WakeWordModule not available']);
         }
       }, 500);
     }
@@ -292,12 +299,12 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       {/* Controls */}
       <View style={styles.controls}>
         <TouchableOpacity
-          style={[styles.button, isListening && styles.buttonActive, (isProcessing || isListening) && styles.buttonDisabled]}
+          style={[styles.button, isListening && styles.buttonActive]}
           onPress={isListening ? stopTest : startTest}
           disabled={isProcessing}
         >
           <Text style={styles.buttonText}>
-            {isProcessing ? '⏳ Processing...' : isListening ? '⏹ Stop' : '▶ Start Test'}
+            {isProcessing ? '⏳ Processing...' : isListening ? '⏹ Stop Listening' : '▶ Start Test'}
           </Text>
         </TouchableOpacity>
 
