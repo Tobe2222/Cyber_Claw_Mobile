@@ -1231,7 +1231,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       {/* Header */}
       {!fullscreen && !isLandscape && (
         <View style={styles.headerBar}>
-          <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
+            <Text style={styles.versionTag}>v2.13.54</Text>
+          </View>
           <View style={styles.headerRight}>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
             <Text style={styles.statusLabel}>{statusLabel}</Text>
@@ -1439,6 +1442,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#111', borderBottomWidth: 1, borderBottomColor: '#222',
   },
   headerTitle: { color: '#f7931a', fontSize: 16, fontWeight: 'bold' },
+  headerTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+  },
+  versionTag: {
+    color: '#666',
+    fontSize: 10,
+    fontWeight: '500',
+  },
   headerTitleGroup: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     flex: 1,

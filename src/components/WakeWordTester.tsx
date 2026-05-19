@@ -78,10 +78,20 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
     if (isListening && matchScore && matchScore > 0.65) {
       // Auto-stop after brief delay to show the match
       if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
-      autoStopTimeoutRef.current = setTimeout(() => {
+      autoStopTimeoutRef.current = setTimeout(async () => {
+        setIsListening(false);
         setTestLog(prev => [...prev, '']);
         setTestLog(prev => [...prev, '✅ DETECTED! Automatically stopped']);
-        stopTest();
+        
+        // Stop the native module
+        if (WakeWordModule) {
+          try {
+            await WakeWordModule.stop();
+            setTestLog(prev => [...prev, 'Stopped listening']);
+          } catch (e: any) {
+            console.error('Error stopping:', e);
+          }
+        }
       }, 500);
     }
     return () => {
