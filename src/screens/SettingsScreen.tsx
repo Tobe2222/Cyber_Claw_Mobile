@@ -426,7 +426,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           placeholderTextColor="#555"
         />
 
-        {/* Train wake phrase button */}
+        {/* DEPRECATED: Old trainer - use V2 below instead */}
+        {/* 
         <TouchableOpacity
           style={[styles.trainBtn, wakeTrained && styles.trainBtnDone]}
           onPress={() => setShowTrainer(!showTrainer)}
@@ -438,6 +439,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             {wakeTrained ? 'Tap to retrain' : 'Record 3 voice samples'}
           </Text>
         </TouchableOpacity>
+        */}
 
         {/* V2 Trainer with Quality Feedback */}
         <TouchableOpacity

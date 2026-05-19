@@ -73,38 +73,34 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
     };
   }, [phrase]);
 
-  // Auto-stop listening when detection threshold is reached
+  // Auto-stop after 6 seconds of listening
   useEffect(() => {
-    if (isListening && matchScore && matchScore > 0.65) {
-      console.log('[AUTO-STOP] Threshold reached:', matchScore);
-      setTestLog(prev => [...prev, `[DEBUG] Auto-stop triggered (score: ${(matchScore * 100).toFixed(0)}%)`]);
-      
-      // Auto-stop after brief delay to show the match
+    if (isListening) {
+      console.log('[AUTO-STOP] Listening started, will auto-stop in 6s');
       if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+      
       autoStopTimeoutRef.current = setTimeout(async () => {
-        console.log('[AUTO-STOP] Executing stop...');
-        setTestLog(prev => [...prev, '[DEBUG] Stopping recorder...']);
+        console.log('[AUTO-STOP] 6s timeout reached, stopping...');
+        setTestLog(prev => [...prev, '⏱️ 6 second timeout - stopping']);
         setIsListening(false);
         
-        // Stop the native module
         if (WakeWordModule) {
           try {
             console.log('[AUTO-STOP] Calling WakeWordModule.stop()');
             await WakeWordModule.stop();
-            setTestLog(prev => [...prev, '✅ DETECTED! Automatically stopped']);
+            setTestLog(prev => [...prev, '✅ Test complete - stopped']);
           } catch (e: any) {
             console.error('[AUTO-STOP] Error:', e);
-            setTestLog(prev => [...prev, `Error stopping: ${e.message}`]);
+            setTestLog(prev => [...prev, `Error: ${e.message}`]);
           }
-        } else {
-          setTestLog(prev => [...prev, 'Warning: WakeWordModule not available']);
         }
-      }, 500);
+      }, 6000); // 6 seconds
     }
+    
     return () => {
       if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
     };
-  }, [isListening, matchScore]);
+  }, [isListening]);
 
   const startTest = async () => {
     if (isListening) return;
