@@ -115,34 +115,38 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
               quality = avgSimilarity; // Quality = how similar to other samples
             }
 
-          setSamples(prev => [...prev, {
-            path: finalPath,
-            features,
-            duration: 1.0,
-            quality,
-          }]);
+            setSamples(prev => [...prev, {
+              path: finalPath,
+              features,
+              duration: 1.0,
+              quality,
+            }]);
 
-          setQualityScores(prev => [...prev, quality]);
+            setQualityScores(prev => [...prev, quality]);
 
-          if (samples.length < REQUIRED_SAMPLES - 1) {
-            setMessage(`✅ Sample ${currentSample + 1} good! (${(quality * 100).toFixed(0)}%)`);
-            setTimeout(() => {
-              setCurrentSample(prev => prev + 1);
-              setMessage('Ready for next sample...');
-            }, 1500);
-          } else {
-            // Calculate overall quality
-            const overall = qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length;
-            setOverallQuality(overall);
-            
-            if (overall > 0.7) {
-              setMessage(`✅ Excellent training data! (${(overall * 100).toFixed(0)}%)`);
-              saveSamples();
-            } else if (overall > 0.5) {
-              setMessage(`⚠️ Fair training data. Consider retrying.`);
+            if (samples.length < REQUIRED_SAMPLES - 1) {
+              setMessage(`✅ Sample ${currentSample + 1} good! (${(quality * 100).toFixed(0)}%)`);
+              setTimeout(() => {
+                setCurrentSample(prev => prev + 1);
+                setMessage('Ready for next sample...');
+              }, 1500);
             } else {
-              setMessage(`❌ Poor quality. Try again.`);
+              // Calculate overall quality
+              const overall = qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length;
+              setOverallQuality(overall);
+              
+              if (overall > 0.7) {
+                setMessage(`✅ Excellent training data! (${(overall * 100).toFixed(0)}%)`);
+                saveSamples();
+              } else if (overall > 0.5) {
+                setMessage(`⚠️ Fair training data. Consider retrying.`);
+              } else {
+                setMessage(`❌ Poor quality. Try again.`);
+              }
             }
+          } catch (e: any) {
+            setMessage(`❌ Feature extraction error: ${e.message}`);
+            setIsRecording(false);
           }
         } catch (e: any) {
           setMessage(`❌ Recording error: ${e.message}`);
@@ -150,7 +154,7 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
         }
       }, 4000);
     } catch (e: any) {
-      setMessage(`❌ Failed to record: ${e.message}`);
+      setMessage(`❌ Failed to start recording: ${e.message}`);
       setIsRecording(false);
     }
   }, [isRecording, currentSample, samples, qualityScores]);
