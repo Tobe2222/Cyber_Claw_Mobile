@@ -3,6 +3,7 @@ package com.cyberclawmobile
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactApplicationContext
 import android.util.Log
+import android.widget.Toast
 
 /**
  * Simple native module for background listening
@@ -24,5 +25,6 @@ class NativeBackgroundModule(reactContext: ReactApplicationContext) :
   @com.facebook.react.bridge.ReactMethod
   fun test() {
     Log.d(TAG, "NativeBackground.test() called!")
+    Toast.makeText(reactApplicationContext, "✅ Native Bridge Works!", Toast.LENGTH_SHORT).show()
   }
 }
