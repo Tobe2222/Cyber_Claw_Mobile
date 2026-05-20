@@ -17,6 +17,7 @@ class MainApplication : Application(), ReactApplication {
           add(BackgroundServicePackage())
           add(AppControlPackage())
           add(WakeWordPackage())
+          add(NativeBackgroundPackage())
         },
     )
   }
