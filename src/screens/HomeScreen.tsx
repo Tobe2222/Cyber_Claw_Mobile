@@ -153,6 +153,18 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         setCompanionId(v);
       }
     }).catch(() => {});
+    
+    // Test native module
+    if (NativeModules.NativeBackground) {
+      try {
+        NativeModules.NativeBackground.test();
+        console.log('[Native] NativeBackground.test() called');
+      } catch (e) {
+        console.error('[Native] Error calling test:', e);
+      }
+    } else {
+      console.warn('[Native] NativeBackground not available');
+    }
   }, []);
 
   // NOTE: Scroll handled by hasInitialScrolled effect below
