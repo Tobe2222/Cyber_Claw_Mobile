@@ -404,12 +404,23 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             onValueChange={async (val) => {
               setBgListening(val);
               await AsyncStorage.setItem('cyberclaw-bg-listening', String(val));
-              if (val) {
-                try { await BackgroundService?.start?.(); } catch {}
-                Alert.alert('✅ Enabled', 'Background listening is on. App will wake on your phrase.');
+              
+              // Call native background module
+              if (NativeModules.NativeBackground) {
+                try {
+                  if (val) {
+                    await NativeModules.NativeBackground.startListening();
+                    NativeModules.NativeBackground.showToast('🎤 Background listening started');
+                  } else {
+                    await NativeModules.NativeBackground.stopListening();
+                    NativeModules.NativeBackground.showToast('🔕 Background listening stopped');
+                  }
+                } catch (e) {
+                  console.error('Error toggling native listening:', e);
+                  Alert.alert('Error', 'Failed to toggle background listening');
+                }
               } else {
-                try { await BackgroundService?.stop?.(); } catch {}
-                Alert.alert('🔕 Disabled', 'Background listening is off.');
+                Alert.alert('Error', 'Native background module not available');
               }
             }}
             trackColor={{ false: '#333', true: '#f7931a' }}
