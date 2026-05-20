@@ -155,15 +155,20 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }).catch(() => {});
     
     // Test native module
+    console.log('[Native] Available modules:', Object.keys(NativeModules).join(', '));
     if (NativeModules.NativeBackground) {
       try {
         NativeModules.NativeBackground.test();
-        console.log('[Native] NativeBackground.test() called');
-      } catch (e) {
-        console.error('[Native] Error calling test:', e);
+        console.log('[Native] NativeBackground.test() called successfully');
+        Alert.alert('Debug', 'Native module called');
+      } catch (e: any) {
+        console.error('[Native] Error calling test:', e.message);
+        Alert.alert('Error', 'Native call failed: ' + e.message);
       }
     } else {
-      console.warn('[Native] NativeBackground not available');
+      console.warn('[Native] NativeBackground module not available!');
+      console.warn('[Native] Available:', Object.keys(NativeModules));
+      Alert.alert('Debug', 'NativeBackground not in NativeModules');
     }
   }, []);
 
@@ -1245,7 +1250,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         <View style={styles.headerBar}>
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
-            <Text style={styles.versionTag}>v2.13.57</Text>
+            <Text style={styles.versionTag}>v2.13.64</Text>
           </View>
           <View style={styles.headerRight}>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
