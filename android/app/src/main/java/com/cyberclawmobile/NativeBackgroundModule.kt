@@ -43,6 +43,17 @@ class NativeBackgroundModule(private val reactContext: ReactApplicationContext) 
   }
 
   /**
+   * Show a Toast notification from JS
+   */
+  @com.facebook.react.bridge.ReactMethod
+  fun showToast(message: String) {
+    Log.d(TAG, "showToast: $message")
+    Handler(Looper.getMainLooper()).post {
+      Toast.makeText(reactContext, message, Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  /**
    * Start listening for audio in background
    */
   @com.facebook.react.bridge.ReactMethod

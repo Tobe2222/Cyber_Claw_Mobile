@@ -652,13 +652,26 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       setConnState(data.state);
       addLogEntry(`State → ${data.state}`, 'info');
       
-      // Show connection notifications
+      // Show connection notifications via Toast (small, subtle)
       if (data.state === 'connected') {
         addLogEntry('Connected - receiving updates from desktop', 'info');
-        Alert.alert('✅ Connected', 'Desktop connection established');
+        // Use Toast via native module
+        if (NativeModules.NativeBackground) {
+          try {
+            NativeModules.NativeBackground.showToast('✅ Connected to Desktop');
+          } catch (e) {
+            console.error('Error showing toast:', e);
+          }
+        }
       } else if (data.state === 'lost' || data.state === 'offline') {
         addLogEntry('Disconnected from desktop', 'warn');
-        Alert.alert('❌ Disconnected', 'Lost connection to desktop');
+        if (NativeModules.NativeBackground) {
+          try {
+            NativeModules.NativeBackground.showToast('❌ Disconnected from Desktop');
+          } catch (e) {
+            console.error('Error showing toast:', e);
+          }
+        }
       }
     };
 
