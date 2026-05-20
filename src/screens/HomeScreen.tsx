@@ -651,9 +651,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const onState = (data: any) => {
       setConnState(data.state);
       addLogEntry(`State → ${data.state}`, 'info');
-      // Request chat history when connected
+      
+      // Show connection notifications
       if (data.state === 'connected') {
         addLogEntry('Connected - receiving updates from desktop', 'info');
+        Alert.alert('✅ Connected', 'Desktop connection established');
+      } else if (data.state === 'lost' || data.state === 'offline') {
+        addLogEntry('Disconnected from desktop', 'warn');
+        Alert.alert('❌ Disconnected', 'Lost connection to desktop');
       }
     };
 
