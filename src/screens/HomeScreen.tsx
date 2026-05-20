@@ -160,15 +160,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       try {
         NativeModules.NativeBackground.test();
         console.log('[Native] NativeBackground.test() called successfully');
-        Alert.alert('Debug', 'Native module called');
       } catch (e: any) {
         console.error('[Native] Error calling test:', e.message);
-        Alert.alert('Error', 'Native call failed: ' + e.message);
       }
     } else {
       console.warn('[Native] NativeBackground module not available!');
       console.warn('[Native] Available:', Object.keys(NativeModules));
-      Alert.alert('Debug', 'NativeBackground not in NativeModules');
     }
   }, []);
 
