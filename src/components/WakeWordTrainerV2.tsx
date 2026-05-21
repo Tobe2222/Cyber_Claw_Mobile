@@ -257,7 +257,7 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
         )}
 
         {/* Quality Scores */}
-        {qualityScores.length > 0 && !showSummary && (
+        {qualityScores.length > 0 && (
           <View style={styles.qualityBox}>
             <Text style={styles.qualityTitle}>📊 Training Samples</Text>
             {qualityScores.length === 0 ? (
@@ -353,7 +353,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0a1a',
   },
   content: {
-    paddingTop: 50,
+    paddingTop: 70,
     paddingHorizontal: 16,
     paddingBottom: 16,
   },
