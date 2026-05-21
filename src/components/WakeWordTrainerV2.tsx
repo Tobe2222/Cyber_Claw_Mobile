@@ -39,12 +39,13 @@ interface TrainedSample {
 }
 
 interface Props {
+  wakePhrase?: string;
   onComplete: (success: boolean) => void;
   onCancel: () => void;
 }
 
-export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
-  const [wakePhrase, setWakePhrase] = useState('hey clawsuu');
+export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey clawsuu', onComplete, onCancel }: Props) {
+  const [wakePhrase, setWakePhrase] = useState(initialPhrase);
   const [started, setStarted] = useState(false);
   const [currentSample, setCurrentSample] = useState(0);
   const [isRecording, setIsRecording] = useState(false);

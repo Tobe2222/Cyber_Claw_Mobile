@@ -14,6 +14,7 @@ import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/
 import WakeWordTrainer from '../components/WakeWordTrainer';
 import WakeWordTrainerV2 from '../components/WakeWordTrainerV2';
 import TrainingManager from '../components/TrainingManager';
+import WakePhraseMenu from '../components/WakePhraseMenu';
 import WakeWordTester from '../components/WakeWordTester';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
@@ -38,7 +39,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [showTrainer, setShowTrainer] = useState(false);
   const [showTrainerV2, setShowTrainerV2] = useState(false);
   const [showTrainingManager, setShowTrainingManager] = useState(false);
+  const [showWakePhraseMenu, setShowWakePhraseMenu] = useState(false);
   const [showTester, setShowTester] = useState(false);
+  const [selectedWakePhrase, setSelectedWakePhrase] = useState('hey clawsuu');
   const [wakePhrase, setWakePhrase] = useState('hey clawsuu');
   const [wakeTrained, setWakeTrained] = useState(false);
   const [micPerm, setMicPerm] = useState<PermStatus>('unknown');
@@ -247,6 +250,19 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   };
 
   // Show V2 trainer if active
+  if (showWakePhraseMenu) {
+    return (
+      <WakePhraseMenu
+        onSelectPhrase={(phrase) => {
+          setSelectedWakePhrase(phrase);
+          setShowWakePhraseMenu(false);
+          setShowTrainerV2(true);
+        }}
+        onClose={() => setShowWakePhraseMenu(false)}
+      />
+    );
+  }
+
   if (showTrainingManager) {
     return (
       <TrainingManager
@@ -262,16 +278,17 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   if (showTrainerV2) {
     return (
       <WakeWordTrainerV2
+        wakePhrase={selectedWakePhrase}
         onComplete={(success) => {
           setShowTrainerV2(false);
-          setShowTrainingManager(true);
+          setShowWakePhraseMenu(true);
           if (success) {
             Alert.alert('Success', 'Wake word trained and ready!');
           }
         }}
         onCancel={() => {
           setShowTrainerV2(false);
-          setShowTrainingManager(true);
+          setShowWakePhraseMenu(true);
         }}
       />
     );
@@ -454,10 +471,10 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         {/* V2 Trainer with Quality Feedback */}
         <TouchableOpacity
           style={[styles.trainBtn, { marginTop: 8, borderColor: '#10b981' }]}
-          onPress={() => setShowTrainingManager(true)}
+          onPress={() => setShowWakePhraseMenu(true)}
         >
           <Text style={[styles.trainBtnText, { color: '#10b981' }]}>
-            🎤 Training
+            🎤 Wake Training
           </Text>
         </TouchableOpacity>
 
