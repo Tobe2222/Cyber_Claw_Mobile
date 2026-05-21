@@ -240,7 +240,7 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={started ? styles.recordingContent : styles.content}>
         <Text style={styles.title}>🎤 Training: "{wakePhrase}"</Text>
 
         {/* Progress */}
@@ -391,6 +391,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0a1a',
   },
   content: {
+    paddingTop: 80,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  recordingContent: {
     paddingTop: 140,
     paddingHorizontal: 16,
     paddingBottom: 16,
