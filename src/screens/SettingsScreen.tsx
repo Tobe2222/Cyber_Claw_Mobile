@@ -13,6 +13,7 @@ import syncClient from '../services/SyncClient';
 import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/AudioBuffer';
 import WakeWordTrainer from '../components/WakeWordTrainer';
 import WakeWordTrainerV2 from '../components/WakeWordTrainerV2';
+import TrainingManager from '../components/TrainingManager';
 import WakeWordTester from '../components/WakeWordTester';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
@@ -36,6 +37,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [showTrainer, setShowTrainer] = useState(false);
   const [showTrainerV2, setShowTrainerV2] = useState(false);
+  const [showTrainingManager, setShowTrainingManager] = useState(false);
   const [showTester, setShowTester] = useState(false);
   const [wakePhrase, setWakePhrase] = useState('hey clawsuu');
   const [wakeTrained, setWakeTrained] = useState(false);
@@ -245,16 +247,32 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   };
 
   // Show V2 trainer if active
+  if (showTrainingManager) {
+    return (
+      <TrainingManager
+        onStartTraining={() => {
+          setShowTrainingManager(false);
+          setShowTrainerV2(true);
+        }}
+        onClose={() => setShowTrainingManager(false)}
+      />
+    );
+  }
+
   if (showTrainerV2) {
     return (
       <WakeWordTrainerV2
         onComplete={(success) => {
           setShowTrainerV2(false);
+          setShowTrainingManager(true);
           if (success) {
             Alert.alert('Success', 'Wake word trained and ready!');
           }
         }}
-        onCancel={() => setShowTrainerV2(false)}
+        onCancel={() => {
+          setShowTrainerV2(false);
+          setShowTrainingManager(true);
+        }}
       />
     );
   }
@@ -444,7 +462,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         {/* V2 Trainer with Quality Feedback */}
         <TouchableOpacity
           style={[styles.trainBtn, { marginTop: 8, borderColor: '#10b981' }]}
-          onPress={() => setShowTrainerV2(true)}
+          onPress={() => setShowTrainingManager(true)}
         >
           <Text style={[styles.trainBtnText, { color: '#10b981' }]}>
             🆕 New Training (with Quality)
