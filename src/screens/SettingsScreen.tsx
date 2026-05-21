@@ -26,11 +26,31 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // Handle Android back button
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Navigate back through the training screens instead of home
+      if (showTrainingDetail) {
+        setShowTrainingDetail(false);
+        setShowWakePhraseMenu(true);
+        return true;
+      }
+      if (showWakePhraseMenu) {
+        setShowWakePhraseMenu(false);
+        return true;
+      }
+      if (showTrainerV2) {
+        setShowTrainerV2(false);
+        setShowWakePhraseMenu(true);
+        return true;
+      }
+      if (showTester) {
+        setShowTester(false);
+        return true;
+      }
+      // Default back behavior for settings screen
       onBack();
       return true;
     });
     return () => backHandler.remove();
-  }, [onBack]);
+  }, [onBack, showTrainingDetail, showWakePhraseMenu, showTrainerV2, showTester]);
 
   const [hostIp, setHostIp] = useState('');
   const [pairingCode, setPairingCode] = useState('');
