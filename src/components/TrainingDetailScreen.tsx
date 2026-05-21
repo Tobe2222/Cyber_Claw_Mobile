@@ -3,8 +3,6 @@ import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { GestureHandlerRootView, Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 
 interface TrainingSample {
   id: string;
@@ -18,8 +16,6 @@ export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: 
   onAddTraining: () => void;
 }) {
   const [samples, setSamples] = useState<TrainingSample[]>([]);
-  const translateX = useSharedValue(0);
-
   useEffect(() => {
     loadSamples();
   }, []);
@@ -58,22 +54,8 @@ export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: 
   };
 
   // Back swipe gesture
-  const gesture = Gesture.Pan()
-    .onUpdate((e) => {
-      if (e.translationX > 50) {
-        onBack();
-      }
-    });
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
-  }));
-
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <GestureDetector gesture={gesture}>
-        <Animated.View style={[{ flex: 1 }, animatedStyle]}>
-          <View style={styles.container}>
+    <View style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
               <View style={styles.header}>
                 <TouchableOpacity onPress={onBack} style={styles.backBtn}>
@@ -132,10 +114,7 @@ export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: 
                 <Text style={styles.addBtnText}>+ Add More Samples</Text>
               </TouchableOpacity>
             </ScrollView>
-          </View>
-        </Animated.View>
-      </GestureDetector>
-    </GestureHandlerRootView>
+    </View>
   );
 }
 
