@@ -544,7 +544,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       if (nextAppState === 'active') {
         // App came to foreground → STOP wake word ONCE (unless already stopped)
         if (!isWakeWordStoppedRef.current) {
-          WakeWordModule?.stop?.().catch(() => {});
+          if (NativeModules.NativeBackground) {
+          try {
+            NativeModules.NativeBackground.stopListening();
+            NativeModules.NativeBackground.showToast('🔕 Wake word listening stopped');
+          } catch (e) {}
+        }
           isWakeWordStoppedRef.current = true;
           // Lifecycle: app in foreground
         }
@@ -987,25 +992,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       addLogEntry('🗣️ Wake Word Mode: ACTIVE - listening locally for wake word', 'info');
       addVoiceLog('Wake listening...');
       
-      // Start native wake word detection on mobile using Vosk + PhoneticMatcher
+      // Start native wake word detection using NativeBackground module
       try {
-        const { WakeWordModule } = NativeModules;
-        if (WakeWordModule) {
+        if (NativeModules.NativeBackground) {
           const phrase = 'hey clawsuu';
-          addLogEntry(`📱 Starting Vosk wake detection with phrase: "${phrase}"`, 'info');
+          addLogEntry(`🎤 Starting background listening for: "${phrase}"`, 'info');
           
-          // Test if module is responsive (triggers model download if needed)
-          try {
-            await WakeWordModule.test();
-            addLogEntry(`✅ Vosk module test passed`, 'debug');
-          } catch (testE: any) {
-            addLogEntry(`⚠️ Vosk test failed: ${testE?.message}`, 'debug');
-          }
-          
-          await WakeWordModule.start(phrase);
-          addLogEntry(`📱 Native wake word detection initialized - listening for "${phrase}"`, 'info');
+          await NativeModules.NativeBackground.startListening();
+          addLogEntry(`📱 Native background listening active - say the phrase to trigger`, 'info');
+          NativeModules.NativeBackground.showToast('🎤 Wake word listening started');
         } else {
-          addLogEntry('WakeWordModule not available - using fallback', 'error');
+          addLogEntry('NativeBackground module not available', 'error');
         }
       } catch (e: any) {
         addLogEntry(`❌ Wake detection start error: ${e?.message}`, 'error');
@@ -1116,7 +1113,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       setPendingAudioPath(null);
       try {
         // PAUSE wake word while recording in chat - prevent conflicts
-        WakeWordModule?.stop?.().catch(() => {});
+        if (NativeModules.NativeBackground) {
+          try {
+            NativeModules.NativeBackground.stopListening();
+            NativeModules.NativeBackground.showToast('🔕 Wake word listening stopped');
+          } catch (e) {}
+        }
         
         const fs = require('react-native-fs');
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-chat-voice-${Date.now()}.m4a`;

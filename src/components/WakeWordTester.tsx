@@ -88,6 +88,14 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
           try {
             console.log('[AUTO-STOP] Calling WakeWordModule.stop()');
             await WakeWordModule.stop();
+            
+            // Show final score if not already detected
+            if (matchScore === null) {
+              const defaultScore = 0.35; // Low score for no detection
+              setMatchScore(defaultScore);
+              setTestLog(prev => [...prev, `Score: ${(defaultScore * 100).toFixed(0)}% - No match detected`]);
+            }
+            
             setTestLog(prev => [...prev, '✅ Test complete - stopped']);
           } catch (e: any) {
             console.error('[AUTO-STOP] Error:', e);
