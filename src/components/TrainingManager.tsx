@@ -73,7 +73,9 @@ export default function TrainingManager({ onStartTraining, onClose }: {
         ) : (
           <View style={styles.setsList}>
             {trainingSets.map((set) => (
-              <View key={set.id} style={styles.setCard}>
+              <TouchableOpacity key={set.id} style={styles.setCard} onPress={() => {
+                // TODO: Open manage screen for this training set
+              }}>
                 <View style={styles.setInfo}>
                   <Text style={styles.setPhrase}>{set.phrase}</Text>
                   <View style={styles.setMeta}>
@@ -104,10 +106,12 @@ export default function TrainingManager({ onStartTraining, onClose }: {
                 >
                   <Text style={styles.deleteBtnText}>✕</Text>
                 </TouchableOpacity>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
         )}
+
+        <Text style={styles.hint}>Tap on a training sample to manage it</Text>
 
         <TouchableOpacity style={styles.createBtn} onPress={onStartTraining}>
           <Text style={styles.createBtnText}>+ Create New Training</Text>
@@ -214,6 +218,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  hint: {
+    color: '#666',
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 16,
+    marginTop: -8,
   },
   createBtn: {
     backgroundColor: '#f7931a',

@@ -435,14 +435,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           />
         </View>
 
-        <Text style={styles.label}>Wake Word</Text>
-        <TextInput
-          style={styles.input}
-          value={audioSettings.wakeWord}
-          onChangeText={v => { updateAudio('wakeWord', v); setWakeTrained(false); }}
-          placeholder="Hey CyberClaw"
-          placeholderTextColor="#555"
-        />
 
         {/* DEPRECATED: Old trainer - use V2 below instead */}
         {/* 
@@ -465,23 +457,10 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           onPress={() => setShowTrainingManager(true)}
         >
           <Text style={[styles.trainBtnText, { color: '#10b981' }]}>
-            🆕 New Training (with Quality)
-          </Text>
-          <Text style={[styles.trainBtnSub, { color: '#666' }]}>
-            Record with instant feedback
+            🎤 Training
           </Text>
         </TouchableOpacity>
 
-        {showTrainer && (
-          <WakeWordTrainer
-            wakePhrase={audioSettings.wakeWord}
-            onComplete={(paths) => {
-              setWakeTrained(true);
-              setShowTrainer(false);
-              Alert.alert('Done!', `Wake phrase "${audioSettings.wakeWord}" trained with ${paths.length} samples.`);
-            }}
-          />
-        )}
 
         {/* Test Wake Word Button */}
         <TouchableOpacity
