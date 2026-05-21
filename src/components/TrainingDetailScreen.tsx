@@ -22,7 +22,8 @@ export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: 
 
   const loadSamples = async () => {
     try {
-      const json = await AsyncStorage.getItem('cyberclaw-wake-samples');
+      const key = `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
+      const json = await AsyncStorage.getItem(key);
       if (json) {
         const data = JSON.parse(json);
         // Create samples from quality scores

@@ -28,7 +28,7 @@ import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import TrainingSummary from './TrainingSummary';
 import RNFS from 'react-native-fs';
 
-const WAKE_SAMPLES_KEY = 'cyberclaw-wake-samples';
+const getWakeSamplesKey = (phrase: string) => `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 const REQUIRED_SAMPLES = 3;
 
 interface TrainedSample {
@@ -165,7 +165,7 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
   const saveSamples = useCallback(async () => {
     try {
       await AsyncStorage.setItem(
-        WAKE_SAMPLES_KEY,
+        getWakeSamplesKey(wakePhrase),
         JSON.stringify({
           phrase: wakePhrase,
           sampleCount: samples.length,

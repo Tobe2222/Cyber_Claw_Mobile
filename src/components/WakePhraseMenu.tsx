@@ -27,18 +27,31 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
 
   const loadPhrases = async () => {
     try {
-      const json = await AsyncStorage.getItem('cyberclaw-wake-samples');
-      if (json) {
-        const data = JSON.parse(json);
-        const phrase: WakePhrase = {
-          id: '1',
-          phrase: data.phrase || defaultPhrase,
-          quality: data.overallQuality || 0,
-          sampleCount: data.samplePaths?.length || data.sampleCount || 0,
-          trainedAt: data.trainedAt || new Date().toISOString(),
-        };
-        setPhrases([phrase]);
+      const keys = await AsyncStorage.getAllKeys();
+      const phraseKeys = keys.filter(k => k.startsWith('cyberclaw-wake-samples-'));
+      
+      if (phraseKeys.length === 0) {
+        // No phrases trained yet, but show default phrase option
+        return;
       }
+
+      const loadedPhrases: WakePhrase[] = [];
+      
+      for (const key of phraseKeys) {
+        const json = await AsyncStorage.getItem(key);
+        if (json) {
+          const data = JSON.parse(json);
+          loadedPhrases.push({
+            id: key,
+            phrase: data.phrase || defaultPhrase,
+            quality: data.overallQuality || 0,
+            sampleCount: data.qualityScores?.length || data.sampleCount || 0,
+            trainedAt: data.trainedAt || new Date().toISOString(),
+          });
+        }
+      }
+      
+      setPhrases(loadedPhrases);
     } catch (e) {
       console.error('Error loading phrases:', e);
     }
@@ -123,6 +136,7 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
               style={styles.dialogBtn}
               onPress={() => {
                 if (newPhrase.trim()) {
+                  // Create phrase and start training
                   onSelectPhrase(newPhrase.trim());
                   setShowAddDialog(false);
                 } else {
@@ -130,7 +144,33 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
                 }
               }}
             >
-              <Text style={styles.dialogBtnText}>Create & Train</Text>
+              <Text style={styles.dialogBtnText}>Start Training</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.dialogCreateBtn}
+              onPress={() => {
+                if (newPhrase.trim()) {
+                  // Just create without training - save empty phrase
+                  AsyncStorage.setItem(
+                    `cyberclaw-wake-samples-${newPhrase.trim().toLowerCase().replace(/\s+/g, '-')}`,
+                    JSON.stringify({
+                      phrase: newPhrase.trim(),
+                      sampleCount: 0,
+                      qualityScores: [],
+                      overallQuality: 0,
+                      trainedAt: new Date().toISOString(),
+                      features: [],
+                    })
+                  ).then(() => {
+                    setShowAddDialog(false);
+                    loadPhrases();
+                  });
+                } else {
+                  Alert.alert('Error', 'Please enter a phrase');
+                }
+              }}
+            >
+              <Text style={styles.dialogCreateText}>Just Create</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.dialogCancelBtn}
@@ -281,6 +321,19 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  dialogCreateBtn: {
+    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  dialogCreateText: {
+    color: '#3b82f6',
+    fontSize: 14,
   },
   dialogCancelBtn: {
     borderWidth: 1,
