@@ -380,7 +380,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0a1a',
   },
   content: {
-    paddingTop: 90,
+    paddingTop: 110,
     paddingHorizontal: 16,
     paddingBottom: 16,
   },

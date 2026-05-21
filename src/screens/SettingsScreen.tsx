@@ -26,31 +26,37 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // Handle Android back button
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      console.log('[BackHandler] Pressed. States:', {showTrainerV2, showWakePhraseMenu, showTrainingDetail, showTester});
       // Navigate back through the training screens instead of home
+      if (showTrainerV2) {
+        console.log('[BackHandler] Closing trainer');
+        setShowTrainerV2(false);
+        setShowWakePhraseMenu(true);
+        return true;
+      }
       if (showTrainingDetail) {
+        console.log('[BackHandler] Closing detail');
         setShowTrainingDetail(false);
         setShowWakePhraseMenu(true);
         return true;
       }
       if (showWakePhraseMenu) {
+        console.log('[BackHandler] Closing menu');
         setShowWakePhraseMenu(false);
         return true;
       }
-      if (showTrainerV2) {
-        setShowTrainerV2(false);
-        setShowWakePhraseMenu(true);
-        return true;
-      }
       if (showTester) {
+        console.log('[BackHandler] Closing tester');
         setShowTester(false);
         return true;
       }
       // Default back behavior for settings screen
+      console.log('[BackHandler] Using default');
       onBack();
       return true;
     });
     return () => backHandler.remove();
-  }, [onBack, showTrainingDetail, showWakePhraseMenu, showTrainerV2, showTester]);
+  }, [onBack, showTrainerV2, showTrainingDetail, showWakePhraseMenu, showTester]);
 
   const [hostIp, setHostIp] = useState('');
   const [pairingCode, setPairingCode] = useState('');

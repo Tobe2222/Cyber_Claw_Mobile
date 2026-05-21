@@ -22,8 +22,32 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
   const [newPhrase, setNewPhrase] = useState('');
 
   useEffect(() => {
+    migrateOldData();
     loadPhrases();
   }, []);
+
+  const migrateOldData = async () => {
+    try {
+      // Check if old storage key exists
+      const oldData = await AsyncStorage.getItem('cyberclaw-wake-samples');
+      if (oldData) {
+        const data = JSON.parse(oldData);
+        const phrase = data.phrase || defaultPhrase;
+        const newKey = `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
+        
+        // Save to new key if it doesn't exist
+        const newKeyExists = await AsyncStorage.getItem(newKey);
+        if (!newKeyExists) {
+          await AsyncStorage.setItem(newKey, oldData);
+          console.log('[Migration] Migrated old data to:', newKey);
+        }
+        
+        // Don't delete old key yet, keep for backward compat
+      }
+    } catch (e) {
+      console.error('Error migrating data:', e);
+    }
+  };
 
   const loadPhrases = async () => {
     try {
@@ -31,7 +55,20 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
       const phraseKeys = keys.filter(k => k.startsWith('cyberclaw-wake-samples-'));
       
       if (phraseKeys.length === 0) {
-        // No phrases trained yet, but show default phrase option
+        // Check if old data exists
+        const oldData = await AsyncStorage.getItem('cyberclaw-wake-samples');
+        if (oldData) {
+          const data = JSON.parse(oldData);
+          const phrase: WakePhrase = {
+            id: 'old-data',
+            phrase: data.phrase || defaultPhrase,
+            quality: data.overallQuality || 0,
+            sampleCount: data.qualityScores?.length || data.sampleCount || 0,
+            trainedAt: data.trainedAt || new Date().toISOString(),
+          };
+          setPhrases([phrase]);
+          return;
+        }
         return;
       }
 
