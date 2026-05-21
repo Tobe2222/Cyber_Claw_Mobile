@@ -259,24 +259,41 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
         {/* Quality Scores */}
         {qualityScores.length > 0 && !showSummary && (
           <View style={styles.qualityBox}>
-            <Text style={styles.qualityTitle}>Quality Scores</Text>
-            {qualityScores.map((score, i) => (
-              <View key={i} style={styles.qualityRow}>
-                <Text style={styles.qualityLabel}>Sample {i + 1}:</Text>
-                <View style={styles.qualityBar}>
-                  <View
-                    style={[
-                      styles.qualityFill,
-                      {
-                        width: `${score * 100}%`,
-                        backgroundColor: score > 0.7 ? '#10b981' : score > 0.5 ? '#f59e0b' : '#ef4444',
-                      },
-                    ]}
-                  />
+            <Text style={styles.qualityTitle}>📊 Training Samples</Text>
+            {qualityScores.length === 0 ? (
+              <Text style={styles.qualityLabel}>No samples recorded yet</Text>
+            ) : (
+              qualityScores.map((score, i) => (
+                <View key={i} style={styles.qualityRow}>
+                  <View style={styles.qualityInfo}>
+                    <Text style={styles.qualityLabel}>Sample {i + 1}</Text>
+                    <Text style={styles.qualitySubtext}>
+                      Quality: {(score * 100).toFixed(0)}% {score > 0.7 ? '✅ Good' : score > 0.5 ? '⚠️ Fair' : '❌ Poor'}
+                    </Text>
+                  </View>
+                  <View style={styles.qualityBar}>
+                    <View
+                      style={[
+                        styles.qualityFill,
+                        {
+                          width: `${score * 100}%`,
+                          backgroundColor: score > 0.7 ? '#10b981' : score > 0.5 ? '#f59e0b' : '#ef4444',
+                        },
+                      ]}
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={styles.deleteBtn}
+                    onPress={() => {
+                      setSamples(prev => prev.filter((_, idx) => idx !== i));
+                      setQualityScores(prev => prev.filter((_, idx) => idx !== i));
+                    }}
+                  >
+                    <Text style={styles.deleteBtnText}>✕</Text>
+                  </TouchableOpacity>
                 </View>
-                <Text style={styles.qualityPercent}>{(score * 100).toFixed(0)}%</Text>
-              </View>
-            ))}
+              ))
+            )}
           </View>
         )}
 
@@ -458,6 +475,28 @@ const styles = StyleSheet.create({
     fontSize: 11,
     width: 40,
     textAlign: 'right',
+  },
+  qualityInfo: {
+    flex: 1,
+  },
+  qualitySubtext: {
+    color: '#666',
+    fontSize: 10,
+    marginTop: 2,
+  },
+  deleteBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#ef4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  deleteBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   message: {
     color: '#f7931a',
