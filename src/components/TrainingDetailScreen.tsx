@@ -13,7 +13,7 @@ interface TrainingSample {
 export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: {
   phrase: string;
   onBack: () => void;
-  onAddTraining: () => void;
+  onAddTraining: (phrase: string) => void;
 }) {
   const [samples, setSamples] = useState<TrainingSample[]>([]);
   useEffect(() => {
@@ -126,7 +126,7 @@ export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: 
                 </View>
               )}
 
-              <TouchableOpacity style={styles.addBtn} onPress={onAddTraining}>
+              <TouchableOpacity style={styles.addBtn} onPress={() => onAddTraining(phrase)}>
                 <Text style={styles.addBtnText}>+ Add More Samples</Text>
               </TouchableOpacity>
             </ScrollView>

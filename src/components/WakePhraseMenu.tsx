@@ -180,21 +180,7 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
               style={styles.dialogBtn}
               onPress={() => {
                 if (newPhrase.trim()) {
-                  // Create phrase and start training
-                  onSelectPhrase(newPhrase.trim());
-                  setShowAddDialog(false);
-                } else {
-                  Alert.alert('Error', 'Please enter a phrase');
-                }
-              }}
-            >
-              <Text style={styles.dialogBtnText}>Start Training</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.dialogCreateBtn}
-              onPress={() => {
-                if (newPhrase.trim()) {
-                  // Just create without training - save empty phrase
+                  // Create phrase - user adds samples later in edit
                   AsyncStorage.setItem(
                     `cyberclaw-wake-samples-${newPhrase.trim().toLowerCase().replace(/\s+/g, '-')}`,
                     JSON.stringify({
@@ -214,7 +200,7 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
                 }
               }}
             >
-              <Text style={styles.dialogCreateText}>Just Create</Text>
+              <Text style={styles.dialogBtnText}>Create</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.dialogCancelBtn}

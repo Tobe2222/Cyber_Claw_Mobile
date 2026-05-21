@@ -286,7 +286,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           setShowTrainingDetail(false);
           setShowWakePhraseMenu(true);
         }}
-        onAddTraining={() => {
+        onAddTraining={(phrase: string) => {
+          setSelectedWakePhrase(phrase);
           setShowTrainingDetail(false);
           setShowTrainerV2(true);
         }}
