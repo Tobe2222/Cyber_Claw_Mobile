@@ -78,15 +78,24 @@ export function compareAudioFeatures(
     return 0;
   }
 
-  // DTW on energy envelope
-  const energyDist = dtw(features1.energy, features2.energy);
-  const maxEnergyDist = Math.max(features1.energy.length, features2.energy.length) * 32767; // Max possible value
-  const energyScore = Math.max(0, 1 - energyDist / maxEnergyDist);
+  // Get max energy values for normalization
+  const maxEnergy1 = Math.max(...features1.energy);
+  const maxEnergy2 = Math.max(...features2.energy);
+  const maxEnergy = Math.max(maxEnergy1, maxEnergy2) || 1;
 
-  // DTW on zero-crossing rate
+  // Normalize energy values to 0-1 range
+  const energy1Normalized = features1.energy.map(e => e / maxEnergy);
+  const energy2Normalized = features2.energy.map(e => e / maxEnergy);
+
+  // DTW on normalized energy envelope
+  const energyDist = dtw(energy1Normalized, energy2Normalized);
+  const maxEnergyDist = Math.max(features1.energy.length, features2.energy.length); // Length-based normalization
+  const energyScore = Math.max(0, 1 - energyDist / (maxEnergyDist || 1));
+
+  // DTW on zero-crossing rate (already normalized to 0-1)
   const zcrDist = dtw(features1.zcr, features2.zcr);
-  const maxZcrDist = Math.max(features1.zcr.length, features2.zcr.length); // Max possible value
-  const zcrScore = Math.max(0, 1 - zcrDist / maxZcrDist);
+  const maxZcrDist = Math.max(features1.zcr.length, features2.zcr.length);
+  const zcrScore = Math.max(0, 1 - zcrDist / (maxZcrDist || 1));
 
   // Weighted combination
   return energyWeight * energyScore + zcrWeight * zcrScore;
@@ -123,7 +132,7 @@ function dtw(seq1: number[], seq2: number[]): number {
 export async function matchAgainstTraining(
   incomingFeatures: AudioFeatures,
   trainingFeaturesList: AudioFeatures[],
-  threshold: number = 0.65
+  threshold: number = 0.55
 ): Promise<{
   matched: boolean;
   score: number;
