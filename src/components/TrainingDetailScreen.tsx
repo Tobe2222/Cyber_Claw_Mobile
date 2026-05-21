@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert,
+  View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert, BackHandler,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -18,7 +18,14 @@ export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: 
   const [samples, setSamples] = useState<TrainingSample[]>([]);
   useEffect(() => {
     loadSamples();
-  }, []);
+    
+    // Handle back button
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      onBack();
+      return true;
+    });
+    return () => backHandler.remove();
+  }, [onBack]);
 
   const loadSamples = async () => {
     try {

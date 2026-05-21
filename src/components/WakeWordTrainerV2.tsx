@@ -191,6 +191,15 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
     setOverallQuality(0);
   };
 
+  // Handle back button during training
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      onCancel();
+      return true;
+    });
+    return () => backHandler.remove();
+  }, [onCancel]);
+
   if (!started) {
     return (
       <View style={styles.container}>
@@ -380,7 +389,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0a1a',
   },
   content: {
-    paddingTop: 110,
+    paddingTop: 140,
     paddingHorizontal: 16,
     paddingBottom: 16,
   },

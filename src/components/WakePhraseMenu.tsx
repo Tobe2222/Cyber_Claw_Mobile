@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert, TextInput,
+  View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert, TextInput, BackHandler,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -24,6 +24,13 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
   useEffect(() => {
     migrateOldData();
     loadPhrases();
+    
+    // Handle back button - close menu
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+    return () => backHandler.remove();
   }, []);
 
   const migrateOldData = async () => {
