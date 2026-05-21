@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert,
+  View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert, TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -18,6 +18,8 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
 }) {
   const [phrases, setPhrases] = useState<WakePhrase[]>([]);
   const [defaultPhrase] = useState('hey clawsuu');
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [newPhrase, setNewPhrase] = useState('');
 
   useEffect(() => {
     loadPhrases();
@@ -96,14 +98,48 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
           </View>
         )}
 
-        <TouchableOpacity
-          style={styles.addBtn}
-          onPress={() => {
-            // TODO: Open new phrase creation dialog
-          }}
-        >
-          <Text style={styles.addBtnText}>+ Add Wake Phrase</Text>
-        </TouchableOpacity>
+        {!showAddDialog ? (
+          <TouchableOpacity
+            style={styles.addBtn}
+            onPress={() => {
+              setShowAddDialog(true);
+              setNewPhrase('');
+            }}
+          >
+            <Text style={styles.addBtnText}>+ Add Wake Phrase</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.dialogBox}>
+            <Text style={styles.dialogTitle}>New Wake Phrase</Text>
+            <TextInput
+              style={styles.dialogInput}
+              placeholder="Enter phrase (e.g., hey clawsuu)"
+              placeholderTextColor="#666"
+              value={newPhrase}
+              onChangeText={setNewPhrase}
+              autoFocus
+            />
+            <TouchableOpacity
+              style={styles.dialogBtn}
+              onPress={() => {
+                if (newPhrase.trim()) {
+                  onSelectPhrase(newPhrase.trim());
+                  setShowAddDialog(false);
+                } else {
+                  Alert.alert('Error', 'Please enter a phrase');
+                }
+              }}
+            >
+              <Text style={styles.dialogBtnText}>Create & Train</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.dialogCancelBtn}
+              onPress={() => setShowAddDialog(false)}
+            >
+              <Text style={styles.dialogCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
 
       <View style={styles.footer}>
@@ -209,6 +245,53 @@ const styles = StyleSheet.create({
   },
   editBtnText: {
     fontSize: 18,
+  },
+  dialogBox: {
+    backgroundColor: '#1a1a2e',
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  dialogTitle: {
+    color: '#3b82f6',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 12,
+  },
+  dialogInput: {
+    backgroundColor: '#0a0a1a',
+    borderWidth: 1,
+    borderColor: '#333',
+    borderRadius: 8,
+    color: '#fff',
+    padding: 12,
+    marginBottom: 12,
+    fontSize: 14,
+  },
+  dialogBtn: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  dialogBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  dialogCancelBtn: {
+    borderWidth: 1,
+    borderColor: '#333',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  dialogCancelText: {
+    color: '#999',
+    fontSize: 14,
   },
   addBtn: {
     backgroundColor: '#f7931a',

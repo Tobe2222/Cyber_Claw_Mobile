@@ -25,9 +25,17 @@ export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: 
       const json = await AsyncStorage.getItem('cyberclaw-wake-samples');
       if (json) {
         const data = JSON.parse(json);
-        // Mock samples - in real app would be loaded from data
-        if (data.samplePaths) {
-          const mockSamples = data.samplePaths.map((path: string, idx: number) => ({
+        // Create samples from quality scores
+        if (data.qualityScores && data.qualityScores.length > 0) {
+          const mockSamples = data.qualityScores.map((score: number, idx: number) => ({
+            id: `${idx}`,
+            date: data.trainedAt || new Date().toISOString(),
+            quality: score || 0.8,
+          }));
+          setSamples(mockSamples);
+        } else if (data.sampleCount && data.sampleCount > 0) {
+          // Fallback if qualityScores not available
+          const mockSamples = Array(data.sampleCount).fill(0).map((_, idx) => ({
             id: `${idx}`,
             date: data.trainedAt || new Date().toISOString(),
             quality: data.overallQuality || 0.8,
