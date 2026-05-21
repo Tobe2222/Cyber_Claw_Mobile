@@ -20,6 +20,7 @@ import {
   Alert,
   TextInput,
   ScrollView,
+  BackHandler,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { extractAudioFeatures, compareAudioFeatures, AudioFeatures } from '../services/AudioSampleMatcher';
@@ -191,8 +192,9 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
     setOverallQuality(0);
   };
 
-  // Handle back button during training
+  // Handle back button during training - only add if BackHandler is available
   useEffect(() => {
+    if (!BackHandler) return; // Skip if not available
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       onCancel();
       return true;
