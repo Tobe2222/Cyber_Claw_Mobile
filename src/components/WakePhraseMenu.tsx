@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert,
 } from 'react-native';
@@ -46,8 +48,22 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
     onSelectPhrase(phrase);
   };
 
+  const translateX = useSharedValue(0);
+  
+  const gesture = Gesture.Pan()
+    .onUpdate((e) => {
+      if (e.translationX > 50) {
+        onClose();
+      }
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
   return (
-    <View style={styles.container}>
+    <GestureDetector gesture={gesture}>
+      <Animated.View style={[styles.container, animatedStyle]}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>🎤 Wake Phrases</Text>
         <Text style={styles.subtitle}>Select a phrase to train or add a new one</Text>
@@ -98,9 +114,11 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
 
         <TouchableOpacity
           style={styles.addBtn}
-          onPress={() => handleTraining(defaultPhrase)}
+          onPress={() => {
+            // TODO: Open new phrase creation dialog
+          }}
         >
-          <Text style={styles.addBtnText}>+ Add Training</Text>
+          <Text style={styles.addBtnText}>+ Add Wake Phrase</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -109,7 +127,8 @@ export default function WakePhraseMenu({ onSelectPhrase, onClose }: {
           <Text style={styles.cancelBtnText}>Cancel</Text>
         </TouchableOpacity>
       </View>
-    </View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 

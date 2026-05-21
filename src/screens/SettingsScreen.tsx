@@ -15,6 +15,7 @@ import WakeWordTrainer from '../components/WakeWordTrainer';
 import WakeWordTrainerV2 from '../components/WakeWordTrainerV2';
 import TrainingManager from '../components/TrainingManager';
 import WakePhraseMenu from '../components/WakePhraseMenu';
+import TrainingDetailScreen from '../components/TrainingDetailScreen';
 import WakeWordTester from '../components/WakeWordTester';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
@@ -40,6 +41,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [showTrainerV2, setShowTrainerV2] = useState(false);
   const [showTrainingManager, setShowTrainingManager] = useState(false);
   const [showWakePhraseMenu, setShowWakePhraseMenu] = useState(false);
+  const [showTrainingDetail, setShowTrainingDetail] = useState(false);
   const [showTester, setShowTester] = useState(false);
   const [selectedWakePhrase, setSelectedWakePhrase] = useState('hey clawsuu');
   const [wakePhrase, setWakePhrase] = useState('hey clawsuu');
@@ -250,13 +252,29 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   };
 
   // Show V2 trainer if active
+  if (showTrainingDetail) {
+    return (
+      <TrainingDetailScreen
+        phrase={selectedWakePhrase}
+        onBack={() => {
+          setShowTrainingDetail(false);
+          setShowWakePhraseMenu(true);
+        }}
+        onAddTraining={() => {
+          setShowTrainingDetail(false);
+          setShowTrainerV2(true);
+        }}
+      />
+    );
+  }
+
   if (showWakePhraseMenu) {
     return (
       <WakePhraseMenu
         onSelectPhrase={(phrase) => {
           setSelectedWakePhrase(phrase);
           setShowWakePhraseMenu(false);
-          setShowTrainerV2(true);
+          setShowTrainingDetail(true);
         }}
         onClose={() => setShowWakePhraseMenu(false)}
       />
@@ -288,7 +306,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         }}
         onCancel={() => {
           setShowTrainerV2(false);
-          setShowWakePhraseMenu(true);
+          setShowTrainingDetail(true);
         }}
       />
     );
