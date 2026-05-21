@@ -47,7 +47,7 @@ interface Props {
 
 export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey clawsuu', onComplete, onCancel }: Props) {
   const [wakePhrase, setWakePhrase] = useState(initialPhrase);
-  const [started, setStarted] = useState(false);
+  const [started, setStarted] = useState(true); // Start recording immediately
   const [currentSample, setCurrentSample] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [samples, setSamples] = useState<TrainedSample[]>([]);
@@ -192,6 +192,15 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
     setOverallQuality(0);
   };
 
+  // Auto-start recording when component mounts
+  useEffect(() => {
+    const autoStart = async () => {
+      await new Promise(resolve => setTimeout(resolve, 300)); // Small delay for UI to render
+      startRecording();
+    };
+    autoStart();
+  }, []);
+
   // Handle back button during training - only add if BackHandler is available
   useEffect(() => {
     if (!BackHandler) return; // Skip if not available
@@ -240,7 +249,7 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={started ? styles.recordingContent : styles.content}>
+      <ScrollView contentContainerStyle={styles.recordingContent}>
         <Text style={styles.title}>🎤 Training: "{wakePhrase}"</Text>
 
         {/* Progress */}
