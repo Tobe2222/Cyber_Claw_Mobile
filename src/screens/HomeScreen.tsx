@@ -1265,7 +1265,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         <View style={styles.headerBar}>
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
-            <Text style={styles.versionTag}>v2.13.72</Text>
+            <Text style={styles.versionTag}>v2.13.73</Text>
           </View>
           <View style={styles.headerRight}>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />

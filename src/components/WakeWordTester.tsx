@@ -81,7 +81,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       
       autoStopTimeoutRef.current = setTimeout(async () => {
         console.log('[AUTO-STOP] 6s timeout reached, stopping...');
-        setTestLog(prev => [...prev, '⏱️ 6 second timeout - stopping']);
+        setTestLog(prev => [...prev, '⏱️ 5 second timeout - stopping']);
         setIsListening(false);
         
         if (WakeWordModule) {
@@ -94,7 +94,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
             setTestLog(prev => [...prev, `Error: ${e.message}`]);
           }
         }
-      }, 6000); // 6 seconds
+      }, 5000); // 5 seconds
     }
     
     return () => {
@@ -143,7 +143,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
         try {
           await WakeWordModule.start(phrase);
           setTestLog(prev => [...prev, '✅ Audio matcher started']);
-          setTestLog(prev => [...prev, '🎤 Listening for match - speak now']);
+          setTestLog(prev => [...prev, '🎤 Listening for match - Say phrase ONCE, then wait 5 seconds']);
         } catch (startErr: any) {
           const errMsg = startErr?.message || String(startErr);
           setTestLog(prev => [...prev, `❌ Start error: ${errMsg}`]);
@@ -241,12 +241,15 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
 
         {/* Match Score */}
         {matchScore !== null ? (
-          <View style={[styles.detectedBox, { borderColor: matchScore > 0.65 ? '#10b981' : '#ef4444' }]}>
-            <Text style={[styles.detectedLabel, { color: matchScore > 0.65 ? '#10b981' : '#ef4444' }]}>
-              {matchScore > 0.65 ? '✅ Match Score:' : '❌ Match Score:'}
+          <View style={[styles.detectedBox, { borderColor: matchScore > 0.65 ? '#10b981' : '#ef4444', borderWidth: 3 }]}>
+            <Text style={[styles.detectedLabel, { color: matchScore > 0.65 ? '#10b981' : '#ef4444', fontSize: 18, fontWeight: 'bold' }]}>
+              {matchScore > 0.65 ? '✅ MATCH!' : '❌ NO MATCH'}
             </Text>
-            <Text style={[styles.detectedText, { color: matchScore > 0.65 ? '#10b981' : '#ef4444' }]}>
-              {(matchScore * 100).toFixed(1)}% {matchScore > 0.65 ? '(Match!)' : '(No match)'}
+            <Text style={[styles.detectedText, { color: matchScore > 0.65 ? '#10b981' : '#ef4444', fontSize: 32, fontWeight: 'bold' }]}>
+              {(matchScore * 100).toFixed(0)}%
+            </Text>
+            <Text style={[styles.detectedLabel, { color: matchScore > 0.65 ? '#10b981' : '#ef4444', fontSize: 12, marginTop: 8 }]}>
+              Threshold: 65% • Need {Math.max(0, 65 - Math.round(matchScore * 100))}% more
             </Text>
           </View>
         ) : null}
