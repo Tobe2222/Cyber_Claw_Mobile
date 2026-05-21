@@ -251,6 +251,32 @@ export default function WakeWordTrainerV2({ onComplete, onCancel }: Props) {
           Sample {currentSample + 1} of {REQUIRED_SAMPLES}
         </Text>
 
+        {/* Existing Samples (before recording starts) */}
+        {!showSummary && currentSample === 0 && qualityScores.length === 0 && samples.length > 0 && (
+          <View style={styles.qualityBox}>
+            <Text style={styles.qualityTitle}>📊 Your Existing Samples</Text>
+            <Text style={styles.qualitySubtext}>Delete any to retrain</Text>
+            {samples.map((sample, i) => (
+              <View key={i} style={styles.qualityRow}>
+                <View style={styles.qualityInfo}>
+                  <Text style={styles.qualityLabel}>Sample {i + 1}</Text>
+                  <Text style={styles.qualitySubtext}>
+                    {sample.quality ? `Quality: ${(sample.quality * 100).toFixed(0)}%` : 'Previously trained'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.deleteBtn}
+                  onPress={() => {
+                    setSamples(prev => prev.filter((_, idx) => idx !== i));
+                  }}
+                >
+                  <Text style={styles.deleteBtnText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* Training Summary */}
         {showSummary && (
           <TrainingSummary samples={samples} overallQuality={overallQuality} />
