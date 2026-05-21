@@ -118,6 +118,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       setPartialResults([]);
       setTestLog(['Initializing...']);
       setLastDetected('');
+      setMatchScore(null);  // Reset score for new test
 
       // Load training data to confirm it exists (supports both V1 and V2 formats)
       try {
