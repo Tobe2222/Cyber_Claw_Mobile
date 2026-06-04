@@ -806,7 +806,18 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry(`📨 Skipping user message`, 'received');
         return;
       }
-      // If in voice mode, treat text response as audio response
+      // In wake word mode, only process messages that are responses to a wake word trigger
+      // (wakeWordBusyRef=true). Random companion reactions should just go to normal chat.
+      if (isWakeWordModeRef.current && !wakeWordBusyRef.current) {
+        addLogEntry(`📨 Wake word mode idle — routing to chat silently`, 'debug');
+        setMessages(prev => {
+          const dupe = prev.some(m => Math.abs(m.ts - (msg.ts || Date.now())) < 2000 && m.text === msg.text);
+          if (dupe) return prev;
+          return [...prev, { id: `${Date.now()}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts || Date.now() }];
+        });
+        return;
+      }
+      // If in voice mode (or wake word mode responding to trigger), treat text response as audio response
       if (fullscreenRef.current && !msg.isUser) {
         addLogEntry(`🎙️ Voice mode response: "${msg.text.substring(0, 50)}..."`, 'info');
         addVoiceLog(`🔊 Responding: "${msg.text.substring(0, 40)}..."`);
