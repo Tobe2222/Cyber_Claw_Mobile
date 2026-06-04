@@ -32,7 +32,7 @@ jobs:
 
       - name: Install NDK and build tools
         run: |
-          echo "y" | sdkmanager "ndk;26.1.10909125" "build-tools;34.0.0" "platforms;android-34"
+          echo "y" | sdkmanager "ndk;26.1.10909125" "build-tools;35.0.0" "platforms;android-35"
 
       - name: Clean Gradle Wrapper Cache
         run: |
