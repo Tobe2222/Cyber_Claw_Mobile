@@ -743,7 +743,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     // Monitor silence detection for voice mode auto-stop
     // SimpleAudioRecorder will emit 'recorderSilence' when silence is detected
     // We set up a listener in the voice mode flow itself, not here
-    const debugSub = wakeEmitter?.addListener('wakeWordDebug', (e: any) => {
+    const debugSub = wakeWordEmitter?.addListener('wakeWordDebug', (e: any) => {
       const label = e.text ? `${e.state}: "${e.text}"` : e.state;
       setWakeDebug(label);
       // Log all debug events to help track wake word recognition
