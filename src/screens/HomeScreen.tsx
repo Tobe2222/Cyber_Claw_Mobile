@@ -902,7 +902,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onAudioResponse = async (msg: any) => {
-      addLogEntry(`🔊 onAudioResponse called: fullscreen=${fullscreenRef.current}, hasAudio=${!!msg.audioBase64}`, 'debug');
+      addLogEntry(`🔊 AUDIO RESPONSE ARRIVED — bytes=${msg.audioBase64?.length ?? 0} mime=${msg.mimeType}`, 'info');
       try {
         if (!msg.audioBase64) {
           addLogEntry(`🔊 No audioBase64, returning`, 'debug');
@@ -912,15 +912,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
+        addLogEntry(`🔊 Written to ${tmpPath}, calling startPlayer`, 'info');
         
         // If in voice mode, set status to 'playing'
         if (fullscreenRef.current) {
           setVoiceStatus('playing');
-          addLogEntry('Response audio status: playing', 'info');
         }
         
-        await WakeWordModule.startPlayer(tmpPath);
-        addLogEntry('Playing audio response', 'received');
+        try {
+          await WakeWordModule.startPlayer(tmpPath);
+          addLogEntry('🔊 startPlayer resolved OK', 'info');
+        } catch (playerErr: any) {
+          addLogEntry(`🔊 startPlayer ERROR: ${playerErr?.message}`, 'error');
+        }
         
         // After playback, if still in voice mode, restart listening loop
         // In wake word mode, restartWakeListening handles this via audioPlayerFinished
