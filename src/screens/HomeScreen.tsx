@@ -232,18 +232,23 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Speak via WebView TTS
   const speak = useCallback((text: string) => {
-    if (!ttsEnabled || !webViewRef.current) return;
-    const escaped = text.replace(/'/g, "\\'").replace(/\n/g, ' ');
-    webViewRef.current.injectJavaScript(`
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance('${escaped}');
-        u.rate = 0.95;
-        u.pitch = 1.1;
-        window.speechSynthesis.speak(u);
-      }
-      true;
-    `);
+    if (!ttsEnabled) return;
+    // Prefer native Android TTS — works reliably even when AudioRecord is active
+    if (WakeWordModule?.speakText) {
+      WakeWordModule.speakText(text).catch(() => {
+        // Fallback: WebView speechSynthesis
+        if (!webViewRef.current) return;
+        const escaped = text.replace(/'/g, "\\'").replace(/\n/g, ' ');
+        webViewRef.current.injectJavaScript(
+          `if('speechSynthesis'in window){window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('${escaped}');u.rate=0.95;u.pitch=1.1;window.speechSynthesis.speak(u);}true;`
+        );
+      });
+    } else if (webViewRef.current) {
+      const escaped = text.replace(/'/g, "\\'").replace(/\n/g, ' ');
+      webViewRef.current.injectJavaScript(
+        `if('speechSynthesis'in window){window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('${escaped}');u.rate=0.95;u.pitch=1.1;window.speechSynthesis.speak(u);}true;`
+      );
+    }
   }, [ttsEnabled]);
 
   // Propagate thinking state to both WebViews
@@ -768,27 +773,24 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
         if (isWakeWordModeRef.current) {
           // Wake word mode: stop sample listener so AudioRecord releases audio focus,
-          // speak the response, then restart wake word listening
+          // speak via native TTS, then restart wake word listening when done
           sampleListenerCleanupRef.current?.();
           sampleListenerCleanupRef.current = null;
 
-          speak(msg.text);
+          // Listen for native TTS completion event
+          const ttsEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
+          let ttsDoneSub: any = null;
+          let ttsTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-          // Estimate speech duration (~130 words/min) + 1s buffer, min 3s
-          const wordCount = msg.text.split(/\s+/).length;
-          const estimatedMs = Math.max(3000, Math.ceil((wordCount / 130) * 60 * 1000) + 1000);
-          addLogEntry(`⏱️ Speech est. ${estimatedMs}ms, then back to wake listening`, 'debug');
-
-          setTimeout(async () => {
-            if (!isWakeWordModeRef.current) return; // user exited
-            // Exit voice recording UI, back to wake-listening state
+          const afterSpeech = async () => {
+            if (ttsDoneSub) { ttsDoneSub.remove(); ttsDoneSub = null; }
+            if (ttsTimeoutId) { clearTimeout(ttsTimeoutId); ttsTimeoutId = null; }
+            if (!isWakeWordModeRef.current) return;
             try { await getSimpleAudioRecorder().stop(); } catch (_) {}
             setIsVoiceListening(false);
             setVoiceStatus('listening');
             addVoiceLog('Wake listening...');
             addLogEntry('🎙️ Back to wake word listening', 'info');
-
-            // Reload training and restart sample listener
             try {
               const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
               const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
@@ -801,7 +803,16 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 );
               }
             } catch (_) {}
-          }, estimatedMs);
+          };
+
+          // Subscribe to ttsDone event from native TTS
+          ttsDoneSub = ttsEmitter?.addListener('ttsDone', afterSpeech);
+          // Fallback timeout in case ttsDone never fires
+          const wordCount = msg.text.split(/\s+/).length;
+          const fallbackMs = Math.max(4000, Math.ceil((wordCount / 130) * 60 * 1000) + 2000);
+          ttsTimeoutId = setTimeout(afterSpeech, fallbackMs);
+
+          speak(msg.text);
         } else {
           // Regular voice mode: speak and go back to mic listening
           speak(msg.text);
@@ -1009,10 +1020,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         return;
       }
       addLogEntry(`Transcribed: "${msg.transcript}"`, 'received');
-      // Add to messages and auto-send
-      setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }]);
+      // Just display the transcript in chat — the desktop already processed the audio
+      // and will send back the AI response. DO NOT call sendChat() here or we get double sends.
+      setMessages(prev => {
+        const dupe = prev.some(m => m.isUser && Math.abs(m.ts - Date.now()) < 5000 && m.text === msg.transcript);
+        if (dupe) return prev;
+        return [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }];
+      });
       setChatVoiceStatus('Clawsuu is thinking...');
-      syncClient.sendChat(msg.transcript);
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
 

@@ -1,6 +1,9 @@
 package com.cyberclawmobile
 
 import android.content.Context
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import java.util.Locale
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
@@ -631,5 +634,53 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Exception) {
             promise.reject("PLAY_STOP_ERROR", e.message)
         }
+    }
+
+    // ── Native Text-to-Speech ───────────────────────────────────────────────
+
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+
+    private fun getTts(onReady: (TextToSpeech) -> Unit) {
+        if (ttsReady && tts != null) { onReady(tts!!); return }
+        tts?.shutdown()
+        tts = TextToSpeech(reactContext) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (ttsReady) {
+                tts?.language = Locale.US
+                tts?.setSpeechRate(0.95f)
+                tts?.setPitch(1.1f)
+                onReady(tts!!)
+            } else {
+                handler.post { emitDebug("error", "TTS init failed: status=$status") }
+            }
+        }
+    }
+
+    @ReactMethod fun speakText(text: String, promise: Promise) {
+        getTts { engine ->
+            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                override fun onDone(utteranceId: String?) {
+                    handler.post {
+                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                            .emit("ttsDone", null)
+                    }
+                }
+                override fun onError(utteranceId: String?) {
+                    handler.post {
+                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                            .emit("ttsDone", null)
+                    }
+                }
+            })
+            engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "claw-tts")
+            promise.resolve(null)
+        }
+    }
+
+    @ReactMethod fun stopSpeaking(promise: Promise) {
+        tts?.stop()
+        promise.resolve(null)
     }
 }
