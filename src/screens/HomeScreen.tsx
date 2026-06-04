@@ -54,7 +54,8 @@ function startSampleMatchListener(
       if (pcm16.length < 1600) return;
       const features = extractAudioFeatures(pcm16);
       const result = await matchAgainstTraining(features, trainingFeatures, SAMPLE_MATCH_THRESHOLD);
-      onLog?.(`sample match: ${(result.score * 100).toFixed(0)}%`);
+      // Only log when score is high (>45%) to reduce noise
+      if (result.score > 0.45) onLog?.(`sample match: ${(result.score * 100).toFixed(0)}%`);
       if (result.matched && !stopped) {
         onLog?.(`\u2705 Wake word matched! (${(result.score * 100).toFixed(0)}%)`);
         onDetected();
@@ -510,8 +511,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         toggleWakeWordMode();
       }
       if (msg.type === 'exitFullscreen') {
-        // User clicked Exit in voice mode → exit fullscreen
-        closeFullscreen();
+        // Only exit fullscreen if we're NOT in wake word mode
+        if (isWakeWordModeRef.current) {
+          addLogEntry('Ignoring exitFullscreen — wake word mode active', 'debug');
+        } else {
+          closeFullscreen();
+        }
       }
       if (msg.type === 'saveBg') {
         AsyncStorage.setItem('cyberclaw-arena-bg', msg.value);

@@ -1,6 +1,6 @@
 {
   "name": "CyberClawMobile",
-  "version": "2.13.115",
+  "version": "2.13.116",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
