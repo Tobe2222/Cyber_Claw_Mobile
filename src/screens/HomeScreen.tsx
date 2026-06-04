@@ -1055,14 +1055,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         return;
       }
       addLogEntry(`Transcribed: "${msg.transcript}"`, 'received');
-      // Just display the transcript in chat — the desktop already processed the audio
-      // and will send back the AI response. DO NOT call sendChat() here or we get double sends.
+      // Display transcript in UI
       setMessages(prev => {
         const dupe = prev.some(m => m.isUser && Math.abs(m.ts - Date.now()) < 5000 && m.text === msg.transcript);
         if (dupe) return prev;
         return [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }];
       });
+      // Send to AI — desktop transcribed the audio but we must send the text to trigger the AI response
       setChatVoiceStatus('Clawsuu is thinking...');
+      syncClient.sendChat(msg.transcript);
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
 
@@ -1215,7 +1216,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       try {
         const fs = require('react-native-fs');
         const base64 = await fs.readFile(pendingAudioPath, 'base64');
-        setMessages(prev => [...prev, { id: `user-${Date.now()}`, text: 'Voice message', isUser: true, ts: Date.now() }]);
         setChatVoiceStatus('Sending to desktop...');
         syncClient.sendAudioInput(base64, 'audio/m4a');
         addLogEntry('Voice message sent', 'sent');
