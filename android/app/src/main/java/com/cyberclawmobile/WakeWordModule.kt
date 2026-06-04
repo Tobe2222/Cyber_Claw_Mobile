@@ -378,6 +378,128 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // ── Raw PCM Recording (for sample matching) ────────────────────────────
+
+    private var rawAudioRecord: AudioRecord? = null
+    private var rawRecordThread: Thread? = null
+    @Volatile private var isRawRecording = false
+    private var rawOutputPath: String? = null
+
+    /**
+     * Record raw PCM16 mono 16kHz audio to a WAV file.
+     * The JS side reads this file, extracts features, and runs DTW matching.
+     */
+    @ReactMethod fun startSampleRecord(outputPath: String, promise: Promise) {
+        if (isRawRecording) {
+            promise.reject("ALREADY_RECORDING", "Raw recording already in progress")
+            return
+        }
+        try {
+            isRawRecording = true
+            rawOutputPath = outputPath
+
+            val sampleRate = 16000
+            val bufferSize = AudioRecord.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            ).coerceAtLeast(4096)
+
+            val rec = AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                isRawRecording = false
+                promise.reject("INIT_ERROR", "AudioRecord failed to initialize")
+                return
+            }
+            rawAudioRecord = rec
+            rec.startRecording()
+
+            // Collect raw PCM bytes in memory
+            val pcmBytes = java.io.ByteArrayOutputStream()
+
+            rawRecordThread = Thread {
+                val buf = ShortArray(bufferSize / 2)
+                while (isRawRecording) {
+                    val read = rec.read(buf, 0, buf.size)
+                    if (read > 0) {
+                        for (i in 0 until read) {
+                            pcmBytes.write(buf[i].toInt() and 0xFF)
+                            pcmBytes.write(buf[i].toInt() shr 8 and 0xFF)
+                        }
+                    }
+                }
+                // Write WAV file
+                try {
+                    val pcm = pcmBytes.toByteArray()
+                    val outFile = File(outputPath)
+                    outFile.parentFile?.mkdirs()
+                    writeWav(outFile, pcm, sampleRate)
+                    handler.post {
+                        val params = Arguments.createMap()
+                        params.putString("path", outputPath)
+                        params.putInt("bytes", pcm.size)
+                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                            .emit("sampleRecordDone", params)
+                    }
+                } catch (e: Exception) {
+                    Log.e("WakeWord", "Failed to write WAV", e)
+                    handler.post { emitDebug("error", "WAV write failed: ${e.message}") }
+                }
+            }.also { it.isDaemon = true; it.start() }
+
+            promise.resolve(outputPath)
+        } catch (e: Exception) {
+            isRawRecording = false
+            promise.reject("START_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun stopSampleRecord(promise: Promise) {
+        isRawRecording = false
+        try { rawAudioRecord?.stop() } catch (_: Exception) {}
+        try { rawAudioRecord?.release() } catch (_: Exception) {}
+        rawAudioRecord = null
+        try { rawRecordThread?.join(2000) } catch (_: Exception) {}
+        rawRecordThread = null
+        promise.resolve(rawOutputPath ?: "")
+    }
+
+    /** Write a standard 16-bit mono PCM WAV file */
+    private fun writeWav(file: File, pcm: ByteArray, sampleRate: Int) {
+        val numChannels = 1
+        val bitsPerSample = 16
+        val byteRate = sampleRate * numChannels * bitsPerSample / 8
+        val blockAlign = numChannels * bitsPerSample / 8
+        val dataSize = pcm.size
+        val headerSize = 44
+        val totalSize = headerSize + dataSize - 8
+
+        file.outputStream().use { out ->
+            fun writeInt16(v: Int) { out.write(v and 0xFF); out.write(v shr 8 and 0xFF) }
+            fun writeInt32(v: Int) { out.write(v and 0xFF); out.write(v shr 8 and 0xFF); out.write(v shr 16 and 0xFF); out.write(v shr 24 and 0xFF) }
+            out.write("RIFF".toByteArray())
+            writeInt32(totalSize)
+            out.write("WAVE".toByteArray())
+            out.write("fmt ".toByteArray())
+            writeInt32(16)         // PCM chunk size
+            writeInt16(1)          // PCM format
+            writeInt16(numChannels)
+            writeInt32(sampleRate)
+            writeInt32(byteRate)
+            writeInt16(blockAlign)
+            writeInt16(bitsPerSample)
+            out.write("data".toByteArray())
+            writeInt32(dataSize)
+            out.write(pcm)
+        }
+    }
+
     // ── Audio Playback ─────────────────────────────────────────────────────
 
     private var mediaPlayer: MediaPlayer? = null
