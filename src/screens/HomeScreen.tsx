@@ -185,6 +185,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const fullscreenRef = useRef(false);
   const isWakeWordStoppedRef = useRef<boolean>(true);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
+  const wakeWordBusyRef = useRef(false); // true while recording/transcribing in wake mode
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -348,6 +349,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         let countdownInterval: NodeJS.Timeout | null = null;
         let silenceEventFired = false;
         let maxDurationTimeout: NodeJS.Timeout | null = null;
+        let audioSent = false; // guard: only send once
         
         // VAD will replace this with frame-by-frame analysis
         const vad = getVAD();
@@ -383,6 +385,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                   if (base64.length < 100) {
                     addLogEntry('Base64 audio very small', 'error');
                   }
+                  if (audioSent) { addLogEntry('Already sent, skipping duplicate', 'debug'); return; }
+                  audioSent = true;
                   addVoiceLog('📏 Sending...');
                   setVoiceStatus('transcribing');
                   syncClient.sendAudioInput(base64, 'audio/m4a');
@@ -437,6 +441,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               }
               try {
                 const base64 = await fs.readFile(resultPath, 'base64');
+                if (audioSent) { addLogEntry('Already sent (max-duration), skipping', 'debug'); return; }
+                audioSent = true;
                 setVoiceStatus('transcribing');
                 syncClient.sendAudioInput(base64, 'audio/m4a');
                 addLogEntry('Forced send after max duration', 'sent');
@@ -516,7 +522,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
+    if (wakeWordBusyRef.current) {
+      addLogEntry('Wake word detected but already busy — ignoring', 'debug');
+      return;
+    }
+    wakeWordBusyRef.current = true;
     await enterVoiceMode('wakeword');
+    // wakeWordBusyRef is cleared in restartWakeListening after TTS finishes
   }, [enterVoiceMode]);
 
   // Load persisted chat
@@ -771,50 +783,42 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addVoiceLog(`🔊 Responding: "${msg.text.substring(0, 40)}..."`);
         setVoiceStatus('playing');
 
-        if (isWakeWordModeRef.current) {
-          // Wake word mode: stop sample listener so AudioRecord releases audio focus,
-          // speak via native TTS, then restart wake word listening when done
-          sampleListenerCleanupRef.current?.();
-          sampleListenerCleanupRef.current = null;
+        // Always add response to chat log (wake word mode or regular voice)
+        setChatVoiceStatus(null);
+        setMessages(prev => {
+          const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
+          if (dupe) return prev;
+          return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
+        });
 
-          // Listen for native TTS completion event
+        if (isWakeWordModeRef.current) {
+          // Wake word mode: keep sample listener running (will ignore while wakeWordBusyRef=true)
+          // just speak and then reset busy flag via restartWakeListening
+
           const ttsEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
           let ttsDoneSub: any = null;
           let ttsTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-          const afterSpeech = async () => {
+          const restartWakeListening = async () => {
             if (ttsDoneSub) { ttsDoneSub.remove(); ttsDoneSub = null; }
             if (ttsTimeoutId) { clearTimeout(ttsTimeoutId); ttsTimeoutId = null; }
             if (!isWakeWordModeRef.current) return;
+            // Stop voice recorder but keep sample listener running (it never stopped)
             try { await getSimpleAudioRecorder().stop(); } catch (_) {}
             setIsVoiceListening(false);
             setVoiceStatus('listening');
             addVoiceLog('Wake listening...');
-            addLogEntry('🎙️ Back to wake word listening', 'info');
-            try {
-              const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-              const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
-              const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
-              const training = trainingJson ? JSON.parse(trainingJson) : null;
-              if (training?.features?.length) {
-                sampleListenerCleanupRef.current = startSampleMatchListener(
-                  phrase, training.features, handleWakeWord,
-                  (m) => addLogEntry(m, 'debug'),
-                );
-              }
-            } catch (_) {}
+            addLogEntry('🎙️ Ready for next wake word', 'info');
+            wakeWordBusyRef.current = false; // allow next wake trigger
           };
 
-          // Subscribe to ttsDone event from native TTS
-          ttsDoneSub = ttsEmitter?.addListener('ttsDone', afterSpeech);
-          // Fallback timeout in case ttsDone never fires
+          ttsDoneSub = ttsEmitter?.addListener('ttsDone', restartWakeListening);
           const wordCount = msg.text.split(/\s+/).length;
           const fallbackMs = Math.max(4000, Math.ceil((wordCount / 130) * 60 * 1000) + 2000);
-          ttsTimeoutId = setTimeout(afterSpeech, fallbackMs);
+          ttsTimeoutId = setTimeout(restartWakeListening, fallbackMs);
 
           speak(msg.text);
         } else {
-          // Regular voice mode: speak and go back to mic listening
           speak(msg.text);
           setTimeout(() => {
             if (fullscreenRef.current) {
@@ -1148,6 +1152,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       // Exiting wake word mode
       sampleListenerCleanupRef.current?.();
       sampleListenerCleanupRef.current = null;
+      wakeWordBusyRef.current = false;
       try { WakeWordModule?.stop?.(); } catch (_) {}
       try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
       closeFullscreen();
