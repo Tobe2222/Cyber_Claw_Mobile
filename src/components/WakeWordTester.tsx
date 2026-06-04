@@ -64,6 +64,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
 
   // Set up native event listener for sampleRecordDone
   useEffect(() => {
+    // NativeEventEmitter requires addListener/removeListeners on native module (now present)
     if (WakeWordModule) {
       const emitter = new NativeEventEmitter(WakeWordModule);
       emitterRef.current = emitter;

@@ -29,6 +29,10 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName() = "WakeWordModule"
 
+    // Required by NativeEventEmitter on the JS side
+    @ReactMethod fun addListener(eventName: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+
     private val handler = Handler(Looper.getMainLooper())
 
     private fun emit(event: String, state: String, text: String? = null) {

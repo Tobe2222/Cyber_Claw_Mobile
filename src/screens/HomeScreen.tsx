@@ -22,6 +22,9 @@ import { base64ToInt16Array } from '../services/AudioUtils';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
+// Stable NativeEventEmitter for WakeWordModule — created once at module level
+// NativeEventEmitter requires addListener/removeListeners on the native module
+const wakeWordEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
 
 // ── Sample-match wake listener ──────────────────────────────────────────────
 const getWakeSamplesKey = (phrase: string) =>
@@ -35,8 +38,7 @@ function startSampleMatchListener(
   onLog?: (msg: string) => void,
 ): () => void {
   let stopped = false;
-  const emitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
-  const sub = emitter?.addListener('sampleAudioChunk', async (e: { wav: string }) => {
+  const sub = wakeWordEmitter?.addListener('sampleAudioChunk', async (e: { wav: string }) => {
     if (stopped) return;
     try {
       const pcm16 = base64ToInt16Array(e.wav);
@@ -722,8 +724,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
 
     // Wake word event → bring app to front in focus mode
-    const wakeEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
-    const wakeSub = wakeEmitter?.addListener('wakeWordDetected', () => {
+    const wakeSub = wakeWordEmitter?.addListener('wakeWordDetected', () => {
       handleWakeWord();
     });
     // Also listen for wake-word-opened-app from MainActivity (broadcast receiver path)
@@ -805,7 +806,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           // Wake word mode: sample listener was stopped in handleWakeWord before recording
           // speak response, then restartWakeListening will restart it
 
-          const ttsEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
           let ttsDoneSub: any = null;
           let ttsTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -835,7 +835,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             } catch (_) {}
           };
 
-          ttsDoneSub = ttsEmitter?.addListener('ttsDone', restartWakeListening);
+          ttsDoneSub = wakeWordEmitter?.addListener('ttsDone', restartWakeListening);
           const wordCount = msg.text.split(/\s+/).length;
           const fallbackMs = Math.max(4000, Math.ceil((wordCount / 130) * 60 * 1000) + 2000);
           ttsTimeoutId = setTimeout(restartWakeListening, fallbackMs);
