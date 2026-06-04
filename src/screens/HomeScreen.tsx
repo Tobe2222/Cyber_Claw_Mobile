@@ -271,6 +271,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setVoiceStatus('idle');
     setIsVoiceListening(false);
     setIsWakeWordMode(false);
+    isWakeWordModeRef.current = false;
     AppControl?.keepScreenOn?.(false);
     
     // CRITICAL: Stop any active recording
@@ -577,6 +578,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   
   // Wake Word Mode
   const [isWakeWordMode, setIsWakeWordMode] = useState(false);
+  const isWakeWordModeRef = useRef(false);
   const [wakeWordSession, setWakeWordSession] = useState<{ id: string; audioChunks: string[] } | null>(null);
 
   // toggleVoiceInput defined after sendMessage below
@@ -760,20 +762,56 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       }
       // If in voice mode, treat text response as audio response
       if (fullscreenRef.current && !msg.isUser) {
-        addLogEntry(`🎙️ Voice mode: Converting text to speech: "${msg.text.substring(0, 50)}..."`, 'info');
+        addLogEntry(`🎙️ Voice mode response: "${msg.text.substring(0, 50)}..."`, 'info');
         addVoiceLog(`🔊 Responding: "${msg.text.substring(0, 40)}..."`);
         setVoiceStatus('playing');
-        speak(msg.text);  // Convert to speech
-        
-        // Then restart listening loop after speech
-        setTimeout(() => {
-          if (fullscreenRef.current) {
+
+        if (isWakeWordModeRef.current) {
+          // Wake word mode: stop sample listener so AudioRecord releases audio focus,
+          // speak the response, then restart wake word listening
+          sampleListenerCleanupRef.current?.();
+          sampleListenerCleanupRef.current = null;
+
+          speak(msg.text);
+
+          // Estimate speech duration (~130 words/min) + 1s buffer, min 3s
+          const wordCount = msg.text.split(/\s+/).length;
+          const estimatedMs = Math.max(3000, Math.ceil((wordCount / 130) * 60 * 1000) + 1000);
+          addLogEntry(`⏱️ Speech est. ${estimatedMs}ms, then back to wake listening`, 'debug');
+
+          setTimeout(async () => {
+            if (!isWakeWordModeRef.current) return; // user exited
+            // Exit voice recording UI, back to wake-listening state
+            try { await getSimpleAudioRecorder().stop(); } catch (_) {}
+            setIsVoiceListening(false);
             setVoiceStatus('listening');
-            addVoiceLog('🎙️ Listening...');
-            addLogEntry(`🎙️ Restarting voice loop after text response`, 'debug');
-            // TODO: Restart listening here (same as audio response)
-          }
-        }, 2000);
+            addVoiceLog('Wake listening...');
+            addLogEntry('🎙️ Back to wake word listening', 'info');
+
+            // Reload training and restart sample listener
+            try {
+              const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+              const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+              const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+              const training = trainingJson ? JSON.parse(trainingJson) : null;
+              if (training?.features?.length) {
+                sampleListenerCleanupRef.current = startSampleMatchListener(
+                  phrase, training.features, handleWakeWord,
+                  (m) => addLogEntry(m, 'debug'),
+                );
+              }
+            } catch (_) {}
+          }, estimatedMs);
+        } else {
+          // Regular voice mode: speak and go back to mic listening
+          speak(msg.text);
+          setTimeout(() => {
+            if (fullscreenRef.current) {
+              setVoiceStatus('listening');
+              addVoiceLog('🎙️ Listening...');
+            }
+          }, 2000);
+        }
         return;
       }
       addLogEntry(`📨 Adding to chat: "${msg.text.substring(0, 50)}..."`, 'received');
@@ -1100,7 +1138,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       closeFullscreen();
       addLogEntry('🗣️ Wake Word Mode: OFF', 'info');
     }
-    setIsWakeWordMode(!isWakeWordMode);
+    const newMode = !isWakeWordMode;
+    isWakeWordModeRef.current = newMode;
+    setIsWakeWordMode(newMode);
   }, [isWakeWordMode, closeFullscreen, handleWakeWord]);
 
   const handleAttach = useCallback(() => {
