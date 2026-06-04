@@ -32,7 +32,7 @@ jobs:
 
       - name: Install NDK and build tools
         run: |
-          echo "y" | sdkmanager "ndk;26.1.10909125" "build-tools;35.0.0" "platforms;android-35"
+          echo "y" | sdkmanager "ndk;25.1.8937393" "build-tools;35.0.0" "platforms;android-35"
 
       - name: Clean Gradle Wrapper Cache
         run: |
@@ -45,7 +45,7 @@ jobs:
       - name: Build Release APK
         working-directory: android
         env:
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/25.1.8937393
         run: ./gradlew assembleRelease --no-daemon --rerun-tasks
 
       - name: Rename APK

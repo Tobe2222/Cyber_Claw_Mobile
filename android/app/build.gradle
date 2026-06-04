@@ -7,6 +7,8 @@ apply plugin: "com.facebook.react"
  * By default you don't need to apply any configuration, just uncomment the lines you need.
  */
 react {
+    // Disable new architecture (Fabric/TurboModules) — avoids Folly C++ CMake errors
+    newArchEnabled = false
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '../..'
     // root = file("../../")
@@ -82,8 +84,8 @@ android {
         applicationId "com.cyberclawmobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 39
-        versionName "2.13.112"
+        versionCode 40
+        versionName "2.13.113"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
