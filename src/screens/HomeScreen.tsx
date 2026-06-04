@@ -649,7 +649,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           ]).then(async ([settingsRaw, ppnPath, wakeModeRaw]) => {
             const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
             const ppn = ppnPath || '';
-            const wakeMode = wakeModeRaw || 'vosk';
+            const wakeMode = wakeModeRaw || 'sample';
             const phrase = settings.wakeWord || 'hey claw';
             if (wakeMode === 'sample') {
               // Load training features and start looping sample listener
@@ -697,7 +697,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     ]).then(async ([settingsRaw, ppnPath, wakeModeRaw]) => {
       const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
       const ppn = ppnPath || '';
-      const wakeMode = wakeModeRaw || 'vosk';
+      const wakeMode = wakeModeRaw || 'sample';
       const phrase = settings.wakeWord || 'hey claw';
       if (wakeMode === 'sample') {
         const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase))
@@ -854,7 +854,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           // Also listen for audioPlayerFinished (fired by startPlayer in onAudioResponse)
           ttsDoneSub = wakeWordEmitter?.addListener('audioPlayerFinished', restartWakeListening);
         } else {
-          speak(msg.text);
+          // audio_response from desktop handles playback — speak() removed
           setTimeout(() => {
             if (fullscreenRef.current) {
               setVoiceStatus('listening');
@@ -875,7 +875,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry(`📨 Chat updated, total: ${prev.length + 1}`, 'received');
         return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
       });
-      speak(msg.text);
+      // audio_response from desktop handles spoken replies
     };
 
     const onTyping = (msg: any) => {
