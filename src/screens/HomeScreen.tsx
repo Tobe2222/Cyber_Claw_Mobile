@@ -843,12 +843,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             } catch (_) {}
           };
 
-          ttsDoneSub = wakeWordEmitter?.addListener('ttsDone', restartWakeListening);
+          // Desktop sends audio_response (synthesized WAV) — onAudioResponse plays it
+          // and will call restartWakeListening via audioPlayerFinished event.
+          // Don't call speak() here — it would conflict with startPlayer().
+          // Fallback: if audio_response never arrives, restart after estimated duration.
           const wordCount = msg.text.split(/\s+/).length;
-          const fallbackMs = Math.max(4000, Math.ceil((wordCount / 130) * 60 * 1000) + 2000);
+          const fallbackMs = Math.max(6000, Math.ceil((wordCount / 130) * 60 * 1000) + 3000);
           ttsTimeoutId = setTimeout(restartWakeListening, fallbackMs);
-
-          speak(msg.text);
+          // Also listen for audioPlayerFinished (fired by startPlayer in onAudioResponse)
+          ttsDoneSub = wakeWordEmitter?.addListener('audioPlayerFinished', restartWakeListening);
         } else {
           speak(msg.text);
           setTimeout(() => {
@@ -920,7 +923,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry('Playing audio response', 'received');
         
         // After playback, if still in voice mode, restart listening loop
-        if (fullscreenRef.current) {
+        // In wake word mode, restartWakeListening handles this via audioPlayerFinished
+        if (fullscreenRef.current && !isWakeWordModeRef.current) {
           addLogEntry(`🔊 Restarting listening loop (fullscreen=true)`, 'debug');
           addLogEntry('Playback finished, restarting listening loop', 'info');
           setVoiceStatus('listening');
