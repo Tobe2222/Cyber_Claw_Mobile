@@ -485,8 +485,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       
       if (msg.type === 'fullscreen') {
         // User clicked Voice Mode button in arena → enter fullscreen
-        addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
-        enterVoiceMode('focus');  // Call enterVoiceMode to start audio recording
+        // But not if we're already in wake word mode — that takes priority
+        if (isWakeWordModeRef.current) {
+          addLogEntry('Ignoring fullscreen msg — wake word mode active', 'debug');
+        } else {
+          addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
+          enterVoiceMode('focus');
+        }
       }
       if (msg.type === 'wakeword') {
         // User clicked Wake Word Mode button in arena
@@ -527,8 +532,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       return;
     }
     wakeWordBusyRef.current = true;
+    // CRITICAL: stop sample listener BEFORE starting SimpleAudioRecorder
+    // Both use AudioRecord — they cannot run simultaneously
+    sampleListenerCleanupRef.current?.();
+    sampleListenerCleanupRef.current = null;
+    addLogEntry('🎤 Wake word! Stopped sample listener, starting recorder', 'info');
     await enterVoiceMode('wakeword');
-    // wakeWordBusyRef is cleared in restartWakeListening after TTS finishes
+    // wakeWordBusyRef cleared + sample listener restarted in restartWakeListening
   }, [enterVoiceMode]);
 
   // Load persisted chat
@@ -792,8 +802,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         });
 
         if (isWakeWordModeRef.current) {
-          // Wake word mode: keep sample listener running (will ignore while wakeWordBusyRef=true)
-          // just speak and then reset busy flag via restartWakeListening
+          // Wake word mode: sample listener was stopped in handleWakeWord before recording
+          // speak response, then restartWakeListening will restart it
 
           const ttsEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
           let ttsDoneSub: any = null;
@@ -803,13 +813,26 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             if (ttsDoneSub) { ttsDoneSub.remove(); ttsDoneSub = null; }
             if (ttsTimeoutId) { clearTimeout(ttsTimeoutId); ttsTimeoutId = null; }
             if (!isWakeWordModeRef.current) return;
-            // Stop voice recorder but keep sample listener running (it never stopped)
             try { await getSimpleAudioRecorder().stop(); } catch (_) {}
             setIsVoiceListening(false);
             setVoiceStatus('listening');
             addVoiceLog('Wake listening...');
             addLogEntry('🎙️ Ready for next wake word', 'info');
             wakeWordBusyRef.current = false; // allow next wake trigger
+            // Restart sample listener now that SimpleAudioRecorder is stopped
+            try {
+              const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+              const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+              const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+              const training = trainingJson ? JSON.parse(trainingJson) : null;
+              if (training?.features?.length && !sampleListenerCleanupRef.current) {
+                sampleListenerCleanupRef.current = startSampleMatchListener(
+                  phrase, training.features, handleWakeWord,
+                  (m) => addLogEntry(m, 'debug'),
+                );
+                addLogEntry('🔄 Sample listener restarted', 'debug');
+              }
+            } catch (_) {}
           };
 
           ttsDoneSub = ttsEmitter?.addListener('ttsDone', restartWakeListening);
