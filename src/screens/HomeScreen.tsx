@@ -1050,54 +1050,58 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Toggle Wake Word Mode - enters fullscreen listening mode with wake word detection
   const toggleWakeWordMode = useCallback(async () => {
     if (!isWakeWordMode) {
-      // Entering wake word mode - go fullscreen and start wake word listening
+      // Entering wake word mode
       setFullscreen(true);
       fullscreenRef.current = true;
       setVoiceStatus('listening');
       AppControl?.keepScreenOn?.(true);
-      
-      // Tell arena to go fullscreen too
+
       const js = `
         document.getElementById('ui').classList.add('fullscreen');
         document.getElementById('c').classList.add('fullscreen');
         true;
       `;
       webViewRef.current?.injectJavaScript(js);
-      
-      addLogEntry('🗣️ Wake Word Mode: ACTIVE - listening locally for wake word', 'info');
+
+      addLogEntry('🗣️ Wake Word Mode: ACTIVE', 'info');
       addVoiceLog('Wake listening...');
-      
-      // Start native wake word detection using NativeBackground module
+
+      // Load training features and start DTW sample-match listener
       try {
-        if (NativeModules.NativeBackground) {
-          const phrase = 'hey clawsuu';
-          addLogEntry(`🎤 Starting background listening for: "${phrase}"`, 'info');
-          
-          await NativeModules.NativeBackground.startListening();
-          addLogEntry(`📱 Native background listening active - say the phrase to trigger`, 'info');
-          NativeModules.NativeBackground.showToast('🎤 Wake word listening started');
+        const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+        const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+        const training = trainingJson ? JSON.parse(trainingJson) : null;
+
+        if (training?.features?.length) {
+          addLogEntry(`🎤 Sample-match listening for: "${phrase}"`, 'info');
+          sampleListenerCleanupRef.current?.();
+          sampleListenerCleanupRef.current = startSampleMatchListener(
+            phrase,
+            training.features,
+            handleWakeWord,
+            (msg) => addLogEntry(msg, 'debug'),
+          );
+          addVoiceLog(`Matching: "${phrase}"`);
         } else {
-          addLogEntry('NativeBackground module not available', 'error');
+          // Fallback to Vosk if no training data
+          addLogEntry('No training data — falling back to Vosk', 'error');
+          WakeWordModule?.start?.(phrase).catch(() => {});
         }
       } catch (e: any) {
         addLogEntry(`❌ Wake detection start error: ${e?.message}`, 'error');
       }
     } else {
       // Exiting wake word mode
-      try {
-        const { WakeWordModule } = NativeModules;
-        if (WakeWordModule) {
-          await WakeWordModule.stop();
-          addLogEntry('Native wake word detection stopped', 'debug');
-        }
-      } catch (e: any) {
-        // Already stopped
-      }
+      sampleListenerCleanupRef.current?.();
+      sampleListenerCleanupRef.current = null;
+      try { WakeWordModule?.stop?.(); } catch (_) {}
+      try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
       closeFullscreen();
       addLogEntry('🗣️ Wake Word Mode: OFF', 'info');
     }
     setIsWakeWordMode(!isWakeWordMode);
-  }, [isWakeWordMode, closeFullscreen]);
+  }, [isWakeWordMode, closeFullscreen, handleWakeWord]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
