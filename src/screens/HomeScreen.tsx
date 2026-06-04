@@ -1365,10 +1365,8 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Auto-scroll to bottom when switching to chat tab or getting new messages
   useEffect(() => {
     if (activeTab === 'chat' && messages.length > 0) {
-      // Always scroll to bottom when entering chat tab
-      setTimeout(() => {
-        chatRef.current?.scrollToEnd({ animated: false });
-      }, 50);
+      // Give FlatList time to render all items before scrolling
+      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 150);
     }
   }, [activeTab, messages.length]);
 
@@ -1568,7 +1566,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               inverted={false}
               onLayout={() => {
                 if (messages.length > 0) {
-                  setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
+                  setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 150);
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
