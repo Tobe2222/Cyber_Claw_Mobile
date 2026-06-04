@@ -145,7 +145,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => { if (v !== null) setTtsEnabled(v === 'true'); });
     AsyncStorage.getItem('cyberclaw-ppn-path').then(v => { if (v) setPpnPath(v); });
-    AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); });
+    AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); else if (v === 'sample') setWakeMode('sample' as any); });
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
@@ -171,6 +171,28 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           }
         } catch {}
       }
+    });
+    // Also check V2 training (phrase-specific key) and auto-set sample mode
+    AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
+      const phrase = raw ? (JSON.parse(raw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+      const key = `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
+      AsyncStorage.getItem(key).then(trainingRaw => {
+        if (trainingRaw) {
+          try {
+            const training = JSON.parse(trainingRaw);
+            if (training.features && training.features.length >= 1) {
+              setWakeTrained(true);
+              // Auto-select sample matching mode if not already set
+              AsyncStorage.getItem('cyberclaw-wake-mode').then(mode => {
+                if (!mode || mode === 'vosk') {
+                  AsyncStorage.setItem('cyberclaw-wake-mode', 'sample');
+                  setWakeMode('sample' as any);
+                }
+              });
+            }
+          } catch {}
+        }
+      });
     });
 
     // Update connection status

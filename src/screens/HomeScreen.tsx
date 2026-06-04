@@ -17,9 +17,51 @@ import { getSimpleAudioRecorder, disposeSimpleAudioRecorder } from '../services/
 import { getVAD, resetVAD } from '../services/SileroVAD';  // Voice Activity Detection
 import Clipboard from '@react-native-clipboard/clipboard';
 import RNFS from 'react-native-fs';
+import { extractAudioFeatures, matchAgainstTraining, AudioFeatures } from '../services/AudioSampleMatcher';
+import { base64ToInt16Array } from '../services/AudioUtils';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
+
+// ── Sample-match wake listener ──────────────────────────────────────────────
+const getWakeSamplesKey = (phrase: string) =>
+  `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
+const SAMPLE_MATCH_THRESHOLD = 0.55;
+
+function startSampleMatchListener(
+  _phrase: string,
+  trainingFeatures: AudioFeatures[],
+  onDetected: () => void,
+  onLog?: (msg: string) => void,
+): () => void {
+  let stopped = false;
+  const emitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
+  const sub = emitter?.addListener('sampleAudioChunk', async (e: { wav: string }) => {
+    if (stopped) return;
+    try {
+      const pcm16 = base64ToInt16Array(e.wav);
+      if (pcm16.length < 1600) return;
+      const features = extractAudioFeatures(pcm16);
+      const result = await matchAgainstTraining(features, trainingFeatures, SAMPLE_MATCH_THRESHOLD);
+      onLog?.(`sample match: ${(result.score * 100).toFixed(0)}%`);
+      if (result.matched && !stopped) {
+        onLog?.(`\u2705 Wake word matched! (${(result.score * 100).toFixed(0)}%)`);
+        onDetected();
+      }
+    } catch (err: any) {
+      onLog?.(`sample match error: ${err.message}`);
+    }
+  });
+  WakeWordModule?.startSampleListening?.().catch((e: any) => {
+    onLog?.(`startSampleListening failed: ${e?.message}`);
+  });
+  return () => {
+    stopped = true;
+    sub?.remove?.();
+    WakeWordModule?.stopSampleListening?.().catch(() => {});
+  };
+}
+
 async function startBgService() {
   try {
     const enabled = await AsyncStorage.getItem('cyberclaw-bg-listening');
@@ -142,6 +184,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const webViewRef = useRef<WebView>(null);
   const fullscreenRef = useRef(false);
   const isWakeWordStoppedRef = useRef<boolean>(true);
+  const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -550,6 +593,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             NativeModules.NativeBackground.showToast('🔕 Wake word listening stopped');
           } catch (e) {}
         }
+          // Stop sample listener if running
+          sampleListenerCleanupRef.current?.();
+          sampleListenerCleanupRef.current = null;
           isWakeWordStoppedRef.current = true;
           // Lifecycle: app in foreground
         }
@@ -560,12 +606,26 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             AsyncStorage.getItem('cyberclaw-audio-settings'),
             AsyncStorage.getItem('cyberclaw-ppn-path'),
             AsyncStorage.getItem('cyberclaw-wake-mode'),
-          ]).then(([settingsRaw, ppnPath, wakeModeRaw]) => {
+          ]).then(async ([settingsRaw, ppnPath, wakeModeRaw]) => {
             const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
             const ppn = ppnPath || '';
             const wakeMode = wakeModeRaw || 'vosk';
             const phrase = settings.wakeWord || 'hey claw';
-            if (wakeMode === 'porcupine' && ppn) {
+            if (wakeMode === 'sample') {
+              // Load training features and start looping sample listener
+              const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase))
+                .catch(() => null);
+              const training = trainingJson ? JSON.parse(trainingJson) : null;
+              if (training?.features?.length) {
+                sampleListenerCleanupRef.current?.();
+                sampleListenerCleanupRef.current = startSampleMatchListener(
+                  phrase, training.features, handleWakeWord,
+                );
+              } else {
+                // No training data, fall back to Vosk
+                WakeWordModule?.start?.(phrase).catch(() => {});
+              }
+            } else if (wakeMode === 'porcupine' && ppn) {
               WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
                 WakeWordModule?.start?.(phrase).catch(() => {});
               });
@@ -594,12 +654,27 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       AsyncStorage.getItem('cyberclaw-audio-settings'),
       AsyncStorage.getItem('cyberclaw-ppn-path'),
       AsyncStorage.getItem('cyberclaw-wake-mode'),
-    ]).then(([settingsRaw, ppnPath, wakeModeRaw]) => {
+    ]).then(async ([settingsRaw, ppnPath, wakeModeRaw]) => {
       const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
       const ppn = ppnPath || '';
       const wakeMode = wakeModeRaw || 'vosk';
       const phrase = settings.wakeWord || 'hey claw';
-      if (wakeMode === 'porcupine' && ppn) {
+      if (wakeMode === 'sample') {
+        const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase))
+          .catch(() => null);
+        const training = trainingJson ? JSON.parse(trainingJson) : null;
+        if (training?.features?.length) {
+          sampleListenerCleanupRef.current?.();
+          sampleListenerCleanupRef.current = startSampleMatchListener(
+            phrase, training.features, handleWakeWord,
+            (msg) => addLogEntry(msg, 'debug'),
+          );
+          addLogEntry(`Starting sample-match wake detection, phrase: "${phrase}"`, 'info');
+        } else {
+          WakeWordModule?.start?.(phrase).catch(() => {});
+          addLogEntry(`No training data for sample mode, falling back to Vosk`, 'error');
+        }
+      } else if (wakeMode === 'porcupine' && ppn) {
         WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
           addLogEntry(`Porcupine failed: ${e?.message}, falling back to Vosk`, 'error');
           WakeWordModule?.start?.(phrase).catch(() => {});

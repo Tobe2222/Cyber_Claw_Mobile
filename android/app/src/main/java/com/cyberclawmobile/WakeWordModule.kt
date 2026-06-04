@@ -500,6 +500,104 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // ── Sample Matching Listener (looping chunks for JS-side DTW) ────────────
+
+    private var sampleListenRecord: AudioRecord? = null
+    private var sampleListenThread: Thread? = null
+    @Volatile private var isSampleListening = false
+
+    /**
+     * Continuously record ~2s PCM16 chunks and emit them to JS as base64 WAV.
+     * JS side extracts features + runs DTW, fires wakeWordDetected if matched.
+     */
+    @ReactMethod fun startSampleListening(promise: Promise) {
+        if (isSampleListening) { promise.resolve(null); return }
+        try {
+            isSampleListening = true
+            val sampleRate = 16000
+            val chunkSamples = sampleRate * 2  // 2 second chunks
+            val bufferSize = AudioRecord.getMinBufferSize(
+                sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+            ).coerceAtLeast(4096)
+
+            val rec = AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC,
+                sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                isSampleListening = false
+                promise.reject("INIT_ERROR", "AudioRecord failed to initialize")
+                return
+            }
+            sampleListenRecord = rec
+            rec.startRecording()
+
+            sampleListenThread = Thread {
+                val readBuf = ShortArray(bufferSize / 2)
+                val chunkBuf = java.io.ByteArrayOutputStream(chunkSamples * 2)
+                var samplesCollected = 0
+
+                while (isSampleListening) {
+                    val read = rec.read(readBuf, 0, readBuf.size)
+                    if (read <= 0) continue
+
+                    // Append to chunk buffer
+                    for (i in 0 until read) {
+                        chunkBuf.write(readBuf[i].toInt() and 0xFF)
+                        chunkBuf.write(readBuf[i].toInt() shr 8 and 0xFF)
+                    }
+                    samplesCollected += read
+
+                    // Emit chunk every ~2s
+                    if (samplesCollected >= chunkSamples) {
+                        val pcm = chunkBuf.toByteArray()
+                        chunkBuf.reset()
+                        samplesCollected = 0
+
+                        // Build WAV in memory and base64-encode
+                        val wavBytes = buildWavBytes(pcm, sampleRate)
+                        val b64 = android.util.Base64.encodeToString(wavBytes, android.util.Base64.NO_WRAP)
+
+                        handler.post {
+                            val params = Arguments.createMap()
+                            params.putString("wav", b64)
+                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                .emit("sampleAudioChunk", params)
+                        }
+                    }
+                }
+            }.also { it.isDaemon = true; it.start() }
+
+            promise.resolve(null)
+        } catch (e: Exception) {
+            isSampleListening = false
+            promise.reject("START_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun stopSampleListening(promise: Promise) {
+        isSampleListening = false
+        try { sampleListenRecord?.stop() } catch (_: Exception) {}
+        try { sampleListenRecord?.release() } catch (_: Exception) {}
+        sampleListenRecord = null
+        try { sampleListenThread?.join(2000) } catch (_: Exception) {}
+        sampleListenThread = null
+        promise.resolve(null)
+    }
+
+    /** Build WAV bytes in memory (no file I/O) */
+    private fun buildWavBytes(pcm: ByteArray, sampleRate: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream(44 + pcm.size)
+        fun w16(v: Int) { out.write(v and 0xFF); out.write(v shr 8 and 0xFF) }
+        fun w32(v: Int) { out.write(v and 0xFF); out.write(v shr 8 and 0xFF); out.write(v shr 16 and 0xFF); out.write(v shr 24 and 0xFF) }
+        out.write("RIFF".toByteArray()); w32(36 + pcm.size)
+        out.write("WAVE".toByteArray()); out.write("fmt ".toByteArray())
+        w32(16); w16(1); w16(1); w32(sampleRate); w32(sampleRate * 2); w16(2); w16(16)
+        out.write("data".toByteArray()); w32(pcm.size); out.write(pcm)
+        return out.toByteArray()
+    }
+
     // ── Audio Playback ─────────────────────────────────────────────────────
 
     private var mediaPlayer: MediaPlayer? = null
