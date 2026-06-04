@@ -19,6 +19,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 import RNFS from 'react-native-fs';
 import { extractAudioFeatures, matchAgainstTraining, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array } from '../services/AudioUtils';
+import { version as APP_VERSION } from '../../package.json';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
@@ -1445,7 +1446,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         <View style={styles.headerBar}>
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
-            <Text style={styles.versionTag}>v2.13.73</Text>
+            <Text style={styles.versionTag}>v{APP_VERSION}</Text>
           </View>
           <View style={styles.headerRight}>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
