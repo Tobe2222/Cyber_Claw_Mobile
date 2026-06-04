@@ -22,9 +22,17 @@ import { base64ToInt16Array } from '../services/AudioUtils';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
-// Stable NativeEventEmitter for WakeWordModule — created once at module level
-// NativeEventEmitter requires addListener/removeListeners on the native module
-const wakeWordEmitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
+// Lazy getter — NativeEventEmitter must not be instantiated at module eval time
+// (bridge may not be ready). Create on first use instead.
+let _wakeWordEmitter: NativeEventEmitter | null = null;
+const getWakeWordEmitter = () => {
+  if (!_wakeWordEmitter && WakeWordModule) {
+    _wakeWordEmitter = new NativeEventEmitter(WakeWordModule);
+  }
+  return _wakeWordEmitter;
+};
+// Alias used throughout file
+const wakeWordEmitter = { addListener: (event: string, cb: (...args: any[]) => void) => getWakeWordEmitter()?.addListener(event, cb) ?? null };
 
 // ── Sample-match wake listener ──────────────────────────────────────────────
 const getWakeSamplesKey = (phrase: string) =>
