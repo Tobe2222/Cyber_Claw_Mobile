@@ -30,11 +30,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK and build tools
+      - name: Install SDK components
         run: |
-          echo "y" | sdkmanager "ndk;25.1.8937393" "build-tools;35.0.0" "platforms;android-35"
+          sdkmanager --install "ndk;27.1.12297006" "build-tools;36.0.0" "platforms;android-36" 2>&1 | tail -5
 
-      - name: Clean Gradle Wrapper Cache
+      - name: Clean Gradle caches
         run: |
           rm -rf ~/.gradle/wrapper/
           rm -rf ~/.gradle/caches/
@@ -45,12 +45,11 @@ jobs:
       - name: Build Release APK
         working-directory: android
         env:
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/25.1.8937393
-        run: ./gradlew assembleRelease --no-daemon --rerun-tasks
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.1.12297006
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
-        run: |
-          mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android.apk
+        run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android.apk
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
