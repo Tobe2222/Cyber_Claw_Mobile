@@ -511,9 +511,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         toggleWakeWordMode();
       }
       if (msg.type === 'exitFullscreen') {
-        // Only exit fullscreen if we're NOT in wake word mode
         if (isWakeWordModeRef.current) {
-          addLogEntry('Ignoring exitFullscreen — wake word mode active', 'debug');
+          // X button in wake word mode — exit wake word mode properly
+          addLogEntry('Exiting wake word mode via X button', 'debug');
+          toggleWakeWordMode();
         } else {
           closeFullscreen();
         }
@@ -532,22 +533,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (fullscreen) {
         if (isWakeWordModeRef.current) {
-          sampleListenerCleanupRef.current?.();
-          sampleListenerCleanupRef.current = null;
-          wakeWordBusyRef.current = false;
-          try { WakeWordModule?.stop?.(); } catch (_) {}
-          try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
-          isWakeWordModeRef.current = false;
-          setIsWakeWordMode(false);
-          AppControl?.keepScreenOn?.(false);
+          // Back in wake word mode — toggle off properly (cleans up + closes fullscreen)
+          toggleWakeWordMode();
+        } else {
+          closeFullscreen();
         }
-        closeFullscreen();
         return true;
       }
       return false;
     });
     return () => backHandler.remove();
-  }, [fullscreen, closeFullscreen]);
+  }, [fullscreen, closeFullscreen, toggleWakeWordMode]);
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
@@ -1158,12 +1154,21 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // Toggle Wake Word Mode - runs in background, no fullscreen
+  // Toggle Wake Word Mode - enters fullscreen listening mode with wake word detection
   const toggleWakeWordMode = useCallback(async () => {
-    if (!isWakeWordMode) {
-      // Entering wake word mode — stay on home screen, just start listening
+    if (!isWakeWordModeRef.current) {
+      // Entering wake word mode
+      setFullscreen(true);
+      fullscreenRef.current = true;
       setVoiceStatus('listening');
       AppControl?.keepScreenOn?.(true);
+
+      const js = `
+        document.getElementById('ui').classList.add('fullscreen');
+        document.getElementById('c').classList.add('fullscreen');
+        true;
+      `;
+      webViewRef.current?.injectJavaScript(js);
 
       addLogEntry('🗣️ Wake Word Mode: ACTIVE', 'info');
       addVoiceLog('Wake listening...');
@@ -1202,11 +1207,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
       closeFullscreen();
       addLogEntry('🗣️ Wake Word Mode: OFF', 'info');
+      isWakeWordModeRef.current = false;
+      setIsWakeWordMode(false);
+      return;
     }
-    const newMode = !isWakeWordMode;
-    isWakeWordModeRef.current = newMode;
-    setIsWakeWordMode(newMode);
-  }, [isWakeWordMode, closeFullscreen, handleWakeWord]);
+    isWakeWordModeRef.current = true;
+    setIsWakeWordMode(true);
+  }, [closeFullscreen, handleWakeWord]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
