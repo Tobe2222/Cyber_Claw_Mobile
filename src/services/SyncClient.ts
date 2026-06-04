@@ -25,6 +25,7 @@ class SyncClient {
   private port: number = 9247;
   private token: string | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
   private handlers: Map<string, MessageHandler[]> = new Map();
   private _state: ConnectionState = 'disconnected';
   private _authenticated: boolean = false;
@@ -149,6 +150,8 @@ class SyncClient {
         this.ws.onclose = () => {
           clearTimeout(connectTimeout);
           this.ws = null;
+          // Stop keepalive ping
+          if (this.pingInterval) { clearInterval(this.pingInterval); this.pingInterval = null; }
 
           // If we were authenticated, this is a temporary disconnect — reconnect silently
           if (this._authenticated && this._reconnectAttempts < this._maxReconnectAttempts) {
@@ -191,7 +194,11 @@ class SyncClient {
     this._isReconnecting = false;
     this._reconnectAttempts = 0;
     if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
+      if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.ws) {
@@ -273,6 +280,13 @@ class SyncClient {
           this._reconnectAttempts = 0;
           this.setState('connected');
           this.emit('authenticated', { name: msg.name });
+          // Start keepalive ping every 10s to prevent Android killing idle WebSocket
+          if (this.pingInterval) clearInterval(this.pingInterval);
+          this.pingInterval = setInterval(() => {
+            if (this.ws?.readyState === WebSocket.OPEN) {
+              this.send({ type: 'ping' });
+            }
+          }, 10000);
           // Auto-request chat history from desktop
           setTimeout(() => this.requestChatHistory(), 300);
         } else {

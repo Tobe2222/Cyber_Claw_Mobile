@@ -530,20 +530,24 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Handle Android back button in fullscreen mode
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      addLogEntry(`🎙️ hardwareBackPress event (fullscreen=${fullscreen} wakeWord=${isWakeWordModeRef.current})`, 'debug');
       if (fullscreen) {
-        addLogEntry('🎙️ Back pressed in fullscreen, exiting', 'debug');
         if (isWakeWordModeRef.current) {
-          toggleWakeWordMode();
-        } else {
-          closeFullscreen();
+          sampleListenerCleanupRef.current?.();
+          sampleListenerCleanupRef.current = null;
+          wakeWordBusyRef.current = false;
+          try { WakeWordModule?.stop?.(); } catch (_) {}
+          try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
+          isWakeWordModeRef.current = false;
+          setIsWakeWordMode(false);
+          AppControl?.keepScreenOn?.(false);
         }
+        closeFullscreen();
         return true;
       }
       return false;
     });
     return () => backHandler.remove();
-  }, [fullscreen, closeFullscreen, toggleWakeWordMode]);
+  }, [fullscreen, closeFullscreen]);
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
@@ -1154,21 +1158,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // Toggle Wake Word Mode - enters fullscreen listening mode with wake word detection
+  // Toggle Wake Word Mode - runs in background, no fullscreen
   const toggleWakeWordMode = useCallback(async () => {
     if (!isWakeWordMode) {
-      // Entering wake word mode
-      setFullscreen(true);
-      fullscreenRef.current = true;
+      // Entering wake word mode — stay on home screen, just start listening
       setVoiceStatus('listening');
       AppControl?.keepScreenOn?.(true);
-
-      const js = `
-        document.getElementById('ui').classList.add('fullscreen');
-        document.getElementById('c').classList.add('fullscreen');
-        true;
-      `;
-      webViewRef.current?.injectJavaScript(js);
 
       addLogEntry('🗣️ Wake Word Mode: ACTIVE', 'info');
       addVoiceLog('Wake listening...');
