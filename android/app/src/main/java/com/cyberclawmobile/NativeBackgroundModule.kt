@@ -166,6 +166,65 @@ class NativeBackgroundModule(private val reactContext: ReactApplicationContext) 
     }, 200)
   }
 
+
+  /**
+   * Check whether SYSTEM_ALERT_WINDOW and USE_FULL_SCREEN_INTENT are granted.
+   * Returns a map: { canDrawOverlays: Boolean, canUseFullScreenIntent: Boolean }
+   */
+  @com.facebook.react.bridge.ReactMethod
+  fun checkWakePermissions(promise: com.facebook.react.bridge.Promise) {
+    try {
+      val canDraw = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M)
+        android.provider.Settings.canDrawOverlays(reactContext) else true
+      val canFsi = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+        (reactContext.getSystemService(android.app.NotificationManager::class.java))?.canUseFullScreenIntent() ?: true
+      else true
+      val map = com.facebook.react.bridge.Arguments.createMap().apply {
+        putBoolean("canDrawOverlays", canDraw)
+        putBoolean("canUseFullScreenIntent", canFsi)
+      }
+      promise.resolve(map)
+    } catch (e: Exception) {
+      promise.reject("ERROR", e.message)
+    }
+  }
+
+  /**
+   * Open system settings for SYSTEM_ALERT_WINDOW (draw over other apps)
+   */
+  @com.facebook.react.bridge.ReactMethod
+  fun openOverlaySettings(promise: com.facebook.react.bridge.Promise) {
+    try {
+      val intent = android.content.Intent(
+        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+        android.net.Uri.parse("package:${reactContext.packageName}")
+      ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+      reactContext.startActivity(intent)
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("ERROR", e.message)
+    }
+  }
+
+  /**
+   * Open system settings for USE_FULL_SCREEN_INTENT (Android 14+)
+   */
+  @com.facebook.react.bridge.ReactMethod
+  fun openFullScreenIntentSettings(promise: com.facebook.react.bridge.Promise) {
+    try {
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        val intent = android.content.Intent(
+          android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+          android.net.Uri.parse("package:${reactContext.packageName}")
+        ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+        reactContext.startActivity(intent)
+      }
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("ERROR", e.message)
+    }
+  }
+
   /**
    * Calculate RMS energy of audio chunk
    */

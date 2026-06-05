@@ -86,6 +86,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [bgListening, setBgListening] = useState(true);
   const [bgThreshold, setBgThreshold] = useState(65); // 0-100, default 65%
   const [readyPhrase, setReadyPhrase] = useState('Ready to chat');
+  const [wakePerms, setWakePerms] = useState({ canDrawOverlays: false, canUseFullScreenIntent: true });
   const [testVoiceIndex, setTestVoiceIndex] = useState(0);
   const [remotePerms, setRemotePerms] = useState<RemotePermissions>({
     file_read: false,
@@ -165,6 +166,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
     AsyncStorage.getItem('cyberclaw-wake-bg-threshold').then(v => { if (v) setBgThreshold(Math.round(parseFloat(v) * 100)); });
     AsyncStorage.getItem('cyberclaw-ready-phrase').then(v => { if (v) setReadyPhrase(v); });
+    NativeModules.NativeBackground?.checkWakePermissions?.()
+      .then((p: any) => setWakePerms(p))
+      .catch(() => {});
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -578,6 +582,55 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             </View>
             <Text style={{ color: '#888', fontSize: 12 }}>90%</Text>
           </View>
+        </View>
+
+        {/* Wake Permissions */}
+        <Text style={[styles.toggleTitle, { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4, color: '#888', fontSize: 12 }]}>
+          WAKE PERMISSIONS
+        </Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>
+              {wakePerms.canDrawOverlays ? '✅' : '⚠️'} Draw Over Other Apps
+            </Text>
+            <Text style={styles.toggleSub}>Required to open app over lock screen</Text>
+          </View>
+          <TouchableOpacity
+            onPress={async () => {
+              await NativeModules.NativeBackground?.openOverlaySettings?.();
+              setTimeout(async () => {
+                const p = await NativeModules.NativeBackground?.checkWakePermissions?.().catch(() => null);
+                if (p) setWakePerms(p);
+              }, 1000);
+            }}
+            style={{ backgroundColor: wakePerms.canDrawOverlays ? '#1a3a1a' : '#3a2a00', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}
+          >
+            <Text style={{ color: wakePerms.canDrawOverlays ? '#4caf50' : '#f7931a', fontSize: 12 }}>
+              {wakePerms.canDrawOverlays ? 'Granted' : 'Grant'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>
+              {wakePerms.canUseFullScreenIntent ? '✅' : '⚠️'} Full Screen Alerts
+            </Text>
+            <Text style={styles.toggleSub}>Allows wake alert to open app instantly (Android 14+)</Text>
+          </View>
+          <TouchableOpacity
+            onPress={async () => {
+              await NativeModules.NativeBackground?.openFullScreenIntentSettings?.();
+              setTimeout(async () => {
+                const p = await NativeModules.NativeBackground?.checkWakePermissions?.().catch(() => null);
+                if (p) setWakePerms(p);
+              }, 1000);
+            }}
+            style={{ backgroundColor: wakePerms.canUseFullScreenIntent ? '#1a3a1a' : '#3a2a00', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}
+          >
+            <Text style={{ color: wakePerms.canUseFullScreenIntent ? '#4caf50' : '#f7931a', fontSize: 12 }}>
+              {wakePerms.canUseFullScreenIntent ? 'Granted' : 'Grant'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* Ready to chat phrase */}
