@@ -301,6 +301,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       // Recording already stopped or not running
     }
     
+    // CRITICAL: Stop any in-progress audio playback
+    try { WakeWordModule?.stopPlayer?.(); } catch (_) {}
+
     // Clear pending audio/attachments
     setPendingAudioPath(null);
     setAttachments([]);
@@ -924,6 +927,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     const onAudioResponse = async (msg: any) => {
       addLogEntry(`🔊 AUDIO RESPONSE ARRIVED — bytes=${msg.audioBase64?.length ?? 0} mime=${msg.mimeType}`, 'info');
+      // Don't play if we've already exited voice/wake mode
+      if (!fullscreenRef.current) {
+        addLogEntry('🔊 Skipping playback — no longer in fullscreen', 'debug');
+        return;
+      }
       try {
         if (!msg.audioBase64) {
           addLogEntry(`🔊 No audioBase64, returning`, 'debug');
