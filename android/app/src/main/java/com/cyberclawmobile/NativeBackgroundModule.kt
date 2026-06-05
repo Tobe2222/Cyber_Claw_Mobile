@@ -9,6 +9,10 @@ import android.media.MediaRecorder
 import android.media.AudioFormat
 import android.os.Handler
 import android.os.Looper
+import android.content.Intent
+import android.os.Build
+import android.app.KeyguardManager
+import android.view.WindowManager
 import kotlin.concurrent.thread
 
 /**
@@ -120,6 +124,46 @@ class NativeBackgroundModule(private val reactContext: ReactApplicationContext) 
     isListening = false
     listeningThread?.join(1000)
     Log.d(TAG, "Listening stopped")
+  }
+
+  /**
+   * Bring the app to the front, even over the lock screen.
+   * Called when wake word is detected in background.
+   */
+  @com.facebook.react.bridge.ReactMethod
+  fun bringToFront() {
+    Log.d(TAG, "bringToFront called")
+    val context = reactContext.applicationContext
+    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+               Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+               Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      putExtra("wake_word_triggered", true)
+    } ?: return
+    context.startActivity(intent)
+
+    // On API 27+ use window flags to show over lock screen
+    Handler(Looper.getMainLooper()).postDelayed({
+      reactContext.currentActivity?.let { activity ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+          activity.setShowWhenLocked(true)
+          activity.setTurnScreenOn(true)
+        } else {
+          @Suppress("DEPRECATION")
+          activity.window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+          )
+        }
+        // Dismiss keyguard if allowed
+        val km = activity.getSystemService(android.content.Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          km?.requestDismissKeyguard(activity, null)
+        }
+        Log.d(TAG, "Lock screen flags applied")
+      }
+    }, 200)
   }
 
   /**

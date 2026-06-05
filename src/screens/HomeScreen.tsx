@@ -352,6 +352,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
         true;
       `);
+
+      // Speak "ready to chat" phrase (customisable in settings)
+      AsyncStorage.getItem('cyberclaw-ready-phrase').then(phrase => {
+        speak(phrase || 'Ready to chat');
+      }).catch(() => speak('Ready to chat'));
     }
     
     // Auto-start listening with SimpleAudioRecorder + countdown on silence (runs always)
@@ -564,6 +569,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
     addLogEntry('🎤 Wake word! Stopped sample listener, starting recorder', 'info');
+
+    // If app is in background, bring it to front over lock screen
+    const isBackground = appStateRef.current === 'background' || appStateRef.current === 'inactive';
+    if (isBackground) {
+      try { NativeModules.NativeBackground?.bringToFront?.(); } catch (_) {}
+      // Small delay to let the activity come forward before we start recording
+      await new Promise(r => setTimeout(r, 400));
+    }
+
     await enterVoiceMode('wakeword');
     // wakeWordBusyRef cleared + sample listener restarted in restartWakeListening
   }, [enterVoiceMode]);

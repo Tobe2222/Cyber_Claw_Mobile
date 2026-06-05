@@ -85,6 +85,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [wakeMode, setWakeMode] = useState<'vosk' | 'porcupine'>('vosk');
   const [bgListening, setBgListening] = useState(true);
   const [bgThreshold, setBgThreshold] = useState(65); // 0-100, default 65%
+  const [readyPhrase, setReadyPhrase] = useState('Ready to chat');
   const [testVoiceIndex, setTestVoiceIndex] = useState(0);
   const [remotePerms, setRemotePerms] = useState<RemotePermissions>({
     file_read: false,
@@ -163,6 +164,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); else if (v === 'sample') setWakeMode('sample' as any); });
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
     AsyncStorage.getItem('cyberclaw-wake-bg-threshold').then(v => { if (v) setBgThreshold(Math.round(parseFloat(v) * 100)); });
+    AsyncStorage.getItem('cyberclaw-ready-phrase').then(v => { if (v) setReadyPhrase(v); });
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -574,6 +576,31 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             </View>
             <Text style={{ color: '#888', fontSize: 12 }}>90%</Text>
           </View>
+        </View>
+
+        {/* Ready to chat phrase */}
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>💬 Wake Greeting</Text>
+            <Text style={styles.toggleSub}>Phrase spoken when wake word is detected</Text>
+          </View>
+        </View>
+        <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          <TextInput
+            style={{
+              backgroundColor: '#1a1a1a', color: '#fff', borderRadius: 8,
+              paddingHorizontal: 12, paddingVertical: 10, fontSize: 14,
+              borderWidth: 1, borderColor: '#333',
+            }}
+            value={readyPhrase}
+            onChangeText={setReadyPhrase}
+            onEndEditing={async () => {
+              await AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase);
+            }}
+            placeholder="Ready to chat"
+            placeholderTextColor="#555"
+            returnKeyType="done"
+          />
         </View>
 
         {/* DEPRECATED: Old trainer - use V2 below instead */}
