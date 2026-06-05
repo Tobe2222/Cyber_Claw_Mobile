@@ -39,14 +39,17 @@ const wakeWordEmitter = { addListener: (event: string, cb: (...args: any[]) => v
 // ── Sample-match wake listener ──────────────────────────────────────────────
 const getWakeSamplesKey = (phrase: string) =>
   `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
-const SAMPLE_MATCH_THRESHOLD = 0.55;
+const SAMPLE_MATCH_THRESHOLD_FG = 0.55; // foreground — more lenient
+const SAMPLE_MATCH_THRESHOLD_BG = 0.65; // background default — stricter
 
 function startSampleMatchListener(
   _phrase: string,
   trainingFeatures: AudioFeatures[],
   onDetected: () => void,
   onLog?: (msg: string) => void,
+  threshold?: number,
 ): () => void {
+  const matchThreshold = threshold ?? SAMPLE_MATCH_THRESHOLD_FG;
   let stopped = false;
   const sub = wakeWordEmitter?.addListener('sampleAudioChunk', async (e: { wav: string }) => {
     if (stopped) return;
@@ -54,9 +57,9 @@ function startSampleMatchListener(
       const pcm16 = base64ToInt16Array(e.wav);
       if (pcm16.length < 1600) return;
       const features = extractAudioFeatures(pcm16);
-      const result = await matchAgainstTraining(features, trainingFeatures, SAMPLE_MATCH_THRESHOLD);
+      const result = await matchAgainstTraining(features, trainingFeatures, matchThreshold);
       // Only log when score is high (>45%) to reduce noise
-      if (result.score > 0.45) onLog?.(`sample match: ${(result.score * 100).toFixed(0)}%`);
+      if (result.score > 0.45) onLog?.(`sample match: ${(result.score * 100).toFixed(0)}% (thr: ${(matchThreshold * 100).toFixed(0)}%)`);
       if (result.matched && !stopped) {
         onLog?.(`\u2705 Wake word matched! (${(result.score * 100).toFixed(0)}%)`);
         onDetected();
@@ -634,60 +637,63 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // toggleVoiceInput defined after sendMessage below
 
-  // AppState listener to manage wake word based on app foreground/background
+  // AppState listener — adjust wake word threshold based on foreground/background
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextAppState) => {
-      if (nextAppState === 'active') {
-        // App came to foreground → STOP wake word ONCE (unless already stopped)
-        if (!isWakeWordStoppedRef.current) {
-          if (NativeModules.NativeBackground) {
-          try {
-            NativeModules.NativeBackground.stopListening();
-            NativeModules.NativeBackground.showToast('🔕 Wake word listening stopped');
-          } catch (e) {}
+    const subscription = AppState.addEventListener('change', async (nextAppState) => {
+      const wasBackground = appStateRef.current === 'background' || appStateRef.current === 'inactive';
+      const goingBackground = nextAppState === 'background' || nextAppState === 'inactive';
+      const goingForeground = nextAppState === 'active';
+
+      if (goingForeground && wasBackground) {
+        // Came back to foreground — restart listener with foreground (lenient) threshold
+        if (!isWakeWordModeRef.current && !fullscreenRef.current) {
+          const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+          const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+          const phrase = settings.wakeWord || 'hey clawsuu';
+          const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+          const training = trainingJson ? JSON.parse(trainingJson) : null;
+          if (training?.features?.length) {
+            sampleListenerCleanupRef.current?.();
+            sampleListenerCleanupRef.current = startSampleMatchListener(
+              phrase, training.features, handleWakeWord,
+              (msg) => addLogEntry(msg, 'debug'),
+              SAMPLE_MATCH_THRESHOLD_FG,
+            );
+          }
+          isWakeWordStoppedRef.current = false;
         }
-          // Stop sample listener if running
-          sampleListenerCleanupRef.current?.();
-          sampleListenerCleanupRef.current = null;
-          isWakeWordStoppedRef.current = true;
-          // Lifecycle: app in foreground
-        }
-      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
-        // App went to background → START wake word ONCE (unless in fullscreen/voice mode)
-        if (isWakeWordStoppedRef.current && !fullscreenRef.current) {
-          Promise.all([
+      } else if (goingBackground && !wasBackground) {
+        // Going to background — restart listener with background (strict) threshold
+        if (!fullscreenRef.current) {
+          const [settingsRaw, ppnPath, wakeModeRaw, bgThreshRaw] = await Promise.all([
             AsyncStorage.getItem('cyberclaw-audio-settings'),
             AsyncStorage.getItem('cyberclaw-ppn-path'),
             AsyncStorage.getItem('cyberclaw-wake-mode'),
-          ]).then(async ([settingsRaw, ppnPath, wakeModeRaw]) => {
-            const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
-            const ppn = ppnPath || '';
-            const wakeMode = wakeModeRaw || 'sample';
-            const phrase = settings.wakeWord || 'hey claw';
-            if (wakeMode === 'sample') {
-              // Load training features and start looping sample listener
-              const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase))
-                .catch(() => null);
-              const training = trainingJson ? JSON.parse(trainingJson) : null;
-              if (training?.features?.length) {
-                sampleListenerCleanupRef.current?.();
-                sampleListenerCleanupRef.current = startSampleMatchListener(
-                  phrase, training.features, handleWakeWord,
-                );
-              } else {
-                // No training data, fall back to Vosk
-                WakeWordModule?.start?.(phrase).catch(() => {});
-              }
-            } else if (wakeMode === 'porcupine' && ppn) {
-              WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
-                WakeWordModule?.start?.(phrase).catch(() => {});
-              });
+            AsyncStorage.getItem('cyberclaw-wake-bg-threshold'),
+          ]);
+          const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+          const wakeMode = wakeModeRaw || 'sample';
+          const phrase = settings.wakeWord || 'hey clawsuu';
+          const bgThreshold = bgThreshRaw ? parseFloat(bgThreshRaw) : SAMPLE_MATCH_THRESHOLD_BG;
+          if (wakeMode === 'sample') {
+            const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+            const training = trainingJson ? JSON.parse(trainingJson) : null;
+            if (training?.features?.length) {
+              sampleListenerCleanupRef.current?.();
+              sampleListenerCleanupRef.current = startSampleMatchListener(
+                phrase, training.features, handleWakeWord,
+                (msg) => addLogEntry(msg, 'debug'),
+                bgThreshold,
+              );
             } else {
               WakeWordModule?.start?.(phrase).catch(() => {});
             }
-            isWakeWordStoppedRef.current = false;
-            // Lifecycle: app in background
-          });
+          } else if (wakeMode === 'porcupine' && ppnPath) {
+            WakeWordModule?.startPorcupine?.(ppnPath).catch(() => WakeWordModule?.start?.(phrase).catch(() => {}));
+          } else {
+            WakeWordModule?.start?.(phrase).catch(() => {});
+          }
+          isWakeWordStoppedRef.current = false;
         }
       }
       appStateRef.current = nextAppState;
@@ -696,7 +702,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     return () => {
       subscription.remove();
     };
-  }, []);
+  }, [handleWakeWord]);
 
   // Sync & background service
   useEffect(() => {
@@ -721,6 +727,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           sampleListenerCleanupRef.current = startSampleMatchListener(
             phrase, training.features, handleWakeWord,
             (msg) => addLogEntry(msg, 'debug'),
+            SAMPLE_MATCH_THRESHOLD_FG,
           );
           addLogEntry(`Starting sample-match wake detection, phrase: "${phrase}"`, 'info');
         } else {
@@ -1213,6 +1220,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             training.features,
             handleWakeWord,
             (msg) => addLogEntry(msg, 'debug'),
+            SAMPLE_MATCH_THRESHOLD_FG,
           );
           addVoiceLog(`Matching: "${phrase}"`);
         } else {

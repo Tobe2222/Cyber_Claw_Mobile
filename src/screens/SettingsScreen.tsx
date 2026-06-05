@@ -84,6 +84,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [ppnPath, setPpnPath] = useState<string>('');
   const [wakeMode, setWakeMode] = useState<'vosk' | 'porcupine'>('vosk');
   const [bgListening, setBgListening] = useState(true);
+  const [bgThreshold, setBgThreshold] = useState(65); // 0-100, default 65%
   const [testVoiceIndex, setTestVoiceIndex] = useState(0);
   const [remotePerms, setRemotePerms] = useState<RemotePermissions>({
     file_read: false,
@@ -161,6 +162,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     AsyncStorage.getItem('cyberclaw-ppn-path').then(v => { if (v) setPpnPath(v); });
     AsyncStorage.getItem('cyberclaw-wake-mode').then(v => { if (v === 'porcupine') setWakeMode('porcupine'); else if (v === 'sample') setWakeMode('sample' as any); });
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
+    AsyncStorage.getItem('cyberclaw-wake-bg-threshold').then(v => { if (v) setBgThreshold(Math.round(parseFloat(v) * 100)); });
     // Load saved settings
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -541,6 +543,38 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           />
         </View>
 
+
+        {/* Background wake threshold */}
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>🎯 Background Threshold: {bgThreshold}%</Text>
+            <Text style={styles.toggleSub}>Min match score to trigger wake word in background. Higher = stricter.</Text>
+          </View>
+        </View>
+        <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ color: '#888', fontSize: 12 }}>40%</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+              {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
+                <TouchableOpacity
+                  key={v}
+                  onPress={async () => {
+                    setBgThreshold(v);
+                    await AsyncStorage.setItem('cyberclaw-wake-bg-threshold', String(v / 100));
+                  }}
+                  style={{
+                    flex: 1, height: 28, justifyContent: 'center', alignItems: 'center',
+                    backgroundColor: bgThreshold === v ? '#f7931a' : (bgThreshold > v ? '#3a2a00' : '#1a1a1a'),
+                    borderRadius: 4, marginHorizontal: 1,
+                  }}
+                >
+                  <Text style={{ color: bgThreshold === v ? '#fff' : '#666', fontSize: 9 }}>{v}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={{ color: '#888', fontSize: 12 }}>90%</Text>
+          </View>
+        </View>
 
         {/* DEPRECATED: Old trainer - use V2 below instead */}
         {/* 
