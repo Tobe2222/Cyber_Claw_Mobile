@@ -1,8 +1,11 @@
 package com.cyberclawmobile
 
 import android.app.Activity
+import android.app.NotificationManager
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -27,6 +30,20 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     checkWakeIntent(intent)
+    requestFullScreenIntentPermission()
+  }
+
+  // Android 14+ requires user to explicitly grant USE_FULL_SCREEN_INTENT
+  private fun requestFullScreenIntentPermission() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34
+      val nm = getSystemService(NotificationManager::class.java)
+      if (!nm.canUseFullScreenIntent()) {
+        val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+          data = android.net.Uri.parse("package:$packageName")
+        }
+        try { startActivity(intent) } catch (_: Exception) {}
+      }
+    }
   }
 
   override fun onNewIntent(intent: Intent) {

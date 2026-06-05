@@ -81,7 +81,11 @@ function startSampleMatchListener(
 async function startBgService() {
   try {
     const enabled = await AsyncStorage.getItem('cyberclaw-bg-listening');
-    if (enabled !== 'false' && BackgroundService) await BackgroundService.start();
+    if (enabled !== 'false' && BackgroundService) {
+      const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+      const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+      await BackgroundService.start(phrase);
+    }
   } catch {}
 }
 async function bringToForeground() {

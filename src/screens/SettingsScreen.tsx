@@ -533,7 +533,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               setBgListening(val);
               await AsyncStorage.setItem('cyberclaw-bg-listening', String(val));
               if (val) {
-                try { await BackgroundService?.start?.(); } catch {}
+                const settingsRaw2 = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+                const phrase2 = settingsRaw2 ? (JSON.parse(settingsRaw2).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+                try { await BackgroundService?.start?.(phrase2); } catch {}
                 Alert.alert('✅ Enabled', 'Background listening is on. App will wake on your phrase.');
               } else {
                 try { await BackgroundService?.stop?.(); } catch {}

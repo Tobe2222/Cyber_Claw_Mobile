@@ -20,7 +20,8 @@ class CyberClawService : Service() {
         const val CHANNEL_ID = "cyberclaw_bg"
         const val NOTIF_ID = 1001
         var isRunning = false
-        const val WAKE_PHRASE = "hey claw"
+        const val EXTRA_PHRASE = "wake_phrase"
+        const val DEFAULT_PHRASE = "hey clawsuu"
     }
 
     private var voskModel: Model? = null
@@ -28,6 +29,7 @@ class CyberClawService : Service() {
     private var listenThread: Thread? = null
     @Volatile private var wakeListening = false
     private val handler = Handler(Looper.getMainLooper())
+    private var wakePhrase = DEFAULT_PHRASE
 
     override fun onCreate() {
         super.onCreate()
@@ -36,8 +38,9 @@ class CyberClawService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        wakePhrase = intent?.getStringExtra(EXTRA_PHRASE) ?: DEFAULT_PHRASE
         try {
-            val notif = buildNotification("CyberClaw", "Listening for \"Hey Claw\"...")
+            val notif = buildNotification("CyberClaw", "Listening for wake word...")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIF_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
             } else {
@@ -119,7 +122,7 @@ class CyberClawService : Service() {
         val text = Regex("\"(text|partial)\"\\s*:\\s*\"([^\"]+)\"")
             .find(json)?.groupValues?.get(2)?.lowercase() ?: return
         if (text.isBlank()) return
-        if (PhoneticMatcher.matches(text, WAKE_PHRASE)) {
+        if (PhoneticMatcher.matches(text, wakePhrase)) {
             Log.d("CyberClawService", "Wake phrase detected in service: $text")
             handler.post { openApp() }
         }
@@ -146,20 +149,20 @@ class CyberClawService : Service() {
         )
 
         val notif = NotificationCompat.Builder(this, "cyberclaw_wake")
-            .setContentTitle("Hey Claw heard! 🐾")
-            .setContentText("Tap to open CyberClaw")
+            .setContentTitle("Wake word detected! 🎤")
+            .setContentText("Opening CyberClaw...")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
             .setFullScreenIntent(pendingIntent, true)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(1002, notif)
 
-        updateNotification("CyberClaw", "Listening for \"Hey Claw\"...")
+        updateNotification("CyberClaw", "Listening for wake word...")
     }
 
     private fun stopWakeListening() {
