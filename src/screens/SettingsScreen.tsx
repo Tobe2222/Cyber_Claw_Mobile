@@ -17,6 +17,12 @@ import TrainingManager from '../components/TrainingManager';
 import WakePhraseMenu from '../components/WakePhraseMenu';
 import TrainingDetailScreen from '../components/TrainingDetailScreen';
 import WakeWordTester from '../components/WakeWordTester';
+import {
+  getPermissions,
+  setPermission,
+  RemotePermissions,
+  RemotePermissionKey,
+} from '../services/RemoteToolPermissions';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
 
@@ -79,6 +85,14 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [wakeMode, setWakeMode] = useState<'vosk' | 'porcupine'>('vosk');
   const [bgListening, setBgListening] = useState(true);
   const [testVoiceIndex, setTestVoiceIndex] = useState(0);
+  const [remotePerms, setRemotePerms] = useState<RemotePermissions>({
+    file_read: false,
+    file_write: false,
+    launch_intent: false,
+    get_location: false,
+    get_camera: false,
+    read_notifications: false,
+  });
 
   const availableVoices = [
     { key: 'en-US', label: 'English (US)' },
@@ -216,6 +230,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       Alert.alert('Pairing Failed', msg.error || 'Wrong code or expired.');
     });
 
+    // Load Agent Reach permissions
+    getPermissions().then(p => setRemotePerms(p)).catch(() => {});
+
     return () => {
       syncClient.off('state_change', onStateChange);
     };
@@ -226,6 +243,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
     audioBuffer.updateSettings(audioSettings);
     Alert.alert('Saved ✓', 'Settings have been saved.');
+  };
+
+  const toggleRemotePerm = async (key: RemotePermissionKey, value: boolean) => {
+    setRemotePerms(prev => ({ ...prev, [key]: value }));
+    await setPermission(key, value);
   };
 
   const connectToDesktop = async () => {
@@ -615,6 +637,102 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         </Text>
       </View>
 
+      {/* Agent Reach */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>🤖 Agent Reach</Text>
+        <View style={styles.divider} />
+        <Text style={styles.sectionDesc}>
+          Allow the AI companion to interact with this device remotely.
+        </Text>
+
+        {/* File System */}
+        <Text style={styles.subGroupTitle}>📁 File System</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>Read files</Text>
+            <Text style={styles.toggleSub}>Browse & read file content</Text>
+          </View>
+          <Switch
+            value={remotePerms.file_read}
+            onValueChange={v => toggleRemotePerm('file_read', v)}
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={remotePerms.file_read ? '#fff' : '#666'}
+          />
+        </View>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>Write / create files</Text>
+            <Text style={styles.toggleSub}>Create, write, and mkdir</Text>
+          </View>
+          <Switch
+            value={remotePerms.file_write}
+            onValueChange={v => toggleRemotePerm('file_write', v)}
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={remotePerms.file_write ? '#fff' : '#666'}
+          />
+        </View>
+
+        {/* App Control */}
+        <Text style={[styles.subGroupTitle, { marginTop: 12 }]}>📱 App Control</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>Launch apps &amp; intents</Text>
+            <Text style={styles.toggleSub}>Open URLs and Android intents</Text>
+          </View>
+          <Switch
+            value={remotePerms.launch_intent}
+            onValueChange={v => toggleRemotePerm('launch_intent', v)}
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={remotePerms.launch_intent ? '#fff' : '#666'}
+          />
+        </View>
+
+        {/* Location */}
+        <Text style={[styles.subGroupTitle, { marginTop: 12 }]}>📍 Location</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>Location</Text>
+            <Text style={styles.toggleSub}>Share GPS coordinates with agent</Text>
+          </View>
+          <Switch
+            value={remotePerms.get_location}
+            onValueChange={v => toggleRemotePerm('get_location', v)}
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={remotePerms.get_location ? '#fff' : '#666'}
+          />
+        </View>
+
+        {/* Camera */}
+        <Text style={[styles.subGroupTitle, { marginTop: 12 }]}>📷 Camera</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>Camera</Text>
+            <Text style={styles.toggleSub}>Take photos on agent request</Text>
+          </View>
+          <Switch
+            value={remotePerms.get_camera}
+            onValueChange={v => toggleRemotePerm('get_camera', v)}
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={remotePerms.get_camera ? '#fff' : '#666'}
+          />
+        </View>
+
+        {/* Notifications — not yet supported */}
+        <Text style={[styles.subGroupTitle, { marginTop: 12 }]}>🔔 Notifications</Text>
+        <View style={[styles.toggleRow, { opacity: 0.4 }]}>
+          <View style={styles.toggleInfo}>
+            <Text style={styles.toggleTitle}>Notifications</Text>
+            <Text style={styles.toggleSub}>Not yet supported</Text>
+          </View>
+          <Switch
+            value={false}
+            disabled
+            trackColor={{ false: '#333', true: '#f7931a' }}
+            thumbColor={'#666'}
+          />
+        </View>
+      </View>
+
       {/* Save */}
       <TouchableOpacity style={[styles.button, styles.saveButton]} onPress={saveSettings}>
         <Text style={styles.buttonText}>Save Settings</Text>
@@ -809,5 +927,18 @@ const styles = StyleSheet.create({
   },
   modeBtnTextActive: {
     color: '#f7931a',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#222',
+    marginVertical: 8,
+  },
+  subGroupTitle: {
+    color: '#aaa',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 6,
+    marginTop: 4,
+    letterSpacing: 0.5,
   },
 });

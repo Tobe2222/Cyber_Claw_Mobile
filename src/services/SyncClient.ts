@@ -213,8 +213,16 @@ class SyncClient {
     this.send({ type: 'pair', code, deviceName });
   }
 
-  sendChat(text: string, agentId: string = 'companion') {
-    this.send({ type: 'chat', text, agentId });
+  sendChat(
+    text: string,
+    agentId: string = 'companion',
+    deviceMeta?: { deviceName?: string; deviceType?: string },
+  ) {
+    this.send({ type: 'chat', text, agentId, ...(deviceMeta ? { deviceMeta } : {}) });
+  }
+
+  sendRemoteToolResult(id: string, ok: boolean, data?: any, error?: string) {
+    this.send({ type: 'remote_tool_result', id, ok, ...(data !== undefined ? { data } : {}), ...(error ? { error } : {}) });
   }
 
   sendVoiceTranscript(transcript: string, context: string, lookbackMinutes: number) {
@@ -315,6 +323,10 @@ class SyncClient {
 
       case 'arena_event':
         this.emit('arena', msg);
+        break;
+
+      case 'remote_tool':
+        this.emit('remote_tool', msg);
         break;
 
       case 'audio_response':

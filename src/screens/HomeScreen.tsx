@@ -20,6 +20,7 @@ import RNFS from 'react-native-fs';
 import { extractAudioFeatures, matchAgainstTraining, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array } from '../services/AudioUtils';
 import { version as APP_VERSION } from '../../package.json';
+import RemoteToolHandler from '../services/RemoteToolHandler';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
@@ -1130,7 +1131,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       }
     });
 
+    // Agent Reach — remote tool handler
+    const remoteToolHandler = new RemoteToolHandler(syncClient);
+    remoteToolHandler.init();
+
     return () => {
+      remoteToolHandler.destroy();
       try { wakeSub?.remove?.(); } catch {}
       try { wakeOpenSub?.remove?.(); } catch {}
       try { debugSub?.remove?.(); } catch {}
