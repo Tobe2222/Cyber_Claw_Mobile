@@ -11,4 +11,7 @@ sed -i "s/versionCode $CODE/versionCode $NEW_CODE/" android/app/build.gradle
 sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
 # Update package.json to match
 node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json')); p.version='$VERSION'; fs.writeFileSync('package.json', JSON.stringify(p,null,2)+'\n');"
-echo "Bumped to $VERSION (versionCode $NEW_CODE)"
+# Tag the release so it shows up in the GitHub Tags list
+git tag -a "v$VERSION" -m "v$VERSION" HEAD
+git push origin "v$VERSION" 2>&1 | tail -1
+echo "Bumped to $VERSION (versionCode $NEW_CODE) and tagged v$VERSION"
