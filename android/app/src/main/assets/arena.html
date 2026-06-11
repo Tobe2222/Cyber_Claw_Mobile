@@ -52,6 +52,12 @@ body{margin:0;padding:0;overflow:hidden;width:100%;height:100%}
 #ui.fullscreen { pointer-events: none !important; background: transparent !important; position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; }
 #ui.fullscreen #ctrlLeft { display: none !important; }
 #ui.fullscreen #ctrlRight { display: none !important; }
+/* Hide the arena canvas content in fullscreen mode — the boar/forest scene
+   is drawn ON the canvas, so background:#000 doesn't hide it. Replace it
+   with a clean dark surface so the React Native voice overlays show clearly. */
+body.fullscreen #c,
+html.fullscreen #c { display: none !important; }
+body.fullscreen, html.fullscreen { background: #0a0a2e !important; }
 #ui.fullscreen #ctrlFs { display: flex !important; position: fixed !important; top: 60px !important; right: 30px !important; z-index: 1001 !important; pointer-events: all !important; }
 #ui.fullscreen #exitVoiceBtn { 
   width: 60px !important; 
@@ -354,6 +360,15 @@ document.getElementById('settingsModal').addEventListener('click', e=>{ if(e.tar
 // ── Fullscreen ────────────────────────────────────────────────────────────────
 function setFullscreenMode(on) {
   fullscreen=on;
+  // Toggle CSS classes — previously only buttons were toggled, leaving the
+  // arena canvas (boar/forest) visible behind the voice overlay. Now we
+  // also add .fullscreen to #ui, #c and body so the voice mode goes opaque.
+  const ui = document.getElementById('ui');
+  const c  = document.getElementById('c');
+  if (ui) ui.classList.toggle('fullscreen', !!on);
+  if (c)  c.classList.toggle('fullscreen', !!on);
+  document.body.classList.toggle('fullscreen', !!on);
+  document.documentElement.classList.toggle('fullscreen', !!on);
   document.getElementById('ctrlLeft').style.display  = on?'none':'flex';
   document.getElementById('ctrlRight').style.display = on?'none':'flex';
   document.getElementById('ctrlFs').style.display    = on?'flex':'none';

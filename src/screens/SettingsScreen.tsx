@@ -2,7 +2,7 @@
  * SettingsScreen — Connection, audio buffer, and always-listening settings
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
   Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules, BackHandler,
@@ -86,6 +86,12 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [bgListening, setBgListening] = useState(true);
   const [bgThreshold, setBgThreshold] = useState(65); // 0-100, default 65%
   const [readyPhrase, setReadyPhrase] = useState('Ready to chat');
+  const [readyPhraseSavedAt, setReadyPhraseSavedAt] = useState<number | null>(null);
+  const readyPhraseSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Clear any pending debounce save on unmount
+  useEffect(() => () => {
+    if (readyPhraseSaveTimer.current) clearTimeout(readyPhraseSaveTimer.current);
+  }, []);
   const [wakePerms, setWakePerms] = useState({ canDrawOverlays: false, canUseFullScreenIntent: true });
   const [testVoiceIndex, setTestVoiceIndex] = useState(0);
   const [remotePerms, setRemotePerms] = useState<RemotePermissions>({
@@ -648,14 +654,62 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               borderWidth: 1, borderColor: '#333',
             }}
             value={readyPhrase}
-            onChangeText={setReadyPhrase}
-            onEndEditing={async () => {
+            onChangeText={(v) => {
+              setReadyPhrase(v);
+              // Debounced auto-save: 600ms after the user stops typing,
+              // persist the greeting. onEndEditing alone is unreliable —
+              // users tap Save / leave the screen and the TextInput never
+              // fires onEndEditing, so the greeting looked like it didn't
+              // stick.
+              if (readyPhraseSaveTimer.current) clearTimeout(readyPhraseSaveTimer.current);
+              readyPhraseSaveTimer.current = setTimeout(async () => {
+                await AsyncStorage.setItem('cyberclaw-ready-phrase', v);
+                setReadyPhraseSavedAt(Date.now());
+              }, 600);
+            }}
+            onBlur={async () => {
+              if (readyPhraseSaveTimer.current) {
+                clearTimeout(readyPhraseSaveTimer.current);
+                readyPhraseSaveTimer.current = null;
+              }
               await AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase);
+              setReadyPhraseSavedAt(Date.now());
+            }}
+            onSubmitEditing={async () => {
+              if (readyPhraseSaveTimer.current) {
+                clearTimeout(readyPhraseSaveTimer.current);
+                readyPhraseSaveTimer.current = null;
+              }
+              await AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase);
+              setReadyPhraseSavedAt(Date.now());
             }}
             placeholder="Ready to chat"
             placeholderTextColor="#555"
             returnKeyType="done"
           />
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 12 }}>
+            <TouchableOpacity
+              onPress={async () => {
+                if (readyPhraseSaveTimer.current) {
+                  clearTimeout(readyPhraseSaveTimer.current);
+                  readyPhraseSaveTimer.current = null;
+                }
+                await AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase);
+                setReadyPhraseSavedAt(Date.now());
+              }}
+              style={{
+                backgroundColor: '#f7931a', borderRadius: 8, paddingHorizontal: 14,
+                paddingVertical: 8,
+              }}
+            >
+              <Text style={{ color: '#000', fontWeight: '600', fontSize: 13 }}>💾 Save</Text>
+            </TouchableOpacity>
+            <Text style={{ color: readyPhraseSavedAt ? '#4caf50' : '#666', fontSize: 12 }}>
+              {readyPhraseSavedAt
+                ? `✅ Saved at ${new Date(readyPhraseSavedAt).toLocaleTimeString()}`
+                : 'Auto-saves as you type'}
+            </Text>
+          </View>
         </View>
 
         {/* DEPRECATED: Old trainer - use V2 below instead */}

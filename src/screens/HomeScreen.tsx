@@ -1,5 +1,5 @@
 /**
- * HomeScreen — CyberClaw mobile companion
+ * HomeScreen - CyberClaw mobile companion
  * Arena (real sprites) + Chat/Events/Log tabs + TTS + background service
  */
 
@@ -24,7 +24,7 @@ import RemoteToolHandler from '../services/RemoteToolHandler';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
-// Lazy getter — NativeEventEmitter must not be instantiated at module eval time
+// Lazy getter - NativeEventEmitter must not be instantiated at module eval time
 // (bridge may not be ready). Create on first use instead.
 let _wakeWordEmitter: NativeEventEmitter | null = null;
 const getWakeWordEmitter = () => {
@@ -39,8 +39,8 @@ const wakeWordEmitter = { addListener: (event: string, cb: (...args: any[]) => v
 // ── Sample-match wake listener ──────────────────────────────────────────────
 const getWakeSamplesKey = (phrase: string) =>
   `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
-const SAMPLE_MATCH_THRESHOLD_FG = 0.55; // foreground — more lenient
-const SAMPLE_MATCH_THRESHOLD_BG = 0.65; // background default — stricter
+const SAMPLE_MATCH_THRESHOLD_FG = 0.55; // foreground - more lenient
+const SAMPLE_MATCH_THRESHOLD_BG = 0.65; // background default - stricter
 
 function startSampleMatchListener(
   _phrase: string,
@@ -217,7 +217,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         setCompanionId(v);
       }
     }).catch(() => {});
-    
+
     // Test native module
     console.log('[Native] Available modules:', Object.keys(NativeModules).join(', '));
     if (NativeModules.NativeBackground) {
@@ -254,7 +254,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Speak via WebView TTS
   const speak = useCallback((text: string) => {
     if (!ttsEnabled) return;
-    // Prefer native Android TTS — works reliably even when AudioRecord is active
+    // Prefer native Android TTS - works reliably even when AudioRecord is active
     if (WakeWordModule?.speakText) {
       WakeWordModule.speakText(text).catch(() => {
         // Fallback: WebView speechSynthesis
@@ -299,7 +299,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setIsWakeWordMode(false);
     isWakeWordModeRef.current = false;
     AppControl?.keepScreenOn?.(false);
-    
+
     // CRITICAL: Stop any active recording
     try {
       const recorder = getSimpleAudioRecorder();
@@ -308,7 +308,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     } catch (e) {
       // Recording already stopped or not running
     }
-    
+
     // CRITICAL: Stop any in-progress audio playback
     try { WakeWordModule?.stopPlayer?.(); } catch (_) {}
 
@@ -316,7 +316,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setPendingAudioPath(null);
     setAttachments([]);
     setWakeWordSession(null);
-    
+
     // CRITICAL: Remove fullscreen CSS classes from HTML
     const js = `
       document.getElementById('ui').classList.remove('fullscreen');
@@ -334,54 +334,70 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
     setVoiceLogs([]);  // Clear logs on enter
     addVoiceLog('🎙️ Listening...');
-    
-    // FIXED: Set fullscreen ALWAYS, not just for wakeword
+
+    // CRITICAL: For wakeword, bring activity to front FIRST and wait.
+    // bringToForeground() calls startActivity which can trigger onNewIntent /
+    // window reconfiguration. If we setFullscreen(true) before that completes,
+    // the React state can be wiped when the activity re-stabilises.
+    if (source === 'wakeword') {
+      try { await bringToForeground(); } catch (_) {}
+      try { await AppControl?.showOnLockScreenWithDismiss?.(); } catch (_) {}
+      addLogEntry('Activity brought to foreground', 'info');
+    }
+
+    // FIXED: Set fullscreen AFTER activity is stable, so React state survives
     AppControl?.keepScreenOn?.(true);
     setFullscreen(true);
     fullscreenRef.current = true;
-    
+
     // Initialize Voice Activity Detection
     const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
     resetVAD();
     addVoiceLog('🎙️ VAD ready');
-    
+
     if (source === 'wakeword') {
-      bringToForeground();
-      AppControl?.showOnLockScreenWithDismiss?.();
       addLogEntry('Entering voice mode', 'info');
-      
-      // Tell arena to enter focus mode
-      webViewRef.current?.injectJavaScript(`
-        window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
-        document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
-        true;
-      `);
+
+      // Tell arena to enter focus mode — AND re-apply after a short delay
+      // in case the WebView is still re-rendering after the activity change.
+      const applyFullscreen = () => {
+        try {
+          webViewRef.current?.injectJavaScript(`
+            window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
+            document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
+            true;
+          `);
+        } catch (_) {}
+      };
+      applyFullscreen();
+      setTimeout(applyFullscreen, 200);
+      setTimeout(applyFullscreen, 600);
 
       // Speak "ready to chat" phrase (customisable in settings)
       AsyncStorage.getItem('cyberclaw-ready-phrase').then(phrase => {
         speak(phrase || 'Ready to chat');
       }).catch(() => speak('Ready to chat'));
     }
-    
+
     // Auto-start listening with SimpleAudioRecorder + countdown on silence (runs always)
     try {
         const fs = require('react-native-fs');
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
         const recorder = getSimpleAudioRecorder();
-        
+
         // FIXED: Track whether we've transitioned to 'recording' state
         let hasTransitionedToRecording = false;
-        
+
         // Set up silence detection: start countdown and auto-send
         // TODO: Integrate VAD for smarter end-of-speech detection
         let countdownInterval: NodeJS.Timeout | null = null;
         let silenceEventFired = false;
         let maxDurationTimeout: NodeJS.Timeout | null = null;
         let audioSent = false; // guard: only send once
-        
+
         // VAD will replace this with frame-by-frame analysis
         const vad = getVAD();
-        
+
         const unsubSilence = recorder.once('silence', async () => {
           silenceEventFired = true;
           addVoiceLog('⏳ Silence detected...');
@@ -389,7 +405,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           setVoiceStatus('silence_countdown');
           let count = 3;
           setSilenceCountdown(count);
-          
+
           countdownInterval = setInterval(() => {
             count--;
             setSilenceCountdown(count);
@@ -419,11 +435,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                   setVoiceStatus('transcribing');
                   syncClient.sendAudioInput(base64, 'audio/m4a');
                   addLogEntry('Voice message sent for transcription', 'sent');
-                  
+
                   // IMPORTANT: Don't exit voice mode!
                   // Set up listener for response and restart listening after
                   // (Desktop will process and respond with audio)
-                  
+
                 } catch (e: any) {
                   setVoiceStatus('idle');
                   addLogEntry(`Send error: ${e?.message}`, 'error');
@@ -436,10 +452,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             }
           }, 1000);
         });
-        
+
         await recorder.start(recPath, 5000); // 5s silence timeout
         setIsVoiceListening(true);
-        
+
         // FIXED #1: Add audio detection timer
         // If still in 'listening' status after 500ms, assume audio is being captured
         // This gives visual feedback that the recorder is active
@@ -452,7 +468,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             addLogEntry('Audio detection timeout - status: recording', 'info');
           }
         }, 500);
-        
+
         // FIXED #2: Add max duration fallback (30s)
         // If silence event doesn't fire after 30s, auto-stop and send
         maxDurationTimeout = setTimeout(() => {
@@ -460,7 +476,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             addLogEntry('Max duration (30s) reached - silence event may not have fired', 'error');
             if (countdownInterval) clearInterval(countdownInterval);
             if (audioDetectTimer) clearTimeout(audioDetectTimer);
-            
+
             recorder.stop().then(async (resultPath: string) => {
               setIsVoiceListening(false);
               if (!resultPath) {
@@ -485,7 +501,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             });
           }
         }, 30000);
-        
+
         setVoiceStatus('listening');
         addLogEntry('Voice mode: listening for audio', 'info');
       } catch (e) {
@@ -504,18 +520,18 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         onOpenArenaSettings();
         return;
       }
-      
+
       if (msg.type === 'log') {
         // Log message from arena - display in app logs
         addLogEntry(msg.text || 'Arena log', 'info');
         return;
       }
-      
+
       if (msg.type === 'fullscreen') {
         // User clicked Voice Mode button in arena → enter fullscreen
-        // But not if we're already in wake word mode — that takes priority
+        // But not if we're already in wake word mode - that takes priority
         if (isWakeWordModeRef.current) {
-          addLogEntry('Ignoring fullscreen msg — wake word mode active', 'debug');
+          addLogEntry('Ignoring fullscreen msg - wake word mode active', 'debug');
         } else {
           addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
           enterVoiceMode('focus');
@@ -528,7 +544,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       }
       if (msg.type === 'exitFullscreen') {
         if (isWakeWordModeRef.current) {
-          // X button in wake word mode — exit wake word mode properly
+          // X button in wake word mode - exit wake word mode properly
           addLogEntry('Exiting wake word mode via X button', 'debug');
           toggleWakeWordMode();
         } else {
@@ -549,7 +565,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (fullscreen) {
         if (isWakeWordModeRef.current) {
-          // Back in wake word mode — toggle off properly (cleans up + closes fullscreen)
+          // Back in wake word mode - toggle off properly (cleans up + closes fullscreen)
           toggleWakeWordMode();
         } else {
           closeFullscreen();
@@ -564,17 +580,18 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
     if (wakeWordBusyRef.current) {
-      addLogEntry('Wake word detected but already busy — ignoring', 'debug');
+      addLogEntry('Wake word detected but already busy - ignoring', 'debug');
       return;
     }
     wakeWordBusyRef.current = true;
     // CRITICAL: stop sample listener BEFORE starting SimpleAudioRecorder
-    // Both use AudioRecord — they cannot run simultaneously
+    // Both use AudioRecord - they cannot run simultaneously
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
     addLogEntry('🎤 Wake word! Stopped sample listener, starting recorder', 'info');
 
-    // If app is in background, bring it to front over lock screen
+    // If app is in background, ask native side to bring it forward (this can
+    // trigger onNewIntent on the activity, but not a fresh launch).
     const isBackground = appStateRef.current === 'background' || appStateRef.current === 'inactive';
     if (isBackground) {
       try { NativeModules.NativeBackground?.bringToFront?.(); } catch (_) {}
@@ -582,15 +599,33 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       await new Promise(r => setTimeout(r, 400));
     }
 
-    await enterVoiceMode('wakeword');
+    try {
+      await enterVoiceMode('wakeword');
+    } catch (e: any) {
+      addLogEntry(`❌ enterVoiceMode failed: ${e?.message}`, 'error');
+      wakeWordBusyRef.current = false;
+      // Try to recover by restarting the sample listener
+      try {
+        const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+        const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+        const training = trainingJson ? JSON.parse(trainingJson) : null;
+        if (training?.features?.length) {
+          sampleListenerCleanupRef.current = startSampleMatchListener(
+            phrase, training.features, handleWakeWord,
+            (m) => addLogEntry(m, 'debug'),
+          );
+        }
+      } catch (_) {}
+    }
     // wakeWordBusyRef cleared + sample listener restarted in restartWakeListening
   }, [enterVoiceMode]);
 
   // Load persisted chat
   useEffect(() => {
     AsyncStorage.getItem(CHAT_STORAGE_KEY).then(raw => {
-      if (raw) { 
-        try { 
+      if (raw) {
+        try {
           const loaded = JSON.parse(raw);
           const filtered = loaded.filter((m: any) => m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
           setMessages(filtered);
@@ -611,10 +646,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       const now = Date.now();
       const recentMessages = messages.filter(m => (now - m.ts) < TWO_WEEKS_MS);
       const archivedMessages = messages.filter(m => (now - m.ts) >= TWO_WEEKS_MS);
-      
+
       // Save recent (keep last 100)
       AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(recentMessages.slice(-100)));
-      
+
       // Save archived separately (keep all)
       if (archivedMessages.length > 0) {
         AsyncStorage.getItem(ARCHIVE_STORAGE_KEY).then(raw => {
@@ -647,7 +682,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [wakeDebug, setWakeDebug] = useState<string>('init');
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
-  
+
   // Wake Word Mode
   const [isWakeWordMode, setIsWakeWordMode] = useState(false);
   const isWakeWordModeRef = useRef(false);
@@ -655,7 +690,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // toggleVoiceInput defined after sendMessage below
 
-  // AppState listener — adjust wake word threshold based on foreground/background
+  // AppState listener - adjust wake word threshold based on foreground/background
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async (nextAppState) => {
       const wasBackground = appStateRef.current === 'background' || appStateRef.current === 'inactive';
@@ -663,7 +698,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       const goingForeground = nextAppState === 'active';
 
       if (goingForeground && wasBackground) {
-        // Came back to foreground — restart listener with foreground (lenient) threshold
+        // Came back to foreground - restart listener with foreground (lenient) threshold
         if (!isWakeWordModeRef.current && !fullscreenRef.current) {
           const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
           const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
@@ -681,7 +716,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           isWakeWordStoppedRef.current = false;
         }
       } else if (goingBackground && !wasBackground) {
-        // Going to background — restart listener with background (strict) threshold
+        // Going to background - restart listener with background (strict) threshold
         if (!fullscreenRef.current) {
           const [settingsRaw, ppnPath, wakeModeRaw, bgThreshRaw] = await Promise.all([
             AsyncStorage.getItem('cyberclaw-audio-settings'),
@@ -765,9 +800,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     });
 
     // Check if app is already in background (e.g., freshly opened from wakeword)
-    // If so, don't start wake word yet — wait for transition
+    // If so, don't start wake word yet - wait for transition
     if (appStateRef.current !== 'active') {
-      // App is backgrounded — wake word will be started by AppState listener
+      // App is backgrounded - wake word will be started by AppState listener
     }
 
     // Wake word event → bring app to front in focus mode
@@ -805,7 +840,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const onState = (data: any) => {
       setConnState(data.state);
       addLogEntry(`State → ${data.state}`, 'info');
-      
+
       // Show connection notifications via Toast (small, subtle)
       if (data.state === 'connected') {
         addLogEntry('Connected - receiving updates from desktop', 'info');
@@ -838,7 +873,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       // In wake word mode, only process messages that are responses to a wake word trigger
       // (wakeWordBusyRef=true). Random companion reactions should just go to normal chat.
       if (isWakeWordModeRef.current && !wakeWordBusyRef.current) {
-        addLogEntry(`📨 Wake word mode idle — routing to chat silently`, 'debug');
+        addLogEntry(`📨 Wake word mode idle - routing to chat silently`, 'debug');
         setMessages(prev => {
           const dupe = prev.some(m => Math.abs(m.ts - (msg.ts || Date.now())) < 2000 && m.text === msg.text);
           if (dupe) return prev;
@@ -893,9 +928,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             } catch (_) {}
           };
 
-          // Desktop sends audio_response (synthesized WAV) — onAudioResponse plays it
+          // Desktop sends audio_response (synthesized WAV) - onAudioResponse plays it
           // and will call restartWakeListening via audioPlayerFinished event.
-          // Don't call speak() here — it would conflict with startPlayer().
+          // Don't call speak() here - it would conflict with startPlayer().
           // Fallback: if audio_response never arrives, restart after estimated duration.
           const wordCount = msg.text.split(/\s+/).length;
           const fallbackMs = Math.max(6000, Math.ceil((wordCount / 130) * 60 * 1000) + 3000);
@@ -903,7 +938,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           // Also listen for audioPlayerFinished (fired by startPlayer in onAudioResponse)
           ttsDoneSub = wakeWordEmitter?.addListener('audioPlayerFinished', restartWakeListening);
         } else {
-          // audio_response from desktop handles playback — speak() removed
+          // audio_response from desktop handles playback - speak() removed
           setTimeout(() => {
             if (fullscreenRef.current) {
               setVoiceStatus('listening');
@@ -952,10 +987,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     };
 
     const onAudioResponse = async (msg: any) => {
-      addLogEntry(`🔊 AUDIO RESPONSE ARRIVED — bytes=${msg.audioBase64?.length ?? 0} mime=${msg.mimeType}`, 'info');
+      addLogEntry(`🔊 AUDIO RESPONSE ARRIVED - bytes=${msg.audioBase64?.length ?? 0} mime=${msg.mimeType}`, 'info');
       // Don't play if we've already exited voice/wake mode
       if (!fullscreenRef.current) {
-        addLogEntry('🔊 Skipping playback — no longer in fullscreen', 'debug');
+        addLogEntry('🔊 Skipping playback - no longer in fullscreen', 'debug');
         return;
       }
       try {
@@ -968,19 +1003,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
         addLogEntry(`🔊 Written to ${tmpPath}, calling startPlayer`, 'info');
-        
+
         // If in voice mode, set status to 'playing'
         if (fullscreenRef.current) {
           setVoiceStatus('playing');
         }
-        
+
         try {
           await WakeWordModule.startPlayer(tmpPath);
           addLogEntry('🔊 startPlayer resolved OK', 'info');
         } catch (playerErr: any) {
           addLogEntry(`🔊 startPlayer ERROR: ${playerErr?.message}`, 'error');
         }
-        
+
         // After playback, if still in voice mode, restart listening loop
         // In wake word mode, restartWakeListening handles this via audioPlayerFinished
         if (fullscreenRef.current && !isWakeWordModeRef.current) {
@@ -989,19 +1024,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           setVoiceStatus('listening');
           setSilenceCountdown(0);
           setIsVoiceListening(true);
-          
+
           // Restart SimpleAudioRecorder for voice mode
           try {
             const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
             const recorder = getSimpleAudioRecorder();
-            
+
             // Re-attach silence listener with state tracking
             let hasTransitionedToRecording = false;
             let silenceEventFired = false;
             let countdownInterval: NodeJS.Timeout | null = null;
             let maxDurationTimeout: NodeJS.Timeout | null = null;
             let audioDetectTimer: NodeJS.Timeout | null = null;
-            
+
             const unsubSilence = recorder.once('silence', async () => {
               silenceEventFired = true;
               addLogEntry('Silence detected in loop', 'info');
@@ -1042,7 +1077,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 }
               }, 1000);
             });
-            
+
             // FIXED #1: Add audio detection timer for loop
             audioDetectTimer = setTimeout(() => {
               addLogEntry(`Loop: audio timer fired (fullscreen=${fullscreenRef.current}, transitioned=${hasTransitionedToRecording})`, 'debug');
@@ -1052,14 +1087,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 addLogEntry('Loop: audio detection - status: recording', 'info');
               }
             }, 500);
-            
+
             // FIXED #2: Add max duration fallback for loop
             maxDurationTimeout = setTimeout(() => {
               if (!silenceEventFired && isVoiceListening) {
                 addLogEntry('Loop: Max duration (30s) reached - forcing send', 'error');
                 if (countdownInterval) clearInterval(countdownInterval);
                 if (audioDetectTimer) clearTimeout(audioDetectTimer);
-                
+
                 recorder.stop().then(async (resultPath: string) => {
                   setIsVoiceListening(false);
                   if (!resultPath) {
@@ -1082,7 +1117,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
                 });
               }
             }, 30000);
-            
+
             await recorder.start(recPath, 5000);
             addLogEntry('Loop: listening restarted', 'info');
           } catch (e: any) {
@@ -1097,7 +1132,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     const onLogUpdate = (e: LogEntry) => setLogEntries(prev => [...prev, e]);
 
-    
+
     syncClient.on('state_change', onState);
     syncClient.on('chat', onChat);
     const onCompanionChange = (msg: any) => {
@@ -1124,7 +1159,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         if (dupe) return prev;
         return [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }];
       });
-      // Send to AI — desktop transcribed the audio but we must send the text to trigger the AI response
+      // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
       setChatVoiceStatus('Clawsuu is thinking...');
       syncClient.sendChat(msg.transcript);
     };
@@ -1136,14 +1171,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     syncClient.on('voice_received', onVoiceReceived);
 
     // NOTE: Wake word detection now happens locally on mobile in Wake Mode
-    
+
     // NOTE: Wake word listener already set up at line 603 (wakeSub)
     // No need for duplicate listener here
 
     const onSendError = (e: any) => {
       if (e?.type === 'audio_input') {
         setChatVoiceStatus(null);
-        addLogEntry('Not connected — reconnect and try again', 'error');
+        addLogEntry('Not connected - reconnect and try again', 'error');
       }
     };
     syncClient.on('send_error', onSendError);
@@ -1156,7 +1191,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       }
     });
 
-    // Agent Reach — remote tool handler
+    // Agent Reach - remote tool handler
     const remoteToolHandler = new RemoteToolHandler(syncClient);
     remoteToolHandler.init();
 
@@ -1243,7 +1278,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           addVoiceLog(`Matching: "${phrase}"`);
         } else {
           // Fallback to Vosk if no training data
-          addLogEntry('No training data — falling back to Vosk', 'error');
+          addLogEntry('No training data - falling back to Vosk', 'error');
           WakeWordModule?.start?.(phrase).catch(() => {});
         }
       } catch (e: any) {
@@ -1300,13 +1335,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
     const text = inputText.trim();
     if (!text && attachments.length === 0) return;
-    
+
     if (text) {
       setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
       syncClient.sendChat(text);
       addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
     }
-    
+
     for (const att of attachments) {
       try {
         const fs = require('react-native-fs');
@@ -1318,7 +1353,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         }
       } catch (e) { console.log('attachment error', e); }
     }
-    
+
     setInputText('');
     setAttachments([]);
   }, [inputText, isConnected, pendingAudioPath]);
@@ -1360,11 +1395,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             NativeModules.NativeBackground.showToast('🔕 Wake word listening stopped');
           } catch (e) {}
         }
-        
+
         const fs = require('react-native-fs');
         const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-chat-voice-${Date.now()}.m4a`;
         const recorder = getSimpleAudioRecorder();
-        
+
         // Set up silence detection listener for chat mode
         const unsubSilence = recorder.once('silence', async () => {
           try {
@@ -1389,7 +1424,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
             addLogEntry(`Error after silence: ${e?.message}`, 'error');
           }
         });
-        
+
         await recorder.start(recPath, 5000);
         setIsVoiceListening(true);
         setVoiceStatus('recording');
@@ -1420,7 +1455,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
       return <View />;
     }
-    
+
     // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)
     let showDateSeparator = false;
     if (index === 0 || !messages[index - 1]) {
@@ -1430,9 +1465,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       const currBucket = getDateBucket(item.ts);
       showDateSeparator = prevBucket !== currBucket;
     }
-    
+
     const dateStr = getDateBucketLabel(item.ts);
-    
+
     return (
       <View>
         {showDateSeparator && <Text style={styles.dateSeparator}>{dateStr}</Text>}
@@ -1457,9 +1492,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       const currBucket = getDateBucket(item.ts);
       showDateSeparator = prevBucket !== currBucket;
     }
-    
+
     const dateStr = getDateBucketLabel(item.ts);
-    
+
     return (
       <View>
         {showDateSeparator && <Text style={styles.dateSeparator}>{dateStr}</Text>}
@@ -1488,12 +1523,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Periodic sync - request state from desktop every 60 seconds
   useEffect(() => {
     if (connState !== 'connected') return;
-    
+
     const syncInterval = setInterval(() => {
       addLogEntry('Requesting latest state from desktop', 'info');
       syncClient.requestState();
     }, 60000); // Every 60 seconds
-    
+
     return () => clearInterval(syncInterval);
   }, [connState]);
 
