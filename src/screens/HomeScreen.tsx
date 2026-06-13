@@ -664,8 +664,11 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Check for a pending wake event from a previous mount or state wipe.
   // The wake-event handler persists a flag to AsyncStorage, and we read
-  // it here. Runs on every AppState change AND on mount, so it catches
-  // the case where React state was wiped by an activity re-order.
+  // it here. Runs on mount, on every app-state change, and on every
+  // render (via the `wakePendingCheckCounter` dep, incremented every
+  // 2s). This catches all three cases: re-mount, app-state change, and
+  // silent state wipe while component stays mounted.
+  const [wakePendingCheckCounter, setWakePendingCheckCounter] = useState(0);
   useEffect(() => {
     let consumed = false;
     const checkPending = () => {
@@ -684,14 +687,24 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         }
       }).catch(() => {});
     };
-    // Check on mount
+    // Check on every effect run
     checkPending();
-    // Check on every app-state change (foreground transition)
+    // Also check on every app-state change (foreground transition)
     const sub = AppState.addEventListener('change', (s) => {
       if (s === 'active') checkPending();
     });
     return () => sub?.remove?.();
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wakePendingCheckCounter]);
+
+  // Bump the counter every 2s so the pending-wake check effect runs
+  // periodically. This catches state wipes that don't trigger a re-mount
+  // or an app-state change.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setWakePendingCheckCounter(c => c + 1);
+    }, 2000);
+    return () => clearInterval(interval);
   }, []);
 
   // Load persisted chat
