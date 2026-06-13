@@ -27,6 +27,14 @@ const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
 // Lazy getter - NativeEventEmitter must not be instantiated at module eval time
 // (bridge may not be ready). Create on first use instead.
 let _wakeWordEmitter: NativeEventEmitter | null = null;
+
+// Module-level wake-recovery state. These survive React re-renders (and
+// the per-render watcher effect below uses them to re-apply fullscreen
+// whenever the state gets wiped). They do NOT survive a full component
+// unmount, but that's handled by the AsyncStorage-based recovery in
+// the useEffect above.
+let moduleLevelWakePending = false;
+let moduleLevelWakePendingAt = 0;
 const getWakeWordEmitter = () => {
   if (!_wakeWordEmitter && WakeWordModule) {
     _wakeWordEmitter = new NativeEventEmitter(WakeWordModule);
@@ -600,6 +608,9 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
   // Wake word → enter voice mode with lock screen
   const handleWakeWord = useCallback(async () => {
+    // ALWAYS show a Toast so the user can confirm the wake event reached JS.
+    try { NativeModules.NativeBackground?.showToast?.('🎤 Wake word detected!'); } catch (_) {}
+    addLogEntry('🎤 Wake word detected - entering Wake Mode', 'info');
     if (wakeWordBusyRef.current) {
       addLogEntry('Wake word detected but already busy - ignoring', 'debug');
       return;
@@ -610,7 +621,6 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     // Both use AudioRecord - they cannot run simultaneously
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
-    addLogEntry('🎤 Wake word! Stopped sample listener, starting recorder', 'info');
 
     // PERSIST the wake event to AsyncStorage BEFORE doing anything else. This
     // survives React re-mounts (e.g. if the activity gets re-ordered to
@@ -618,10 +628,15 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     // re-enter Wake Mode when it sees the flag. This is the most robust
     // way to handle the wake-from-background case.
     try { await AsyncStorage.setItem('cyberclaw-wake-pending', '1'); } catch (_) {}
-    // Clear after 10s as a safety net — the consuming effect will also
+    // Clear after 30s as a safety net — the consuming effect will also
     // clear it, but if the consuming effect doesn't fire (e.g. JS error),
     // we don't want the flag to stick around forever.
-    setTimeout(() => { AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {}); }, 10000);
+    setTimeout(() => { AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {}); }, 30000);
+
+    // Module-level flag for the per-render watcher effect below. Survives
+    // re-renders (and is the most reliable signal we have).
+    moduleLevelWakePending = true;
+    moduleLevelWakePendingAt = Date.now();
 
     // Mark Wake Mode active SYNCHRONOUSLY before any async/native calls.
     isWakeWordModeRef.current = true;
@@ -629,18 +644,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
     // DO NOT call NativeBackground.bringToFront() here. It calls
     // startActivity(REORDER_TO_FRONT) on the activity which triggers
-    // onNewIntent, which can wipe React state. The wake-receiver path
-    // (when the app is killed) already brings us up via SYSTEM_ALERT_WINDOW.
-    // When the app is in foreground, no bring-to-front is needed at all.
-    // When the app is in background (paused, not killed), the wake word is
-    // detected in-app via the sample listener or the background service
-    // and the activity is already running. So we skip bringToFront.
+    // onNewIntent, which can wipe React state.
     addLogEntry('Wake event handled without native bringToFront (avoids state wipe)', 'debug');
 
     try {
       await enterVoiceMode('wakeword');
       // Successfully entered voice mode — clear the pending flag so the
       // mount-effect doesn't re-fire the wake event on the next state change.
+      moduleLevelWakePending = false;
       try { await AsyncStorage.removeItem('cyberclaw-wake-pending'); } catch (_) {}
     } catch (e: any) {
       addLogEntry(`❌ enterVoiceMode failed: ${e?.message}`, 'error');
@@ -706,6 +717,43 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  // Per-render watcher for the module-level wake-pending flag. Runs on
+  // EVERY render (no deps). If a wake event fired recently (within 10s)
+  // and the state has been wiped, re-apply Wake Mode. This is the last
+  // line of defense — it catches the case where state is wiped but the
+  // component doesn't unmount, the app state doesn't change, and the
+  // 2s polling hasn't ticked yet.
+  useEffect(() => {
+    const now = Date.now();
+    if (
+      moduleLevelWakePending &&
+      moduleLevelWakePendingAt > 0 &&
+      now - moduleLevelWakePendingAt < 10000
+    ) {
+      if (!fullscreen || !isWakeWordMode) {
+        addLogEntry('⚠️ Per-render watcher: state wiped during wake event — re-applying', 'debug');
+        isWakeWordModeRef.current = true;
+        setIsWakeWordMode(true);
+        if (!fullscreen) {
+          setFullscreen(true);
+          fullscreenRef.current = true;
+        }
+        // Re-apply WebView .fullscreen class
+        try {
+          webViewRef.current?.injectJavaScript(`
+            document.getElementById('ui')?.classList.add('fullscreen');
+            document.getElementById('c')?.classList.add('fullscreen');
+            document.body.classList.add('fullscreen');
+            document.documentElement.classList.add('fullscreen');
+            true;
+          `);
+        } catch (_) {}
+      }
+    } else if (now - moduleLevelWakePendingAt > 10000) {
+      moduleLevelWakePending = false;
+    }
+  });
 
   // Load persisted chat
   useEffect(() => {
@@ -1628,8 +1676,20 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
             <Text style={styles.versionTag}>v{APP_VERSION}</Text>
+            {isWakeWordMode && (
+              <Text style={styles.wakeModeBadge}>🗣️ Wake Mode</Text>
+            )}
           </View>
           <View style={styles.headerRight}>
+            <TouchableOpacity
+              style={[styles.testWakeBtn]}
+              onPress={() => {
+                addLogEntry('🧪 Test wake event triggered manually', 'info');
+                handleWakeWord();
+              }}
+            >
+              <Text style={styles.testWakeText}>🧪</Text>
+            </TouchableOpacity>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
             <Text style={styles.statusLabel}>{statusLabel}</Text>
             <TouchableOpacity style={styles.settingsBtn} onPress={onOpenSettings}>
@@ -1828,6 +1888,24 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
+  wakeModeBadge: {
+    color: '#f7931a',
+    fontSize: 11,
+    fontWeight: 'bold',
+    marginLeft: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(247, 147, 26, 0.15)',
+    borderRadius: 4,
+  },
+  testWakeBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginRight: 4,
+  },
+  testWakeText: {
+    fontSize: 16,
+  },
   headerBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16,
