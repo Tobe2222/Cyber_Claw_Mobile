@@ -605,34 +605,43 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       return;
     }
     wakeWordBusyRef.current = true;
+
     // CRITICAL: stop sample listener BEFORE starting SimpleAudioRecorder
     // Both use AudioRecord - they cannot run simultaneously
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
     addLogEntry('🎤 Wake word! Stopped sample listener, starting recorder', 'info');
 
-    // Mark Wake Mode active SYNCHRONOUSLY before any async/native calls. If
-    // the activity gets re-ordered to front (onNewIntent), the React state
-    // can be wiped — but onNewIntent re-fires the wakeWordOpenedApp event
-    // which re-enters this function, so we'll re-enter Wake Mode. Without
-    // this, the user lands on the home screen after the wipe.
+    // PERSIST the wake event to AsyncStorage BEFORE doing anything else. This
+    // survives React re-mounts (e.g. if the activity gets re-ordered to
+    // front and React state is wiped). HomeScreen's mount effect will
+    // re-enter Wake Mode when it sees the flag. This is the most robust
+    // way to handle the wake-from-background case.
+    try { await AsyncStorage.setItem('cyberclaw-wake-pending', '1'); } catch (_) {}
+    // Clear after 10s as a safety net — the consuming effect will also
+    // clear it, but if the consuming effect doesn't fire (e.g. JS error),
+    // we don't want the flag to stick around forever.
+    setTimeout(() => { AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {}); }, 10000);
+
+    // Mark Wake Mode active SYNCHRONOUSLY before any async/native calls.
     isWakeWordModeRef.current = true;
     setIsWakeWordMode(true);
 
-    // If app is in background, ask native side to bring it forward. We only
-    // do this when the app is NOT already foreground — otherwise we'd
-    // double-trigger onNewIntent and wipe React state.
-    const isBackground = appStateRef.current === 'background' || appStateRef.current === 'inactive';
-    if (isBackground) {
-      try { NativeModules.NativeBackground?.bringToFront?.(); } catch (_) {}
-      // Small delay to let the activity come forward before we start recording
-      await new Promise(r => setTimeout(r, 400));
-    } else {
-      addLogEntry('Activity already foreground (launched by wake) - skipping bringToFront', 'debug');
-    }
+    // DO NOT call NativeBackground.bringToFront() here. It calls
+    // startActivity(REORDER_TO_FRONT) on the activity which triggers
+    // onNewIntent, which can wipe React state. The wake-receiver path
+    // (when the app is killed) already brings us up via SYSTEM_ALERT_WINDOW.
+    // When the app is in foreground, no bring-to-front is needed at all.
+    // When the app is in background (paused, not killed), the wake word is
+    // detected in-app via the sample listener or the background service
+    // and the activity is already running. So we skip bringToFront.
+    addLogEntry('Wake event handled without native bringToFront (avoids state wipe)', 'debug');
 
     try {
       await enterVoiceMode('wakeword');
+      // Successfully entered voice mode — clear the pending flag so the
+      // mount-effect doesn't re-fire the wake event on the next state change.
+      try { await AsyncStorage.removeItem('cyberclaw-wake-pending'); } catch (_) {}
     } catch (e: any) {
       addLogEntry(`❌ enterVoiceMode failed: ${e?.message}`, 'error');
       wakeWordBusyRef.current = false;
@@ -652,6 +661,38 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     }
     // wakeWordBusyRef cleared + sample listener restarted in restartWakeListening
   }, [enterVoiceMode]);
+
+  // Check for a pending wake event from a previous mount or state wipe.
+  // The wake-event handler persists a flag to AsyncStorage, and we read
+  // it here. Runs on every AppState change AND on mount, so it catches
+  // the case where React state was wiped by an activity re-order.
+  useEffect(() => {
+    let consumed = false;
+    const checkPending = () => {
+      if (consumed) return;
+      AsyncStorage.getItem('cyberclaw-wake-pending').then(pending => {
+        if (consumed) return;
+        if (pending === '1') {
+          consumed = true;
+          addLogEntry('🗣️ Pending wake event found — re-entering Wake Mode', 'info');
+          AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
+          // Small delay so any activity re-configuration settles first
+          setTimeout(() => {
+            // Replay the wake event
+            handleWakeWord();
+          }, 300);
+        }
+      }).catch(() => {});
+    };
+    // Check on mount
+    checkPending();
+    // Check on every app-state change (foreground transition)
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') checkPending();
+    });
+    return () => sub?.remove?.();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load persisted chat
   useEffect(() => {
