@@ -335,17 +335,19 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setVoiceLogs([]);  // Clear logs on enter
     addVoiceLog('🎙️ Listening...');
 
-    // For wakeword, ensure the activity is foreground AND showing over the
-    // lock screen. We swallow errors so a failure here doesn't abort the
-    // whole enter-voice-mode flow. bringToForeground() can trigger
-    // onNewIntent which can wipe React state — but we have already set
-    // isWakeMode=true in handleWakeWord, so the activity's checkWakeIntent
-    // re-emits wakeWordOpenedApp and re-enters handleWakeWord on the
-    // onNewIntent path, keeping us in Wake Mode.
+    // For wakeword, the activity is ALREADY foreground by the time we get
+    // here — either the wake-receiver launched us, or the user was already
+    // in the app and the wake-word event fired in-process. Calling
+    // bringToForeground() here would call startActivity with
+    // FLAG_ACTIVITY_REORDER_TO_FRONT which triggers onNewIntent on the
+    // already-foreground activity, and that onNewIntent can wipe React
+    // state — leaving the user on the home screen instead of the Wake
+    // Mode fullscreen. So we deliberately do NOT call bringToForeground
+    // here. We only need showOnLockScreenWithDismiss for the
+    // "show over lock screen" behaviour.
     if (source === 'wakeword') {
-      try { await bringToForeground(); } catch (_) {}
       try { await AppControl?.showOnLockScreenWithDismiss?.(); } catch (_) {}
-      addLogEntry('Wake Mode: activity brought to foreground', 'info');
+      addLogEntry('Wake Mode: showing over lock screen (no bringToFront - would wipe state)', 'info');
     }
 
     // FIXED: Set fullscreen AFTER activity is stable, so React state survives

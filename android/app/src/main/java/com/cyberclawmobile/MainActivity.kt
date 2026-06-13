@@ -40,15 +40,29 @@ class MainActivity : ReactActivity() {
       // Clear the extra so subsequent onNewIntent calls (e.g. from
       // bringToForeground re-ordering) don't re-fire the wake event.
       intent.removeExtra("from_wake_word")
-      // Post-delayed so React context is ready
-      window.decorView.postDelayed({
-        try {
-          val reactContext: ReactContext? = reactInstanceManager?.currentReactContext
-          reactContext?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-            ?.emit("wakeWordOpenedApp", null)
-        } catch (_: Exception) {}
-      }, 600)
+      // Post-delayed so React context is ready, and retry if context is not
+      // ready yet (cold start can take longer than 600ms on some devices).
+      emitWakeOpenedWithRetry(0)
     }
+  }
+
+  private fun emitWakeOpenedWithRetry(attempt: Int) {
+    val maxAttempts = 20
+    val delayMs = 250L
+    window.decorView.postDelayed({
+      try {
+        val reactContext: ReactContext? = reactInstanceManager?.currentReactContext
+        if (reactContext != null) {
+          reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("wakeWordOpenedApp", null)
+        } else if (attempt < maxAttempts) {
+          // Context not ready (cold start) — try again
+          emitWakeOpenedWithRetry(attempt + 1)
+        }
+      } catch (_: Exception) {
+        if (attempt < maxAttempts) emitWakeOpenedWithRetry(attempt + 1)
+      }
+    }, delayMs)
   }
 
   // Called by WakeWordModule to launch the speech intent
