@@ -1,4 +1,4 @@
-# Wake Word Mode Integration Guide
+# Wake Mode Integration Guide
 
 ## Current Status (v2.13.23)
 
@@ -86,11 +86,11 @@ const onWakeWordDetected = () => {
 ## Testing Checklist
 
 ```
-Wake Word Mode OFF:
+Wake Mode OFF:
 [ ] Click Mic button → Manual recording works
 [ ] Say "Hey Claw" → Just shows fullscreen, doesn't record
 
-Wake Word Mode ON:
+Wake Mode ON:
 [ ] Say "Hey Claw" → Auto-record starts
 [ ] Normal pause → Recording continues
 [ ] Say "Hey Claw" again during send → Appends new audio
@@ -105,7 +105,7 @@ Multi-person:
 ## Desktop Integration
 
 Desktop needs to:
-1. Receive audio segments marked as "wake word mode"
+1. Receive audio segments marked as "wake mode"
 2. Know if this is continuation of previous message
 3. Wait for final audio (or timeout) before responding
 4. Send response after all audio collected

@@ -335,14 +335,17 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setVoiceLogs([]);  // Clear logs on enter
     addVoiceLog('🎙️ Listening...');
 
-    // CRITICAL: For wakeword, bring activity to front FIRST and wait.
-    // bringToForeground() calls startActivity which can trigger onNewIntent /
-    // window reconfiguration. If we setFullscreen(true) before that completes,
-    // the React state can be wiped when the activity re-stabilises.
+    // For wakeword, ensure the activity is foreground AND showing over the
+    // lock screen. We swallow errors so a failure here doesn't abort the
+    // whole enter-voice-mode flow. bringToForeground() can trigger
+    // onNewIntent which can wipe React state — but we have already set
+    // isWakeMode=true in handleWakeWord, so the activity's checkWakeIntent
+    // re-emits wakeWordOpenedApp and re-enters handleWakeWord on the
+    // onNewIntent path, keeping us in Wake Mode.
     if (source === 'wakeword') {
       try { await bringToForeground(); } catch (_) {}
       try { await AppControl?.showOnLockScreenWithDismiss?.(); } catch (_) {}
-      addLogEntry('Activity brought to foreground', 'info');
+      addLogEntry('Wake Mode: activity brought to foreground', 'info');
     }
 
     // FIXED: Set fullscreen AFTER activity is stable, so React state survives
@@ -529,23 +532,23 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
 
       if (msg.type === 'fullscreen') {
         // User clicked Voice Mode button in arena → enter fullscreen
-        // But not if we're already in wake word mode - that takes priority
+        // But not if we're already in Wake Mode - that takes priority
         if (isWakeWordModeRef.current) {
-          addLogEntry('Ignoring fullscreen msg - wake word mode active', 'debug');
+          addLogEntry('Ignoring fullscreen msg - Wake Mode active', 'debug');
         } else {
           addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
           enterVoiceMode('focus');
         }
       }
       if (msg.type === 'wakeword') {
-        // User clicked Wake Word Mode button in arena
-        addLogEntry(`🗣️ Wake Word Mode toggle from arena`, 'debug');
+        // User clicked Wake Mode button in arena
+        addLogEntry(`🗣️ Wake Mode toggle from arena`, 'debug');
         toggleWakeWordMode();
       }
       if (msg.type === 'exitFullscreen') {
         if (isWakeWordModeRef.current) {
-          // X button in wake word mode - exit wake word mode properly
-          addLogEntry('Exiting wake word mode via X button', 'debug');
+          // X button in Wake Mode - exit Wake Mode properly
+          addLogEntry('Exiting Wake Mode via X button', 'debug');
           toggleWakeWordMode();
         } else {
           closeFullscreen();
@@ -565,7 +568,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (fullscreen) {
         if (isWakeWordModeRef.current) {
-          // Back in wake word mode - toggle off properly (cleans up + closes fullscreen)
+          // Back in Wake Mode - toggle off properly (cleans up + closes fullscreen)
           toggleWakeWordMode();
         } else {
           closeFullscreen();
@@ -590,13 +593,24 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     sampleListenerCleanupRef.current = null;
     addLogEntry('🎤 Wake word! Stopped sample listener, starting recorder', 'info');
 
-    // If app is in background, ask native side to bring it forward (this can
-    // trigger onNewIntent on the activity, but not a fresh launch).
+    // Mark Wake Mode active SYNCHRONOUSLY before any async/native calls. If
+    // the activity gets re-ordered to front (onNewIntent), the React state
+    // can be wiped — but onNewIntent re-fires the wakeWordOpenedApp event
+    // which re-enters this function, so we'll re-enter Wake Mode. Without
+    // this, the user lands on the home screen after the wipe.
+    isWakeWordModeRef.current = true;
+    setIsWakeWordMode(true);
+
+    // If app is in background, ask native side to bring it forward. We only
+    // do this when the app is NOT already foreground — otherwise we'd
+    // double-trigger onNewIntent and wipe React state.
     const isBackground = appStateRef.current === 'background' || appStateRef.current === 'inactive';
     if (isBackground) {
       try { NativeModules.NativeBackground?.bringToFront?.(); } catch (_) {}
       // Small delay to let the activity come forward before we start recording
       await new Promise(r => setTimeout(r, 400));
+    } else {
+      addLogEntry('Activity already foreground (launched by wake) - skipping bringToFront', 'debug');
     }
 
     try {
@@ -683,7 +697,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
 
-  // Wake Word Mode
+  // Wake Mode
   const [isWakeWordMode, setIsWakeWordMode] = useState(false);
   const isWakeWordModeRef = useRef(false);
   const [wakeWordSession, setWakeWordSession] = useState<{ id: string; audioChunks: string[] } | null>(null);
@@ -870,7 +884,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry(`📨 Skipping user message`, 'received');
         return;
       }
-      // In wake word mode, only process messages that are responses to a wake word trigger
+      // In Wake Mode, only process messages that are responses to a wake word trigger
       // (wakeWordBusyRef=true). Random companion reactions should just go to normal chat.
       if (isWakeWordModeRef.current && !wakeWordBusyRef.current) {
         addLogEntry(`📨 Wake word mode idle - routing to chat silently`, 'debug');
@@ -881,13 +895,13 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         });
         return;
       }
-      // If in voice mode (or wake word mode responding to trigger), treat text response as audio response
+      // If in voice mode (or Wake Mode responding to trigger), treat text response as audio response
       if (fullscreenRef.current && !msg.isUser) {
         addLogEntry(`🎙️ Voice mode response: "${msg.text.substring(0, 50)}..."`, 'info');
         addVoiceLog(`🔊 Responding: "${msg.text.substring(0, 40)}..."`);
         setVoiceStatus('playing');
 
-        // Always add response to chat log (wake word mode or regular voice)
+        // Always add response to chat log (Wake Mode or regular voice)
         setChatVoiceStatus(null);
         setMessages(prev => {
           const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
@@ -1017,7 +1031,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         }
 
         // After playback, if still in voice mode, restart listening loop
-        // In wake word mode, restartWakeListening handles this via audioPlayerFinished
+        // In Wake Mode, restartWakeListening handles this via audioPlayerFinished
         if (fullscreenRef.current && !isWakeWordModeRef.current) {
           addLogEntry(`🔊 Restarting listening loop (fullscreen=true)`, 'debug');
           addLogEntry('Playback finished, restarting listening loop', 'info');
@@ -1239,10 +1253,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // Toggle Wake Word Mode - enters fullscreen listening mode with wake word detection
+  // Toggle Wake Mode - enters fullscreen listening mode with wake word detection
   const toggleWakeWordMode = useCallback(async () => {
     if (!isWakeWordModeRef.current) {
-      // Entering wake word mode
+      // Entering Wake Mode
       setFullscreen(true);
       fullscreenRef.current = true;
       setVoiceStatus('listening');
@@ -1255,7 +1269,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       `;
       webViewRef.current?.injectJavaScript(js);
 
-      addLogEntry('🗣️ Wake Word Mode: ACTIVE', 'info');
+      addLogEntry('🗣️ Wake Mode: ACTIVE', 'info');
       addVoiceLog('Wake listening...');
 
       // Load training features and start DTW sample-match listener
@@ -1285,14 +1299,14 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         addLogEntry(`❌ Wake detection start error: ${e?.message}`, 'error');
       }
     } else {
-      // Exiting wake word mode
+      // Exiting Wake Mode
       sampleListenerCleanupRef.current?.();
       sampleListenerCleanupRef.current = null;
       wakeWordBusyRef.current = false;
       try { WakeWordModule?.stop?.(); } catch (_) {}
       try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
       closeFullscreen();
-      addLogEntry('🗣️ Wake Word Mode: OFF', 'info');
+      addLogEntry('🗣️ Wake Mode: OFF', 'info');
       isWakeWordModeRef.current = false;
       setIsWakeWordMode(false);
       return;

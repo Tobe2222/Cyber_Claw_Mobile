@@ -232,7 +232,7 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>🎤 Wake Word Tester</Text>
+        <Text style={styles.title}>🎤 Wake Mode Tester</Text>
         <Text style={styles.phrase}>Testing: "{phrase}"</Text>
       </View>
 

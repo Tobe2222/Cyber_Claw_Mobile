@@ -214,7 +214,7 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
   if (!started) {
     return (
       <View style={styles.container}>
-        <Text style={styles.title}>🎤 Train Wake Word</Text>
+        <Text style={styles.title}>🎤 Train Wake Phrase</Text>
         <Text style={styles.subtitle}>Create a new wake phrase for detection</Text>
 
         <Text style={styles.label}>Wake Phrase</Text>

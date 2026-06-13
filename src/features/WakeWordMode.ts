@@ -1,10 +1,10 @@
-// Wake Word Mode: Intelligent Multi-Speaker Voice Control
-// 
+// Wake Mode: Intelligent Multi-Speaker Voice Control
+//
 // Feature: Always-listening wake word with sentence recording
 // Use case: Family/group conversations - only trigger when you use wake word
 //
 // Flow:
-// 1. App starts → Wake word detector listening in background
+// 1. App starts → Wake Mode listening in background
 // 2. User says "Hey Claw" → Trigger sentence recording
 // 3. User speaks sentence(s) with natural pauses
 // 4. If another "Hey Claw" during sending/reply → Interrupt & append new audio
@@ -75,7 +75,7 @@ export class WakeWordController {
     }
     
     // In send/reply - append new audio
-    console.log('[WakeWord] Interrupt during processing - appending...');
+    console.log('[WakeMode] Interrupt during processing - appending...');
     
     // Stop current recording if any
     if (this.recorder) {

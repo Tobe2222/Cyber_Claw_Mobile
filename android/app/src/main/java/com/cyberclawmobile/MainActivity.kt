@@ -37,6 +37,9 @@ class MainActivity : ReactActivity() {
 
   private fun checkWakeIntent(intent: Intent?) {
     if (intent?.getBooleanExtra("from_wake_word", false) == true) {
+      // Clear the extra so subsequent onNewIntent calls (e.g. from
+      // bringToForeground re-ordering) don't re-fire the wake event.
+      intent.removeExtra("from_wake_word")
       // Post-delayed so React context is ready
       window.decorView.postDelayed({
         try {
