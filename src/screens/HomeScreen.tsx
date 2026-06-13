@@ -332,57 +332,73 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
   // Simplified enterVoiceMode - only handles wakeword wake-up
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
-    setVoiceLogs([]);  // Clear logs on enter
-    addVoiceLog('🎙️ Listening...');
 
-    // For wakeword, the activity is ALREADY foreground by the time we get
-    // here — either the wake-receiver launched us, or the user was already
-    // in the app and the wake-word event fired in-process. Calling
-    // bringToForeground() here would call startActivity with
-    // FLAG_ACTIVITY_REORDER_TO_FRONT which triggers onNewIntent on the
-    // already-foreground activity, and that onNewIntent can wipe React
-    // state — leaving the user on the home screen instead of the Wake
-    // Mode fullscreen. So we deliberately do NOT call bringToForeground
-    // here. We only need showOnLockScreenWithDismiss for the
-    // "show over lock screen" behaviour.
+    // For wakeword, route through the Wake Mode UI (same screen as the home
+    // Wake Mode button). The "voice input" fullscreen with the forest scene
+    // was a separate leftover UI from before Wake Mode was a thing; the user
+    // expects wake word → Wake Mode → recording, all in the same fullscreen.
     if (source === 'wakeword') {
-      try { await AppControl?.showOnLockScreenWithDismiss?.(); } catch (_) {}
-      addLogEntry('Wake Mode: showing over lock screen (no bringToFront - would wipe state)', 'info');
-    }
+      // Mark Wake Mode active so the UI shows the proper Wake Mode fullscreen
+      // (black background, centered boar, orange X button) instead of the
+      // old voice input fullscreen.
+      isWakeWordModeRef.current = true;
+      setIsWakeWordMode(true);
 
-    // FIXED: Set fullscreen AFTER activity is stable, so React state survives
-    AppControl?.keepScreenOn?.(true);
-    setFullscreen(true);
-    fullscreenRef.current = true;
+      // Ensure fullscreen is on
+      if (!fullscreenRef.current) {
+        AppControl?.keepScreenOn?.(true);
+        setFullscreen(true);
+        fullscreenRef.current = true;
+      }
 
-    // Initialize Voice Activity Detection
-    const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
-    resetVAD();
-    addVoiceLog('🎙️ VAD ready');
-
-    if (source === 'wakeword') {
-      addLogEntry('Entering voice mode', 'info');
-
-      // Tell arena to enter focus mode — AND re-apply after a short delay
-      // in case the WebView is still re-rendering after the activity change.
-      const applyFullscreen = () => {
+      // Apply the .fullscreen CSS class to the WebView directly — this is
+      // the reliable way that toggleWakeWordMode uses, and it survives the
+      // activity re-configuration that the wake-receiver triggers. The
+      // setFullscreen message dispatch was unreliable on the wake-event
+      // path (WebView re-render loses the class).
+      const applyWebviewFullscreen = () => {
         try {
           webViewRef.current?.injectJavaScript(`
-            window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
-            document.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'setFullscreen',value:true,focused:true})}));
+            document.getElementById('ui')?.classList.add('fullscreen');
+            document.getElementById('c')?.classList.add('fullscreen');
+            document.body.classList.add('fullscreen');
+            document.documentElement.classList.add('fullscreen');
             true;
           `);
         } catch (_) {}
       };
-      applyFullscreen();
-      setTimeout(applyFullscreen, 200);
-      setTimeout(applyFullscreen, 600);
+      applyWebviewFullscreen();
+      setTimeout(applyWebviewFullscreen, 200);
+      setTimeout(applyWebviewFullscreen, 600);
 
-      // Speak "ready to chat" phrase (customisable in settings)
+      // Show over lock screen
+      try { await AppControl?.showOnLockScreenWithDismiss?.(); } catch (_) {}
+
+      addLogEntry('Wake Mode: wake word detected, recording sentence in Wake Mode UI', 'info');
+      addVoiceLog('Wake listening...');
+      addVoiceLog('Matching: "hey clawsuu"');
+      addVoiceLog('🔴 Recording...');
+
+      // Speak "ready to chat" phrase
       AsyncStorage.getItem('cyberclaw-ready-phrase').then(phrase => {
         speak(phrase || 'Ready to chat');
       }).catch(() => speak('Ready to chat'));
+
+      setVoiceStatus('listening');
+      // Continue into the recording flow below
+    } else {
+      // Focus source (manual mic tap) — old behaviour
+      setVoiceLogs([]);
+      addVoiceLog('🎙️ Listening...');
+      AppControl?.keepScreenOn?.(true);
+      setFullscreen(true);
+      fullscreenRef.current = true;
     }
+
+    // Initialize Voice Activity Detection
+    const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
+    resetVAD();
+    if (source !== 'wakeword') addVoiceLog('🎙️ VAD ready');
 
     // Auto-start listening with SimpleAudioRecorder + countdown on silence (runs always)
     try {
