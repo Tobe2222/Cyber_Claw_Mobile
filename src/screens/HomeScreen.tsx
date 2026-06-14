@@ -186,7 +186,7 @@ export function offLogEntry(fn: (e: LogEntry) => void) {
 
 type TabId = 'chat' | 'events' | 'log';
 
-export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { onOpenSettings: () => void; onOpenArenaSettings: () => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenSettings: () => void; onOpenWakeMode?: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
@@ -544,9 +544,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     try {
       const msg = JSON.parse(e.nativeEvent.data);
       addLogEntry(`🎬 Arena message: type=${msg.type}`, 'debug');
+      // v3.1.12: openArenaSettings is a no-op now. The mobile is just an
+      // extension of the desktop, which owns arena background / companion
+      // show/hide. If a stale WebView still sends this, ignore gracefully
+      // so we don't crash on undefined onOpenArenaSettings.
       if (msg.type === 'openArenaSettings') {
-        // Arena Settings button clicked - open full-screen Arena Settings
-        onOpenArenaSettings();
+        addLogEntry('openArenaSettings ignored — mobile uses desktop arena settings', 'debug');
         return;
       }
 
@@ -587,7 +590,7 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
     } catch {}
-  }, [closeFullscreen, onOpenArenaSettings]);
+  }, [closeFullscreen]);
 
   // Handle Android back button in fullscreen mode
   useEffect(() => {
@@ -939,15 +942,12 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
       // App is backgrounded - wake word will be started by AppState listener
     }
 
-    // Wake word event → bring app to front in focus mode
-    const wakeSub = wakeWordEmitter?.addListener('wakeWordDetected', () => {
-      handleWakeWord();
-    });
-    // Also listen for wake-word-opened-app from MainActivity (broadcast receiver path)
-    const { DeviceEventEmitter } = require('react-native');
-    const wakeOpenSub = DeviceEventEmitter.addListener('wakeWordOpenedApp', () => {
-      handleWakeWord();
-    });
+    // v3.1.12: wake event listening moved to App.tsx. App-level listener
+    // switches to the dedicated WakeModeScreen, which has its own
+    // wake + recording + audio-response flow. HomeScreen no longer
+    // handles the wake event (it would race with App.tsx).
+    const wakeSub = null; // (was: wakeWordEmitter?.addListener('wakeWordDetected', handleWakeWord))
+    const wakeOpenSub = null; // (was: DeviceEventEmitter.addListener('wakeWordOpenedApp', handleWakeWord))
     // Monitor silence detection for voice mode auto-stop
     // SimpleAudioRecorder will emit 'recorderSilence' when silence is detected
     // We set up a listener in the voice mode flow itself, not here
@@ -1373,67 +1373,36 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // Toggle Wake Mode - enters fullscreen listening mode with wake word detection
+  // Toggle Wake Mode - v3.1.12: delegate to App-level navigation so the
+  // wake mode UI always renders in the dedicated WakeModeScreen (not as
+  // a conditional fullscreen render of HomeScreen, which was racy).
   const toggleWakeWordMode = useCallback(async () => {
     if (!isWakeWordModeRef.current) {
-      // Entering Wake Mode
-      setFullscreen(true);
-      fullscreenRef.current = true;
-      setVoiceStatus('listening');
-      AppControl?.keepScreenOn?.(true);
-
-      const js = `
-        document.getElementById('ui').classList.add('fullscreen');
-        document.getElementById('c').classList.add('fullscreen');
-        true;
-      `;
-      webViewRef.current?.injectJavaScript(js);
-
-      addLogEntry('🗣️ Wake Mode: ACTIVE', 'info');
-      addVoiceLog('Wake listening...');
-
-      // Load training features and start DTW sample-match listener
-      try {
-        const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
-        const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
-        const training = trainingJson ? JSON.parse(trainingJson) : null;
-
-        if (training?.features?.length) {
-          addLogEntry(`🎤 Sample-match listening for: "${phrase}"`, 'info');
-          sampleListenerCleanupRef.current?.();
-          sampleListenerCleanupRef.current = startSampleMatchListener(
-            phrase,
-            training.features,
-            handleWakeWord,
-            (msg) => addLogEntry(msg, 'debug'),
-            SAMPLE_MATCH_THRESHOLD_FG,
-          );
-          addVoiceLog(`Matching: "${phrase}"`);
-        } else {
-          // Fallback to Vosk if no training data
-          addLogEntry('No training data - falling back to Vosk', 'error');
-          WakeWordModule?.start?.(phrase).catch(() => {});
-        }
-      } catch (e: any) {
-        addLogEntry(`❌ Wake detection start error: ${e?.message}`, 'error');
+      addLogEntry('🗣️ Wake Mode: opening dedicated screen', 'info');
+      if (onOpenWakeMode) {
+        onOpenWakeMode();
+      } else {
+        // Fallback: keep the old behaviour in case onOpenWakeMode is
+        // missing (e.g. tests or older App.tsx).
+        setFullscreen(true);
+        fullscreenRef.current = true;
+        setVoiceStatus('listening');
+        AppControl?.keepScreenOn?.(true);
+        const js = `
+          document.getElementById('ui').classList.add('fullscreen');
+          document.getElementById('c').classList.add('fullscreen');
+          true;
+        `;
+        webViewRef.current?.injectJavaScript(js);
+        addLogEntry('🗣️ Wake Mode: ACTIVE (fallback)', 'info');
+        isWakeWordModeRef.current = true;
+        setIsWakeWordMode(true);
       }
-    } else {
-      // Exiting Wake Mode
-      sampleListenerCleanupRef.current?.();
-      sampleListenerCleanupRef.current = null;
-      wakeWordBusyRef.current = false;
-      try { WakeWordModule?.stop?.(); } catch (_) {}
-      try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
-      closeFullscreen();
-      addLogEntry('🗣️ Wake Mode: OFF', 'info');
-      isWakeWordModeRef.current = false;
-      setIsWakeWordMode(false);
-      return;
     }
-    isWakeWordModeRef.current = true;
-    setIsWakeWordMode(true);
-  }, [closeFullscreen, handleWakeWord]);
+    // Exiting Wake Mode from HomeScreen is no longer supported — the
+    // WakeModeScreen has its own X / back handler. The exit logic in
+    // WakeModeScreen tears down the listener + recorder.
+  }, [onOpenWakeMode]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
@@ -1685,7 +1654,10 @@ export default function HomeScreen({ onOpenSettings, onOpenArenaSettings }: { on
               style={[styles.testWakeBtn]}
               onPress={() => {
                 addLogEntry('🧪 Test wake event triggered manually', 'info');
-                handleWakeWord();
+                // v3.1.12: navigate to WakeModeScreen directly so the
+                // test path matches the wake-word path. No state flip
+                // on HomeScreen.
+                if (onOpenWakeMode) onOpenWakeMode();
               }}
             >
               <Text style={styles.testWakeText}>🧪</Text>
