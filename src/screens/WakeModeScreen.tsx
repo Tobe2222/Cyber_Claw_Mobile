@@ -352,7 +352,7 @@ export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenPr
       <WebView
         key={webViewKey}
         ref={webViewRef}
-        source={{ uri: `file:///android_asset/arena.html?companion=${companionId}` }}
+        source={{ uri: `file:///android_asset/arena.html?companion=${companionId}&platform=mobile` }}
         style={styles.webview}
         scrollEnabled={false}
         bounces={false}

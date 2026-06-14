@@ -210,6 +210,12 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
   const webViewRef = useRef<WebView>(null);
+  // v3.1.14: chat auto-scroll state — only auto-scroll to the newest
+  // message when the user is already at (or near) the bottom of the
+  // chat. When they've scrolled up to read history, leave them there
+  // and show a "↓ new messages" badge so they can jump back down.
+  const [chatAtBottom, setChatAtBottom] = useState(true);
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
   const isWakeWordStoppedRef = useRef<boolean>(true);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
@@ -1541,18 +1547,46 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   }, [isConnected, isVoiceListening]);
 
   // Auto-scroll to bottom when switching to chat tab or getting new messages
-  useEffect(() => {
-    if (activeTab === 'chat' && messages.length > 0) {
-      // Give FlatList time to render all items before scrolling
-      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 150);
+  // v3.1.14: track incoming (non-user) messages so we can surface a
+// "↓ new messages" badge when the user has scrolled up to read
+// history. User-sent messages don't count.
+const lastMessageIdRef = useRef<string | null>(null);
+useEffect(() => {
+  if (messages.length === 0) return;
+  const last = messages[messages.length - 1];
+  if (last.id === lastMessageIdRef.current) return;
+  const isInitial = lastMessageIdRef.current === null;
+  lastMessageIdRef.current = last.id;
+  if (isInitial) return; // first mount: just record, no auto-scroll/bump
+  // Skip user-sent messages: the user just typed them, they know.
+  if (last.isUser) {
+    // ...but still scroll to the new (their) message at the bottom.
+    if (chatAtBottom) {
+      setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
     }
-  }, [activeTab, messages.length]);
+    return;
+  }
+  // Incoming message while at bottom: auto-scroll. While scrolled
+  // away: increment the unread badge.
+  if (chatAtBottom) {
+    setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
+  } else {
+    setChatUnreadCount(c => c + 1);
+  }
+}, [messages.length]);
 
-
-
-  const onChatScroll = useCallback((event: any) => {
-    // Just track scroll events, don't interfere with position
-  }, []);
+// v3.1.14: when the user switches to the chat tab, jump to the
+// newest message so they don't have to manually scroll. This is
+// the "open at the bottom" behavior the user expects. Also clear
+// the unread badge — they're looking at the chat now.
+useEffect(() => {
+  if (activeTab === 'chat') {
+    if (messages.length > 0) {
+      setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
+    }
+    setChatUnreadCount(0);
+  }
+}, [activeTab]);
 
   const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
@@ -1650,18 +1684,6 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
             )}
           </View>
           <View style={styles.headerRight}>
-            <TouchableOpacity
-              style={[styles.testWakeBtn]}
-              onPress={() => {
-                addLogEntry('🧪 Test wake event triggered manually', 'info');
-                // v3.1.12: navigate to WakeModeScreen directly so the
-                // test path matches the wake-word path. No state flip
-                // on HomeScreen.
-                if (onOpenWakeMode) onOpenWakeMode();
-              }}
-            >
-              <Text style={styles.testWakeText}>🧪</Text>
-            </TouchableOpacity>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
             <Text style={styles.statusLabel}>{statusLabel}</Text>
             <TouchableOpacity style={styles.settingsBtn} onPress={onOpenSettings}>
@@ -1677,7 +1699,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           <WebView
             key={webViewKey}
             ref={webViewRef}
-            source={{ uri: `file:///android_asset/arena.html?companion=${companionId}` }}
+            source={{ uri: `file:///android_asset/arena.html?companion=${companionId}&platform=mobile` }}
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
             scrollEnabled={false}
             bounces={false}
@@ -1748,6 +1770,19 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
         {activeTab === 'chat' && (
           <>
+            {chatUnreadCount > 0 && !chatAtBottom && (
+              <TouchableOpacity
+                style={styles.chatScrollToBottomBtn}
+                onPress={() => {
+                  chatRef.current?.scrollToOffset({ offset: 0, animated: true });
+                  setChatUnreadCount(0);
+                }}
+              >
+                <Text style={styles.chatScrollToBottomText}>
+                  ↓ {chatUnreadCount} new message{chatUnreadCount !== 1 ? 's' : ''}
+                </Text>
+              </TouchableOpacity>
+            )}
             <FlatList
               ref={chatRef}
               data={messages}
@@ -1756,10 +1791,33 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
-              inverted={false}
+              // v3.1.14: standard chat pattern. With inverted=true, the
+              // FlatList renders oldest→newest as bottom→top. New
+              // messages are appended to the end of the array and
+              // appear at the bottom of the screen, where the user
+              // expects to read them. We use scrollToOffset({ offset:0 })
+              // to jump to "newest" (= top of inverted list = bottom of
+              // the screen).
+              inverted={true}
+              onScroll={(e) => {
+                // In inverted mode, offset 0 = top of list = bottom of
+                // the screen. Mark the user as "at the bottom" when
+                // their scroll position is within a small threshold
+                // of the top of the list.
+                const offset = e.nativeEvent.contentOffset.y;
+                setChatAtBottom(offset < 8);
+              }}
+              onContentSizeChange={() => {
+                // Auto-scroll to the newest on first render and whenever
+                // the user is already at the bottom when new content
+                // arrives. With inverted=true, offset 0 = newest.
+                if (chatAtBottom) {
+                  chatRef.current?.scrollToOffset({ offset: 0, animated: false });
+                }
+              }}
               onLayout={() => {
                 if (messages.length > 0) {
-                  setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 150);
+                  setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 150);
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
@@ -1869,14 +1927,6 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     backgroundColor: 'rgba(247, 147, 26, 0.15)',
     borderRadius: 4,
-  },
-  testWakeBtn: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginRight: 4,
-  },
-  testWakeText: {
-    fontSize: 16,
   },
   headerBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -2004,6 +2054,26 @@ const styles = StyleSheet.create({
   },
   chatStatusText: {
     color: 'rgba(247,147,26,0.85)', fontSize: 12, fontStyle: 'italic',
+  },
+  // v3.1.14: "↓ N new messages" floating badge shown above the chat
+  // when the user has scrolled up to read history and incoming
+  // messages arrive.
+  chatScrollToBottomBtn: {
+    position: 'absolute',
+    bottom: 8,
+    left: 0, right: 0,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  chatScrollToBottomText: {
+    backgroundColor: '#f7931a',
+    color: '#000',
+    fontSize: 12,
+    fontWeight: '700',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   voiceModeBtnText: {
     color: '#f7931a', fontSize: 14, fontWeight: '600',

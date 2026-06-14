@@ -36,24 +36,40 @@ export default function App(): React.JSX.Element {
   // can't be wiped by a state reset.
   useEffect(() => {
     const handleWake = () => {
-      // Always switch, regardless of which screen we're on. The X
-      // button / back button in WakeModeScreen is the only way out.
+      // v3.1.14: also persist the pending flag so if the activity gets
+      // recreated while waking from the lock screen (which can happen
+      // — the React tree unmounts when the activity is torn down and
+      // remounts when MainActivity is brought to front, losing the
+      // setScreen state in flight), the next mount or AppState=active
+      // transition will pick it up and switch to WakeModeScreen.
+      AsyncStorage.setItem('cyberclaw-wake-pending', '1').catch(() => {});
       setScreen('wake-mode');
+    };
+    const clearWakePending = () => {
+      AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
     };
 
     const emitter = getWakeWordEmitter();
-    const wakeSub = emitter?.addListener('wakeWordDetected', handleWake);
+    const wakeSub = emitter?.addListener('wakeWordDetected', () => {
+      clearWakePending();
+      handleWake();
+    });
 
     // DeviceEventEmitter path (used by MainActivity's emitWakeOpenedWithRetry)
     const { DeviceEventEmitter } = require('react-native');
-    const wakeOpenSub = DeviceEventEmitter.addListener('wakeWordOpenedApp', handleWake);
+    const wakeOpenSub = DeviceEventEmitter.addListener('wakeWordOpenedApp', () => {
+      clearWakePending();
+      handleWake();
+    });
 
-    // AsyncStorage fallback: if HomeScreen persisted a wake-pending flag
-    // (e.g. before our listener was attached), pick it up here.
+    // AsyncStorage fallback: if a wake-pending flag was persisted
+    // (because the activity was torn down between the native event
+    // firing and our React listener being ready), pick it up here.
+    // Run on mount AND on every foregrounding.
     const checkPending = () => {
       AsyncStorage.getItem('cyberclaw-wake-pending').then(pending => {
         if (pending === '1') {
-          AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
+          clearWakePending();
           handleWake();
         }
       }).catch(() => {});
@@ -94,7 +110,10 @@ export default function App(): React.JSX.Element {
           {screen === 'wake-mode' && (
             <WakeModeScreen
               companionId={companionId}
-              onExit={() => setScreen('home')}
+              onExit={() => {
+                AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
+                setScreen('home');
+              }}
             />
           )}
         </SafeAreaView>

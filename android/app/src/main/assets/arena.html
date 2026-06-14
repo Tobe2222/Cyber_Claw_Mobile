@@ -52,12 +52,22 @@ body{margin:0;padding:0;overflow:hidden;width:100%;height:100%}
 #ui.fullscreen { pointer-events: none !important; background: transparent !important; position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; }
 #ui.fullscreen #ctrlLeft { display: none !important; }
 #ui.fullscreen #ctrlRight { display: none !important; }
-/* Hide the arena canvas content in fullscreen mode — the boar/forest scene
-   is drawn ON the canvas, so background:#000 doesn't hide it. Replace it
-   with a clean dark surface so the React Native voice overlays show clearly. */
-body.fullscreen #c,
-html.fullscreen #c { display: none !important; }
+/* v3.1.14: in fullscreen (wake / voice) mode, the canvas should KEEP
+   drawing the companion sprite on a black background, instead of being
+   hidden. The previous rule that hid the canvas was wrong for the
+   Wake Mode flow — the user wants the boar to be visible while the
+   React Native overlays (status text, voice log, X button) show on top. */
 body.fullscreen, html.fullscreen { background: #0a0a2e !important; }
+/* v3.1.14: mobile (Companion app) doesn't have its own arena settings —
+   the desktop owns that. Hide the ⚙ button on mobile. */
+body.mobile #ctrlLeft { display: none !important; }
+/* v3.1.14: hide the WebView's voice-mode chrome on mobile. The mobile
+   renders its own X button, status text, and voice log as React Native
+   overlays above the WebView. Showing the WebView's versions too just
+   creates duplicates and visual noise. */
+body.mobile #ui #ctrlFs,
+body.mobile #ui #thinking,
+body.mobile #ui #voiceDebug { display: none !important; }
 #ui.fullscreen #ctrlFs { display: flex !important; position: fixed !important; top: 60px !important; right: 30px !important; z-index: 1001 !important; pointer-events: all !important; }
 #ui.fullscreen #exitVoiceBtn { 
   width: 60px !important; 
@@ -86,6 +96,12 @@ body.fullscreen { background: #000 !important; }
 <script>
 // Arena Settings button - send message to React Native
 document.addEventListener('DOMContentLoaded', () => {
+  // v3.1.14: on mobile the ⚙ button does nothing (mobile uses the desktop's
+  // arena settings). Hide it by adding .mobile to <body> when the URL
+  // includes ?platform=mobile.
+  if (location.search.includes('platform=mobile')) {
+    document.body.classList.add('mobile');
+  }
   const settingsBtn = document.getElementById('arenaSettingsBtn');
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
