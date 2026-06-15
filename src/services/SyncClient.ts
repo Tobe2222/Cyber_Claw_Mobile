@@ -259,6 +259,16 @@ class SyncClient {
     this.send({ type: 'request_state' });
   }
 
+  // v3.1.17: ask the desktop for the current agents list. The
+  // mobile calls this on every HomeScreen mount so the companion
+  // tab bar rebuilds even after the HomeScreen component was
+  // unmounted (e.g. when the user opened Wake Mode and came back).
+  // The desktop's sync server caches the last agents_list and
+  // replays it as part of _sendFullState.
+  requestAgentsList() {
+    this.send({ type: 'request_state' });
+  }
+
   sendCompanionAction(action: any) {
     this.send({ type: 'companion_interaction', action });
   }

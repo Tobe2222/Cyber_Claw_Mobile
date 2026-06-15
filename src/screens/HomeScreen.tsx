@@ -289,6 +289,19 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       }
     }).catch(() => {});
 
+    // v3.1.17: ask the desktop for the current agents list on every
+    // mount. This rebuilds the companion tab bar when the user
+    // comes back from Wake Mode (HomeScreen unmounts/remounts),
+    // reconnects after a network blip, or the desktop was restarted
+    // while the app was in the background. The desktop's sync server
+    // caches the last agents_list and replays it.
+    try {
+      syncClient.requestAgentsList();
+      addLogEntry('→ Requested agents list from desktop', 'sent');
+    } catch (e) {
+      addLogEntry(`Request agents list failed: ${(e as any)?.message}`, 'error');
+    }
+
     // Test native module
     console.log('[Native] Available modules:', Object.keys(NativeModules).join(', '));
     if (NativeModules.NativeBackground) {
@@ -1025,6 +1038,14 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       // Show connection notifications via Toast (small, subtle)
       if (data.state === 'connected') {
         addLogEntry('Connected - receiving updates from desktop', 'info');
+        // v3.1.17: re-request the agents list on every reconnect. The
+        // desktop caches and replays the last agents_list, so this
+        // rebuilds the companion tab bar even if we lost connection
+        // mid-session or the desktop was restarted.
+        try {
+          syncClient.requestAgentsList();
+          addLogEntry('→ Re-requested agents list (reconnect)', 'sent');
+        } catch (_) {}
         // Use Toast via native module
         if (NativeModules.NativeBackground) {
           try {
