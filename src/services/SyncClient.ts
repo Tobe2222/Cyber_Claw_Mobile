@@ -247,6 +247,14 @@ class SyncClient {
     this.send({ type: 'request_chat_history' });
   }
 
+  // v3.1.17: per-agent chat history request for the companion tab bar.
+  // Each companion has its own chat history on the desktop; when the
+  // user switches to a different companion tab, we ask the desktop
+  // for that companion's messages.
+  requestAgentHistory(agentId: string) {
+    this.send({ type: 'request_agent_history', agentId });
+  }
+
   requestState() {
     this.send({ type: 'request_state' });
   }
@@ -306,6 +314,14 @@ class SyncClient {
 
       case 'chat_history':
         this.emit('chat_history', msg);
+        break;
+
+      case 'agent_history':
+        // v3.1.17: per-agent chat history response. The mobile
+        // companion tab bar shows the chat history of whichever
+        // companion the user has selected. The response is tagged
+        // with the agentId so we know which slot to fill.
+        this.emit('agent_history', msg);
         break;
 
       case 'typing':

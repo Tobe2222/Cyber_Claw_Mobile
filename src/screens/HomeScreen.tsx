@@ -187,8 +187,48 @@ export function offLogEntry(fn: (e: LogEntry) => void) {
 
 type TabId = 'chat' | 'events' | 'log';
 
+// v3.1.17: per-companion chat helper. We use this in two ways:
+//   1. Append a freshly arrived message to a specific companion's
+//      history (server tells us which agent it belongs to).
+//   2. Update the `messages` view-state when the user switches
+//      companion tabs, so the FlatList re-renders.
+//
+// Both updates are batched into a single setMessagesByAgent call so
+// the agent's array never gets out of sync with the view.
+function appendAgentMessage(
+  msg: ChatMessage,
+  agentId: string,
+  setMessagesByAgent: React.Dispatch<React.SetStateAction<Record<string, ChatMessage[]>>>,
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
+  activeAgentId: string | null,
+) {
+  setMessagesByAgent(prev => {
+    const list = prev[agentId] || [];
+    // dedupe
+    if (list.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text)) {
+      return prev;
+    }
+    const next = { ...prev, [agentId]: [...list, msg] };
+    if (agentId === activeAgentId) {
+      setMessages(next[agentId]);
+    }
+    return next;
+  });
+}
+
 export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenSettings: () => void; onOpenWakeMode?: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // v3.1.17: per-companion chat history. The mobile companion tab
+  // bar lets the user switch between companions; each companion has
+  // its own chat history on the desktop that we mirror locally.
+  // `messages` above is a view of `messagesByAgent[activeChatAgentId]`.
+  const [messagesByAgent, setMessagesByAgent] = useState<Record<string, ChatMessage[]>>({});
+  // v3.1.17: which companion's chat is currently shown. The
+  // companion tab bar updates this when the user taps a tab.
+  const [activeChatAgentId, setActiveChatAgentId] = useState<string | null>(null);
+  // v3.1.17: unread message count per companion, used to badge
+  // companion tabs when the user is on a different one.
+  const [chatUnreadByAgent, setChatUnreadByAgent] = useState<Record<string, number>>({});
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
   const [inputText, setInputText] = useState('');
@@ -210,7 +250,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // desktop so the mobile arena can show all companions, not just
   // the active one. Empty array = unknown (still works in single-
   // companion fallback).
-  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null }>>([]);
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>([]);
   const [webViewKey, setWebViewKey] = useState(0);
   const chatRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
@@ -226,8 +266,19 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   const isWakeWordStoppedRef = useRef<boolean>(true);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
   const wakeWordBusyRef = useRef(false); // true while recording/transcribing in wake mode
+  // v3.1.17: stable refs that mirror the per-companion state so the
+  // sync-event handlers (defined inside the main useEffect) can
+  // read the latest values without a stale-closure bug.
+  const activeChatAgentIdRef = useRef<string | null>(null);
+  const messagesByAgentRef = useRef<Record<string, ChatMessage[]>>({});
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
+
+  // v3.1.17: keep stable refs in sync with the per-companion state
+  // so the sync-event handlers in the main useEffect don't capture
+  // stale values.
+  useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
+  useEffect(() => { messagesByAgentRef.current = messagesByAgent; }, [messagesByAgent]);
 
   // Load companion selection from storage on mount
   useEffect(() => {
@@ -1000,18 +1051,28 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         addLogEntry(`📨 Skipping user message`, 'received');
         return;
       }
+      // v3.1.17: route incoming chat to the correct companion tab.
+      // The desktop tags the message with agentId; if it's missing,
+      // fall back to the active chat agent. Either way, we update
+      // messagesByAgent[aid] and bump the unread counter for that
+      // agent unless it's the currently active one.
+      const aid: string = msg.agentId || activeChatAgentIdRef.current || 'companion';
+      const incoming: ChatMessage = {
+        id: `${msg.ts || Date.now()}-${Math.random()}`,
+        text: msg.text,
+        isUser: false,
+        agentId: aid,
+        agentName: msg.agentName,
+        ts: msg.ts || Date.now(),
+      };
+      appendAgentMessage(incoming, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      if (aid !== activeChatAgentIdRef.current) {
+        setChatUnreadByAgent(prev => ({ ...prev, [aid]: (prev[aid] || 0) + 1 }));
+      }
       // In Wake Mode, only process messages that are responses to a wake word trigger
       // (wakeWordBusyRef=true). Random companion reactions should just go to normal chat.
       if (isWakeWordModeRef.current && !wakeWordBusyRef.current) {
         addLogEntry(`📨 Wake word mode idle - routing to chat silently`, 'debug');
-        setMessages(prev => {
-          const dupe = prev.some(m => Math.abs(m.ts - (msg.ts || Date.now())) < 2000 && m.text === msg.text);
-          if (dupe) return prev;
-          // v3.1.16: append in chronological order (oldest→newest). FlatList
-          // is NOT inverted, so the newest lands at the natural bottom of
-          // the screen and scrollToEnd jumps there.
-          return [...prev, { id: `${Date.now()}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts || Date.now() }];
-        });
         return;
       }
       // If in voice mode (or Wake Mode responding to trigger), treat text response as audio response
@@ -1019,15 +1080,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         addLogEntry(`🎙️ Voice mode response: "${msg.text.substring(0, 50)}..."`, 'info');
         addVoiceLog(`🔊 Responding: "${msg.text.substring(0, 40)}..."`);
         setVoiceStatus('playing');
-
-        // Always add response to chat log (Wake Mode or regular voice)
         setChatVoiceStatus(null);
-        setMessages(prev => {
-          const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
-          if (dupe) return prev;
-          // v3.1.16: append in chronological order.
-          return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
-        });
 
         if (isWakeWordModeRef.current) {
           // Wake word mode: sample listener was stopped in handleWakeWord before recording
@@ -1084,17 +1137,11 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       }
       addLogEntry(`📨 Adding to chat: "${msg.text.substring(0, 50)}..."`, 'received');
       setChatVoiceStatus(null); // clear status when response arrives
-      setMessages(prev => {
-        const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
-        if (dupe) {
-          addLogEntry(`📨 Skipping duplicate message`, 'received');
-          return prev;
-        }
-        addLogEntry(`📨 Chat updated, total: ${prev.length + 1}`, 'received');
-        // v3.1.16: append in chronological order. FlatList is NOT inverted;
-        // the newest lands at the natural bottom of the screen.
-        return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
-      });
+      // v3.1.17: incoming message already appended to messagesByAgent[aid]
+      // and (if active) `messages` at the top of onChat. The legacy
+      // duplicate-detection log entry still helps when debugging the
+      // sync layer.
+      addLogEntry(`📨 Chat updated, total: ${(messagesByAgentRef.current[aid] || []).length + 1}`, 'received');
       // audio_response from desktop handles spoken replies
     };
 
@@ -1115,8 +1162,15 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           text: m.text,
           isUser: m.isUser,
           agentId: m.agentId,
+          agentName: m.agentName,
           ts: m.ts,
         }));
+        // v3.1.17: route the legacy flat chat_history response to
+        // the active companion. The desktop sends this on first
+        // connect; the per-agent request fires afterwards for each
+        // tab in the companion bar.
+        const aid = activeChatAgentIdRef.current || 'companion';
+        setMessagesByAgent(prev => ({ ...prev, [aid]: loaded }));
         setMessages(loaded);
       }
     };
@@ -1310,6 +1364,36 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     };
     syncClient.on('voice_received', onVoiceReceived);
 
+    // v3.1.17: per-agent chat history response. Fills the
+    // messagesByAgent slot for the agent named in the response.
+    // If that agent is the currently active chat companion, we
+    // also update the visible `messages` state so the FlatList
+    // shows the loaded history immediately.
+    const onAgentHistory = (msg: any) => {
+      if (!msg?.agentId) return;
+      const aid = msg.agentId;
+      const loaded: ChatMessage[] = (Array.isArray(msg.messages) ? msg.messages : []).map((m: any) => ({
+        id: `hist-${m.ts}-${Math.random()}`,
+        text: m.text,
+        isUser: m.isUser,
+        agentId: m.agentId || aid,
+        agentName: m.agentName,
+        ts: m.ts,
+      }));
+      addLogEntry(`← Loaded ${loaded.length} messages for ${aid}`, 'info');
+      setMessagesByAgent(prev => ({ ...prev, [aid]: loaded }));
+      // If this is the active companion, swap the visible messages.
+      // We read activeChatAgentIdRef to avoid stale-closure issues
+      // (the closure for this useEffect doesn't see state updates
+      // after mount).
+      if (activeChatAgentIdRef.current === aid) {
+        setMessages(loaded);
+      }
+      // History is loaded — clear unread for this agent.
+      setChatUnreadByAgent(prev => ({ ...prev, [aid]: 0 }));
+    };
+    syncClient.on('agent_history', onAgentHistory);
+
     // v3.1.15: receive the full agent list from the desktop. The mobile
     // arena uses this to render one sprite per agent (instead of only
     // the active companion).
@@ -1317,6 +1401,31 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       if (Array.isArray(msg?.agents)) {
         addLogEntry(`← Agents list: ${msg.agents.length} companion(s)`, 'info');
         setAgents(msg.agents);
+        // v3.1.17: initialise per-companion chat slots and request
+        // each companion's history from the desktop. The desktop
+        // stores chatHistoryByAgent[id] and we mirror it locally so
+        // switching tabs is instant on subsequent visits.
+        setMessagesByAgent(prev => {
+          const next = { ...prev };
+          for (const a of msg.agents) {
+            if (!next[a.id]) next[a.id] = [];
+          }
+          return next;
+        });
+        // Pick the first agent as the active chat companion if we
+        // don't already have one (initial load, or desktop restarted
+        // and the agent list is fresh).
+        setActiveChatAgentId(curr => {
+          if (curr) return curr;
+          const first = msg.agents[0];
+          return first ? first.id : null;
+        });
+        // Request history for every companion so switching tabs is
+        // instant. The desktop will respond with `agent_history` per
+        // agent; we fill each slot as responses arrive.
+        for (const a of msg.agents) {
+          try { syncClient.requestAgentHistory(a.id); } catch (_) {}
+        }
       }
     };
     syncClient.on('agents_list', onAgentsList);
@@ -1361,6 +1470,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       try { syncClient?.off?.('voice_transcript_result', onVoiceTranscriptResult); } catch {}
       try { syncClient?.off?.('voice_received', onVoiceReceived); } catch {}
       try { syncClient?.off?.('agents_list', onAgentsList); } catch {}
+      try { syncClient?.off?.('agent_history', onAgentHistory); } catch {}
 
       try { syncClient?.off?.('send_error', onSendError); } catch {}
       try { offLogEntry?.(onLogUpdate); } catch {}
@@ -1458,10 +1568,14 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     if (!text && attachments.length === 0) return;
 
     if (text) {
-      // v3.1.16: append in chronological order.
-      setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
-      syncClient.sendChat(text);
-      addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
+      // v3.1.17: tag the user message with the active companion's
+      // agentId so it lands in the right slot of messagesByAgent and
+      // the desktop routes the response back to the same companion.
+      const aid = activeChatAgentIdRef.current || 'companion';
+      const userMsg: ChatMessage = { id: `user-${Date.now()}`, text, isUser: true, agentId: aid, ts: Date.now() };
+      appendAgentMessage(userMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      syncClient.sendChat(text, aid);
+      addLogEntry(`→ [${aid}] ${text.substring(0, 80)}`, 'sent');
     }
 
     for (const att of attachments) {
@@ -1810,6 +1924,52 @@ useEffect(() => {
         </View>
       )}
 
+      {/* v3.1.17: companion tab bar. Shows one tab per companion
+          (dynamically built from the `agents` state populated by the
+          desktop's `agents_list` sync event). Tapping a tab switches
+          the active chat companion and loads that companion's chat
+          history. Unread badges appear when a different companion
+          received a message while the user is on this tab. */}
+      {!fullscreen && !isLandscape && agents.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.companionTabBar}
+          contentContainerStyle={styles.companionTabBarContent}
+        >
+          {agents.map(a => {
+            const isActive = activeChatAgentId === a.id;
+            const unread = chatUnreadByAgent[a.id] || 0;
+            return (
+              <TouchableOpacity
+                key={a.id}
+                style={[styles.companionTab, isActive && styles.companionTabActive]}
+                onPress={() => {
+                  // Switch active companion: update the visible
+                  // `messages` view to this companion's history, clear
+                  // their unread counter, and request a fresh history
+                  // in case anything changed on the desktop.
+                  setActiveChatAgentId(a.id);
+                  setMessages(messagesByAgent[a.id] || []);
+                  setChatUnreadByAgent(prev => ({ ...prev, [a.id]: 0 }));
+                  try { syncClient.requestAgentHistory(a.id); } catch (_) {}
+                }}
+              >
+                <Text style={styles.companionTabEmoji}>{a.emoji || '🤖'}</Text>
+                <Text style={[styles.companionTabName, isActive && styles.companionTabNameActive]} numberOfLines={1}>
+                  {a.name}
+                </Text>
+                {unread > 0 && (
+                  <View style={styles.companionTabBadge}>
+                    <Text style={styles.companionTabBadgeText}>{unread > 9 ? '9+' : unread}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      )}
+
       {/* Tab content - Hidden when fullscreen or landscape */}
       {!fullscreen && !isLandscape && (
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
@@ -2026,6 +2186,61 @@ const styles = StyleSheet.create({
   tabActive: { borderBottomWidth: 2, borderBottomColor: '#f7931a' },
   tabText: { color: '#666', fontSize: 13 },
   tabTextActive: { color: '#f7931a', fontWeight: 'bold' },
+  // v3.1.17: companion tab bar (one tab per companion). Sits
+  // between the system tabs and the chat content.
+  companionTabBar: {
+    backgroundColor: '#0a0a14',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a1a2e',
+    maxHeight: 64,
+  },
+  companionTabBarContent: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
+  companionTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#15151f',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#222',
+  },
+  companionTabActive: {
+    backgroundColor: 'rgba(247,147,26,0.18)',
+    borderColor: '#f7931a',
+  },
+  companionTabEmoji: {
+    fontSize: 16,
+    marginRight: 6,
+  },
+  companionTabName: {
+    color: '#888',
+    fontSize: 12,
+    fontWeight: '600',
+    maxWidth: 90,
+  },
+  companionTabNameActive: {
+    color: '#f7931a',
+  },
+  companionTabBadge: {
+    marginLeft: 6,
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    minWidth: 16,
+    alignItems: 'center',
+  },
+  companionTabBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
   tabContent: { flex: 1 },
   chatList: { padding: 12, paddingBottom: 8 },
   dateSeparator: {
