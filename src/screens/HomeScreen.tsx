@@ -2002,15 +2002,21 @@ useEffect(() => {
           desktop's `agents_list` sync event). Tapping a tab switches
           the active chat companion and loads that companion's chat
           history. Unread badges appear when a different companion
-          received a message while the user is on this tab. */}
-      {!fullscreen && !isLandscape && agents.length > 0 && (
+          received a message while the user is on this tab.
+          v3.1.19: while the agents list is still loading, show a
+          single 'Clawsuu' tab so the user can see the bar is there
+          and we can tell from the device whether the rest of the
+          flow is working. */}
+      {!fullscreen && !isLandscape && (() => {
+        const list = agents.length > 0 ? agents : [{ id: 'clawsuu', name: 'Clawsuu', emoji: '🐾' }];
+        return (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.companionTabBar}
           contentContainerStyle={styles.companionTabBarContent}
         >
-          {agents.map(a => {
+          {list.map(a => {
             const isActive = activeChatAgentId === a.id;
             const unread = chatUnreadByAgent[a.id] || 0;
             return (
@@ -2041,7 +2047,8 @@ useEffect(() => {
             );
           })}
         </ScrollView>
-      )}
+        );
+      })()}
 
       {/* Tab content - Hidden when fullscreen or landscape */}
       {!fullscreen && !isLandscape && (
