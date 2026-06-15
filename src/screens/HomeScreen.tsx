@@ -250,7 +250,21 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // desktop so the mobile arena can show all companions, not just
   // the active one. Empty array = unknown (still works in single-
   // companion fallback).
-  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>([]);
+  // v3.1.18: initialise from AsyncStorage so the companion tab bar
+  // shows immediately on mount, even before the desktop's
+  // agents_list replay arrives. The desktop broadcast (or the
+  // on-mount requestAgentsList call) refreshes the cached list
+  // shortly after.
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>(() => {
+    try {
+      // Eager synchronous read isn't possible with AsyncStorage, so
+      // we leave this empty and let the useEffect below hydrate it
+      // from storage on mount.
+      return [];
+    } catch (_) {
+      return [];
+    }
+  });
   const [webViewKey, setWebViewKey] = useState(0);
   const chatRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
@@ -280,6 +294,31 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
   useEffect(() => { messagesByAgentRef.current = messagesByAgent; }, [messagesByAgent]);
 
+  // v3.1.18: hydrate the agents list from AsyncStorage on mount so
+  // the companion tab bar shows immediately, even if the desktop
+  // hasn't sent agents_list yet (slow reconnect, etc.).
+  useEffect(() => {
+    AsyncStorage.getItem('cyberclaw-agents-cache').then(raw => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAgents(parsed);
+          addLogEntry(`Loaded ${parsed.length} companion(s) from local cache`, 'info');
+        }
+      } catch (_) {}
+    }).catch(() => {});
+  }, []);
+
+  // v3.1.18: persist the agents list whenever it changes so a
+  // remount (e.g. user opens Wake Mode and comes back) can
+  // rebuild the tab bar from cache while waiting for the desktop
+  // to send a fresh list.
+  useEffect(() => {
+    if (agents.length === 0) return;
+    AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(agents)).catch(() => {});
+  }, [agents]);
+
   // Load companion selection from storage on mount
   useEffect(() => {
     AsyncStorage.getItem('cyberclaw-arena-comp').then(v => {
@@ -295,12 +334,25 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     // reconnects after a network blip, or the desktop was restarted
     // while the app was in the background. The desktop's sync server
     // caches the last agents_list and replays it.
-    try {
-      syncClient.requestAgentsList();
-      addLogEntry('→ Requested agents list from desktop', 'sent');
-    } catch (e) {
-      addLogEntry(`Request agents list failed: ${(e as any)?.message}`, 'error');
-    }
+    // v3.1.18: retry a few times in case the WebSocket isn't open
+    // yet on the very first mount (the SyncClient may still be
+    // connecting when this effect runs).
+    const requestWithRetry = (attempt: number) => {
+      try {
+        if (syncClient.connected) {
+          syncClient.requestAgentsList();
+          addLogEntry('→ Requested agents list from desktop', 'sent');
+        } else if (attempt < 5) {
+          addLogEntry(`WS not ready, retrying requestAgentsList (attempt ${attempt + 1})`, 'debug');
+          setTimeout(() => requestWithRetry(attempt + 1), 800);
+        } else {
+          addLogEntry('Gave up requesting agents list (WS never opened)', 'warn');
+        }
+      } catch (e) {
+        addLogEntry(`Request agents list failed: ${(e as any)?.message}`, 'error');
+      }
+    };
+    requestWithRetry(0);
 
     // Test native module
     console.log('[Native] Available modules:', Object.keys(NativeModules).join(', '));
