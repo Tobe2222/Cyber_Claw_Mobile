@@ -13,6 +13,21 @@ const patches = [
     find: 'jvmTarget = "1.8"',
     replace: 'jvmTarget = "17"',
   },
+  // v3.1.22: AsyncStorage's android/build.gradle has its OWN
+  // `repositories { mavenCentral(); google() }` block. When
+  // gradle resolves transitive deps (like
+  // org.asyncstorage.shared_storage:storage-android:1.0.0) for
+  // THIS subproject, it uses these repos, NOT the root
+  // project's allprojects block. JitPack (added by react-native's
+  // gradle plugin at line 99 of DependencyUtils.kt) is also
+  // consulted, and JitPack times out intermittently. The fix:
+  // add the local_repo to this subproject's repos so gradle
+  // finds the AAR locally and never needs JitPack.
+  {
+    file: 'node_modules/@react-native-async-storage/async-storage/android/build.gradle',
+    find: 'repositories {\n    mavenCentral()\n    google()\n}\n\ndependencies {\n    implementation "com.facebook.react:react-android"\n    api "org.asyncstorage.shared_storage:storage-android:1.0.0"',
+    replace: 'repositories {\n    // v3.1.22: local_repo must be FIRST so gradle finds\n    // storage-android locally and never hits JitPack.\n    // rootDir here is the async-storage subproject\'s android\n    // dir, so ../local_repo is the right relative path.\n    maven {\n        url = uri("${rootDir}/../local_repo")\n        metadataSources {\n            mavenPom()\n            gradleMetadata()\n            artifact()\n        }\n    }\n    mavenCentral()\n    google()\n}\n\ndependencies {\n    implementation "com.facebook.react:react-android"\n    api "org.asyncstorage.shared_storage:storage-android:1.0.0"',
+  },
 ];
 
 let patchCount = 0;
