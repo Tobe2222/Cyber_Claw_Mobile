@@ -747,6 +747,20 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         try {
           const loaded = JSON.parse(raw);
           const filtered = loaded.filter((m: any) => m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
+          // v3.1.16 migration: v3.1.15 stored the array in reversed
+          // (newest→oldest) order for an inverted FlatList. v3.1.16
+          // uses chronological order. If the stored data starts with
+          // a ts that's later than the last item, it's reversed —
+          // flip it back. This is non-destructive (no chat clearing)
+          // and handles persisted data from any prior version.
+          if (filtered.length >= 2) {
+            const firstTs = filtered[0].ts;
+            const lastTs = filtered[filtered.length - 1].ts;
+            if (firstTs > lastTs) {
+              setMessages(filtered.reverse());
+              return;
+            }
+          }
           setMessages(filtered);
         } catch (e) {
           console.log('Error loading messages:', e);
@@ -993,8 +1007,10 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         setMessages(prev => {
           const dupe = prev.some(m => Math.abs(m.ts - (msg.ts || Date.now())) < 2000 && m.text === msg.text);
           if (dupe) return prev;
-          // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
-          return [{ id: `${Date.now()}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts || Date.now() }, ...prev];
+          // v3.1.16: append in chronological order (oldest→newest). FlatList
+          // is NOT inverted, so the newest lands at the natural bottom of
+          // the screen and scrollToEnd jumps there.
+          return [...prev, { id: `${Date.now()}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts || Date.now() }];
         });
         return;
       }
@@ -1009,8 +1025,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         setMessages(prev => {
           const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
           if (dupe) return prev;
-          // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
-          return [{ id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }, ...prev];
+          // v3.1.16: append in chronological order.
+          return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
         });
 
         if (isWakeWordModeRef.current) {
@@ -1075,8 +1091,9 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           return prev;
         }
         addLogEntry(`📨 Chat updated, total: ${prev.length + 1}`, 'received');
-        // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
-        return [{ id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }, ...prev];
+        // v3.1.16: append in chronological order. FlatList is NOT inverted;
+        // the newest lands at the natural bottom of the screen.
+        return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
       });
       // audio_response from desktop handles spoken replies
     };
@@ -1091,8 +1108,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     const onChatHistory = (msg: any) => {
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
-        // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList.
-        // Desktop sends oldest→newest, so reverse before storing.
+        // v3.1.16: data is stored in chronological order (oldest→newest).
+        // The desktop sends it that way; we keep it as-is.
         const loaded = msg.messages.map((m: any) => ({
           id: `hist-${m.ts}-${Math.random()}`,
           text: m.text,
@@ -1100,7 +1117,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           agentId: m.agentId,
           ts: m.ts,
         }));
-        setMessages(loaded.reverse());
+        setMessages(loaded);
       }
     };
 
@@ -1279,8 +1296,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       setMessages(prev => {
         const dupe = prev.some(m => m.isUser && Math.abs(m.ts - Date.now()) < 5000 && m.text === msg.transcript);
         if (dupe) return prev;
-        // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
-        return [{ id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }, ...prev];
+        // v3.1.16: append in chronological order.
+        return [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }];
       });
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
       setChatVoiceStatus('Clawsuu is thinking...');
@@ -1441,8 +1458,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     if (!text && attachments.length === 0) return;
 
     if (text) {
-      // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
-      setMessages(prev => [{ id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }, ...prev]);
+      // v3.1.16: append in chronological order.
+      setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
       syncClient.sendChat(text);
       addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
     }
@@ -1546,41 +1563,42 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // v3.1.14: track incoming (non-user) messages so we can surface a
 // "↓ new messages" badge when the user has scrolled up to read
 // history. User-sent messages don't count.
-// v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList,
-// so the newest message is at index 0, not length-1.
+// v3.1.16: data is stored in chronological order (oldest→newest). The
+// newest message is at index length-1, not 0. FlatList is NOT
+// inverted — scrollToEnd jumps to the bottom of the screen.
 const lastMessageIdRef = useRef<string | null>(null);
 useEffect(() => {
   if (messages.length === 0) return;
-  const newest = messages[0];
-  if (newest.id === lastMessageIdRef.current) return;
+  const last = messages[messages.length - 1];
+  if (last.id === lastMessageIdRef.current) return;
   const isInitial = lastMessageIdRef.current === null;
-  lastMessageIdRef.current = newest.id;
+  lastMessageIdRef.current = last.id;
   if (isInitial) return; // first mount: just record, no auto-scroll/bump
   // Skip user-sent messages: the user just typed them, they know.
-  if (newest.isUser) {
+  if (last.isUser) {
     // ...but still scroll to the new (their) message at the bottom.
     if (chatAtBottom) {
-      setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
+      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
     }
     return;
   }
   // Incoming message while at bottom: auto-scroll. While scrolled
   // away: increment the unread badge.
   if (chatAtBottom) {
-    setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
+    setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
   } else {
     setChatUnreadCount(c => c + 1);
   }
 }, [messages.length]);
 
-// v3.1.14: when the user switches to the chat tab, jump to the
+// v3.1.16: when the user switches to the chat tab, jump to the
 // newest message so they don't have to manually scroll. This is
 // the "open at the bottom" behavior the user expects. Also clear
 // the unread badge — they're looking at the chat now.
 useEffect(() => {
   if (activeTab === 'chat') {
     if (messages.length > 0) {
-      setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
+      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
     }
     setChatUnreadCount(0);
   }
@@ -1591,19 +1609,16 @@ useEffect(() => {
       return <View />;
     }
 
-    // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList.
-    // Visual order (top to bottom) goes older→newer. The separator appears
-    // ABOVE the first message of a new day group. For each message we
-    // check the next-older message (index+1) — if it crosses into a new
-    // (older) day bucket, this message is the FIRST of a new day group
-    // and should show the separator. The oldest message (last index) gets
-    // no separator (it's the start of the conversation).
+    // v3.1.16: data is stored in chronological order (oldest→newest).
+    // Show a date separator when the bucket changes from the previous
+    // message (which is the one right above in the array).
     let showDateSeparator = false;
-    const isOldest = index === messages.length - 1;
-    if (!isOldest && messages[index + 1]) {
-      const nextOlderBucket = getDateBucket(messages[index + 1].ts);
+    if (index === 0 || !messages[index - 1]) {
+      showDateSeparator = true;
+    } else {
+      const prevBucket = getDateBucket(messages[index - 1].ts);
       const currBucket = getDateBucket(item.ts);
-      showDateSeparator = nextOlderBucket !== currBucket;
+      showDateSeparator = prevBucket !== currBucket;
     }
 
     // v3.1.15: show the actual agent name (e.g. "🐾 Lamasuu") if we
@@ -1804,7 +1819,7 @@ useEffect(() => {
               <TouchableOpacity
                 style={styles.chatScrollToBottomBtn}
                 onPress={() => {
-                  chatRef.current?.scrollToOffset({ offset: 0, animated: true });
+                  chatRef.current?.scrollToEnd({ animated: true });
                   setChatUnreadCount(0);
                 }}
               >
@@ -1821,33 +1836,30 @@ useEffect(() => {
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
-              // v3.1.14: standard chat pattern. With inverted=true, the
-              // FlatList renders oldest→newest as bottom→top. New
-              // messages are appended to the end of the array and
-              // appear at the bottom of the screen, where the user
-              // expects to read them. We use scrollToOffset({ offset:0 })
-              // to jump to "newest" (= top of inverted list = bottom of
-              // the screen).
-              inverted={true}
+              // v3.1.16: simple chronological FlatList (not inverted).
+              // Newest message lives at the end of the array and the
+              // end of the screen, where the user reads it. We use
+              // scrollToEnd to jump there.
+              inverted={false}
               onScroll={(e) => {
-                // In inverted mode, offset 0 = top of list = bottom of
-                // the screen. Mark the user as "at the bottom" when
-                // their scroll position is within a small threshold
-                // of the top of the list.
-                const offset = e.nativeEvent.contentOffset.y;
-                setChatAtBottom(offset < 8);
+                // Without inversion, "at the bottom" means near the
+                // end of contentSize.height (within a small threshold
+                // of layoutHeight).
+                const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+                const distanceFromEnd = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+                setChatAtBottom(distanceFromEnd < 32);
               }}
               onContentSizeChange={() => {
                 // Auto-scroll to the newest on first render and whenever
                 // the user is already at the bottom when new content
-                // arrives. With inverted=true, offset 0 = newest.
+                // arrives.
                 if (chatAtBottom) {
-                  chatRef.current?.scrollToOffset({ offset: 0, animated: false });
+                  chatRef.current?.scrollToEnd({ animated: false });
                 }
               }}
               onLayout={() => {
                 if (messages.length > 0) {
-                  setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 150);
+                  setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 150);
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
