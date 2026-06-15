@@ -333,6 +333,15 @@ class SyncClient {
         this.emit('audio_response', msg);
         break;
 
+      case 'agents_list':
+        // v3.1.15: desktop sent the full list of agents so the mobile
+        // can mirror the arena (one companion per agent). Re-emit
+        // under a separate event so the HomeScreen can react without
+        // touching the existing companion_id handler.
+        console.log('[SyncClient] Received agents_list:', msg.agents?.length, 'agents');
+        this.emit('agents_list', msg);
+        break;
+
       case 'pong':
         break;
 

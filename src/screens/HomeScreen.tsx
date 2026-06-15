@@ -112,6 +112,7 @@ interface ChatMessage {
   text: string;
   isUser: boolean;
   agentId?: string;
+  agentName?: string; // v3.1.15: human-readable name from desktop (e.g. "Lamasuu")
   ts: number;
 }
 
@@ -205,6 +206,11 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
   const [companionId, setCompanionId] = useState('boar');
+  // v3.1.15: full list of agents (id, name, sprite) broadcast by the
+  // desktop so the mobile arena can show all companions, not just
+  // the active one. Empty array = unknown (still works in single-
+  // companion fallback).
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null }>>([]);
   const [webViewKey, setWebViewKey] = useState(0);
   const chatRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
@@ -347,59 +353,29 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
 
-    // For wakeword, route through the Wake Mode UI (same screen as the home
-    // Wake Mode button). The "voice input" fullscreen with the forest scene
-    // was a separate leftover UI from before Wake Mode was a thing; the user
-    // expects wake word → Wake Mode → recording, all in the same fullscreen.
+    // For wakeword, route to the dedicated WakeModeScreen — same as the
+    // user tapping the Wake Mode button. The in-home "voice input"
+    // fullscreen was a separate leftover UI from before Wake Mode was a
+    // thing; the user expects wake word → Wake Mode → recording, all in
+    // the same fullscreen, and to ALWAYS land on Wake Mode regardless of
+    // what screen they were on (chat, settings, etc).
     if (source === 'wakeword') {
-      // Mark Wake Mode active so the UI shows the proper Wake Mode fullscreen
-      // (black background, centered boar, orange X button) instead of the
-      // old voice input fullscreen.
-      isWakeWordModeRef.current = true;
-      setIsWakeWordMode(true);
-
-      // Ensure fullscreen is on
-      if (!fullscreenRef.current) {
-        AppControl?.keepScreenOn?.(true);
-        setFullscreen(true);
-        fullscreenRef.current = true;
+      // Clear the in-home fullscreen state — we're handing off to the
+      // dedicated screen which manages its own UI and recording.
+      if (fullscreenRef.current) {
+        setFullscreen(false);
+        fullscreenRef.current = false;
       }
-
-      // Apply the .fullscreen CSS class to the WebView directly — this is
-      // the reliable way that toggleWakeWordMode uses, and it survives the
-      // activity re-configuration that the wake-receiver triggers. The
-      // setFullscreen message dispatch was unreliable on the wake-event
-      // path (WebView re-render loses the class).
-      const applyWebviewFullscreen = () => {
-        try {
-          webViewRef.current?.injectJavaScript(`
-            document.getElementById('ui')?.classList.add('fullscreen');
-            document.getElementById('c')?.classList.add('fullscreen');
-            document.body.classList.add('fullscreen');
-            document.documentElement.classList.add('fullscreen');
-            true;
-          `);
-        } catch (_) {}
-      };
-      applyWebviewFullscreen();
-      setTimeout(applyWebviewFullscreen, 200);
-      setTimeout(applyWebviewFullscreen, 600);
-
-      // Show over lock screen
-      try { await AppControl?.showOnLockScreenWithDismiss?.(); } catch (_) {}
-
-      addLogEntry('Wake Mode: wake word detected, recording sentence in Wake Mode UI', 'info');
-      addVoiceLog('Wake listening...');
-      addVoiceLog('Matching: "hey clawsuu"');
-      addVoiceLog('🔴 Recording...');
-
-      // Speak "ready to chat" phrase
-      AsyncStorage.getItem('cyberclaw-ready-phrase').then(phrase => {
-        speak(phrase || 'Ready to chat');
-      }).catch(() => speak('Ready to chat'));
-
-      setVoiceStatus('listening');
-      // Continue into the recording flow below
+      setIsWakeWordMode(false);
+      isWakeWordModeRef.current = false;
+      // Mark wake as handled so the AsyncStorage flag / per-render
+      // watcher in HomeScreen doesn't keep re-firing it.
+      moduleLevelWakePending = false;
+      try { await AsyncStorage.removeItem('cyberclaw-wake-pending'); } catch (_) {}
+      wakeWordBusyRef.current = false;
+      addLogEntry('🗣️ Wake Mode: handing off to dedicated WakeModeScreen', 'info');
+      onOpenWakeMode?.();
+      return;
     } else {
       // Focus source (manual mic tap) — old behaviour
       setVoiceLogs([]);
@@ -1017,7 +993,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         setMessages(prev => {
           const dupe = prev.some(m => Math.abs(m.ts - (msg.ts || Date.now())) < 2000 && m.text === msg.text);
           if (dupe) return prev;
-          return [...prev, { id: `${Date.now()}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts || Date.now() }];
+          // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
+          return [{ id: `${Date.now()}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts || Date.now() }, ...prev];
         });
         return;
       }
@@ -1032,7 +1009,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         setMessages(prev => {
           const dupe = prev.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text);
           if (dupe) return prev;
-          return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
+          // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
+          return [{ id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }, ...prev];
         });
 
         if (isWakeWordModeRef.current) {
@@ -1097,7 +1075,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           return prev;
         }
         addLogEntry(`📨 Chat updated, total: ${prev.length + 1}`, 'received');
-        return [...prev, { id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }];
+        // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
+        return [{ id: `${msg.ts}-${Math.random()}`, text: msg.text, isUser: false, agentId: msg.agentId, ts: msg.ts }, ...prev];
       });
       // audio_response from desktop handles spoken replies
     };
@@ -1112,13 +1091,16 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     const onChatHistory = (msg: any) => {
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
-        setMessages(msg.messages.map((m: any) => ({
+        // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList.
+        // Desktop sends oldest→newest, so reverse before storing.
+        const loaded = msg.messages.map((m: any) => ({
           id: `hist-${m.ts}-${Math.random()}`,
           text: m.text,
           isUser: m.isUser,
           agentId: m.agentId,
           ts: m.ts,
-        })));
+        }));
+        setMessages(loaded.reverse());
       }
     };
 
@@ -1297,7 +1279,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       setMessages(prev => {
         const dupe = prev.some(m => m.isUser && Math.abs(m.ts - Date.now()) < 5000 && m.text === msg.transcript);
         if (dupe) return prev;
-        return [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }];
+        // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
+        return [{ id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }, ...prev];
       });
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
       setChatVoiceStatus('Clawsuu is thinking...');
@@ -1309,6 +1292,17 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       setChatVoiceStatus('Received at desktop, transcribing...');
     };
     syncClient.on('voice_received', onVoiceReceived);
+
+    // v3.1.15: receive the full agent list from the desktop. The mobile
+    // arena uses this to render one sprite per agent (instead of only
+    // the active companion).
+    const onAgentsList = (msg: any) => {
+      if (Array.isArray(msg?.agents)) {
+        addLogEntry(`← Agents list: ${msg.agents.length} companion(s)`, 'info');
+        setAgents(msg.agents);
+      }
+    };
+    syncClient.on('agents_list', onAgentsList);
 
     // NOTE: Wake word detection now happens locally on mobile in Wake Mode
 
@@ -1349,6 +1343,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       try { syncClient?.off?.('audio_response', onAudioResponse); } catch {}
       try { syncClient?.off?.('voice_transcript_result', onVoiceTranscriptResult); } catch {}
       try { syncClient?.off?.('voice_received', onVoiceReceived); } catch {}
+      try { syncClient?.off?.('agents_list', onAgentsList); } catch {}
 
       try { syncClient?.off?.('send_error', onSendError); } catch {}
       try { offLogEntry?.(onLogUpdate); } catch {}
@@ -1446,7 +1441,8 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     if (!text && attachments.length === 0) return;
 
     if (text) {
-      setMessages(prev => [...prev, { id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }]);
+      // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList
+      setMessages(prev => [{ id: `user-${Date.now()}`, text, isUser: true, ts: Date.now() }, ...prev]);
       syncClient.sendChat(text);
       addLogEntry(`→ ${text.substring(0, 80)}`, 'sent');
     }
@@ -1550,16 +1546,18 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // v3.1.14: track incoming (non-user) messages so we can surface a
 // "↓ new messages" badge when the user has scrolled up to read
 // history. User-sent messages don't count.
+// v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList,
+// so the newest message is at index 0, not length-1.
 const lastMessageIdRef = useRef<string | null>(null);
 useEffect(() => {
   if (messages.length === 0) return;
-  const last = messages[messages.length - 1];
-  if (last.id === lastMessageIdRef.current) return;
+  const newest = messages[0];
+  if (newest.id === lastMessageIdRef.current) return;
   const isInitial = lastMessageIdRef.current === null;
-  lastMessageIdRef.current = last.id;
+  lastMessageIdRef.current = newest.id;
   if (isInitial) return; // first mount: just record, no auto-scroll/bump
   // Skip user-sent messages: the user just typed them, they know.
-  if (last.isUser) {
+  if (newest.isUser) {
     // ...but still scroll to the new (their) message at the bottom.
     if (chatAtBottom) {
       setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
@@ -1593,15 +1591,27 @@ useEffect(() => {
       return <View />;
     }
 
-    // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)
+    // v3.1.15: data is stored newest→oldest (prepend) for inverted FlatList.
+    // Visual order (top to bottom) goes older→newer. The separator appears
+    // ABOVE the first message of a new day group. For each message we
+    // check the next-older message (index+1) — if it crosses into a new
+    // (older) day bucket, this message is the FIRST of a new day group
+    // and should show the separator. The oldest message (last index) gets
+    // no separator (it's the start of the conversation).
     let showDateSeparator = false;
-    if (index === 0 || !messages[index - 1]) {
-      showDateSeparator = true;
-    } else {
-      const prevBucket = getDateBucket(messages[index - 1].ts);
+    const isOldest = index === messages.length - 1;
+    if (!isOldest && messages[index + 1]) {
+      const nextOlderBucket = getDateBucket(messages[index + 1].ts);
       const currBucket = getDateBucket(item.ts);
-      showDateSeparator = prevBucket !== currBucket;
+      showDateSeparator = nextOlderBucket !== currBucket;
     }
+
+    // v3.1.15: show the actual agent name (e.g. "🐾 Lamasuu") if we
+    // know which agent spoke, otherwise fall back to the legacy label.
+    // v3.1.15+ also reads item.agentName from the desktop payload.
+    const agentLabel = item.isUser
+      ? '👤 You'
+      : (item.agentName || (item.agentId && item.agentId !== 'boar' ? `🐾 ${item.agentId}` : '🐾 Clawsuu'));
 
     const dateStr = getDateBucketLabel(item.ts);
 
@@ -1610,7 +1620,7 @@ useEffect(() => {
         {showDateSeparator && <Text style={styles.dateSeparator}>{dateStr}</Text>}
         <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
           <Text style={[styles.agentLabel, item.isUser ? styles.userLabel : styles.aiLabel]}>
-            {item.isUser ? '👤 You' : '🐾 Clawsuu'}
+            {agentLabel}
           </Text>
           <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
           <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
@@ -1656,6 +1666,19 @@ useEffect(() => {
     addLogEntry(`Companion updated: ${companionId}`, 'info');
     setWebViewKey(k => k + 1);
   }, [companionId]);
+
+  // v3.1.15: when the agents list updates, push it into the WebView so
+  // the arena can render one sprite per agent. Only injects if the
+  // WebView is mounted; otherwise the next onLoadEnd will pick it up
+  // via the agents list sent in the prefs message.
+  useEffect(() => {
+    if (agents.length === 0) return;
+    if (!webViewRef.current) return;
+    try {
+      const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); true;`;
+      webViewRef.current.injectJavaScript(js);
+    } catch (_) {}
+  }, [agents]);
 
   // Periodic sync - request state from desktop every 60 seconds
   useEffect(() => {
@@ -1715,6 +1738,13 @@ useEffect(() => {
                 const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
                 const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
                 webViewRef.current?.injectJavaScript(js);
+                // v3.1.15: also seed the agents list at load so the
+                // arena can show all companions immediately. Uses the
+                // same channel as the runtime agentsList injection.
+                if (agents.length > 0) {
+                  const agentsJs = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); true;`;
+                  webViewRef.current?.injectJavaScript(agentsJs);
+                }
               });
             }}
           />
