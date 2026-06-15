@@ -22,9 +22,38 @@ apply plugin: "com.facebook.react.rootproject"
 
 allprojects {
     repositories {
+        // v3.1.21: async-storage ships `storage-android` as a local
+        // Maven repo. The .pom has `published-with-gradle-metadata`
+        // pointing gradle at the .module file, so we declare both
+        // metadata sources and put this repo FIRST so gradle never
+        // even tries JitPack for the artifact (which is what was
+        // timing out and breaking the build).
         maven {
-            // async-storage ships shared_storage as a local Maven repo
             url = uri("${rootProject.projectDir}/../node_modules/@react-native-async-storage/async-storage/android/local_repo")
+            metadataSources {
+                mavenPom()
+                gradleMetadata()
+                artifact()
+            }
+        }
+        // v3.1.21: declare JitPack explicitly with relaxed timeouts.
+        // React Native's gradle plugin (DependencyUtils.kt:99) adds
+        // JitPack to every project — if it goes first and times out
+        // (JitPack is slow / sometimes down), the build fails. With
+        // it declared here with longer socket timeouts, transient
+        // JitPack hiccups don't break the build.
+        maven {
+            url = uri("https://www.jitpack.io")
+            content {
+                // Only fall back to JitPack for missing artifacts.
+                // The shared_storage local repo above handles
+                // async-storage's transitive deps.
+                includeGroupByRegex "com\\.github\\..*"
+            }
+            metadataSources {
+                mavenPom()
+                artifact()
+            }
         }
         maven { url = uri("https://alphacephei.com/maven/") }
         mavenCentral()

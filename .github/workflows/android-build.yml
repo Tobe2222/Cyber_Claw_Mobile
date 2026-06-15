@@ -29,7 +29,7 @@ jobs:
 
       - name: Install NDK and build tools
         run: |
-          echo "y" | sdkmanager "ndk;26.1.10909125" "build-tools;34.0.0" "platforms;android-34"
+          echo "y" | sdkmanager "ndk;27.1.12297006" "build-tools;36.0.0" "platforms;android-36"
 
       - name: Install Node dependencies
         run: npm install
