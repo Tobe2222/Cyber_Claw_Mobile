@@ -315,6 +315,12 @@ class SyncClient {
           }, 10000);
           // Auto-request chat history from desktop
           setTimeout(() => this.requestChatHistory(), 300);
+          // v3.1.21: Also request the agents list on every successful
+          // auth. The desktop's _sendFullState() handles request_state
+          // too, but firing it here means we don't depend on the
+          // HomeScreen useEffect to do it (which has its own retry
+          // loop that can give up at 4s on a slow first connect).
+          setTimeout(() => this.requestAgentsList(), 400);
         } else {
           this.token = null;
           AsyncStorage.removeItem(STORAGE_KEY_TOKEN);
@@ -380,12 +386,26 @@ class SyncClient {
     }
   }
 
+  // v3.1.21: When a message can't be sent because the WS isn't
+  // open, we used to silently drop it. That made the agents_list
+  // data flow look broken on the mobile while the actual cause was
+  // a half-closed socket. Now we log a warning so the Log tab
+  // shows the dropped message and we can correlate with the
+  // desktop log to find the race.
   private send(obj: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(obj));
       } catch (e: any) {
         this.emit('send_error', { type: obj.type, reason: e?.message });
+      }
+    } else {
+      // v3.1.21: visible diagnostic. State 0=CONNECTING, 1=OPEN,
+      // 2=CLOSING, 3=CLOSED. We only want to warn for non-trivial
+      // message types (don't spam the log with pings).
+      if (obj.type && obj.type !== 'ping') {
+        const state = this.ws ? this.ws.readyState : 'no-ws';
+        console.warn(`[SyncClient] Dropped '${obj.type}' — WS not open (readyState=${state}, state=${this._state})`);
       }
     }
   }
