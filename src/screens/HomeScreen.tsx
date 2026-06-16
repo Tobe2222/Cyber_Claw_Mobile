@@ -1823,34 +1823,36 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           const first = msg.agents[0];
           return first ? first.id : null;
         });
-        // v3.1.26: also update the arena sprite on initial load so
-        // the WebView shows the first agent's companion. Without
-        // this, the arena stays on whatever the last WebView
-        // initialised with (or the default 'boar') and doesn't
-        // match the active chat tab.
-        // v3.1.27: only do this on the very first agents_list
-        // arrival. After that, the WebView keeps its own active
-        // companion and tab clicks swap it via setCompanion()
-        // injection. Re-setting it on every agents_list broadcast
-        // would re-trigger the reload ping-pong.
-        if (!initialArenaInjectedRef.current && msg.agents[0]?.sprite) {
-          initialArenaInjectedRef.current = true;
-          // The WebView's URI on first mount uses
-          // `initialArenaCompanionRef.current`, which is the
-          // value the WebView was rendered with. If that
-          // matches the first agent's sprite, no injection is
-          // needed. If not (e.g. the WebView was rendered with
-          // the 'boar' default because there was no saved
-          // companion), inject a setCompanion call to swap it
-          // without a reload.
-          if (initialArenaCompanionRef.current !== msg.agents[0].sprite) {
-            try {
-              webViewRef.current?.injectJavaScript(
-                `if (typeof setCompanion === 'function') { setCompanion(${JSON.stringify(msg.agents[0].sprite)}); } true;`,
-              );
-            } catch (_) {}
-            AsyncStorage.setItem('cyberclaw-arena-comp', msg.agents[0].sprite).catch(() => {});
+        // v3.1.31: the mobile arena.html is now a multi-companion
+        // renderer. We tell it the FULL list of companions on every
+        // agents_list broadcast, plus which one is active. The
+        // WebView rebuilds its sprite list internally (cheaper than
+        // trying to diff-and-update, and avoids the reload ping-
+        // pong that the v3.1.26 per-companionId reload caused).
+        //
+        // We do this on EVERY agents_list arrival, not just the
+        // first one — if a new companion is added on the desktop,
+        // the next agents_list will include it and the WebView
+        // will show it. No React state change, no WebView reload.
+        if (Array.isArray(msg.agents) && msg.agents.length > 0 && webViewRef.current) {
+          // Strip to the fields the WebView needs (id, name, sprite, scale)
+          const slim = msg.agents.map((a: any) => ({
+            id: a.id, name: a.name, sprite: a.sprite || null, scale: a.scale || null,
+          }));
+          try {
+            webViewRef.current.injectJavaScript(
+              `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)}); true;`,
+            );
+          } catch (_) {}
+          // Persist the first agent's sprite for next app start
+          // (only the sprite is used by the legacy persistence
+          // path; the WebView now derives the active companion
+          // from the agents_list + tab clicks).
+          if (slim[0]?.sprite) {
+            AsyncStorage.setItem('cyberclaw-arena-comp', slim[0].sprite).catch(() => {});
           }
+          // Mark initial injection as done
+          initialArenaInjectedRef.current = true;
         }
         // Request history for every companion so switching tabs is
         // instant. The desktop will respond with `agent_history` per
@@ -2307,7 +2309,7 @@ useEffect(() => {
           <WebView
             key={webViewKey}
             ref={webViewRef}
-            source={{ uri: `file:///android_asset/arena.html?companion=${initialArenaCompanionRef.current || companionId}&platform=mobile` }}
+            source={{ uri: `file:///android_asset/arena.html?platform=mobile` }}
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
             scrollEnabled={false}
             bounces={false}
@@ -2445,18 +2447,17 @@ useEffect(() => {
                   // desktop echoing companionId back via the
                   // sync server, this caused a reload ping-pong
                   // every few seconds (visible in the Log tab
-                  // as 'Companion updated: hare / boar'). The
-                  // WebView's setCompanion() swaps the sprite
-                  // and posts `saveComp` to persist; no React
-                  // state change, no reload, no echo loop.
-                  if (a.sprite) {
-                    try {
-                      webViewRef.current?.injectJavaScript(
-                        `if (typeof setCompanion === 'function') { setCompanion(${JSON.stringify(a.sprite)}); } true;`,
-                      );
-                    } catch (_) {}
-                    AsyncStorage.setItem('cyberclaw-arena-comp', a.sprite).catch(() => {});
-                  }
+                  // v3.1.31: the new multi-companion arena takes
+                  // an `id` and looks the sprite up itself. No
+                  // need to send the sprite id — the WebView
+                  // already has the full agents list from the
+                  // last agents_list broadcast.
+                  try {
+                    webViewRef.current?.injectJavaScript(
+                      `window.Arena && window.Arena.setActive(${JSON.stringify(a.id)}); true;`,
+                    );
+                  } catch (_) {}
+                  AsyncStorage.setItem('cyberclaw-arena-comp', a.id).catch(() => {});
                 }}
               >
                 <Text style={styles.companionTabEmoji}>{a.emoji || '🤖'}</Text>
