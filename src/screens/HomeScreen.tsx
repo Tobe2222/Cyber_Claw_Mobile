@@ -1676,32 +1676,23 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     const onAgentsList = (msg: any) => {
       if (Array.isArray(msg?.agents)) {
         addLogEntry(`← Agents list: ${msg.agents.length} companion(s)`, 'info');
-        // v3.1.27: cap the mobile companion tab bar at 6. The
-        // desktop can have any number of agents, but the mobile
-        // UI was never designed for a long horizontal scroll
-        // bar of 20+ tabs. If the desktop sends more, we take
-        // the first 6 in the order the desktop sent them (which
-        // is the arena order, with the active chat companion
-        // first).
-        const MAX_MOBILE_COMPANIONS = 6;
-        const full = msg.agents;
-        const limited = full.length > MAX_MOBILE_COMPANIONS
-          ? full.slice(0, MAX_MOBILE_COMPANIONS)
-          : full;
-        if (full.length > limited.length) {
-          addLogEntry(
-            `← Mobile showing first ${limited.length} of ${full.length} companions (mobile cap: ${MAX_MOBILE_COMPANIONS})`,
-            'info',
-          );
-        }
-        setAgents(limited);
+        // v3.1.28: the mobile trusts the desktop's list as the
+        // source of truth. The desktop (v3.1.19) caps the
+        // visibleOrder at 6 (MAX_ARENA_COMPANIONS) before
+        // broadcasting, so the mobile should see at most 6
+        // entries here. The v3.1.27 version had a redundant
+        // mobile-side cap, but the cap belongs at the source
+        // (the desktop) — mirroring it on the mobile hides
+        // desktop-side bugs and means the mobile UI doesn't
+        // agree with the desktop on what the limit is.
+        setAgents(msg.agents);
         // v3.1.17: initialise per-companion chat slots and request
         // each companion's history from the desktop. The desktop
         // stores chatHistoryByAgent[id] and we mirror it locally so
         // switching tabs is instant on subsequent visits.
         setMessagesByAgent(prev => {
           const next = { ...prev };
-          for (const a of limited) {
+          for (const a of msg.agents) {
             if (!next[a.id]) next[a.id] = [];
           }
           return next;
@@ -1711,7 +1702,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         // and the agent list is fresh).
         setActiveChatAgentId(curr => {
           if (curr) return curr;
-          const first = limited[0];
+          const first = msg.agents[0];
           return first ? first.id : null;
         });
         // v3.1.26: also update the arena sprite on initial load so
@@ -1724,7 +1715,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         // companion and tab clicks swap it via setCompanion()
         // injection. Re-setting it on every agents_list broadcast
         // would re-trigger the reload ping-pong.
-        if (!initialArenaInjectedRef.current && limited[0]?.sprite) {
+        if (!initialArenaInjectedRef.current && msg.agents[0]?.sprite) {
           initialArenaInjectedRef.current = true;
           // The WebView's URI on first mount uses
           // `initialArenaCompanionRef.current`, which is the
@@ -1734,19 +1725,19 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           // the 'boar' default because there was no saved
           // companion), inject a setCompanion call to swap it
           // without a reload.
-          if (initialArenaCompanionRef.current !== limited[0].sprite) {
+          if (initialArenaCompanionRef.current !== msg.agents[0].sprite) {
             try {
               webViewRef.current?.injectJavaScript(
-                `if (typeof setCompanion === 'function') { setCompanion(${JSON.stringify(limited[0].sprite)}); } true;`,
+                `if (typeof setCompanion === 'function') { setCompanion(${JSON.stringify(msg.agents[0].sprite)}); } true;`,
               );
             } catch (_) {}
-            AsyncStorage.setItem('cyberclaw-arena-comp', limited[0].sprite).catch(() => {});
+            AsyncStorage.setItem('cyberclaw-arena-comp', msg.agents[0].sprite).catch(() => {});
           }
         }
         // Request history for every companion so switching tabs is
         // instant. The desktop will respond with `agent_history` per
         // agent; we fill each slot as responses arrive.
-        for (const a of limited) {
+        for (const a of msg.agents) {
           try { syncClient.requestAgentHistory(a.id); } catch (_) {}
         }
       }
