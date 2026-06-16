@@ -489,9 +489,11 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       }
       setIsWakeWordMode(false);
       isWakeWordModeRef.current = false;
-      // Mark wake as handled so the AsyncStorage flag / per-render
-      // watcher in HomeScreen doesn't keep re-firing it.
-      moduleLevelWakePending = false;
+      // v3.1.26: the per-render watcher that depended on this
+      // module-level flag is gone. The AsyncStorage 'wake-pending'
+      // flag is still the recovery signal for the activity-torn-
+      // down case (App.tsx + HomeScreen's wakePendingCheckCounter
+      // both watch it).
       try { await AsyncStorage.removeItem('cyberclaw-wake-pending'); } catch (_) {}
       wakeWordBusyRef.current = false;
       addLogEntry('🗣️ Wake Mode: handing off to dedicated WakeModeScreen', 'info');
@@ -713,71 +715,61 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   }, [fullscreen, closeFullscreen, toggleWakeWordMode]);
 
   // Wake word → enter voice mode with lock screen
+  // Wake word → hand off to the dedicated WakeModeScreen
+  //
+  // v3.1.26: this is now a thin wrapper. The previous version
+  // toggled setIsWakeWordMode(true) + moduleLevelWakePending +
+  // setFullscreen(false) before routing to onOpenWakeMode, and a
+  // per-render watcher would re-apply the in-home fullscreen state
+  // if React state got wiped. That caused the OLD in-home fullscreen
+  // overlay (with Voice Mode / Wake Mode buttons) to flash on top of
+  // the new WakeModeScreen for ~50ms whenever a wake event fired.
+  //
+  // The wake path now has exactly one destination — the dedicated
+  // WakeModeScreen. We:
+  //   1. Stop the in-home sample listener (it conflicts with the
+  //      WakeModeScreen's own recorder).
+  //   2. Show a toast + log so the user can confirm the event
+  //      reached JS.
+  //   3. Set busyRef so the sample listener's own restart-after-
+  //      error path doesn't double-fire.
+  //   4. Hand off to onOpenWakeMode, which switches App.tsx's screen
+  //      to 'wake-mode' and unmounts HomeScreen.
+  //   5. Restart the sample listener on the WakeModeScreen's
+  //      teardown (not here, because we won't be around).
+  //
+  // The AsyncStorage 'cyberclaw-wake-pending' flag is still set
+  // because the App.tsx polling effect and HomeScreen's own
+  // wake-pending check both watch it as a fallback for the
+  // activity-torn-down case.
   const handleWakeWord = useCallback(async () => {
-    // ALWAYS show a Toast so the user can confirm the wake event reached JS.
     try { NativeModules.NativeBackground?.showToast?.('🎤 Wake word detected!'); } catch (_) {}
-    addLogEntry('🎤 Wake word detected - entering Wake Mode', 'info');
+    addLogEntry('🎤 Wake word detected - handing off to WakeModeScreen', 'info');
+
     if (wakeWordBusyRef.current) {
       addLogEntry('Wake word detected but already busy - ignoring', 'debug');
       return;
     }
     wakeWordBusyRef.current = true;
 
-    // CRITICAL: stop sample listener BEFORE starting SimpleAudioRecorder
-    // Both use AudioRecord - they cannot run simultaneously
+    // Stop sample listener — it would conflict with WakeModeScreen's
+    // own audio capture. WakeModeScreen restarts it on exit.
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
 
-    // PERSIST the wake event to AsyncStorage BEFORE doing anything else. This
-    // survives React re-mounts (e.g. if the activity gets re-ordered to
-    // front and React state is wiped). HomeScreen's mount effect will
-    // re-enter Wake Mode when it sees the flag. This is the most robust
-    // way to handle the wake-from-background case.
+    // Persist the wake event. This is the safety net for the
+    // activity-torn-down case: App.tsx's checkPending and
+    // HomeScreen's wakePendingCheckCounter both watch this flag and
+    // will switch to the wake-mode screen on the next tick.
     try { await AsyncStorage.setItem('cyberclaw-wake-pending', '1'); } catch (_) {}
-    // Clear after 30s as a safety net — the consuming effect will also
-    // clear it, but if the consuming effect doesn't fire (e.g. JS error),
-    // we don't want the flag to stick around forever.
     setTimeout(() => { AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {}); }, 30000);
 
-    // Module-level flag for the per-render watcher effect below. Survives
-    // re-renders (and is the most reliable signal we have).
-    moduleLevelWakePending = true;
-    moduleLevelWakePendingAt = Date.now();
+    // Route to the dedicated WakeModeScreen via the App-level screen
+    // switch. No more in-home fullscreen toggle.
+    try { onOpenWakeMode?.(); } catch (_) {}
 
-    // Mark Wake Mode active SYNCHRONOUSLY before any async/native calls.
-    isWakeWordModeRef.current = true;
-    setIsWakeWordMode(true);
-
-    // DO NOT call NativeBackground.bringToFront() here. It calls
-    // startActivity(REORDER_TO_FRONT) on the activity which triggers
-    // onNewIntent, which can wipe React state.
-    addLogEntry('Wake event handled without native bringToFront (avoids state wipe)', 'debug');
-
-    try {
-      await enterVoiceMode('wakeword');
-      // Successfully entered voice mode — clear the pending flag so the
-      // mount-effect doesn't re-fire the wake event on the next state change.
-      moduleLevelWakePending = false;
-      try { await AsyncStorage.removeItem('cyberclaw-wake-pending'); } catch (_) {}
-    } catch (e: any) {
-      addLogEntry(`❌ enterVoiceMode failed: ${e?.message}`, 'error');
-      wakeWordBusyRef.current = false;
-      // Try to recover by restarting the sample listener
-      try {
-        const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-        const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
-        const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
-        const training = trainingJson ? JSON.parse(trainingJson) : null;
-        if (training?.features?.length) {
-          sampleListenerCleanupRef.current = startSampleMatchListener(
-            phrase, training.features, handleWakeWord,
-            (m) => addLogEntry(m, 'debug'),
-          );
-        }
-      } catch (_) {}
-    }
-    // wakeWordBusyRef cleared + sample listener restarted in restartWakeListening
-  }, [enterVoiceMode]);
+    // wakeWordBusyRef is cleared in WakeModeScreen's onExit handler.
+  }, [onOpenWakeMode]);
 
   // Check for a pending wake event from a previous mount or state wipe.
   // The wake-event handler persists a flag to AsyncStorage, and we read
@@ -796,10 +788,18 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           consumed = true;
           addLogEntry('🗣️ Pending wake event found — re-entering Wake Mode', 'info');
           AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
-          // Small delay so any activity re-configuration settles first
+          // v3.1.26: route straight to the dedicated WakeModeScreen
+          // via onOpenWakeMode, instead of replaying handleWakeWord.
+          // handleWakeWord still has the in-home fullscreen path
+          // baggage (setIsWakeWordMode + setFullscreen(false) → onOpenWakeMode),
+          // and the per-render watcher used to depend on those calls
+          // to do its job. With the watcher gone, replaying
+          // handleWakeWord would briefly toggle the in-home state
+          // before the App-level screen switch could unmount this
+          // component. Skip the in-home path entirely.
+          // Small delay so any activity re-configuration settles first.
           setTimeout(() => {
-            // Replay the wake event
-            handleWakeWord();
+            try { onOpenWakeMode?.(); } catch (_) {}
           }, 300);
         }
       }).catch(() => {});
@@ -824,42 +824,24 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     return () => clearInterval(interval);
   }, []);
 
-  // Per-render watcher for the module-level wake-pending flag. Runs on
-  // EVERY render (no deps). If a wake event fired recently (within 10s)
-  // and the state has been wiped, re-apply Wake Mode. This is the last
-  // line of defense — it catches the case where state is wiped but the
-  // component doesn't unmount, the app state doesn't change, and the
-  // 2s polling hasn't ticked yet.
-  useEffect(() => {
-    const now = Date.now();
-    if (
-      moduleLevelWakePending &&
-      moduleLevelWakePendingAt > 0 &&
-      now - moduleLevelWakePendingAt < 10000
-    ) {
-      if (!fullscreen || !isWakeWordMode) {
-        addLogEntry('⚠️ Per-render watcher: state wiped during wake event — re-applying', 'debug');
-        isWakeWordModeRef.current = true;
-        setIsWakeWordMode(true);
-        if (!fullscreen) {
-          setFullscreen(true);
-          fullscreenRef.current = true;
-        }
-        // Re-apply WebView .fullscreen class
-        try {
-          webViewRef.current?.injectJavaScript(`
-            document.getElementById('ui')?.classList.add('fullscreen');
-            document.getElementById('c')?.classList.add('fullscreen');
-            document.body.classList.add('fullscreen');
-            document.documentElement.classList.add('fullscreen');
-            true;
-          `);
-        } catch (_) {}
-      }
-    } else if (now - moduleLevelWakePendingAt > 10000) {
-      moduleLevelWakePending = false;
-    }
-  });
+  // v3.1.26: the per-render watcher that re-applied setFullscreen(true)
+  // during a wake event was REMOVED. It was a leftover from the old
+  // architecture (v3.1.11 and earlier) where wake mode was an in-home
+  // fullscreen overlay and the watcher was the safety net for state
+  // wipes. In v3.1.12+ the wake path is App-level (App.tsx switches to
+  // the dedicated WakeModeScreen), so re-applying setFullscreen(true)
+  // here was actively breaking the new flow: it would briefly render
+  // the OLD in-home fullscreen overlay (the one with Voice Mode / Wake
+  // Mode buttons) before the App-level screen switch could unmount
+  // HomeScreen. Wake now has exactly one destination — the
+  // WakeModeScreen — and no in-home path to "restore".
+  //
+  // The module-level `moduleLevelWakePending` flag and the
+  // `wakePendingCheckCounter` polling effect (above) are still here
+  // because App.tsx's checkPending effect AND the new
+  // wakePendingCheckCounter re-entry both use the AsyncStorage
+  // 'cyberclaw-wake-pending' flag (the shared recovery signal) —
+  // the module-level variable is dead but harmless to keep for now.
 
   // Load persisted chat
   useEffect(() => {
@@ -1507,6 +1489,15 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           const first = msg.agents[0];
           return first ? first.id : null;
         });
+        // v3.1.26: also update the arena sprite on initial load so
+        // the WebView shows the first agent's companion. Without
+        // this, the arena stays on whatever the last WebView
+        // initialised with (or the default 'boar') and doesn't
+        // match the active chat tab.
+        if (msg.agents[0]?.sprite) {
+          setCompanionId(msg.agents[0].sprite);
+          AsyncStorage.setItem('cyberclaw-arena-comp', msg.agents[0].sprite).catch(() => {});
+        }
         // Request history for every companion so switching tabs is
         // instant. The desktop will respond with `agent_history` per
         // agent; we fill each slot as responses arrive.
@@ -2071,12 +2062,26 @@ useEffect(() => {
                 onPress={() => {
                   // Switch active companion: update the visible
                   // `messages` view to this companion's history, clear
-                  // their unread counter, and request a fresh history
-                  // in case anything changed on the desktop.
+                  // their unread counter, request a fresh history in
+                  // case anything changed on the desktop, AND swap the
+                  // arena sprite so the WebView above shows this
+                  // companion (the arena previously stayed on
+                  // whichever companion the WebView was last
+                  // initialised with, so the tab and the arena
+                  // disagreed).
                   setActiveChatAgentId(a.id);
                   setMessages(messagesByAgent[a.id] || []);
                   setChatUnreadByAgent(prev => ({ ...prev, [a.id]: 0 }));
                   try { syncClient.requestAgentHistory(a.id); } catch (_) {}
+                  // v3.1.26: also update the arena's active companion
+                  // so the WebView re-renders with this companion's
+                  // sprite. The WebView's companionId is read from
+                  // a query param on initial load; bumping
+                  // webViewKey forces a reload with the new id.
+                  if (a.sprite) {
+                    setCompanionId(a.sprite);
+                    AsyncStorage.setItem('cyberclaw-arena-comp', a.sprite).catch(() => {});
+                  }
                 }}
               >
                 <Text style={styles.companionTabEmoji}>{a.emoji || '🤖'}</Text>
