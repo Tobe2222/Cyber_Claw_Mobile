@@ -64,7 +64,16 @@ def main():
     # hand-written style in arena.html).
     # START_MARKER already includes the opening `{` after `=`, so
     # we just append a newline + JSON body + closing `};`.
-    new_const = START_MARKER + "\n" + json.dumps(catalog, indent=2) + "\n" + END_MARKER
+    # The json.dumps output starts with `{` for a top-level dict,
+    # so we need to strip that leading `{` to avoid a double
+    # opening brace. We also need to strip the trailing `}` from
+    # the JSON since the END_MARKER already has it.
+    json_body = json.dumps(catalog, indent=2)
+    if json_body.startswith("{"):
+        json_body = json_body[1:].lstrip("\n")
+    if json_body.endswith("}"):
+        json_body = json_body[:-1].rstrip()
+    new_const = START_MARKER + "\n" + json_body + "\n" + END_MARKER
     new_html = html[:start] + new_const + html[end:]
 
     with ARENA_PATH.open("w") as f:

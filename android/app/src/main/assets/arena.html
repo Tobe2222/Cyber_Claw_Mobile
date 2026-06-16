@@ -84,6 +84,24 @@ canvas{
     statusEl.className = cls || '';
   }
 
+  // v3.1.33: catch any uncaught error and show it in the status
+  // bar. Without this, a single bad line (e.g. an unsupported
+  // API) would leave the user stuck on "Loading arena..." with
+  // no clue why. This at least surfaces the error message so
+  // we can debug from screenshots alone.
+  window.addEventListener('error', (ev) => {
+    const msg = (ev && (ev.message || (ev.error && ev.error.message))) || 'unknown error';
+    const where = (ev && ev.filename) ? ` (${ev.filename}:${ev.lineno})` : '';
+    setStatus('JS error: ' + msg + where, 'error');
+    try { notifyRN({ type: 'arena_js_error', message: msg, where: where }); } catch (_) {}
+  });
+  window.addEventListener('unhandledrejection', (ev) => {
+    const r = ev && ev.reason;
+    const msg = (r && r.message) || String(r) || 'unhandled rejection';
+    setStatus('Promise error: ' + msg, 'error');
+    try { notifyRN({ type: 'arena_promise_error', message: msg }); } catch (_) {}
+  });
+
   // ── Embedded companion catalog ───────────────────────────────
   // v3.1.32: the catalog is EMBEDDED in this script (below) as a
   // JS const, not fetched. Android WebView's fetch() refuses to
@@ -97,7 +115,6 @@ canvas{
   // To regenerate: see tools/build_embedded_catalog.py in the
   // mobile repo. Run it after editing assets/companions/catalog.json.
   const EMBEDDED_CATALOG = {
-{
   "companions": [
     {
       "id": "fox",
@@ -342,7 +359,6 @@ canvas{
       "shadow": "Black_grouse_Shadow.png"
     }
   ]
-}
 };
 
   function loadCatalog() {
