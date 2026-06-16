@@ -157,15 +157,46 @@ export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenPr
         const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
         const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
         const phrase = settings.wakeWord || 'hey clawsuu';
-        const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+        // v3.1.29: same fallback as HomeScreen. If the
+        // settings-phrase has no training data, look for any
+        // trained phrase in AsyncStorage and use that. This
+        // handles the case where the settings got reset to
+        // a different phrase after training. The user is
+        // told which phrase is actually being used so they
+        // can re-train if they want.
+        let trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+        let usedPhrase = phrase;
+        if (!trainingJson || !JSON.parse(trainingJson || '{}')?.features?.length) {
+          try {
+            const allKeys = await AsyncStorage.getAllKeys();
+            const sampleKeys = allKeys.filter(k => k.startsWith('cyberclaw-wake-samples-'));
+            for (const key of sampleKeys) {
+              const raw = await AsyncStorage.getItem(key).catch(() => null);
+              if (!raw) continue;
+              const parsed = JSON.parse(raw);
+              if (parsed?.features?.length) {
+                trainingJson = raw;
+                const slug = key.replace('cyberclaw-wake-samples-', '');
+                usedPhrase = slug.replace(/-/g, ' ').toLowerCase();
+                addLogEntry(
+                  `⚠️ No samples for "${phrase}" — using samples for "${usedPhrase}" instead. Re-train to fix.`,
+                  'warn',
+                );
+                break;
+              }
+            }
+          } catch {
+            // fall through
+          }
+        }
         const training = trainingJson ? JSON.parse(trainingJson) : null;
 
         if (cancelled) return;
 
         if (training?.features?.length) {
-          addLogEntry(`🎤 Wake Mode active — listening for: "${phrase}"`, 'info');
+          addLogEntry(`🎤 Wake Mode active — listening for: "${usedPhrase}"`, 'info');
           addVoiceLog('Wake listening...');
-          addVoiceLog(`Matching: "${phrase}"`);
+          addVoiceLog(`Matching: "${usedPhrase}"`);
           addVoiceLog('🔴 Recording...');
 
           // Speak "ready to chat"
@@ -174,7 +205,7 @@ export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenPr
           }).catch(() => speak('Ready to chat'));
 
           cleanup = startSampleMatchListener(
-            phrase,
+            usedPhrase,
             training.features,
             handleWakeWordInner,
             (msg) => addLogEntry(msg, 'debug'),
@@ -182,7 +213,7 @@ export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenPr
           );
           sampleListenerCleanupRef.current = cleanup;
         } else {
-          addLogEntry('No training data for sample match', 'error');
+          addLogEntry('No training data for sample match — open Wake Mode and tap "Train wake phrase" to record 3 samples.', 'error');
         }
       } catch (e: any) {
         addLogEntry(`Wake listener start failed: ${e?.message}`, 'error');

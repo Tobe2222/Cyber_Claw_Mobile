@@ -48,6 +48,46 @@ const wakeWordEmitter = { addListener: (event: string, cb: (...args: any[]) => v
 const getWakeSamplesKey = (phrase: string) =>
   `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 const SAMPLE_MATCH_THRESHOLD_FG = 0.55; // foreground - more lenient
+
+// v3.1.29: lookup the most recent training samples across all
+// phrases. Used as a fallback when the user has trained for
+// "hey clawsuu" but the settings say "hey claw" (or any
+// other mismatch). Scans AsyncStorage for the
+// cyberclaw-wake-samples-* keys and returns the first one
+// with valid training data. Returns `null` if no training
+// data exists for any phrase.
+//
+// We don't try to migrate the keys when the phrase changes
+// in settings — that would silently re-train the user on a
+// different phrase without their consent. The fallback is
+// for "I had it working, the settings got reset, I don't
+// want to re-train right now". The user can re-train to
+// permanently fix the mismatch.
+async function findAnyWakeSamples(): Promise<{ key: string; phrase: string; training: any } | null> {
+  let keys: string[] = [];
+  try {
+    keys = await AsyncStorage.getAllKeys();
+  } catch {
+    return null;
+  }
+  const sampleKeys = keys.filter(k => k.startsWith('cyberclaw-wake-samples-'));
+  for (const key of sampleKeys) {
+    try {
+      const raw = await AsyncStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (parsed?.features?.length) {
+        // The phrase is encoded in the key. Decode it back.
+        const slug = key.replace('cyberclaw-wake-samples-', '');
+        const phrase = slug.replace(/-/g, ' ').toLowerCase();
+        return { key, phrase, training: parsed };
+      }
+    } catch {
+      // skip broken entries
+    }
+  }
+  return null;
+}
 const SAMPLE_MATCH_THRESHOLD_BG = 0.65; // background default - stricter
 
 function startSampleMatchListener(
@@ -1103,12 +1143,21 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
           const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
           const phrase = settings.wakeWord || 'hey clawsuu';
-          const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+          // v3.1.29: same fallback as the initial setup.
+          let trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+          let usedPhrase = phrase;
+          if (!trainingJson || !JSON.parse(trainingJson || '{}')?.features?.length) {
+            const any = await findAnyWakeSamples();
+            if (any) {
+              trainingJson = JSON.stringify(any.training);
+              usedPhrase = any.phrase;
+            }
+          }
           const training = trainingJson ? JSON.parse(trainingJson) : null;
           if (training?.features?.length) {
             sampleListenerCleanupRef.current?.();
             sampleListenerCleanupRef.current = startSampleMatchListener(
-              phrase, training.features, handleWakeWord,
+              usedPhrase, training.features, handleWakeWord,
               (msg) => addLogEntry(msg, 'debug'),
               SAMPLE_MATCH_THRESHOLD_FG,
             );
@@ -1129,22 +1178,31 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           const phrase = settings.wakeWord || 'hey clawsuu';
           const bgThreshold = bgThreshRaw ? parseFloat(bgThreshRaw) : SAMPLE_MATCH_THRESHOLD_BG;
           if (wakeMode === 'sample') {
-            const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+            // v3.1.29: same fallback as foreground path.
+            let trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+            let usedPhrase = phrase;
+            if (!trainingJson || !JSON.parse(trainingJson || '{}')?.features?.length) {
+              const any = await findAnyWakeSamples();
+              if (any) {
+                trainingJson = JSON.stringify(any.training);
+                usedPhrase = any.phrase;
+              }
+            }
             const training = trainingJson ? JSON.parse(trainingJson) : null;
             if (training?.features?.length) {
               sampleListenerCleanupRef.current?.();
               sampleListenerCleanupRef.current = startSampleMatchListener(
-                phrase, training.features, handleWakeWord,
+                usedPhrase, training.features, handleWakeWord,
                 (msg) => addLogEntry(msg, 'debug'),
                 bgThreshold,
               );
-            } else {
-              WakeWordModule?.start?.(phrase).catch(() => {});
             }
+            // v3.1.29: removed the Vosk fallback here. If
+            // there's no training data, just skip — the
+            // user will need to train or the foreground
+            // restart will pick it up.
           } else if (wakeMode === 'porcupine' && ppnPath) {
-            WakeWordModule?.startPorcupine?.(ppnPath).catch(() => WakeWordModule?.start?.(phrase).catch(() => {}));
-          } else {
-            WakeWordModule?.start?.(phrase).catch(() => {});
+            WakeWordModule?.startPorcupine?.(ppnPath).catch(() => {});
           }
           isWakeWordStoppedRef.current = false;
         }
@@ -1172,30 +1230,58 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       const wakeMode = wakeModeRaw || 'sample';
       const phrase = settings.wakeWord || 'hey claw';
       if (wakeMode === 'sample') {
-        const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase))
+        // v3.1.29: first try the specific phrase the settings
+        // ask for; if that has no training data, fall back to
+        // any trained phrase (so the user doesn't lose wake
+        // detection just because the settings got reset).
+        // Vosk is no longer a fallback — it requires a 50MB
+        // model download and the sample matcher is more
+        // reliable. If neither path has data, just don't
+        // start wake detection and tell the user to train.
+        let trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase))
           .catch(() => null);
+        let usedPhrase = phrase;
+        let usedKey = getWakeSamplesKey(phrase);
+        if (!trainingJson || !JSON.parse(trainingJson)?.features?.length) {
+          const any = await findAnyWakeSamples();
+          if (any) {
+            trainingJson = JSON.stringify(any.training);
+            usedPhrase = any.phrase;
+            usedKey = any.key;
+            addLogEntry(
+              `⚠️ No samples for "${phrase}" — using samples for "${any.phrase}" instead. Re-train to fix.`,
+              'warn',
+            );
+          }
+        }
         const training = trainingJson ? JSON.parse(trainingJson) : null;
         if (training?.features?.length) {
           sampleListenerCleanupRef.current?.();
           sampleListenerCleanupRef.current = startSampleMatchListener(
-            phrase, training.features, handleWakeWord,
+            usedPhrase, training.features, handleWakeWord,
             (msg) => addLogEntry(msg, 'debug'),
             SAMPLE_MATCH_THRESHOLD_FG,
           );
-          addLogEntry(`Starting sample-match wake detection, phrase: "${phrase}"`, 'info');
+          addLogEntry(`Starting sample-match wake detection, phrase: "${usedPhrase}"`, 'info');
         } else {
-          WakeWordModule?.start?.(phrase).catch(() => {});
-          addLogEntry(`No training data for sample mode, falling back to Vosk`, 'error');
+          addLogEntry(
+            `⚠️ No wake-word samples found. Open Wake Mode and tap "Train wake phrase" to record 3 samples.`,
+            'warn',
+          );
         }
       } else if (wakeMode === 'porcupine' && ppn) {
         WakeWordModule?.startPorcupine?.(ppn).catch((e: any) => {
-          addLogEntry(`Porcupine failed: ${e?.message}, falling back to Vosk`, 'error');
-          WakeWordModule?.start?.(phrase).catch(() => {});
+          addLogEntry(`Porcupine failed: ${e?.message}`, 'error');
         });
         addLogEntry(`Starting Porcupine wake detection`, 'info');
       } else {
-        WakeWordModule?.start?.(phrase).catch(() => {});
-        addLogEntry(`Starting wake detection, phrase: "${phrase}"`, 'info');
+        // v3.1.29: unknown wakeMode. Previously this fell
+        // through to Vosk, but Vosk is no longer a fallback.
+        // Just log and skip.
+        addLogEntry(
+          `⚠️ Unknown wake mode "${wakeMode}". Check the Wake Mode settings.`,
+          'warn',
+        );
       }
     });
 
@@ -1324,17 +1410,28 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
             addLogEntry('🎙️ Ready for next wake word', 'info');
             wakeWordBusyRef.current = false; // allow next wake trigger
             // Restart sample listener now that SimpleAudioRecorder is stopped
+            // v3.1.29: same fallback as the initial setup — use
+            // the settings phrase if it has samples, otherwise
+            // fall back to any trained phrase.
             try {
               const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
               const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
-              const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+              let trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
+              let usedPhrase = phrase;
+              if (!trainingJson || !JSON.parse(trainingJson || '{}')?.features?.length) {
+                const any = await findAnyWakeSamples();
+                if (any) {
+                  trainingJson = JSON.stringify(any.training);
+                  usedPhrase = any.phrase;
+                }
+              }
               const training = trainingJson ? JSON.parse(trainingJson) : null;
               if (training?.features?.length && !sampleListenerCleanupRef.current) {
                 sampleListenerCleanupRef.current = startSampleMatchListener(
-                  phrase, training.features, handleWakeWord,
+                  usedPhrase, training.features, handleWakeWord,
                   (m) => addLogEntry(m, 'debug'),
                 );
-                addLogEntry('🔄 Sample listener restarted', 'debug');
+                addLogEntry(`🔄 Sample listener restarted (phrase: "${usedPhrase}")`, 'debug');
               }
             } catch (_) {}
           };
