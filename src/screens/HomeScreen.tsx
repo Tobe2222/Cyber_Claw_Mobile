@@ -1133,9 +1133,30 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // AppState listener - adjust wake word threshold based on foreground/background
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async (nextAppState) => {
-      const wasBackground = appStateRef.current === 'background' || appStateRef.current === 'inactive';
+      const prev = appStateRef.current;
+      const wasBackground = prev === 'background' || prev === 'inactive';
       const goingBackground = nextAppState === 'background' || nextAppState === 'inactive';
       const goingForeground = nextAppState === 'active';
+
+      // v3.1.36: de-spam. AppState 'change' can fire MANY times in
+      // a row (e.g. when the keyboard opens/closes, when the
+      // WebView mounts, or just on Android lifecycle churn), and
+      // each fire used to (a) re-apply the sample listener
+      // setup and (b) log 'App foregrounded / backgrounded'.
+      // Both are wasteful when nothing material changed. Skip the
+      // no-op transition entirely, and rate-limit any actual
+      // transition to at most once per 1.5s so a quick back-and-
+      // forth (e.g. transient inactive states) doesn't double-log.
+      if (nextAppState === prev) return;
+      const now = Date.now();
+      if (now - lastAppStateLogRef.current < 1500) {
+        // Still update the ref so the next fire doesn't think
+        // it's a transition. We just don't re-run the listener
+        // setup or log this fire.
+        appStateRef.current = nextAppState;
+        return;
+      }
+      lastAppStateLogRef.current = now;
 
       if (goingForeground && wasBackground) {
         // Came back to foreground - restart listener with foreground (lenient) threshold
@@ -1923,6 +1944,12 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
 
 
   const appStateRef = useRef<string>(AppState.currentState);
+  // v3.1.36: rate-limit the AppState 'foregrounded/backgrounded'
+  // log so it doesn't spam. AppState 'change' can fire many times
+  // in a row for spurious reasons (keyboard, WebView mount,
+  // Android lifecycle churn) and we used to log every fire.
+  // Now: log at most once per 1.5s, and skip no-op transitions.
+  const lastAppStateLogRef = useRef<number>(0);
 
   // Add attachment
   const addAttachment = (asset: any) => {

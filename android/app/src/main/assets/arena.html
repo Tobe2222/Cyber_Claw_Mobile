@@ -491,11 +491,60 @@ canvas{
     return arr;
   })();
 
+  // v3.1.36: load the desktop's background image (or a custom
+  // one set via setBackground). The default is 'forest' to
+  // match the desktop's default. If the image fails to load
+  // (e.g. file:// blocked, or wrong path), we fall back to the
+  // procedural gradient + stars + ground band. Either way the
+  // user always sees a visible arena.
+  const BACKGROUNDS_BASE = 'file:///android_asset/backgrounds/';
+  let bgImage = null;
+  let bgLoadFailed = false;
+  let currentBgId = 'forest';
+
+  function loadBackground(id) {
+    const file = id === 'meadow' ? 'pixel_landscape_1.png'
+              : id === 'grove'  ? 'pixel_landscape_3.png'
+              : 'pixel_landscape_2.png';  // default 'forest'
+    currentBgId = id;
+    bgImage = null;
+    bgLoadFailed = false;
+    const img = new Image();
+    img.onload = () => {
+      bgImage = img;
+      notifyRN({ type: 'arena_bg_loaded', id: id });
+    };
+    img.onerror = () => {
+      bgLoadFailed = true;
+      notifyRN({ type: 'arena_bg_load_failed', id: id });
+    };
+    img.src = BACKGROUNDS_BASE + file;
+  }
+
+  // Public wrapper exposed as window.Arena.setBackground.
+  function setBackground(id) {
+    if (typeof id !== 'string') return;
+    loadBackground(id);
+  }
+
   function drawBackground() {
     const w = canvas.width;
     const h = canvas.height;
 
-    // Sky gradient (top 65% = sky, bottom 35% = ground)
+    // If the background image loaded, draw it covering the
+    // whole canvas. This is the SAME image the desktop uses
+    // — the mobile is a read-only mirror of the desktop's
+    // arena, per the user's instruction.
+    if (bgImage && bgImage.complete && bgImage.naturalWidth > 0) {
+      ctx.drawImage(bgImage, 0, 0, w, h);
+      return;
+    }
+
+    // Fallback: procedural gradient + stars + ground band.
+    // Used when the image hasn't loaded yet OR failed to load.
+    // The skyEnd at 0.65 mirrors the desktop's default
+    // horizon line (0.5) — the procedural version puts the
+    // horizon a bit lower so the sky has more room for stars.
     const skyEnd = h * 0.65;
     const skyGrad = ctx.createLinearGradient(0, 0, 0, skyEnd);
     skyGrad.addColorStop(0, '#1a1a4a');
@@ -507,7 +556,7 @@ canvas{
     // Stars (with twinkle — they get brighter/dimmer slowly)
     const now = performance.now();
     for (const star of STARS) {
-      const twinkle = (Math.sin(now * star.twinkleSpeed + star.phase) + 1) * 0.5; // 0..1
+      const twinkle = (Math.sin(now * star.twinkleSpeed + star.phase) + 1) * 0.5;
       const alpha = 0.3 + twinkle * 0.7;
       ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
       ctx.fillRect(star.x * w, star.y * h, 1, 1);
@@ -520,11 +569,11 @@ canvas{
     ctx.fillStyle = groundGrad;
     ctx.fillRect(0, skyEnd, w, h - skyEnd);
 
-    // Bright horizon line (the same orange the rest of the UI uses)
+    // Bright horizon line
     ctx.fillStyle = '#f7931a';
     ctx.fillRect(0, skyEnd, w, 1);
 
-    // A few brighter grass patches near the ground (like the desktop)
+    // Grass patches near the ground
     const patchY = skyEnd + 2;
     for (let i = 0; i < 20; i++) {
       const px = (i * 73 + 17) % w;
@@ -682,8 +731,10 @@ canvas{
   window.Arena = {
     setAgents,
     setActive,
+    setBackground,        // accepts 'meadow' | 'forest' | 'grove'
     getActiveId: () => activeId,
     getCompanionCount: () => companions.length,
+    getBackground: () => currentBgId,
   };
 
   // ── React Native bridge ──────────────────────────────
@@ -703,6 +754,8 @@ canvas{
       setAgents(msg.agents);
     } else if (msg.type === 'setActive') {
       setActive(msg.id);
+    } else if (msg.type === 'setBackground') {
+      loadBackground(msg.id || 'forest');
     }
   });
 
@@ -710,6 +763,7 @@ canvas{
   window.addEventListener('resize', resize);
   resize();
   loadCatalog();
+  loadBackground('forest'); // default — matches the desktop's default
   requestAnimationFrame(loop);
 })();
 </script>
