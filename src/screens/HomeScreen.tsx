@@ -1161,6 +1161,18 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
               (msg) => addLogEntry(msg, 'debug'),
               SAMPLE_MATCH_THRESHOLD_FG,
             );
+            // v3.1.30: log the threshold change so the user
+            // can see why a previously-stable 60% (or
+            // whatever) suddenly becomes 55%. The
+            // foreground threshold is intentionally lower
+            // (more lenient) than the background one
+            // because the phone mic is closer to the
+            // user and the audio is cleaner when the app
+            // is foregrounded.
+            addLogEntry(
+              `🎙️ App foregrounded — wake threshold: ${Math.round(SAMPLE_MATCH_THRESHOLD_FG * 100)}% (was stricter in background)`,
+              'info',
+            );
           }
           isWakeWordStoppedRef.current = false;
         }
@@ -1195,6 +1207,12 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
                 usedPhrase, training.features, handleWakeWord,
                 (msg) => addLogEntry(msg, 'debug'),
                 bgThreshold,
+              );
+              // v3.1.30: same — log the threshold change
+              // so the user understands the reason.
+              addLogEntry(
+                `🎙️ App backgrounded — wake threshold: ${Math.round(bgThreshold * 100)}% (stricter than foreground)`,
+                'info',
               );
             }
             // v3.1.29: removed the Vosk fallback here. If
@@ -1262,7 +1280,10 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
             (msg) => addLogEntry(msg, 'debug'),
             SAMPLE_MATCH_THRESHOLD_FG,
           );
-          addLogEntry(`Starting sample-match wake detection, phrase: "${usedPhrase}"`, 'info');
+          addLogEntry(
+            `Starting sample-match wake detection, phrase: "${usedPhrase}", threshold: ${Math.round(SAMPLE_MATCH_THRESHOLD_FG * 100)}% (foreground)`,
+            'info',
+          );
         } else {
           addLogEntry(
             `⚠️ No wake-word samples found. Open Wake Mode and tap "Train wake phrase" to record 3 samples.`,
