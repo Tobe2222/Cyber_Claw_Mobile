@@ -265,8 +265,14 @@ class SyncClient {
   // unmounted (e.g. when the user opened Wake Mode and came back).
   // The desktop's sync server caches the last agents_list and
   // replays it as part of _sendFullState.
+  //
+  // v3.1.16: send a dedicated 'request_agents_list' message
+  // instead of piggy-backing on 'request_state'. The desktop
+  // handles it the same way (replay cache or trigger refresh),
+  // but using a dedicated message means a future refactor of
+  // _sendFullState won't accidentally drop the agents-list reply.
   requestAgentsList() {
-    this.send({ type: 'request_state' });
+    this.send({ type: 'request_agents_list' });
   }
 
   sendCompanionAction(action: any) {

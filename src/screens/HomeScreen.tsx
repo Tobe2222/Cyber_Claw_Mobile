@@ -285,6 +285,10 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // read the latest values without a stale-closure bug.
   const activeChatAgentIdRef = useRef<string | null>(null);
   const messagesByAgentRef = useRef<Record<string, ChatMessage[]>>({});
+  // v3.1.16: same trick for the agents list so onTyping and
+  // other handlers can read the latest names without a stale
+  // closure over the `agents` state.
+  const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>([]);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -293,6 +297,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // stale values.
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
   useEffect(() => { messagesByAgentRef.current = messagesByAgent; }, [messagesByAgent]);
+  useEffect(() => { agentsRef.current = agents; }, [agents]);
 
   // v3.1.18: hydrate the agents list from AsyncStorage on mount so
   // the companion tab bar shows immediately, even if the desktop
@@ -1221,7 +1226,14 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     const onTyping = (msg: any) => {
       setIsThinking(!!msg.active);
       setArenaThinking(!!msg.active);
-      if (!fullscreenRef.current && msg.active) setChatVoiceStatus('Clawsuu is thinking...');
+      if (!fullscreenRef.current && msg.active) {
+        // v3.1.16: use the agent's name (from the cached agents
+        // list) instead of the hard-coded 'Clawsuu' so the status
+        // reads correctly when the user is chatting with Lamasuu.
+        const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
+        const name = a?.name || 'Companion';
+        setChatVoiceStatus(`${name} is thinking...`);
+      }
       if (!fullscreenRef.current && !msg.active) { /* keep until message arrives */ }
     };
 
@@ -1427,7 +1439,9 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         return [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }];
       });
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
-      setChatVoiceStatus('Clawsuu is thinking...');
+      const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
+      const name = a?.name || 'Companion';
+      setChatVoiceStatus(`${name} is thinking...`);
       syncClient.sendChat(msg.transcript);
     };
     syncClient.on('voice_transcript_result', onVoiceTranscriptResult);
@@ -1811,9 +1825,22 @@ useEffect(() => {
     // v3.1.15: show the actual agent name (e.g. "🐾 Lamasuu") if we
     // know which agent spoke, otherwise fall back to the legacy label.
     // v3.1.15+ also reads item.agentName from the desktop payload.
-    const agentLabel = item.isUser
-      ? '👤 You'
-      : (item.agentName || (item.agentId && item.agentId !== 'boar' ? `🐾 ${item.agentId}` : '🐾 Clawsuu'));
+    // v3.1.15: show the actual agent name (e.g. "🐾 Lamasuu") if we
+    // know which agent spoke, otherwise fall back to the legacy label.
+    // v3.1.15+ also reads item.agentName from the desktop payload.
+    // v3.1.16: prefer a lookup against the cached `agents` list so
+    // the fallback label uses the user's chosen name (customName on
+    // the desktop) and emoji instead of the hard-coded 'Clawsuu'.
+    const agentLabel = (() => {
+      if (item.isUser) return '👤 You';
+      if (item.agentName) return item.agentName;
+      if (item.agentId) {
+        const a = (agents || []).find(x => x.id === item.agentId);
+        if (a) return `${a.emoji || '🐾'} ${a.name}`;
+        return `🐾 ${item.agentId}`;
+      }
+      return '🐾 Clawsuu';
+    })();
 
     const dateStr = getDateBucketLabel(item.ts);
 
@@ -2006,9 +2033,27 @@ useEffect(() => {
           v3.1.19: while the agents list is still loading, show a
           single 'Clawsuu' tab so the user can see the bar is there
           and we can tell from the device whether the rest of the
-          flow is working. */}
+          flow is working.
+          v3.1.16: removed the fake 'Clawsuu' fallback tab. It was
+          misleading (looked like a real companion tab but had no
+          data behind it) and it stayed visible even when the
+          desktop's agents_list never arrived, masking the missing
+          Lamasuu bug. Now the tab bar is hidden until at least one
+          real companion is in the list, and a small inline
+          'Loading companions…' placeholder takes its place so the
+          chat area still has clear context. */}
       {!fullscreen && !isLandscape && (() => {
-        const list = agents.length > 0 ? agents : [{ id: 'clawsuu', name: 'Clawsuu', emoji: '🐾' }];
+        if (agents.length === 0) {
+          return (
+            <View style={styles.companionTabBar}>
+              <View style={styles.companionTabBarContent}>
+                <Text style={styles.companionTabPlaceholder}>
+                  {isConnected ? 'Loading companions…' : 'Connect to desktop to see companions'}
+                </Text>
+              </View>
+            </View>
+          );
+        }
         return (
         <ScrollView
           horizontal
@@ -2016,7 +2061,7 @@ useEffect(() => {
           style={styles.companionTabBar}
           contentContainerStyle={styles.companionTabBarContent}
         >
-          {list.map(a => {
+          {agents.map(a => {
             const isActive = activeChatAgentId === a.id;
             const unread = chatUnreadByAgent[a.id] || 0;
             return (
@@ -2106,7 +2151,15 @@ useEffect(() => {
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
-                    {isConnected ? "Say hi to Clawsuu! 🐾🐾" : "Connect to desktop CyberClaw to chat"}
+                    {!isConnected
+                      ? "Connect to desktop CyberClaw to chat"
+                      : !activeChatAgentId
+                        ? "Pick a companion tab to start chatting"
+                        : (() => {
+                            const a = (agents || []).find(x => x.id === activeChatAgentId);
+                            const name = a?.name || activeChatAgentId;
+                            return `Say hi to ${name}! ${a?.emoji || '🐾'}`;
+                          })()}
                   </Text>
                 </View>
               }
@@ -2142,7 +2195,14 @@ useEffect(() => {
                   style={styles.textInput}
                   value={inputText}
                   onChangeText={setInputText}
-                  placeholder={isConnected ? "Message Clawsuu..." : "Not connected"}
+                  placeholder={!isConnected
+                    ? "Not connected"
+                    : !activeChatAgentId
+                      ? "Pick a companion tab first"
+                      : (() => {
+                          const a = (agents || []).find(x => x.id === activeChatAgentId);
+                          return `Message ${a?.name || activeChatAgentId}...`;
+                        })()}
                   placeholderTextColor="#555"
                   editable={isConnected}
                   multiline
@@ -2278,6 +2338,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 6,
     alignItems: 'center',
+  },
+  // v3.1.16: small inline label that shows in place of the tab
+  // bar while the desktop's agents list is still loading. Keeps
+  // the bar's height stable so the layout doesn't jump when the
+  // real tabs arrive.
+  companionTabPlaceholder: {
+    color: '#666',
+    fontSize: 12,
+    fontStyle: 'italic',
+    paddingVertical: 6,
   },
   companionTab: {
     flexDirection: 'row',
