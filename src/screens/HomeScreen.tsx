@@ -289,6 +289,25 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // other handlers can read the latest names without a stale
   // closure over the `agents` state.
   const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>([]);
+  // v3.1.27: the companion id the WebView was initialised with.
+  // The WebView's source URI includes this on first mount so it
+  // knows which sprite to render on first paint. After that, the
+  // WebView keeps its own active companion state and is swapped
+  // via `injectJavaScript('setCompanion(id)')` — the URI MUST NOT
+  // change or react-native-webview will re-mount the WebView and
+  // re-trigger the ping-pong. This ref captures the value used
+  // on first mount so subsequent `companionId` state changes
+  // don't affect the URI.
+  const initialArenaCompanionRef = useRef<string | null>(null);
+  if (initialArenaCompanionRef.current === null) {
+    initialArenaCompanionRef.current = companionId;
+  }
+  // v3.1.27: set to true the first time agents_list arrives, so
+  // we only inject the initial companion sprite into the WebView
+  // once. Subsequent agents_list broadcasts (e.g. after a
+  // settings change) don't re-swap the active sprite, since the
+  // user may have clicked a different tab in the meantime.
+  const initialArenaInjectedRef = useRef(false);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
 
@@ -844,35 +863,151 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // the module-level variable is dead but harmless to keep for now.
 
   // Load persisted chat
+  //
+  // v3.1.27: also load into `messagesByAgent` (per-agent) so tab
+  // switching doesn't lose history. v3.1.26 (and earlier) only
+  // loaded into the single `messages` view, so when the user
+  // clicked a different companion tab the new tab's
+  // `setMessages(messagesByAgent[a.id] || [])` would see an empty
+  // slot and wipe the visible chat. The desktop restart also
+  // drops the in-memory `chatHistoryByAgent`, so the mobile's
+  // own copy is the only persistent record.
+  //
+  // The legacy `cyberclaw-chat-history` key holds the pre-
+  // per-agent flat array (with `agentId` on each message). We
+  // group by `agentId` and seed `messagesByAgent` from it. We
+  // also save a per-agent key `cyberclaw-chat-byagent` for
+  // future loads (the persist effect below writes both for
+  // compatibility, but the per-agent one is the new source of
+  // truth).
   useEffect(() => {
-    AsyncStorage.getItem(CHAT_STORAGE_KEY).then(raw => {
-      if (raw) {
-        try {
-          const loaded = JSON.parse(raw);
-          const filtered = loaded.filter((m: any) => m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
-          // v3.1.16 migration: v3.1.15 stored the array in reversed
-          // (newest→oldest) order for an inverted FlatList. v3.1.16
-          // uses chronological order. If the stored data starts with
-          // a ts that's later than the last item, it's reversed —
-          // flip it back. This is non-destructive (no chat clearing)
-          // and handles persisted data from any prior version.
-          if (filtered.length >= 2) {
-            const firstTs = filtered[0].ts;
-            const lastTs = filtered[filtered.length - 1].ts;
-            if (firstTs > lastTs) {
-              setMessages(filtered.reverse());
-              return;
+    let cancelled = false;
+    const seedFromLegacy = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(CHAT_STORAGE_KEY);
+        if (!raw) return;
+        const loaded = JSON.parse(raw);
+        if (!Array.isArray(loaded)) return;
+        const filtered = loaded.filter((m: any) =>
+          m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
+        if (filtered.length === 0) return;
+        // v3.1.16 migration: v3.1.15 stored the array in reversed
+        // (newest→oldest) order for an inverted FlatList. v3.1.16
+        // uses chronological order. If the stored data starts with
+        // a ts that's later than the last item, it's reversed —
+        // flip it back. This is non-destructive (no chat clearing)
+        // and handles persisted data from any prior version.
+        let ordered = filtered;
+        if (filtered.length >= 2) {
+          const firstTs = filtered[0].ts;
+          const lastTs = filtered[filtered.length - 1].ts;
+          if (firstTs > lastTs) ordered = filtered.slice().reverse();
+        }
+        if (cancelled) return;
+        // Group by agentId. Pre-per-agent data typically has
+        // `agentId = 'clawsuu'` (or undefined). Route anything
+        // without an agentId to 'clawsuu' for backwards compat.
+        const grouped: Record<string, ChatMessage[]> = {};
+        for (const m of ordered) {
+          const aid: string = m.agentId || 'clawsuu';
+          if (!grouped[aid]) grouped[aid] = [];
+          grouped[aid].push({
+            id: m.id || `hist-${m.ts}-${Math.random()}`,
+            text: m.text,
+            isUser: m.isUser,
+            agentId: aid,
+            agentName: m.agentName,
+            ts: m.ts,
+          });
+        }
+        // v3.1.27: also seed the visible `messages` from the
+        // first non-empty slot so the chat isn't blank on
+        // startup. (The tab bar's onPress will switch this if
+        // the user clicks a different tab.)
+        setMessagesByAgent(prev => {
+          // Merge: prefer the new grouped data for slots that
+          // are currently empty, but don't overwrite slots
+          // that already have messages (in case the user has
+          // a fresh agent that arrived via agents_list while
+          // we were loading the legacy cache).
+          const next = { ...prev };
+          for (const [aid, msgs] of Object.entries(grouped)) {
+            if (!next[aid] || next[aid].length === 0) {
+              next[aid] = msgs;
             }
           }
-          setMessages(filtered);
-        } catch (e) {
-          console.log('Error loading messages:', e);
-        }
+          return next;
+        });
+        // Show the first non-empty slot (or the active tab's
+        // slot, if any) as the visible chat.
+        setMessages(prev => {
+          if (prev.length > 0) return prev; // already populated
+          const aid = activeChatAgentIdRef.current;
+          if (aid && grouped[aid]?.length) return grouped[aid];
+          // otherwise the first non-empty slot
+          const firstAid = Object.keys(grouped)[0];
+          return firstAid ? grouped[firstAid] : prev;
+        });
+      } catch (e) {
+        console.log('Error loading messages:', e);
       }
-    });
+    };
+
+    // v3.1.27: also load the per-agent key (the new source of
+    // truth). The legacy key still works as a fallback for users
+    // upgrading from v3.1.26.
+    const seedFromPerAgent = async () => {
+      try {
+        const raw = await AsyncStorage.getItem('cyberclaw-chat-byagent');
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return false;
+        if (cancelled) return true;
+        setMessagesByAgent(prev => {
+          const next = { ...prev };
+          for (const [aid, msgs] of Object.entries(parsed)) {
+            if (Array.isArray(msgs) && msgs.length > 0) {
+              // Replace slot with the persisted one (it's the
+              // newer / more recent data).
+              next[aid] = msgs.map((m: any) => ({
+                id: m.id || `hist-${m.ts}-${Math.random()}`,
+                text: m.text,
+                isUser: !!m.isUser,
+                agentId: m.agentId || aid,
+                agentName: m.agentName,
+                ts: m.ts,
+              }));
+            }
+          }
+          return next;
+        });
+        setMessages(prev => {
+          if (prev.length > 0) return prev;
+          const aid = activeChatAgentIdRef.current;
+          if (aid && parsed[aid]?.length) return parsed[aid];
+          // first non-empty slot
+          for (const [aid, msgs] of Object.entries(parsed)) {
+            if (Array.isArray(msgs) && msgs.length > 0) return msgs;
+          }
+          return prev;
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    (async () => {
+      // New per-agent key takes priority; fall back to legacy.
+      const ok = await seedFromPerAgent();
+      if (cancelled) return;
+      if (!ok) await seedFromLegacy();
+    })();
+
     AsyncStorage.getItem('cyberclaw-tts-enabled').then(v => {
       if (v !== null) setTtsEnabled(v === 'true');
     });
+    return () => { cancelled = true; };
   }, []);
 
   // Persist chat
@@ -896,6 +1031,35 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
       }
     }
   }, [messages]);
+
+  // v3.1.27: persist the per-agent chat cache so tab switching
+  // can restore history even if the desktop is offline / has
+  // been restarted. The legacy single-list persist above still
+  // runs for backward compat (and the Log / archive key), but
+  // this is the new source of truth for the tab-switch UX.
+  // We debounce writes (every 1.5s after a messagesByAgent
+  // change) so rapid incoming messages don't hammer storage.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      // Snapshot via the ref so we always read the latest, even
+      // if the effect closure was captured before the change.
+      const snapshot = messagesByAgentRef.current || {};
+      // Don't write empty caches (avoids wiping storage on a
+      // transient empty state).
+      const nonEmpty = Object.entries(snapshot).filter(
+        ([, v]) => Array.isArray(v) && v.length > 0,
+      );
+      if (nonEmpty.length === 0) return;
+      const out: Record<string, ChatMessage[]> = {};
+      for (const [aid, msgs] of nonEmpty) {
+        // Keep the last 200 per agent.
+        out[aid] = msgs.slice(-200);
+      }
+      AsyncStorage.setItem('cyberclaw-chat-byagent', JSON.stringify(out))
+        .catch(() => {});
+    }, 1500);
+    return () => clearTimeout(handle);
+  }, [messagesByAgent]);
 
   // Orientation listener
   useEffect(() => {
@@ -1402,6 +1566,19 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     };
     syncClient.on('companion_id', onCompanionChange);
 
+    // v3.1.27: the v3.1.26 version of onCompanionChange set
+    // `companionId` state, which triggered the per-companionId
+    // useEffect to reload the WebView. Combined with the
+    // desktop echoing the companionId back, this caused a
+    // reload ping-pong every 3-8 seconds (visible in the Log
+    // tab as "Companion updated: hare / boar"). The v3.1.27
+    // WebView doesn't need React state for its active
+    // companion — it keeps its own state and handles
+    // setCompanion() calls injected from the React side. The
+    // `companionId` state is now ONLY used for the initial
+    // query param on WebView mount (see <WebView source=
+    // `?companion=${companionId}` below).
+
     syncClient.on('typing', onTyping);
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
@@ -1438,6 +1615,16 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     // If that agent is the currently active chat companion, we
     // also update the visible `messages` state so the FlatList
     // shows the loaded history immediately.
+    //
+    // v3.1.27: if the desktop sends back an EMPTY response
+    // (`loaded.length === 0`) and we already have local
+    // history (from the persisted `cyberclaw-chat-byagent`
+    // cache, or from previous messages), we KEEP the local
+    // history. The desktop's `chatHistoryByAgent` is in-memory
+    // only and gets wiped on restart, so an empty response is
+    // the normal post-restart case. Replacing the local
+    // history with `[]` would clear the chat. Only adopt the
+    // empty response if the local slot is also empty.
     const onAgentHistory = (msg: any) => {
       if (!msg?.agentId) return;
       const aid = msg.agentId;
@@ -1450,13 +1637,33 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         ts: m.ts,
       }));
       addLogEntry(`← Loaded ${loaded.length} messages for ${aid}`, 'info');
-      setMessagesByAgent(prev => ({ ...prev, [aid]: loaded }));
-      // If this is the active companion, swap the visible messages.
-      // We read activeChatAgentIdRef to avoid stale-closure issues
-      // (the closure for this useEffect doesn't see state updates
-      // after mount).
-      if (activeChatAgentIdRef.current === aid) {
-        setMessages(loaded);
+      const localSlot = (messagesByAgentRef.current || {})[aid] || [];
+      // Decide what to put in the slot. If the desktop
+      // returned messages, use them (they may include the
+      // latest items we don't have yet). If the desktop
+      // returned an empty list, only adopt that if we don't
+      // already have local history (e.g. brand new agent);
+      // otherwise keep the local copy so the chat isn't
+      // wiped just because the desktop restarted.
+      if (loaded.length > 0) {
+        setMessagesByAgent(prev => ({ ...prev, [aid]: loaded }));
+        // If this is the active companion, swap the visible
+        // messages to the freshly loaded history.
+        if (activeChatAgentIdRef.current === aid) {
+          setMessages(loaded);
+        }
+      } else if (localSlot.length === 0) {
+        // Empty desktop response + empty local slot =
+        // genuinely empty chat. Adopt the empty state.
+        setMessagesByAgent(prev => ({ ...prev, [aid]: [] }));
+        if (activeChatAgentIdRef.current === aid) {
+          setMessages([]);
+        }
+      } else {
+        // Desktop says empty but we have local history
+        // (e.g. the desktop restarted). KEEP the local
+        // copy. The user can still see their old messages.
+        addLogEntry(`← Desktop history empty for ${aid}, keeping local cache (${localSlot.length} msg)`, 'info');
       }
       // History is loaded — clear unread for this agent.
       setChatUnreadByAgent(prev => ({ ...prev, [aid]: 0 }));
@@ -1469,14 +1676,32 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
     const onAgentsList = (msg: any) => {
       if (Array.isArray(msg?.agents)) {
         addLogEntry(`← Agents list: ${msg.agents.length} companion(s)`, 'info');
-        setAgents(msg.agents);
+        // v3.1.27: cap the mobile companion tab bar at 6. The
+        // desktop can have any number of agents, but the mobile
+        // UI was never designed for a long horizontal scroll
+        // bar of 20+ tabs. If the desktop sends more, we take
+        // the first 6 in the order the desktop sent them (which
+        // is the arena order, with the active chat companion
+        // first).
+        const MAX_MOBILE_COMPANIONS = 6;
+        const full = msg.agents;
+        const limited = full.length > MAX_MOBILE_COMPANIONS
+          ? full.slice(0, MAX_MOBILE_COMPANIONS)
+          : full;
+        if (full.length > limited.length) {
+          addLogEntry(
+            `← Mobile showing first ${limited.length} of ${full.length} companions (mobile cap: ${MAX_MOBILE_COMPANIONS})`,
+            'info',
+          );
+        }
+        setAgents(limited);
         // v3.1.17: initialise per-companion chat slots and request
         // each companion's history from the desktop. The desktop
         // stores chatHistoryByAgent[id] and we mirror it locally so
         // switching tabs is instant on subsequent visits.
         setMessagesByAgent(prev => {
           const next = { ...prev };
-          for (const a of msg.agents) {
+          for (const a of limited) {
             if (!next[a.id]) next[a.id] = [];
           }
           return next;
@@ -1486,7 +1711,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         // and the agent list is fresh).
         setActiveChatAgentId(curr => {
           if (curr) return curr;
-          const first = msg.agents[0];
+          const first = limited[0];
           return first ? first.id : null;
         });
         // v3.1.26: also update the arena sprite on initial load so
@@ -1494,14 +1719,34 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         // this, the arena stays on whatever the last WebView
         // initialised with (or the default 'boar') and doesn't
         // match the active chat tab.
-        if (msg.agents[0]?.sprite) {
-          setCompanionId(msg.agents[0].sprite);
-          AsyncStorage.setItem('cyberclaw-arena-comp', msg.agents[0].sprite).catch(() => {});
+        // v3.1.27: only do this on the very first agents_list
+        // arrival. After that, the WebView keeps its own active
+        // companion and tab clicks swap it via setCompanion()
+        // injection. Re-setting it on every agents_list broadcast
+        // would re-trigger the reload ping-pong.
+        if (!initialArenaInjectedRef.current && limited[0]?.sprite) {
+          initialArenaInjectedRef.current = true;
+          // The WebView's URI on first mount uses
+          // `initialArenaCompanionRef.current`, which is the
+          // value the WebView was rendered with. If that
+          // matches the first agent's sprite, no injection is
+          // needed. If not (e.g. the WebView was rendered with
+          // the 'boar' default because there was no saved
+          // companion), inject a setCompanion call to swap it
+          // without a reload.
+          if (initialArenaCompanionRef.current !== limited[0].sprite) {
+            try {
+              webViewRef.current?.injectJavaScript(
+                `if (typeof setCompanion === 'function') { setCompanion(${JSON.stringify(limited[0].sprite)}); } true;`,
+              );
+            } catch (_) {}
+            AsyncStorage.setItem('cyberclaw-arena-comp', limited[0].sprite).catch(() => {});
+          }
         }
         // Request history for every companion so switching tabs is
         // instant. The desktop will respond with `agent_history` per
         // agent; we fill each slot as responses arrive.
-        for (const a of msg.agents) {
+        for (const a of limited) {
           try { syncClient.requestAgentHistory(a.id); } catch (_) {}
         }
       }
@@ -1881,11 +2126,22 @@ useEffect(() => {
     connState === 'connecting' ? 'Connecting...' :
     connState === 'lost' ? 'Lost' : 'Offline';
 
-  // Watch companionId changes and reload WebView when it updates
-  useEffect(() => {
-    addLogEntry(`Companion updated: ${companionId}`, 'info');
-    setWebViewKey(k => k + 1);
-  }, [companionId]);
+  // v3.1.27: removed the per-companionId WebView reload. The
+  // old version (v3.1.26 and earlier) did
+  // `setWebViewKey(k => k + 1)` on every companionId change,
+  // which forced a full WebView reload. The reload triggered
+  // a `companion_id` echo from the desktop (the WebView
+  // announced its current companion, the desktop echoed it
+  // back via the sync server, and React set the state again),
+  // and the loop ran every 3-8 seconds — visible in the Log
+  // tab as the "Companion updated: hare / boar" ping-pong.
+  //
+  // Now: tab clicks call `setArenaCompanion(id)` which
+  // injects a `setCompanion(id)` call into the WebView (no
+  // reload). The WebView swaps its sprite in place. The
+  // desktop's echo of `companion_id` only updates a ref
+  // (lastArenaCompanionFromDesktop) for diagnostic purposes
+  // and does NOT trigger a reload.
 
   // v3.1.15: when the agents list updates, push it into the WebView so
   // the arena can render one sprite per agent. Only injects if the
@@ -1942,7 +2198,7 @@ useEffect(() => {
           <WebView
             key={webViewKey}
             ref={webViewRef}
-            source={{ uri: `file:///android_asset/arena.html?companion=${companionId}&platform=mobile` }}
+            source={{ uri: `file:///android_asset/arena.html?companion=${initialArenaCompanionRef.current || companionId}&platform=mobile` }}
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
             scrollEnabled={false}
             bounces={false}
@@ -2073,13 +2329,23 @@ useEffect(() => {
                   setMessages(messagesByAgent[a.id] || []);
                   setChatUnreadByAgent(prev => ({ ...prev, [a.id]: 0 }));
                   try { syncClient.requestAgentHistory(a.id); } catch (_) {}
-                  // v3.1.26: also update the arena's active companion
-                  // so the WebView re-renders with this companion's
-                  // sprite. The WebView's companionId is read from
-                  // a query param on initial load; bumping
-                  // webViewKey forces a reload with the new id.
+                  // v3.1.27: inject `setCompanion(id)` into the
+                  // WebView to swap the active sprite in place.
+                  // The v3.1.26 version bumped `webViewKey` to
+                  // force a full reload; combined with the
+                  // desktop echoing companionId back via the
+                  // sync server, this caused a reload ping-pong
+                  // every few seconds (visible in the Log tab
+                  // as 'Companion updated: hare / boar'). The
+                  // WebView's setCompanion() swaps the sprite
+                  // and posts `saveComp` to persist; no React
+                  // state change, no reload, no echo loop.
                   if (a.sprite) {
-                    setCompanionId(a.sprite);
+                    try {
+                      webViewRef.current?.injectJavaScript(
+                        `if (typeof setCompanion === 'function') { setCompanion(${JSON.stringify(a.sprite)}); } true;`,
+                      );
+                    } catch (_) {}
                     AsyncStorage.setItem('cyberclaw-arena-comp', a.sprite).catch(() => {});
                   }
                 }}
