@@ -38,9 +38,9 @@ canvas{
 <script>
 'use strict';
 
-// ── CyberClaw Mobile Arena (v3.1.31) ───────────────────────────────────────
+// ── CyberClaw Mobile Arena (v3.1.32) ──────────────────────────────
 //
-// Multi-companion pixel sprite arena for the mobile companion app.
+// Multi-companion pixel arena for the mobile companion app.
 // This is a STRIPPED-DOWN port of the desktop's pixel-arena.js:
 //
 //   * No click handlers, no drag, no focus effects.
@@ -48,66 +48,319 @@ canvas{
 //   * No "add/remove" — the React Native side rebuilds the WebView's
 //     companion list by calling the public setAgents() / setActive() API
 //     and the WebView re-renders from scratch (we wipe and rebuild on
-//     each setAgents call; cheaper than diff-and-update for this scale).
+//     each setAgents call; cheaper than diff-and-update at this scale).
 //
 // What we DO have:
-//   * Sprite loading from the bundled assets folder (catalog.json + per-
-//     companion PNG folders).
-//   * Per-companion idle animation (other animations could be triggered
-//     in the future but aren't needed for the read-only mirror).
+//   * Per-companion idle animation.
 //   * Spread layout (evenly placed across the canvas width).
 //   * Active companion marker — the active chat companion is drawn with
-//     a subtle golden ring underneath + a "speaking" indicator (a small
-//     pulsing dot in the corner). Inactive companions get a faint grey
-//     ring.
+//     a subtle golden ring underneath + a brighter name. Inactive
+//     companions get a faint grey ring.
 //   * Set on the arena via the message API:
 //        window.postMessage({ type: 'setAgents', agents: [...] }, '*');
 //        window.postMessage({ type: 'setActive', id: 'clawsuu' }, '*');
 //   * Loaded assets are emitted back so the React Native side can
 //     report the load state in the Log tab.
 //
+// Note on terminology: the user-visible text says "companion" not
+// "sprite". Internally we still use "sprite" because that's the
+// pixel-arena convention inherited from the desktop (each companion
+// is drawn from a pixel-art framesheet). User never sees "sprite".
+//
 (function() {
   const canvas = document.getElementById('arena');
   const ctx = canvas.getContext('2d');
   const statusEl = document.getElementById('status');
 
-  // ── State ────────────────────────────────────────────────────────────
-  let catalog = null;            // { companions: [{ id, name, folder, frameSize, animations, shadow }] }
-  let companions = [];           // [{ id, name, data, images, x, y, scale, frame, frameTimer, frameSpeed, isActive }]
+  // ── State ────────────────────────────────────────────
+  let catalog = null;
+  let companions = [];
   let activeId = null;
-  let assetsBase = 'companions/'; // WebView serves from android_asset root
-  let loadFailed = false;
+  let assetsBase = 'file:///android_asset/companions/';
   let lastFrame = 0;
 
-  // ── Status reporting ───────────────────────────────────────────────
   function setStatus(text, cls) {
     statusEl.textContent = text;
     statusEl.className = cls || '';
   }
 
-  // ── Asset loading ──────────────────────────────────────────────────
-  async function loadCatalog() {
-    const url = assetsBase + 'catalog.json';
-    try {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const j = await r.json();
-      if (!j || !Array.isArray(j.companions)) throw new Error('bad catalog shape');
-      catalog = j;
-      setStatus('Arena ready', 'ok');
-      notifyRN({ type: 'arena_loaded', count: catalog.companions.length });
-    } catch (e) {
-      loadFailed = true;
-      setStatus('Failed to load sprite catalog: ' + e.message, 'error');
-      notifyRN({ type: 'arena_load_failed', error: String(e.message) });
+  // ── Embedded companion catalog ───────────────────────────────
+  // v3.1.32: the catalog is EMBEDDED in this script (below) as a
+  // JS const, not fetched. Android WebView's fetch() refuses to
+  // load file:// URLs from a non-secure origin (a known WebView
+  // restriction), so trying to fetch catalog.json gave us
+  // "FAILED TO FETCH". Inlining the catalog is the fix: the catalog
+  // is small (~5 KB) and rarely changes. The actual sprite images
+  // still load via `new Image(); img.src = 'file:///android_asset/...'`
+  // which is allowed (only fetch() / XHR is restricted).
+  //
+  // To regenerate: see tools/build_embedded_catalog.py in the
+  // mobile repo. Run it after editing assets/companions/catalog.json.
+  const EMBEDDED_CATALOG = {
+{
+  "companions": [
+    {
+      "id": "fox",
+      "name": "Fox",
+      "folder": "Fox",
+      "frameSize": [
+        32,
+        32
+      ],
+      "animations": {
+        "idle": {
+          "file": "Fox_Idle.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 4,
+          "speed": 6
+        },
+        "walk": {
+          "file": "Fox_walk.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 8
+        },
+        "run": {
+          "file": "Fox_Run.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 10
+        },
+        "hurt": {
+          "file": "Fox_Hurt.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 2,
+          "speed": 6
+        },
+        "death": {
+          "file": "Fox_Death.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 6
+        }
+      },
+      "shadow": "Fox_Shadow.png"
+    },
+    {
+      "id": "boar",
+      "name": "Boar",
+      "folder": "Boar",
+      "frameSize": [
+        32,
+        32
+      ],
+      "animations": {
+        "idle": {
+          "file": "Boar_Idle.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 4,
+          "speed": 6
+        },
+        "walk": {
+          "file": "Boar_Walk.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 8
+        },
+        "run": {
+          "file": "Boar_Run.png",
+          "cols": 5,
+          "rows": 4,
+          "frames": 5,
+          "speed": 10
+        },
+        "attack": {
+          "file": "Boar_Attack.png",
+          "cols": 5,
+          "rows": 4,
+          "frames": 5,
+          "speed": 8
+        },
+        "hurt": {
+          "file": "Boar_Hurt.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 2,
+          "speed": 6
+        },
+        "death": {
+          "file": "Boar_Death.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 6
+        }
+      },
+      "shadow": "Boar_shadow.png"
+    },
+    {
+      "id": "deer",
+      "name": "Deer",
+      "folder": "Deer",
+      "frameSize": [
+        32,
+        32
+      ],
+      "animations": {
+        "idle": {
+          "file": "Deer_Idle.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 4,
+          "speed": 6
+        },
+        "walk": {
+          "file": "Deer_Walk.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 8
+        },
+        "run": {
+          "file": "Deer_Run.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 10
+        },
+        "hurt": {
+          "file": "Deer_Hurt.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 2,
+          "speed": 6
+        },
+        "death": {
+          "file": "Deer_Death.png",
+          "cols": 7,
+          "rows": 4,
+          "frames": 7,
+          "speed": 6
+        }
+      },
+      "shadow": "Deer_Shadow.png"
+    },
+    {
+      "id": "hare",
+      "name": "Hare",
+      "folder": "Hare",
+      "frameSize": [
+        32,
+        32
+      ],
+      "animations": {
+        "idle": {
+          "file": "Hare_Idle.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 4,
+          "speed": 6
+        },
+        "walk": {
+          "file": "Hare_Walk.png",
+          "cols": 5,
+          "rows": 4,
+          "frames": 5,
+          "speed": 8
+        },
+        "run": {
+          "file": "Hare_Run.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 10
+        },
+        "hurt": {
+          "file": "Hare_Hurt.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 2,
+          "speed": 6
+        },
+        "death": {
+          "file": "Hare_Death.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 6
+        }
+      },
+      "shadow": "Hare_Shadow.png"
+    },
+    {
+      "id": "black_grouse",
+      "name": "Black Grouse",
+      "folder": "Black_grouse",
+      "frameSize": [
+        32,
+        32
+      ],
+      "animations": {
+        "idle": {
+          "file": "Black_grouse_Idle.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 4,
+          "speed": 6
+        },
+        "walk": {
+          "file": "Black_grouse_Walk.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 8
+        },
+        "flight": {
+          "file": "Black_grouse_Flight.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 10
+        },
+        "hurt": {
+          "file": "Black_grouse_Hurt.png",
+          "cols": 4,
+          "rows": 4,
+          "frames": 2,
+          "speed": 6
+        },
+        "death": {
+          "file": "Black_grouse_Death.png",
+          "cols": 6,
+          "rows": 4,
+          "frames": 6,
+          "speed": 6
+        }
+      },
+      "shadow": "Black_grouse_Shadow.png"
     }
+  ]
+}
+};
+
+  function loadCatalog() {
+    catalog = EMBEDDED_CATALOG;
+    if (!catalog || !Array.isArray(catalog.companions)) {
+      setStatus('Failed to load companion catalog: bad shape', 'error');
+      notifyRN({ type: 'arena_load_failed', error: 'bad catalog shape' });
+      return;
+    }
+    setStatus('Arena ready', 'ok');
+    notifyRN({ type: 'arena_loaded', count: catalog.companions.length });
   }
 
   function loadImage(url) {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => resolve(null); // don't crash on missing anims
+      img.onerror = () => resolve(null);
       img.src = url;
     });
   }
@@ -117,17 +370,11 @@ canvas{
     if (!pixelId) return null;
     const compData = catalog.companions.find(c => c.id === pixelId);
     if (!compData) {
-      // Unknown sprite id — fall back to first catalog entry so we
-      // always show something rather than a blank slot.
       const fallback = catalog.companions[0];
       if (!fallback) return null;
       return buildCompanion({ ...agent, sprite: fallback.id });
     }
     const images = {};
-    // Load the animations we'll actually use. Idle is the default
-    // for the read-only mirror. Walk is loaded so we can use it as
-    // a "this is the active one" cue if we want later. Death frames
-    // can stand in for sleep if we ever want it.
     const animsToLoad = ['idle'];
     for (const name of animsToLoad) {
       const animData = compData.animations[name];
@@ -138,7 +385,6 @@ canvas{
         images[name] = { img, frames: animData.frames, cols: animData.cols || animData.frames };
       }
     }
-    // Try to load shadow too
     let shadowImg = null;
     if (compData.shadow) {
       shadowImg = await loadImage(assetsBase + compData.folder + '/' + compData.shadow);
@@ -158,7 +404,7 @@ canvas{
     };
   }
 
-  // ── Layout ──────────────────────────────────────────────────────────
+  // ── Layout ────────────────────────────────────────────
   function resize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -172,8 +418,6 @@ canvas{
     if (!n) return;
     const w = canvas.width;
     const h = canvas.height;
-    // Place all companions on the same horizontal row, centered
-    // vertically below the horizon. Spread evenly across the width.
     const groundY = h * 0.7;
     for (let i = 0; i < n; i++) {
       const c = companions[i];
@@ -184,7 +428,7 @@ canvas{
     }
   }
 
-  // ── Update + Draw ──────────────────────────────────────────────────
+  // ── Update + Draw ────────────────────────────────────
   function update(dt) {
     const now = performance.now();
     for (const c of companions) {
@@ -200,7 +444,6 @@ canvas{
   }
 
   function drawBackground() {
-    // Solid dark blue background + simple horizon gradient
     const w = canvas.width;
     const h = canvas.height;
     const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -210,7 +453,6 @@ canvas{
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    // Ground band
     const groundY = h * 0.7;
     const groundGrad = ctx.createLinearGradient(0, groundY, 0, h);
     groundGrad.addColorStop(0, '#1a2a1a');
@@ -218,7 +460,6 @@ canvas{
     ctx.fillStyle = groundGrad;
     ctx.fillRect(0, groundY, w, h - groundY);
 
-    // Horizon line
     ctx.fillStyle = '#f7931a';
     ctx.fillRect(0, groundY, w, 1);
   }
@@ -243,8 +484,7 @@ canvas{
     const cy = c.y + dh / 2;
     const r = Math.max(dw, dh) * 0.6;
     if (c.isActive) {
-      // Active: bright golden ring with a slow pulse
-      const t = (Math.sin(lastFrame * 0.003) + 1) * 0.5; // 0..1
+      const t = (Math.sin(lastFrame * 0.003) + 1) * 0.5;
       ctx.strokeStyle = '#f7931a';
       ctx.lineWidth = 3;
       ctx.globalAlpha = 0.5 + t * 0.4;
@@ -253,7 +493,6 @@ canvas{
       ctx.stroke();
       ctx.globalAlpha = 1;
     } else {
-      // Inactive: faint grey ring
       ctx.strokeStyle = '#444';
       ctx.lineWidth = 1;
       ctx.globalAlpha = 0.4;
@@ -271,7 +510,7 @@ canvas{
     const cols = animData.cols;
     const col = c.frame % cols;
     const sx = col * fw;
-    const sy = 0; // idle anim is on row 0
+    const sy = 0;
     const dw = fw * c.scale;
     const dh = fh * c.scale;
     ctx.imageSmoothingEnabled = false;
@@ -307,24 +546,17 @@ canvas{
     requestAnimationFrame(loop);
   }
 
-  // ── Public API (called from React Native) ──────────────────────────
+  // ── Public API (called from React Native) ──────────────────
   async function setAgents(agents) {
     if (!Array.isArray(agents)) return;
-    if (!catalog) {
-      // Catalog not loaded yet — wait a moment and retry
-      await new Promise(r => setTimeout(r, 200));
-      if (!catalog) return;
-    }
-    // Cap to MAX_MOBILE_COMPANIONS — but the desktop already caps
-    // before sending, so this is belt-and-braces. If a future
-    // desktop regression lets more through, the mobile still
-    // shows only 6 instead of crashing or wrapping.
+    if (!catalog) return;
+    // Cap to MAX_MOBILE_COMPANIONS — the desktop already caps
+    // before sending, but if a future desktop regression lets
+    // more through, the mobile still shows only 6.
     const MAX = 6;
     const list = agents.length > MAX ? agents.slice(0, MAX) : agents;
-    // Build all companions in parallel
     const built = await Promise.all(list.map(buildCompanion));
     companions = built.filter(Boolean);
-    // Restore active state
     for (const c of companions) c.isActive = (c.id === activeId);
     layout();
     notifyRN({ type: 'arena_set_agents', count: companions.length });
@@ -335,7 +567,6 @@ canvas{
     for (const c of companions) c.isActive = (c.id === activeId);
   }
 
-  // Expose API on window for React Native's injectJavaScript to call.
   window.Arena = {
     setAgents,
     setActive,
@@ -343,20 +574,13 @@ canvas{
     getCompanionCount: () => companions.length,
   };
 
-  // ── React Native bridge ────────────────────────────────────────────
+  // ── React Native bridge ──────────────────────────────
   function notifyRN(payload) {
-    // The React Native side listens for 'message' events on the
-    // WebView. Wrap in a JSON-encoded string so the receiver can
-    // JSON.parse it directly.
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
       try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (_) {}
     }
   }
 
-  // React Native injects messages via:
-  //   window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({...}) }));
-  // so we listen on window for that. Also support direct window.Arena
-  // calls via injectJavaScript.
   window.addEventListener('message', (e) => {
     let msg = e.data;
     if (typeof msg === 'string') {
@@ -370,16 +594,11 @@ canvas{
     }
   });
 
-  // ── Boot ────────────────────────────────────────────────────────────
+  // ── Boot ────────────────────────────────────────────
   window.addEventListener('resize', resize);
   resize();
-  loadCatalog().then(() => {
-    if (catalog) {
-      // Auto-start the loop; it just draws the background if no
-      // companions have been set yet.
-      requestAnimationFrame(loop);
-    }
-  });
+  loadCatalog();
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>
