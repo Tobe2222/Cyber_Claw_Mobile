@@ -415,7 +415,7 @@ canvas{
       scale,
       frame: 0,
       frameTimer: 0,
-      frameSpeed: 200,
+      frameSpeed: 120,
       isActive: false,
     };
   }
@@ -459,25 +459,78 @@ canvas{
     lastFrame = now;
   }
 
+  // v3.1.35: a small vertical bob for each companion, so the
+  // idle pose is visibly alive. The bob is 2 px on a sine wave
+  // with a per-companion period (so they don't all bob in sync),
+  // computed from c.id so it's stable across renders.
+  function bobFor(c) {
+    const t = performance.now() * 0.003;
+    // Per-id period multiplier in 0.85..1.15 (stable hash)
+    let h = 0;
+    for (let i = 0; i < c.id.length; i++) h = (h * 31 + c.id.charCodeAt(i)) >>> 0;
+    const periodMult = 0.85 + ((h % 100) / 100) * 0.30;
+    return Math.sin(t * periodMult) * 2; // -2..+2 px
+  }
+
+  // Stars are placed deterministically (no random — would flicker
+  // on resize). Each star is a 1-2px white pixel with occasional
+  // twinkle. The pattern below has 40 stars spread across the sky
+  // region (top 65% of the canvas).
+  const STARS = (() => {
+    const arr = [];
+    let s = 42; // simple LCG seed for reproducibility
+    for (let i = 0; i < 40; i++) {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      const x = (s % 1000) / 1000;
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      const y = ((s % 1000) / 1000) * 0.6; // top 60%
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      const twinkleSpeed = 0.0005 + ((s % 1000) / 1000) * 0.002;
+      arr.push({ x, y, twinkleSpeed, phase: (s % 1000) / 1000 * Math.PI * 2 });
+    }
+    return arr;
+  })();
+
   function drawBackground() {
     const w = canvas.width;
     const h = canvas.height;
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, '#0a0a2e');
-    grad.addColorStop(0.5, '#1a1a4a');
-    grad.addColorStop(1, '#0a1a1a');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
 
-    const groundY = h * 0.7;
-    const groundGrad = ctx.createLinearGradient(0, groundY, 0, h);
-    groundGrad.addColorStop(0, '#1a2a1a');
+    // Sky gradient (top 65% = sky, bottom 35% = ground)
+    const skyEnd = h * 0.65;
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, skyEnd);
+    skyGrad.addColorStop(0, '#1a1a4a');
+    skyGrad.addColorStop(0.5, '#2a2a5a');
+    skyGrad.addColorStop(1, '#3a2a3a');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, w, skyEnd);
+
+    // Stars (with twinkle — they get brighter/dimmer slowly)
+    const now = performance.now();
+    for (const star of STARS) {
+      const twinkle = (Math.sin(now * star.twinkleSpeed + star.phase) + 1) * 0.5; // 0..1
+      const alpha = 0.3 + twinkle * 0.7;
+      ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+      ctx.fillRect(star.x * w, star.y * h, 1, 1);
+    }
+
+    // Ground band (bottom 35%)
+    const groundGrad = ctx.createLinearGradient(0, skyEnd, 0, h);
+    groundGrad.addColorStop(0, '#2a3a1a');
     groundGrad.addColorStop(1, '#0a1a0a');
     ctx.fillStyle = groundGrad;
-    ctx.fillRect(0, groundY, w, h - groundY);
+    ctx.fillRect(0, skyEnd, w, h - skyEnd);
 
+    // Bright horizon line (the same orange the rest of the UI uses)
     ctx.fillStyle = '#f7931a';
-    ctx.fillRect(0, groundY, w, 1);
+    ctx.fillRect(0, skyEnd, w, 1);
+
+    // A few brighter grass patches near the ground (like the desktop)
+    const patchY = skyEnd + 2;
+    for (let i = 0; i < 20; i++) {
+      const px = (i * 73 + 17) % w;
+      ctx.fillStyle = `rgba(${30 + (i % 3) * 10}, ${60 + (i % 4) * 15}, ${20 + (i % 2) * 8}, 0.6)`;
+      ctx.fillRect(px, patchY + (i % 3) * 4, 8 + (i % 4) * 4, 3);
+    }
   }
 
   function drawShadow(c) {
@@ -486,6 +539,9 @@ canvas{
     const sw = fw * c.scale * 1.2;
     const sh = sw * 0.25;
     const sx = c.x + (fw * c.scale - sw) / 2;
+    // Shadow stays on the ground (no bob) so the companion
+    // appears to "bounce" above the shadow rather than carry
+    // it with them.
     const sy = c.y + fh * c.scale - sh * 0.3;
     ctx.globalAlpha = 0.35;
     ctx.drawImage(c.shadow, sx, sy, sw, sh);
@@ -497,7 +553,7 @@ canvas{
     const dw = fw * c.scale;
     const dh = fh * c.scale;
     const cx = c.x + dw / 2;
-    const cy = c.y + dh / 2;
+    const cy = (c._drawY !== undefined ? c._drawY : c.y) + dh / 2;
     const r = Math.max(dw, dh) * 0.6;
     if (c.isActive) {
       const t = (Math.sin(lastFrame * 0.003) + 1) * 0.5;
@@ -524,13 +580,14 @@ canvas{
     const [fw, fh] = c.data.frameSize;
     const dw = fw * c.scale;
     const dh = fh * c.scale;
+    const y = (c._drawY !== undefined ? c._drawY : c.y);
     if (animData && animData.img && animData.img.complete) {
       const cols = animData.cols;
       const col = c.frame % cols;
       const sx = col * fw;
       const sy = 0;
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(animData.img, sx, sy, fw, fh, c.x, c.y, dw, dh);
+      ctx.drawImage(animData.img, sx, sy, fw, fh, c.x, y, dw, dh);
       return;
     }
     // v3.1.34: fallback if the sprite didn't load — draw a
@@ -540,28 +597,36 @@ canvas{
     // 404s, or the WebView blocks file:// images for some
     // reason. Better than an invisible empty arena.
     ctx.fillStyle = c.isActive ? '#f7931a' : '#666';
-    ctx.fillRect(c.x, c.y, dw, dh);
+    ctx.fillRect(c.x, y, dw, dh);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 16px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const ch = (c.name || '?').charAt(0).toUpperCase();
-    ctx.fillText(ch, c.x + dw / 2, c.y + dh / 2);
+    ctx.fillText(ch, c.x + dw / 2, y + dh / 2);
   }
 
   function drawName(c) {
     if (!c.name) return;
     const [fw, fh] = c.data.frameSize;
     const dw = fw * c.scale;
+    const y = (c._drawY !== undefined ? c._drawY : c.y);
     ctx.fillStyle = c.isActive ? '#f7931a' : '#888';
     ctx.font = 'bold 11px "Orbitron", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(c.name, c.x + dw / 2, c.y - 8);
+    ctx.fillText(c.name, c.x + dw / 2, y - 8);
   }
 
   function render() {
     drawBackground();
     for (const c of companions) {
+      // v3.1.35: apply a small per-companion vertical bob so
+      // the idle pose is visibly alive (the sprite sheets
+      // have multiple idle frames but they're nearly
+      // identical, so a 2px sine-wave bob makes the
+      // animation obvious without changing the look).
+      const bob = bobFor(c);
+      c._drawY = c.y + bob;
       drawShadow(c);
       drawRing(c);
       drawCompanion(c);
