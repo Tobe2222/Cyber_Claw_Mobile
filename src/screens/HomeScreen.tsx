@@ -2291,12 +2291,22 @@ useEffect(() => {
   // the arena can render one sprite per agent. Only injects if the
   // WebView is mounted; otherwise the next onLoadEnd will pick it up
   // via the agents list sent in the prefs message.
+  // v3.1.37: switched from dispatchEvent('agentsList', ...) (which
+  // the WebView doesn't listen for) to calling
+  // window.Arena.setAgents() directly. The old code path was a
+  // no-op — the WebView only handles 'setAgents' messages, not
+  // 'agentsList', so the inject was silently ignored and the user
+  // saw an empty arena until the next 60s periodic sync.
   useEffect(() => {
     if (agents.length === 0) return;
     if (!webViewRef.current) return;
+    const slim = agents.map((a) => ({
+      id: a.id, name: a.name, sprite: a.sprite || null, scale: a.scale || null,
+    }));
     try {
-      const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); true;`;
-      webViewRef.current.injectJavaScript(js);
+      webViewRef.current.injectJavaScript(
+        `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)}); true;`,
+      );
     } catch (_) {}
   }, [agents]);
 
@@ -2356,14 +2366,22 @@ useEffect(() => {
                 AsyncStorage.getItem('cyberclaw-arena-comp'),
               ]).then(([bgId, compId]) => {
                 const prefs = { type: 'loadPrefs', bgId: bgId || 'forest', compId: compId || 'fox' };
-                const js = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify(prefs))}})); true;`;
-                webViewRef.current?.injectJavaScript(js);
+                // v3.1.37: use window.Arena.setBackground directly
+                // instead of dispatchEvent (which the WebView
+                // doesn't reliably handle for 'loadPrefs' either).
+                const bgJs = `window.Arena && window.Arena.setBackground(${JSON.stringify(bgId || 'forest')}); true;`;
+                webViewRef.current?.injectJavaScript(bgJs);
                 // v3.1.15: also seed the agents list at load so the
-                // arena can show all companions immediately. Uses the
-                // same channel as the runtime agentsList injection.
+                // arena can show all companions immediately. v3.1.37:
+                // switched to window.Arena.setAgents (the dispatchEvent
+                // path was a no-op — the WebView ignored 'agentsList').
                 if (agents.length > 0) {
-                  const agentsJs = `window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); document.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(JSON.stringify({ type: 'agentsList', agents }))}})); true;`;
-                  webViewRef.current?.injectJavaScript(agentsJs);
+                  const slim = agents.map((a) => ({
+                    id: a.id, name: a.name, sprite: a.sprite || null, scale: a.scale || null,
+                  }));
+                  webViewRef.current?.injectJavaScript(
+                    `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)}); true;`,
+                  );
                 }
               });
             }}
