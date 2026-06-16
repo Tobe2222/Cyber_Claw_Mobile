@@ -521,16 +521,32 @@ canvas{
 
   function drawCompanion(c) {
     const animData = c.images['idle'];
-    if (!animData || !animData.img || !animData.img.complete) return;
     const [fw, fh] = c.data.frameSize;
-    const cols = animData.cols;
-    const col = c.frame % cols;
-    const sx = col * fw;
-    const sy = 0;
     const dw = fw * c.scale;
     const dh = fh * c.scale;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(animData.img, sx, sy, fw, fh, c.x, c.y, dw, dh);
+    if (animData && animData.img && animData.img.complete) {
+      const cols = animData.cols;
+      const col = c.frame % cols;
+      const sx = col * fw;
+      const sy = 0;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(animData.img, sx, sy, fw, fh, c.x, c.y, dw, dh);
+      return;
+    }
+    // v3.1.34: fallback if the sprite didn't load — draw a
+    // colored rectangle with the companion's initial so the
+    // user sees SOMETHING in the arena. This is what we see
+    // if the catalog says 'boar' but Boar/Boar_Idle.png
+    // 404s, or the WebView blocks file:// images for some
+    // reason. Better than an invisible empty arena.
+    ctx.fillStyle = c.isActive ? '#f7931a' : '#666';
+    ctx.fillRect(c.x, c.y, dw, dh);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const ch = (c.name || '?').charAt(0).toUpperCase();
+    ctx.fillText(ch, c.x + dw / 2, c.y + dh / 2);
   }
 
   function drawName(c) {
@@ -571,11 +587,26 @@ canvas{
     // more through, the mobile still shows only 6.
     const MAX = 6;
     const list = agents.length > MAX ? agents.slice(0, MAX) : agents;
-    const built = await Promise.all(list.map(buildCompanion));
+    notifyRN({ type: 'arena_set_agents_start', count: list.length });
+    let built;
+    try {
+      built = await Promise.all(list.map(buildCompanion));
+    } catch (e) {
+      setStatus('setAgents build failed: ' + (e && e.message || e), 'error');
+      notifyRN({ type: 'arena_set_agents_failed', error: String(e) });
+      return;
+    }
     companions = built.filter(Boolean);
     for (const c of companions) c.isActive = (c.id === activeId);
     layout();
-    notifyRN({ type: 'arena_set_agents', count: companions.length });
+    // Diagnostic: report per-companion build results so we can see
+    // when sprites failed to load (idle img missing → won't draw).
+    const details = companions.map(c => {
+      const hasIdle = !!(c.images && c.images.idle && c.images.idle.img && c.images.idle.img.complete);
+      const hasShadow = !!(c.shadow && c.shadow.complete);
+      return { id: c.id, name: c.name, hasIdle, hasShadow, scale: c.scale };
+    });
+    notifyRN({ type: 'arena_set_agents', count: companions.length, details });
   }
 
   function setActive(id) {

@@ -1843,7 +1843,10 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
             webViewRef.current.injectJavaScript(
               `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)}); true;`,
             );
-          } catch (_) {}
+            addLogEntry(`→ Injected setAgents to WebView (${slim.length} agents)`, 'sent');
+          } catch (e: any) {
+            addLogEntry(`✗ Failed to inject setAgents: ${e?.message || e}`, 'error');
+          }
           // Persist the first agent's sprite for next app start
           // (only the sprite is used by the legacy persistence
           // path; the WebView now derives the active companion
@@ -1853,6 +1856,9 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           }
           // Mark initial injection as done
           initialArenaInjectedRef.current = true;
+        } else if (Array.isArray(msg.agents) && msg.agents.length > 0) {
+          // WebView ref not ready — log so we know the inject was skipped.
+          addLogEntry('⏳ Skipped arena inject: webViewRef not ready (will retry on next agents_list)', 'debug');
         }
         // Request history for every companion so switching tabs is
         // instant. The desktop will respond with `agent_history` per
