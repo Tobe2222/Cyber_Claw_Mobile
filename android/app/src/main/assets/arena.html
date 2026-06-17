@@ -390,22 +390,38 @@ canvas{
       if (!fallback) return null;
       return buildCompanion({ ...agent, sprite: fallback.id });
     }
+    // v3.1.38: load every animation the catalog lists (idle, walk, run,
+    // hurt, death, attack). Previously we only loaded 'idle' since the
+    // companion was a static bob. Now they need walk + run for the
+    // state-machine behaviour to feel alive. Catalog `speed` is frames
+    // per second, so frameInterval = 1000/speed ms. If a sheet is
+    // missing on disk the loadImage resolves to null and we just skip
+    // that animation — the fallback chain in pickAnim() handles the
+    // rest.
     const images = {};
-    const animsToLoad = ['idle'];
-    for (const name of animsToLoad) {
-      const animData = compData.animations[name];
-      if (!animData) continue;
-      const imgUrl = assetsBase + compData.folder + '/' + animData.file;
-      const img = await loadImage(imgUrl);
-      if (img) {
-        images[name] = { img, frames: animData.frames, cols: animData.cols || animData.frames };
-      }
+    for (const [animName, animData] of Object.entries(compData.animations || {})) {
+      if (!animData || !animData.file) continue;
+      const img = await loadImage(assetsBase + compData.folder + '/' + animData.file);
+      if (!img) continue;
+      const speed = (typeof animData.speed === 'number' && animData.speed > 0) ? animData.speed : 6;
+      images[animName] = {
+        img,
+        frames: animData.frames || 1,
+        cols: animData.cols || animData.frames || 1,
+        rows: animData.rows || 1,
+        frameInterval: Math.round(1000 / speed),
+      };
     }
     let shadowImg = null;
     if (compData.shadow) {
       shadowImg = await loadImage(assetsBase + compData.folder + '/' + compData.shadow);
     }
     const scale = (typeof agent.scale === 'number' && agent.scale >= 1 && agent.scale <= 8) ? agent.scale : 4;
+    // v3.1.38: stable per-id hash for staggering initial state.
+    // Same algorithm as bobFor() so values line up if you change one.
+    let _h = 0;
+    for (let i = 0; i < agent.id.length; i++) _h = (_h * 31 + agent.id.charCodeAt(i)) >>> 0;
+    const initialDirection = _h % 4; // 0=down, 1=up, 2=left, 3=right
     return {
       id: agent.id,
       name: agent.name || 'Companion',
@@ -413,9 +429,20 @@ canvas{
       images,
       shadow: shadowImg,
       scale,
+      // v3.1.38: animation state machine (mirrors the desktop's
+      // pixel-arena.js AI). state ∈ {'idle','walk','run','zoomies'};
+      // direction is the sprite-sheet row (0=down,1=up,2=left,3=right,
+      // matches the desktop convention). stateTimer is ms until we
+      // roll a new state. vx/vy are pixels/ms (we use vx only on the
+      // mobile — vertical movement is suppressed so companions stay
+      // on the ground line; see update()).
+      state: 'idle',
+      direction: initialDirection,
+      vx: 0,
+      vy: 0,
+      stateTimer: 200 + (_h % 800), // 0.2–1.0s before first roll
       frame: 0,
       frameTimer: 0,
-      frameSpeed: 120,
       isActive: false,
     };
   }
@@ -445,15 +472,103 @@ canvas{
   }
 
   // ── Update + Draw ────────────────────────────────────
+  // v3.1.38: state-machine AI (mirrors the desktop's pixel-arena.js).
+  // The mobile arena is still a read-only mirror — no click handlers,
+  // no toys/treats, no speech bubbles, no user-initiated actions — but
+  // the companions now walk and run around on their own with the same
+  // state distribution as the desktop (60% idle / 30% walk / 10% run,
+  // 10% of which is "zoomies" dashing).
+  function pickState(c) {
+    const roll = Math.random();
+    if (roll < 0.45) {
+      // idle — chill in place
+      c.state = 'idle';
+      c.vx = 0;
+      c.vy = 0;
+      c.stateTimer = 2000 + Math.random() * 4000; // 2–6s
+    } else if (roll < 0.75) {
+      // walk — gentle wander. Mobile is narrower than the desktop so
+      // we use a single horizontal direction (L or R) to keep them
+      // on the ground line. The sprite still gets the correct
+      // facing row (left vs right) via the direction update below.
+      c.state = 'walk';
+      c.direction = Math.random() < 0.5 ? 2 : 3; // left or right
+      c.vx = c.direction === 2 ? -(0.015 + Math.random() * 0.010) : (0.015 + Math.random() * 0.010);
+      c.vy = 0;
+      c.stateTimer = 1500 + Math.random() * 2500; // 1.5–4s
+    } else if (roll < 0.90) {
+      // run — energetic burst
+      c.state = 'run';
+      c.direction = Math.random() < 0.5 ? 2 : 3;
+      c.vx = c.direction === 2 ? -(0.06 + Math.random() * 0.03) : (0.06 + Math.random() * 0.03);
+      c.vy = 0;
+      c.stateTimer = 800 + Math.random() * 1200; // 0.8–2s
+    } else {
+      // zoomies — fast dash
+      c.state = 'run';
+      c.direction = Math.random() < 0.5 ? 2 : 3;
+      c.vx = c.direction === 2 ? -(0.10 + Math.random() * 0.04) : (0.10 + Math.random() * 0.04);
+      c.vy = 0;
+      c.stateTimer = 400 + Math.random() * 500; // 0.4–0.9s
+    }
+    c.frame = 0;
+    c.frameTimer = 0;
+  }
+
+  // v3.1.38: pick the best available animation for the current state.
+  // If the state isn't loaded (e.g. the 'walk' PNG is missing on disk)
+  // fall back to 'idle' so the companion is never invisible.
+  function pickAnim(c) {
+    if (c.images[c.state]) return c.images[c.state];
+    if (c.images['idle']) return c.images['idle'];
+    // No animations at all — return the first one we have, whatever
+    // it's called. Better than returning undefined and breaking draw.
+    for (const k of Object.keys(c.images)) return c.images[k];
+    return null;
+  }
+
   function update(dt) {
     const now = performance.now();
     for (const c of companions) {
-      const animData = c.images['idle'];
-      if (!animData) continue;
-      c.frameTimer += dt;
-      if (c.frameTimer >= c.frameSpeed) {
-        c.frameTimer = 0;
-        c.frame = (c.frame + 1) % animData.frames;
+      // 1. State timer — roll a new behaviour when it expires.
+      c.stateTimer -= dt;
+      if (c.stateTimer <= 0) pickState(c);
+
+      // 2. Apply velocity. Mobile is single-row (no vertical movement
+      // across the horizon line), so vy stays at 0 and we only update x.
+      c.x += c.vx * dt;
+      // y is the ground line — clamp to the canvas (small bottom
+      // clip is allowed, same as the desktop's loose bounds).
+      const [fw, fh] = c.data.frameSize;
+      const dw = fw * c.scale;
+      const dh = fh * c.scale;
+      const halfW = dw / 2;
+      const halfH = dh / 2;
+      // Sides: bounce. Keep half the sprite visible on each edge.
+      if (c.x + halfW < 0) { c.x = -halfW; c.vx = Math.abs(c.vx); c.direction = 3; }
+      if (c.x + halfW > canvas.width) { c.x = canvas.width - halfW; c.vx = -Math.abs(c.vx); c.direction = 2; }
+      // Vertical bounds — the ground line is at c.y already, and we
+      // allow a small clip below the canvas for a "feet partially off
+      // screen" feel. Top: don't let them fly above the horizon.
+      if (c.y < -halfH) c.y = -halfH;
+      if (c.y + halfH > canvas.height) c.y = canvas.height - halfH;
+
+      // 3. While moving, keep the facing row in sync with velocity.
+      // (pickState() sets it at state start, but it can drift if we
+      // bounced off a wall.) Mirror the desktop's preference: use the
+      // side sprites (L/R) for any mostly-horizontal motion.
+      if (c.state === 'walk' || c.state === 'run') {
+        if (Math.abs(c.vx) > 0.001) c.direction = c.vx < 0 ? 2 : 3;
+      }
+
+      // 4. Advance the current animation's frame counter.
+      const animData = pickAnim(c);
+      if (animData) {
+        c.frameTimer += dt;
+        if (c.frameTimer >= animData.frameInterval) {
+          c.frameTimer = 0;
+          c.frame = (c.frame + 1) % animData.frames;
+        }
       }
     }
     lastFrame = now;
@@ -625,16 +740,25 @@ canvas{
   }
 
   function drawCompanion(c) {
-    const animData = c.images['idle'];
+    // v3.1.38: pick the current state's animation (idle/walk/run)
+    // and use the direction as the sprite-sheet ROW (0=down, 1=up,
+    // 2=left, 3=right — matches the desktop's pixel-arena.js).
+    // Previously we only used the idle sheet's first row.
+    const animData = pickAnim(c);
     const [fw, fh] = c.data.frameSize;
     const dw = fw * c.scale;
     const dh = fh * c.scale;
     const y = (c._drawY !== undefined ? c._drawY : c.y);
     if (animData && animData.img && animData.img.complete) {
-      const cols = animData.cols;
+      const cols = animData.cols || animData.frames || 1;
+      const rows = animData.rows || 1;
       const col = c.frame % cols;
+      // Clamp direction to the rows the sheet actually has. Most
+      // sheets are 4 rows (desktop convention) but the catalog
+      // doesn't guarantee it for every animation.
+      const row = Math.min(c.direction, rows - 1);
       const sx = col * fw;
-      const sy = 0;
+      const sy = row * fh;
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(animData.img, sx, sy, fw, fh, c.x, y, dw, dh);
       return;
