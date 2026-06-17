@@ -370,6 +370,15 @@ canvas{
     }
     setStatus('Arena ready', 'ok');
     notifyRN({ type: 'arena_loaded', count: catalog.companions.length });
+    // v3.1.40: the "Arena ready" overlay was permanent and sat in
+    // the top-left of the canvas. Clear it after 2.5s so it
+    // doesn't overlap the action.
+    setTimeout(() => {
+      if (statusEl.textContent === 'Arena ready') {
+        statusEl.textContent = '';
+        statusEl.className = '';
+      }
+    }, 2500);
   }
 
   function loadImage(url) {
@@ -416,7 +425,13 @@ canvas{
     if (compData.shadow) {
       shadowImg = await loadImage(assetsBase + compData.folder + '/' + compData.shadow);
     }
-    const scale = (typeof agent.scale === 'number' && agent.scale >= 1 && agent.scale <= 8) ? agent.scale : 4;
+    // v3.1.40: mobile default scale dropped from 4 to 2. The
+    // desktop's default is 5 (and the desktop canvas is huge), but
+    // a scale-4 sprite is 128px tall — taller than half the typical
+    // mobile arena viewport — and dominates the screen. Scale 2
+    // (= 64px tall) feels right for the small mobile arena. If the
+    // desktop sends an explicit scale, we still respect it.
+    const scale = (typeof agent.scale === 'number' && agent.scale >= 1 && agent.scale <= 8) ? agent.scale : 2;
     // v3.1.38: stable per-id hash for staggering initial state.
     // Same algorithm as bobFor() so values line up if you change one.
     let _h = 0;
@@ -436,11 +451,17 @@ canvas{
       // roll a new state. vx/vy are pixels/ms (we use vx only on the
       // mobile — vertical movement is suppressed so companions stay
       // on the ground line; see update()).
-      state: 'idle',
-      direction: initialDirection,
-      vx: 0,
+      // v3.1.40: start in 'walk' so the companion is moving on
+      // first paint (the user complained that the companions
+      // "just stand there" on first load). First roll happens
+      // 0.3–0.7s in, which is short enough that it feels
+      // immediate and long enough that they don't instantly
+      // snap to a different state.
+      state: 'walk',
+      direction: Math.random() < 0.5 ? 2 : 3, // start walking L or R
+      vx: (Math.random() < 0.5 ? -1 : 1) * (0.015 + Math.random() * 0.010),
       vy: 0,
-      stateTimer: 200 + (_h % 800), // 0.2–1.0s before first roll
+      stateTimer: 300 + (_h % 400), // 0.3–0.7s before first pickState
       frame: 0,
       frameTimer: 0,
       isActive: false,
@@ -456,14 +477,15 @@ canvas{
     layout();
   }
 
-  // v3.1.39: ground line. The desktop uses height * (horizonLine + 0.1)
-  // = 0.6 — i.e. the FEET of the sprite sit ~60% down the canvas.
-  // Mobile previously used 0.7 which pushed the feet against the
-  // bottom edge of the (small) arena viewport and the sprite bodies
-  // got clipped. Match the desktop fraction and ALSO position so the
-  // feet (not the top-left of the sprite) land on the line — the
-  // sprite is drawn from c.y downward, so c.y = groundLine - dh.
-  const GROUND_FRACTION = 0.6;
+  // v3.1.40: ground line. The background image is 1266x631 (2:1)
+  // aspect; the walkable ground (the green grass) starts at ~72% of
+  // the image's height. When that image is stretched to fill the
+  // mobile canvas (which is wider/shorter than 2:1, ~1.8:1 typical),
+  // the ground line ends up at ~78% of the canvas height. The
+  // sprite's FEET need to sit on that line, so c.y = groundLine - dh.
+  // (Previous 0.6 put the feet well above the visible ground —
+  // companions looked like they were floating in the sky.)
+  const GROUND_FRACTION = 0.78;
 
   function layout() {
     const n = companions.length;
