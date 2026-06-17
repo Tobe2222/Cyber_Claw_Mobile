@@ -56,9 +56,14 @@ body.wake-mode #ctrlRight{display:none!important}
 <body>
 <canvas id="arena"></canvas>
 <div id="status">Loading arena…</div>
-<!-- v3.1.50: voice/wake buttons hidden in wake mode (the wake mode
-     IS the wake screen, no need for the buttons to launch it). -->
-<div id="ctrlRight" style="display:none">
+<!-- v3.1.46: Voice Mode and Wake Mode buttons (overlay on the
+     arena). Send messages to React Native via ReactNativeWebView.
+     The RN side handles 'fullscreen' and 'wakeword' messages.
+     v3.1.51: the inline display:none was a v3.1.50 mistake that
+     hid the buttons in the home screen. The CSS rule
+     `body.wake-mode #ctrlRight { display:none }` already hides
+     them in wake mode (since the wake mode IS the wake screen). -->
+<div id="ctrlRight">
   <button class="ctrlBtn" id="voiceBtn" title="Enter Voice Mode"
     onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'wakeword'})); } catch(e) {}">Voice Mode</button>
   <button class="ctrlBtn" id="wakeWordBtn" title="Activate Wake Word Mode"
@@ -562,44 +567,64 @@ body.wake-mode #ctrlRight{display:none!important}
   // update()'s velocity application.
   const DIRS = [[0, 1], [0, -1], [-1, 0], [1, 0]];  // cardinal: [dx, dy] for dir 0..3
 
+  // v3.1.51: state distribution tuned further down. Tobe said
+  // even at 5% the zoomies state was firing "10 times plus" before
+  // the companion stopped. The issue is that 5% × multiple state
+  // rolls (every 2-5s for walk) accumulates — over 30s the
+  // companion rolls 6-15 times, so 5% × 10 = ~50% chance of
+  // zoomies 10 times in 30s.
+  //
+  // New distribution: idle 50% / walk 47% / zoomies 3%. Idle
+  // duration 2-5s, walk 3-7s, zoomies 0.4-0.8s. The companion
+  // spends most of its time either idling or walking
+  // (97%), and the rare zoomies dash is short.
+  //
+  // Also added a "preferred direction bias" — the companion
+  // prefers the direction it was already moving in (with 60%
+  // probability) so it doesn't bounce back and forth between
+  // up and down repeatedly. Tobe reported the companion was
+  // "running up and down very fast" which was the state
+  // machine alternating between dir=0 (down) and dir=1 (up)
+  // each roll. With the bias, the companion keeps going in
+  // the same direction for multiple rolls.
   function pickState(c) {
     const roll = Math.random();
-    // v3.1.49: state distribution tuned down on zoomies. Tobe said
-    // the run/zoomies state was firing too often (10% felt like 50%
-    // in practice). Reduced to 5% and increased walk to 60%. Idle
-    // stays at 35%. Most of the time the companion walks; the
-    // zoomies dash is a rare surprise.
-    if (roll < 0.35) {
+    if (roll < 0.50) {
       c.state = 'idle';
       c.vx = 0;
       c.vy = 0;
-      c.direction = 0;  // forward-facing
-      c.stateTimer = 1500 + Math.random() * 2500;  // 1.5-4s idle
-    } else if (roll < 0.95) {
-      // walk — cardinal direction
+      c.direction = 0;
+      c.stateTimer = 2000 + Math.random() * 3000;  // 2-5s idle
+    } else if (roll < 0.97) {
+      // walk — cardinal direction with a bias toward the
+      // previous direction (if any)
       c.state = 'walk';
-      c.direction = Math.floor(Math.random() * 4);
-      const speed = 0.025 + Math.random() * 0.015;
-      c.vx = DIRS[c.direction][0] * speed;
-      c.vy = DIRS[c.direction][1] * speed;
-      c.stateTimer = 2000 + Math.random() * 3000;  // 2-5s walk
+      let newDir;
+      if (c._lastWalkDir != null && Math.random() < 0.6) {
+        // 60% chance: keep going in the same direction
+        newDir = c._lastWalkDir;
+      } else {
+        newDir = Math.floor(Math.random() * 4);
+      }
+      c._lastWalkDir = newDir;
+      c.direction = newDir;
+      const speed = 0.022 + Math.random() * 0.013;
+      c.vx = DIRS[newDir][0] * speed;
+      c.vy = DIRS[newDir][1] * speed;
+      c.stateTimer = 3000 + Math.random() * 4000;  // 3-7s walk
     } else {
-      // zoomies — random angle (can be diagonal). Match the
-      // desktop's "excited zoomies" behavior. Rarer now (5%)
-      // and the dash is shorter (0.6-1.4s) so it doesn't
-      // dominate the visual.
+      // zoomies — diagonal random angle, very short dash
       c.state = 'run';
       const angle = Math.random() * Math.PI * 2;
       const speed = 0.07 + Math.random() * 0.04;
       c.vx = Math.cos(angle) * speed;
       c.vy = Math.sin(angle) * speed;
-      // Pick sprite row from dominant velocity axis
       if (Math.abs(c.vx) > Math.abs(c.vy)) {
-        c.direction = c.vx > 0 ? 3 : 2;  // right or left
+        c.direction = c.vx > 0 ? 3 : 2;
       } else {
-        c.direction = c.vy > 0 ? 0 : 1;  // down or up
+        c.direction = c.vy > 0 ? 0 : 1;
       }
-      c.stateTimer = 600 + Math.random() * 800;  // 0.6-1.4s
+      c.stateTimer = 400 + Math.random() * 400;  // 0.4-0.8s
     }
     c.frame = 0;
     c.frameTimer = 0;
@@ -681,7 +706,6 @@ body.wake-mode #ctrlRight{display:none!important}
   // the home screen's forest backdrop. Companion movement, sprite
   // drawing, name label — all the same. Just no background image.
   const WAKE_MODE = /[?&]mode=wake\b/.test(location.search);
-  if (WAKE_MODE) document.body.classList.add('wake-mode');
 
   function loadBackground(id) {
     const file = id === 'meadow' ? 'pixel_landscape_1.png'
@@ -795,6 +819,38 @@ body.wake-mode #ctrlRight{display:none!important}
     if (!catalog) return;
     const MAX = 6;
     const list = agents.length > MAX ? agents.slice(0, MAX) : agents;
+
+    // v3.1.51: IDEMPOTENT. The desktop sends `agents_list` periodically
+    // (every reconnect, every desktop change, etc). Previously every
+    // setAgents call rebuilt the companions array from scratch and
+    // called layout(), which teleported existing companions back to
+    // their starting positions. Tobe reported "companions reset to
+    // the starting point after 30 sec" — this is why.
+    //
+    // Now: compare the new list to the current companions. If the IDs
+    // match (same companions, just a refresh), keep the existing
+    // companion objects (preserving position, animation, state) and
+    // just update metadata (scale, name, sprite). Only call layout()
+    // if the list actually changed (new IDs, removed IDs).
+    const newIds = list.map(a => a.id).sort().join(',');
+    const oldIds = companions.map(c => c.id).sort().join(',');
+    const sameSet = newIds === oldIds;
+
+    if (sameSet && companions.length > 0) {
+      // Same companions — just update metadata in place, no rebuild,
+      // no layout() call. Preserves positions and state.
+      for (let i = 0; i < list.length && i < companions.length; i++) {
+        const a = list[i];
+        const c = companions[i];
+        if (c.id !== a.id) continue;
+        c.name = a.name || c.name;
+        c.scale = (typeof a.scale === 'number' && a.scale >= 1 && a.scale <= 8) ? a.scale : c.scale;
+        c.isActive = (c.id === activeId);
+      }
+      return;
+    }
+
+    // Different set of companions — full rebuild
     notifyRN({ type: 'arena_set_agents_start', count: list.length });
     let built;
     try {
@@ -857,6 +913,23 @@ body.wake-mode #ctrlRight{display:none!important}
   resize();
   loadCatalog();
   loadBackground('forest');
+
+  // v3.1.51: read ?companion=<id> from the URL. WakeModeScreen uses
+  // this to set the active companion without needing to call
+  // setAgents (which would require sending the full agent list from
+  // React Native). If the param is missing or invalid, the
+  // companion ID stays null and the WebView waits for a setAgents
+  // call from RN (the home screen's normal path).
+  try {
+    const m = location.search.match(/[?&]companion=([^&]+)/);
+    if (m) activeId = decodeURIComponent(m[1]);
+  } catch (_) {}
+
+  // v3.1.51: read ?mode=wake and add the wake-mode class to body
+  // (moved here from the WAKE_MODE flag init so the class is set
+  // before the first render).
+  if (WAKE_MODE) document.body.classList.add('wake-mode');
+
   requestAnimationFrame(loop);
 })();
 </script>
