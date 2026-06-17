@@ -503,41 +503,64 @@ canvas{
     if (!n) return;
     const w = canvas.width;
     const h = canvas.height;
-    const groundLine = h * GROUND_FRACTION;
+    // v3.1.45: spread companions across the walkable band, not
+    // just one line. Each gets a different starting Y so they
+    // don't all stack at the same depth.
+    const minY = h * 0.60;
+    const maxY = h * 0.95;
     for (let i = 0; i < n; i++) {
       const c = companions[i];
       const [fw, fh] = c.data.frameSize;
       const dw = fw * c.scale;
       const dh = fh * c.scale;
-      // Evenly spread across width
       const x = w * (i + 1) / (n + 1) - dw / 2;
       c.x = x;
-      c.y = groundLine - dh;
+      // Stagger the Y starting positions. With 2 companions,
+      // they start at different depths (one closer, one further).
+      const yFrac = 0.65 + (i / Math.max(1, n - 1)) * 0.20;  // 0.65, 0.85 for n=2
+      c.y = h * yFrac - dh;
     }
   }
 
   // ── State Machine ────────────────────────────────────
-  // v3.1.43: simple state machine. Idle 40% / Walk 50% / Run 10%.
-  // Each state sets vx and direction. The animation is then picked
-  // by pickAnimation() based on what's actually loaded.
+  // v3.1.45: 4-directional movement matching the desktop. The
+  // desktop uses dirs = [[0,1],[0,-1],[-1,0],[1,0]] for
+  // direction 0/1/2/3 = down/up/left/right, with the sprite
+  // sheet row being direction. Same convention here.
+  //
+  // State distribution: idle 40% / walk 50% / run 10%. On
+  // walk/run, direction is picked from all 4 cardinal
+  // directions (not just L/R), so companions actually move
+  // up and down the arena, not just side to side.
+  //
+  // Y movement is constrained to the grass band: c.y must
+  // stay between the upper grass and the lower grass. We
+  // compute the bounds from the canvas height and the
+  // bgImage's grass position. The desktop uses a single
+  // ground line (no vertical bounce), so this matches.
+  const DIRS = [[0, 1], [0, -1], [-1, 0], [1, 0]];  // [dx, dy] for dir 0..3
+
   function pickState(c) {
     const roll = Math.random();
     if (roll < 0.40) {
       c.state = 'idle';
       c.vx = 0;
+      c.vy = 0;
       c.direction = 0;  // forward-facing
       c.stateTimer = 1500 + Math.random() * 2500;  // 1.5-4s idle
     } else if (roll < 0.90) {
       c.state = 'walk';
-      c.direction = Math.random() < 0.5 ? 2 : 3;
-      const speed = 0.025 + Math.random() * 0.015;  // 0.025-0.040 px/ms
-      c.vx = c.direction === 2 ? -speed : speed;
+      c.direction = Math.floor(Math.random() * 4);  // any of 0,1,2,3
+      const speed = 0.025 + Math.random() * 0.015;
+      c.vx = DIRS[c.direction][0] * speed;
+      c.vy = DIRS[c.direction][1] * speed;
       c.stateTimer = 2000 + Math.random() * 3000;  // 2-5s walk
     } else {
       c.state = 'run';
-      c.direction = Math.random() < 0.5 ? 2 : 3;
-      const speed = 0.06 + Math.random() * 0.03;  // 0.06-0.09 px/ms
-      c.vx = c.direction === 2 ? -speed : speed;
+      c.direction = Math.floor(Math.random() * 4);
+      const speed = 0.06 + Math.random() * 0.03;
+      c.vx = DIRS[c.direction][0] * speed;
+      c.vy = DIRS[c.direction][1] * speed;
       c.stateTimer = 1000 + Math.random() * 1500;  // 1-2.5s run
     }
     c.frame = 0;
@@ -549,15 +572,35 @@ canvas{
       c.stateTimer -= dt;
       if (c.stateTimer <= 0) pickState(c);
 
-      // Apply velocity
+      // Apply velocity in both axes
       c.x += c.vx * dt;
+      c.y += c.vy * dt;
 
-      // Bounce off sides
+      // Bounce off all 4 edges. The desktop's bounce code only
+      // bounces horizontally (y stays on the ground line), but
+      // since we're allowing vertical movement here, we need
+      // to bounce vertically too. The ground band is roughly
+      // the bottom 30% of the canvas (from grass top to canvas
+      // bottom). We use groundLine ± some margin.
       const [fw, fh] = c.data.frameSize;
       const dw = fw * c.scale;
+      const dh = fh * c.scale;
       const halfW = dw / 2;
+      const halfH = dh / 2;
+      // Horizontal: full canvas bounce
       if (c.x + halfW < 0) { c.x = -halfW; c.vx = Math.abs(c.vx); c.direction = 3; }
       if (c.x + halfW > canvas.width) { c.x = canvas.width - halfW; c.vx = -Math.abs(c.vx); c.direction = 2; }
+      // Vertical: constrain to the walkable band.
+      // Upper bound: stay below the sky/horizon (don't go above
+      // the upper grass). Lower bound: stay above the bottom edge
+      // of the canvas (don't go past the dirt path).
+      // Walkable band = 60%-95% of canvas height. That gives the
+      // companion room to walk "up" (toward the horizon) and
+      // "down" (toward the foreground) without leaving the grass.
+      const minY = canvas.height * 0.60;  // upper limit (don't fly into sky)
+      const maxY = canvas.height * 0.95 - dh;  // lower limit (don't go past foreground)
+      if (c.y < minY) { c.y = minY; c.vy = Math.abs(c.vy); c.direction = 0; }
+      if (c.y > maxY) { c.y = maxY; c.vy = -Math.abs(c.vy); c.direction = 1; }
 
       // Animation: pick the best sheet for the current state
       c.animation = pickAnimationKey(c);
