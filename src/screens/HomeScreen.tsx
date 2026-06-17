@@ -2444,7 +2444,7 @@ useEffect(() => {
           {(['chat', 'events', 'log'] as TabId[]).map(tab => (
             <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
               <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-                {tab === 'chat' ? 'Chat' : tab === 'events' ? 'Events' : 'Log'}
+                {tab === 'chat' ? '💬 Chat' : tab === 'events' ? '📜 Events' : '📋 Log'}
               </Text>
             </TouchableOpacity>
           ))}
@@ -2529,7 +2529,13 @@ useEffect(() => {
                   AsyncStorage.setItem('cyberclaw-arena-comp', a.id).catch(() => {});
                 }}
               >
-                <Text style={styles.companionTabEmoji}>{a.emoji || '🤖'}</Text>
+                {/* v3.1.47: companion tab no longer shows the robot emoji
+                    fallback when a.emoji is missing. The companion name is
+                    the only label now. If a.emoji is set we use it; if not,
+                    we just show the name. */}
+                {a.emoji ? (
+                  <Text style={styles.companionTabEmoji}>{a.emoji}</Text>
+                ) : null}
                 <Text style={[styles.companionTabName, isActive && styles.companionTabNameActive]} numberOfLines={1}>
                   {a.name}
                 </Text>
