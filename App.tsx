@@ -102,6 +102,16 @@ export default function App(): React.JSX.Element {
             <HomeScreen
               onOpenSettings={() => setScreen('settings')}
               onOpenWakeMode={() => setScreen('wake-mode')}
+              // v3.1.52: HomeScreen reports the currently active chat
+              // companion back to App.tsx so WakeModeScreen can show
+              // the SAME companion the user is looking at. Previously
+              // App.tsx's companionId was loaded once on mount from
+              // AsyncStorage and never updated, so if the user tapped
+              // a different companion tab, the wake mode would still
+              // show the original saved companion (a stale value).
+              onActiveCompanionChange={(id) => {
+                if (id && id !== companionId) setCompanionId(id);
+              }}
             />
           )}
           {screen === 'settings' && (

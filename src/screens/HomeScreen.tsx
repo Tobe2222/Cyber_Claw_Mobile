@@ -256,7 +256,11 @@ function appendAgentMessage(
   });
 }
 
-export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenSettings: () => void; onOpenWakeMode?: () => void }) {
+// v3.1.52: added onActiveCompanionChange prop. HomeScreen reports
+// the currently selected chat companion (activeChatAgentId) back to
+// App.tsx so the App-level state stays in sync. This is what the
+// wake mode / voice mode uses to know which companion to show.
+export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCompanionChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onActiveCompanionChange?: (id: string) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -266,6 +270,14 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
   // v3.1.17: which companion's chat is currently shown. The
   // companion tab bar updates this when the user taps a tab.
   const [activeChatAgentId, setActiveChatAgentId] = useState<string | null>(null);
+
+  // v3.1.52: report the active chat companion back to App.tsx so
+  // WakeModeScreen knows which companion to display. Fires on
+  // mount (with the initial value) and every time the user taps
+  // a different companion tab.
+  useEffect(() => {
+    if (activeChatAgentId) onActiveCompanionChange?.(activeChatAgentId);
+  }, [activeChatAgentId, onActiveCompanionChange]);
   // v3.1.17: unread message count per companion, used to badge
   // companion tabs when the user is on a different one.
   const [chatUnreadByAgent, setChatUnreadByAgent] = useState<Record<string, number>>({});
