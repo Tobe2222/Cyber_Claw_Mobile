@@ -456,18 +456,29 @@ canvas{
     layout();
   }
 
+  // v3.1.39: ground line. The desktop uses height * (horizonLine + 0.1)
+  // = 0.6 — i.e. the FEET of the sprite sit ~60% down the canvas.
+  // Mobile previously used 0.7 which pushed the feet against the
+  // bottom edge of the (small) arena viewport and the sprite bodies
+  // got clipped. Match the desktop fraction and ALSO position so the
+  // feet (not the top-left of the sprite) land on the line — the
+  // sprite is drawn from c.y downward, so c.y = groundLine - dh.
+  const GROUND_FRACTION = 0.6;
+
   function layout() {
     const n = companions.length;
     if (!n) return;
     const w = canvas.width;
     const h = canvas.height;
-    const groundY = h * 0.7;
+    const groundLine = h * GROUND_FRACTION;
     for (let i = 0; i < n; i++) {
       const c = companions[i];
-      const fw = (c.data.frameSize[0] || 32) * c.scale;
-      const x = w * (i + 1) / (n + 1) - fw / 2;
+      const [fw, fh] = c.data.frameSize;
+      const dw = fw * c.scale;
+      const dh = fh * c.scale;
+      const x = w * (i + 1) / (n + 1) - dw / 2;
       c.x = x;
-      c.y = groundY;
+      c.y = groundLine - dh; // feet on the ground line, not top-left
     }
   }
 
@@ -475,17 +486,20 @@ canvas{
   // v3.1.38: state-machine AI (mirrors the desktop's pixel-arena.js).
   // The mobile arena is still a read-only mirror — no click handlers,
   // no toys/treats, no speech bubbles, no user-initiated actions — but
-  // the companions now walk and run around on their own with the same
-  // state distribution as the desktop (60% idle / 30% walk / 10% run,
-  // 10% of which is "zoomies" dashing).
+  // the companions now walk and run around on their own. The mobile
+  // arena is small and the user notices stillness quickly, so v3.1.39
+  // drops idle probability and shortens idle duration vs the desktop's
+  // 60/30/10 — mobile uses 30/45/20/5 (idle/walk/run/zoomies) with
+  // idle stateTimer 1–3s (was 2–6s). The result: a companion is
+  // almost always moving within ~1–2s of loading.
   function pickState(c) {
     const roll = Math.random();
-    if (roll < 0.45) {
-      // idle — chill in place
+    if (roll < 0.30) {
+      // idle — chill in place, but briefly
       c.state = 'idle';
       c.vx = 0;
       c.vy = 0;
-      c.stateTimer = 2000 + Math.random() * 4000; // 2–6s
+      c.stateTimer = 1000 + Math.random() * 2000; // 1–3s
     } else if (roll < 0.75) {
       // walk — gentle wander. Mobile is narrower than the desktop so
       // we use a single horizontal direction (L or R) to keep them
@@ -496,7 +510,7 @@ canvas{
       c.vx = c.direction === 2 ? -(0.015 + Math.random() * 0.010) : (0.015 + Math.random() * 0.010);
       c.vy = 0;
       c.stateTimer = 1500 + Math.random() * 2500; // 1.5–4s
-    } else if (roll < 0.90) {
+    } else if (roll < 0.95) {
       // run — energetic burst
       c.state = 'run';
       c.direction = Math.random() < 0.5 ? 2 : 3;
@@ -504,7 +518,9 @@ canvas{
       c.vy = 0;
       c.stateTimer = 800 + Math.random() * 1200; // 0.8–2s
     } else {
-      // zoomies — fast dash
+      // zoomies — fast dash. Kept short (0.4–0.9s) so the small
+      // mobile viewport doesn't turn into a blur of bouncing
+      // sprites.
       c.state = 'run';
       c.direction = Math.random() < 0.5 ? 2 : 3;
       c.vx = c.direction === 2 ? -(0.10 + Math.random() * 0.04) : (0.10 + Math.random() * 0.04);
