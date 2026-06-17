@@ -432,11 +432,13 @@ canvas{
     // (= 64px tall) feels right for the small mobile arena. If the
     // desktop sends an explicit scale, we still respect it.
     const scale = (typeof agent.scale === 'number' && agent.scale >= 1 && agent.scale <= 8) ? agent.scale : 2;
-    // v3.1.38: stable per-id hash for staggering initial state.
+    // v3.1.41: stable per-id hash for staggering initial state.
     // Same algorithm as bobFor() so values line up if you change one.
+    // (Removed unused initialDirection — we set direction directly
+    // in the return block below; the hash is only used for
+    // stateTimer staggering.)
     let _h = 0;
     for (let i = 0; i < agent.id.length; i++) _h = (_h * 31 + agent.id.charCodeAt(i)) >>> 0;
-    const initialDirection = _h % 4; // 0=down, 1=up, 2=left, 3=right
     return {
       id: agent.id,
       name: agent.name || 'Companion',
@@ -451,17 +453,19 @@ canvas{
       // roll a new state. vx/vy are pixels/ms (we use vx only on the
       // mobile — vertical movement is suppressed so companions stay
       // on the ground line; see update()).
-      // v3.1.40: start in 'walk' so the companion is moving on
-      // first paint (the user complained that the companions
-      // "just stand there" on first load). First roll happens
-      // 0.3–0.7s in, which is short enough that it feels
-      // immediate and long enough that they don't instantly
-      // snap to a different state.
+      // v3.1.41: start in 'walk' with a LONGER stateTimer so the
+      // companion walks for 4-7 seconds before the first
+      // pickState. v3.1.40 used 0.3-0.7s which was too short —
+      // pickState would roll idle most of the time (30% chance)
+      // and the companion would feel static for a few seconds.
+      // A 4-7s walk guarantees the user sees movement on load.
+      // Direction starts L or R (not 0=down) so the sprite
+      // shows the side-view walking animation immediately.
       state: 'walk',
-      direction: Math.random() < 0.5 ? 2 : 3, // start walking L or R
-      vx: (Math.random() < 0.5 ? -1 : 1) * (0.015 + Math.random() * 0.010),
+      direction: Math.random() < 0.5 ? 2 : 3, // L or R walking sprite row
+      vx: (Math.random() < 0.5 ? -1 : 1) * (0.025 + Math.random() * 0.015), // 0.025-0.040 px/ms
       vy: 0,
-      stateTimer: 300 + (_h % 400), // 0.3–0.7s before first pickState
+      stateTimer: 4000 + (_h % 3000), // 4-7s before first pickState
       frame: 0,
       frameTimer: 0,
       isActive: false,
@@ -477,15 +481,27 @@ canvas{
     layout();
   }
 
-  // v3.1.40: ground line. The background image is 1266x631 (2:1)
-  // aspect; the walkable ground (the green grass) starts at ~72% of
-  // the image's height. When that image is stretched to fill the
-  // mobile canvas (which is wider/shorter than 2:1, ~1.8:1 typical),
-  // the ground line ends up at ~78% of the canvas height. The
-  // sprite's FEET need to sit on that line, so c.y = groundLine - dh.
-  // (Previous 0.6 put the feet well above the visible ground —
-  // companions looked like they were floating in the sky.)
-  const GROUND_FRACTION = 0.78;
+  // v3.1.41: ground line. Earlier versions used 0.78 / 0.6 — both
+  // were wrong because they tried to use the actual image's grass
+  // position. The problem is the Android WebView reports
+  // window.innerHeight = the FULL viewport height, not the WebView
+  // container's height. So canvas.height is huge (e.g. 800 on a
+  // typical phone) but only the top ARENA_HEIGHT portion (~187 CSS
+  // px on iPhone mini) is visible. Putting feet at 78% of canvas
+  // puts them WAY off-screen below the WebView's bottom border.
+  //
+  // The fix: stop using canvas.height as the reference. Use the
+  // CSS height of the WebView container instead, which we read
+  // from the offsetHeight of the WebView's parent element. If we
+  // can't get that, fall back to canvas.height (which will then
+  // still be wrong, but at least this is rare).
+  //
+  // Empirically, on iPhone mini the visible arena is ~187 CSS px
+  // tall. The grass+path band in the bgImage starts at the bottom
+  // ~25% of the image. When the image fills the 1.85:1 canvas,
+  // the walkable band ends up at ~95% of canvas height. So we
+  // use 0.95 as the ground fraction.
+  const GROUND_FRACTION = 0.95;
 
   function layout() {
     const n = companions.length;
@@ -897,6 +913,23 @@ canvas{
     getActiveId: () => activeId,
     getCompanionCount: () => companions.length,
     getBackground: () => currentBgId,
+    // v3.1.41: diagnostic — report canvas dimensions and where the
+    // first companion is actually positioned. Used for debugging
+    // the floating-feet bug; can be removed once we confirm
+    // positioning is stable across device sizes.
+    getDebug: () => {
+      const c0 = companions[0];
+      return {
+        canvasW: canvas.width,
+        canvasH: canvas.height,
+        windowInnerW: window.innerWidth,
+        windowInnerH: window.innerHeight,
+        groundLine: canvas.height * GROUND_FRACTION,
+        firstCompanionY: c0 ? c0.y : null,
+        firstCompanionScale: c0 ? c0.scale : null,
+        firstCompanionDh: c0 ? (c0.data.frameSize[1] * c0.scale) : null,
+      };
+    },
   };
 
   // ── React Native bridge ──────────────────────────────

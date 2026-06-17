@@ -2352,7 +2352,14 @@ useEffect(() => {
           <WebView
             key={webViewKey}
             ref={webViewRef}
-            source={{ uri: `file:///android_asset/arena.html?platform=mobile` }}
+            // v3.1.41: include APP_VERSION in the URI so Android WebView
+            // doesn't serve a cached arena.html after an app upgrade. The
+            // `platform=mobile` param was the only query string before, and
+            // Android WebView caches file:///android_asset/ aggressively,
+            // so changes to arena.html didn't show up after upgrade without
+            // a clear-data or full reinstall. Adding v=APP_VERSION makes
+            // each version's arena.html a distinct URL → no cache hit.
+            source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&platform=mobile` }}
             style={{ flex: 1, backgroundColor: '#0a0a2e' }}
             scrollEnabled={false}
             bounces={false}
