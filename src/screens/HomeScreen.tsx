@@ -2444,7 +2444,7 @@ useEffect(() => {
           {(['chat', 'events', 'log'] as TabId[]).map(tab => (
             <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
               <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-                {tab === 'chat' ? '💬 Chat' : tab === 'events' ? '📜 Events' : '📋 Log'}
+                {tab === 'chat' ? 'Chat' : tab === 'events' ? 'Events' : 'Log'}
               </Text>
             </TouchableOpacity>
           ))}
@@ -2772,7 +2772,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', backgroundColor: '#111',
     borderBottomWidth: 1, borderBottomColor: '#222',
   },
-  tab: { flex: 1, paddingVertical: 10, alignItems: 'center' },
+  tab: { flex: 1, paddingVertical: 4, alignItems: 'center' },
   tabActive: { borderBottomWidth: 2, borderBottomColor: '#f7931a' },
   tabText: { color: '#666', fontSize: 13 },
   tabTextActive: { color: '#f7931a', fontWeight: 'bold' },

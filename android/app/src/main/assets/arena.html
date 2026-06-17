@@ -20,6 +20,23 @@ canvas{
   width:100%;height:100%;
   z-index:1;
 }
+#ctrlRight{
+  position:absolute;top:6px;right:6px;
+  display:flex;gap:4px;z-index:20;pointer-events:all;
+}
+.ctrlBtn{
+  background:rgba(0,0,0,0.72);
+  border:1px solid rgba(247,147,26,0.45);
+  color:#f7931a;
+  font-size:10px;
+  width:54px;height:24px;
+  border-radius:6px;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-family:'Orbitron',monospace;
+}
+.ctrlBtn:active{background:rgba(247,147,26,0.25)}
+.ctrlBtn.active{border-color:#4ade80;color:#4ade80}
 #status{
   position:absolute;top:8px;left:0;right:0;
   text-align:center;
@@ -45,6 +62,15 @@ canvas{
 <canvas id="arena"></canvas>
 <div id="status">Loading arena…</div>
 <div id="debug"></div>
+<!-- v3.1.46: Voice Mode and Wake Mode buttons (overlay on the
+     arena). Send messages to React Native via ReactNativeWebView.
+     The RN side handles 'fullscreen' and 'wakeword' messages. -->
+<div id="ctrlRight">
+  <button class="ctrlBtn" id="voiceBtn" title="Enter Voice Mode"
+    onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); } catch(e) {}">Voice</button>
+  <button class="ctrlBtn" id="wakeWordBtn" title="Activate Wake Word Mode"
+    onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'wakeword'})); } catch(e) {}">Wake</button>
+</div>
 <script>
 'use strict';
 
@@ -726,7 +752,8 @@ canvas{
   function render() {
     drawBackground();
     for (const c of companions) {
-      drawShadow(c);
+      // v3.1.46: shadows removed (Tobe asked for cleaner look).
+      // drawShadow(c);
       drawCompanion(c);
       drawName(c);
     }
