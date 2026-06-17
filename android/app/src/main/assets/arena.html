@@ -567,51 +567,50 @@ body.wake-mode #ctrlRight{display:none!important}
   // update()'s velocity application.
   const DIRS = [[0, 1], [0, -1], [-1, 0], [1, 0]];  // cardinal: [dx, dy] for dir 0..3
 
-  // v3.1.51: state distribution tuned further down. Tobe said
-  // even at 5% the zoomies state was firing "10 times plus" before
-  // the companion stopped. The issue is that 5% × multiple state
-  // rolls (every 2-5s for walk) accumulates — over 30s the
-  // companion rolls 6-15 times, so 5% × 10 = ~50% chance of
-  // zoomies 10 times in 30s.
+  // v3.1.53: state distribution tuned even further down. Tobe
+  // reported clawsuu was "spamming up and down hastily" — even
+  // at 3% zoomies + 60% direction bias, the random walk was
+  // still bouncing too much.
   //
-  // New distribution: idle 50% / walk 47% / zoomies 3%. Idle
-  // duration 2-5s, walk 3-7s, zoomies 0.4-0.8s. The companion
-  // spends most of its time either idling or walking
-  // (97%), and the rare zoomies dash is short.
+  // New distribution: idle 60% / walk 38% / zoomies 2%.
+  // Direction bias up to 75% (companion keeps going in the
+  // same direction for longer).
+  // Idle duration extended to 3-6s (rest periods between
+  // activity bursts).
+  // Walk duration 3-6s.
+  // Zoomies duration 0.3-0.6s (very short).
   //
-  // Also added a "preferred direction bias" — the companion
-  // prefers the direction it was already moving in (with 60%
-  // probability) so it doesn't bounce back and forth between
-  // up and down repeatedly. Tobe reported the companion was
-  // "running up and down very fast" which was the state
-  // machine alternating between dir=0 (down) and dir=1 (up)
-  // each roll. With the bias, the companion keeps going in
-  // the same direction for multiple rolls.
+  // The "spam up and down" pattern is the state machine
+  // alternating between dir=0 (down) and dir=1 (up) on
+  // consecutive rolls. With 75% direction bias, the
+  // companion has a 75% chance of keeping the same
+  // direction on the next walk, which breaks the
+  // alternation. Combined with longer idle (60%), the
+  // companion spends more time resting.
   function pickState(c) {
     const roll = Math.random();
-    if (roll < 0.50) {
+    if (roll < 0.60) {
       c.state = 'idle';
       c.vx = 0;
       c.vy = 0;
       c.direction = 0;
-      c.stateTimer = 2000 + Math.random() * 3000;  // 2-5s idle
-    } else if (roll < 0.97) {
-      // walk — cardinal direction with a bias toward the
-      // previous direction (if any)
+      c.stateTimer = 3000 + Math.random() * 3000;  // 3-6s idle
+    } else if (roll < 0.98) {
+      // walk — cardinal direction with a strong bias toward
+      // the previous direction (if any)
       c.state = 'walk';
       let newDir;
-      if (c._lastWalkDir != null && Math.random() < 0.6) {
-        // 60% chance: keep going in the same direction
+      if (c._lastWalkDir != null && Math.random() < 0.75) {
         newDir = c._lastWalkDir;
       } else {
         newDir = Math.floor(Math.random() * 4);
       }
       c._lastWalkDir = newDir;
       c.direction = newDir;
-      const speed = 0.022 + Math.random() * 0.013;
+      const speed = 0.020 + Math.random() * 0.012;
       c.vx = DIRS[newDir][0] * speed;
       c.vy = DIRS[newDir][1] * speed;
-      c.stateTimer = 3000 + Math.random() * 4000;  // 3-7s walk
+      c.stateTimer = 3000 + Math.random() * 3000;  // 3-6s walk
     } else {
       // zoomies — diagonal random angle, very short dash
       c.state = 'run';
@@ -624,7 +623,7 @@ body.wake-mode #ctrlRight{display:none!important}
       } else {
         c.direction = c.vy > 0 ? 0 : 1;
       }
-      c.stateTimer = 400 + Math.random() * 400;  // 0.4-0.8s
+      c.stateTimer = 300 + Math.random() * 300;  // 0.3-0.6s
     }
     c.frame = 0;
     c.frameTimer = 0;
