@@ -30,90 +30,56 @@ canvas{
 }
 #status.error{color:#f7931a}
 #status.ok{color:#4ade80}
+#debug{
+  position:absolute;top:8px;left:8px;
+  color:#0f0;font-size:10px;font-family:monospace;
+  z-index:11;pointer-events:none;
+  background:rgba(0,0,0,0.5);padding:4px;
+  border-radius:2px;max-width:60%;
+  line-height:1.3;
+  white-space:pre;
+}
 </style>
 </head>
 <body>
 <canvas id="arena"></canvas>
 <div id="status">Loading arena…</div>
+<div id="debug"></div>
 <script>
 'use strict';
 
-// ── CyberClaw Mobile Arena (v3.1.32) ──────────────────────────────
+// ── CyberClaw Mobile Arena (v3.1.43) ──────────────────────────────
 //
-// Multi-companion pixel arena for the mobile companion app.
-// This is a STRIPPED-DOWN port of the desktop's pixel-arena.js:
+// CLEAN REWRITE after v3.1.39 → v3.1.42 failed to land positioning
+// and animation behavior. This is a minimal port of the desktop's
+// pixel-arena.js state machine — same animation conventions, same
+// sprite sheet layout, same direction encoding. We just strip
+// toys/treats/sleep/click and constrain the arena to a single
+// ground line (no Y movement).
 //
-//   * No click handlers, no drag, no focus effects.
-//   * No toys, no treats, no speech bubbles.
-//   * No "add/remove" — the React Native side rebuilds the WebView's
-//     companion list by calling the public setAgents() / setActive() API
-//     and the WebView re-renders from scratch (we wipe and rebuild on
-//     each setAgents call; cheaper than diff-and-update at this scale).
-//
-// What we DO have:
-//   * Per-companion idle animation.
-//   * Spread layout (evenly placed across the canvas width).
-//   * Active companion marker — the active chat companion is drawn with
-//     a subtle golden ring underneath + a brighter name. Inactive
-//     companions get a faint grey ring.
-//   * Set on the arena via the message API:
-//        window.postMessage({ type: 'setAgents', agents: [...] }, '*');
-//        window.postMessage({ type: 'setActive', id: 'clawsuu' }, '*');
-//   * Loaded assets are emitted back so the React Native side can
-//     report the load state in the Log tab.
-//
-// Note on terminology: the user-visible text says "companion" not
-// "sprite". Internally we still use "sprite" because that's the
-// pixel-arena convention inherited from the desktop (each companion
-// is drawn from a pixel-art framesheet). User never sees "sprite".
+// Key design decisions:
+// - Explicit canvas size from React Native via Arena.init(W, H).
+//   This is the ONLY reliable way to get the WebView's actual size
+//   on Android WebView (window.innerHeight returns the full viewport).
+// - Animation is driven by c.animation, separate from c.state, like
+//   the desktop. If the walk PNG fails to load, we try run, then
+//   idle — never show a state with no animation.
+// - State machine: idle (still) / walk (gentle) / run (fast). On
+//   idle, vx=0 and the companion bobs in place. On walk/run, the
+//   companion moves horizontally and shows the side-view sprite.
+// - Sprite sheet rows: 0=down, 1=up, 2=left, 3=right. Same as desktop.
+// - scale: default 2 for mobile (desktop default is 5). If desktop
+//   sends a different scale, we use it.
+// - Companion floats slightly off the ground line so the shadow
+//   renders underneath (matching the desktop feel).
 //
 (function() {
   const canvas = document.getElementById('arena');
   const ctx = canvas.getContext('2d');
   const statusEl = document.getElementById('status');
+  const debugEl = document.getElementById('debug');
 
-  // ── State ────────────────────────────────────────────
-  let catalog = null;
-  let companions = [];
-  let activeId = null;
-  let assetsBase = 'file:///android_asset/companions/';
-  let lastFrame = 0;
-
-  function setStatus(text, cls) {
-    statusEl.textContent = text;
-    statusEl.className = cls || '';
-  }
-
-  // v3.1.33: catch any uncaught error and show it in the status
-  // bar. Without this, a single bad line (e.g. an unsupported
-  // API) would leave the user stuck on "Loading arena..." with
-  // no clue why. This at least surfaces the error message so
-  // we can debug from screenshots alone.
-  window.addEventListener('error', (ev) => {
-    const msg = (ev && (ev.message || (ev.error && ev.error.message))) || 'unknown error';
-    const where = (ev && ev.filename) ? ` (${ev.filename}:${ev.lineno})` : '';
-    setStatus('JS error: ' + msg + where, 'error');
-    try { notifyRN({ type: 'arena_js_error', message: msg, where: where }); } catch (_) {}
-  });
-  window.addEventListener('unhandledrejection', (ev) => {
-    const r = ev && ev.reason;
-    const msg = (r && r.message) || String(r) || 'unhandled rejection';
-    setStatus('Promise error: ' + msg, 'error');
-    try { notifyRN({ type: 'arena_promise_error', message: msg }); } catch (_) {}
-  });
-
-  // ── Embedded companion catalog ───────────────────────────────
-  // v3.1.32: the catalog is EMBEDDED in this script (below) as a
-  // JS const, not fetched. Android WebView's fetch() refuses to
-  // load file:// URLs from a non-secure origin (a known WebView
-  // restriction), so trying to fetch catalog.json gave us
-  // "FAILED TO FETCH". Inlining the catalog is the fix: the catalog
-  // is small (~5 KB) and rarely changes. The actual sprite images
-  // still load via `new Image(); img.src = 'file:///android_asset/...'`
-  // which is allowed (only fetch() / XHR is restricted).
-  //
-  // To regenerate: see tools/build_embedded_catalog.py in the
-  // mobile repo. Run it after editing assets/companions/catalog.json.
+  // ── Embedded companion catalog (v3.1.43) ───────────────────
   const EMBEDDED_CATALOG = {
   "companions": [
     {
@@ -361,6 +327,38 @@ canvas{
   ]
 };
 
+  // ── State ────────────────────────────────────────────
+  let catalog = null;
+  let companions = [];
+  let activeId = null;
+  const assetsBase = 'file:///android_asset/companions/';
+  let lastFrame = 0;
+  let debugMode = true;  // v3.1.43: show debug overlay by default
+
+  // v3.1.43: explicit canvas size from React Native. This is the
+  // only reliable way to get the WebView's actual size on Android
+  // WebView (window.innerHeight returns the full viewport, which
+  // is wrong for the WebView container's size).
+  let explicitCanvasW = null;
+  let explicitCanvasH = null;
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || '';
+  }
+
+  window.addEventListener('error', (ev) => {
+    const msg = (ev && (ev.message || (ev.error && ev.error.message))) || 'unknown error';
+    setStatus('JS error: ' + msg, 'error');
+    notifyRN({ type: 'arena_js_error', message: msg });
+  });
+  window.addEventListener('unhandledrejection', (ev) => {
+    const r = ev && ev.reason;
+    const msg = (r && r.message) || String(r) || 'unhandled rejection';
+    setStatus('Promise error: ' + msg, 'error');
+    notifyRN({ type: 'arena_promise_error', message: msg });
+  });
+
   function loadCatalog() {
     catalog = EMBEDDED_CATALOG;
     if (!catalog || !Array.isArray(catalog.companions)) {
@@ -370,26 +368,25 @@ canvas{
     }
     setStatus('Arena ready', 'ok');
     notifyRN({ type: 'arena_loaded', count: catalog.companions.length });
-    // v3.1.40: the "Arena ready" overlay was permanent and sat in
-    // the top-left of the canvas. Clear it after 2.5s so it
-    // doesn't overlap the action.
-    setTimeout(() => {
-      if (statusEl.textContent === 'Arena ready') {
-        statusEl.textContent = '';
-        statusEl.className = '';
-      }
-    }, 2500);
+    setTimeout(() => { if (statusEl.textContent === 'Arena ready') { statusEl.textContent = ''; statusEl.className = ''; } }, 2500);
   }
 
   function loadImage(url) {
     return new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => resolve(null);
+      let settled = false;
+      img.onload = () => { if (!settled) { settled = true; resolve(img); } };
+      img.onerror = () => { if (!settled) { settled = true; resolve(null); } };
+      // v3.1.43: also timeout after 5s to avoid hanging on missing assets
+      setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, 5000);
       img.src = url;
     });
   }
 
+  // v3.1.43: load all available animations for a companion.
+  // Returns { idle, walk, run, ... } with the loaded image data.
+  // If a sheet is missing on disk, the corresponding key is undefined
+  // and pickAnim() will fall back to a different available sheet.
   async function buildCompanion(agent) {
     const pixelId = agent.sprite;
     if (!pixelId) return null;
@@ -399,46 +396,35 @@ canvas{
       if (!fallback) return null;
       return buildCompanion({ ...agent, sprite: fallback.id });
     }
-    // v3.1.38: load every animation the catalog lists (idle, walk, run,
-    // hurt, death, attack). Previously we only loaded 'idle' since the
-    // companion was a static bob. Now they need walk + run for the
-    // state-machine behaviour to feel alive. Catalog `speed` is frames
-    // per second, so frameInterval = 1000/speed ms. If a sheet is
-    // missing on disk the loadImage resolves to null and we just skip
-    // that animation — the fallback chain in pickAnim() handles the
-    // rest.
     const images = {};
+    const loadResults = {};
+    // v3.1.43: try to load each animation; record success/failure
     for (const [animName, animData] of Object.entries(compData.animations || {})) {
       if (!animData || !animData.file) continue;
-      const img = await loadImage(assetsBase + compData.folder + '/' + animData.file);
-      if (!img) continue;
-      const speed = (typeof animData.speed === 'number' && animData.speed > 0) ? animData.speed : 6;
-      images[animName] = {
-        img,
-        frames: animData.frames || 1,
-        cols: animData.cols || animData.frames || 1,
-        rows: animData.rows || 1,
-        frameInterval: Math.round(1000 / speed),
-      };
+      const url = assetsBase + compData.folder + '/' + animData.file;
+      const img = await loadImage(url);
+      if (img) {
+        const speed = (typeof animData.speed === 'number' && animData.speed > 0) ? animData.speed : 6;
+        images[animName] = {
+          img,
+          frames: animData.frames || 1,
+          cols: animData.cols || animData.frames || 1,
+          rows: animData.rows || 1,
+          frameInterval: Math.round(1000 / speed),
+        };
+        loadResults[animName] = 'OK';
+      } else {
+        loadResults[animName] = 'FAIL';
+      }
     }
     let shadowImg = null;
     if (compData.shadow) {
       shadowImg = await loadImage(assetsBase + compData.folder + '/' + compData.shadow);
     }
-    // v3.1.40: mobile default scale dropped from 4 to 2. The
-    // desktop's default is 5 (and the desktop canvas is huge), but
-    // a scale-4 sprite is 128px tall — taller than half the typical
-    // mobile arena viewport — and dominates the screen. Scale 2
-    // (= 64px tall) feels right for the small mobile arena. If the
-    // desktop sends an explicit scale, we still respect it.
+    // v3.1.43: scale handling. Desktop default is 5 (large canvas),
+    // mobile default is 2 (small canvas). We respect whatever the
+    // desktop sends via the agents_list payload.
     const scale = (typeof agent.scale === 'number' && agent.scale >= 1 && agent.scale <= 8) ? agent.scale : 2;
-    // v3.1.41: stable per-id hash for staggering initial state.
-    // Same algorithm as bobFor() so values line up if you change one.
-    // (Removed unused initialDirection — we set direction directly
-    // in the return block below; the hash is only used for
-    // stateTimer staggering.)
-    let _h = 0;
-    for (let i = 0; i < agent.id.length; i++) _h = (_h * 31 + agent.id.charCodeAt(i)) >>> 0;
     return {
       id: agent.id,
       name: agent.name || 'Companion',
@@ -446,84 +432,58 @@ canvas{
       images,
       shadow: shadowImg,
       scale,
-      // v3.1.38: animation state machine (mirrors the desktop's
-      // pixel-arena.js AI). state ∈ {'idle','walk','run','zoomies'};
-      // direction is the sprite-sheet row (0=down,1=up,2=left,3=right,
-      // matches the desktop convention). stateTimer is ms until we
-      // roll a new state. vx/vy are pixels/ms (we use vx only on the
-      // mobile — vertical movement is suppressed so companions stay
-      // on the ground line; see update()).
-      // v3.1.41: start in 'walk' with a LONGER stateTimer so the
-      // companion walks for 4-7 seconds before the first
-      // pickState. v3.1.40 used 0.3-0.7s which was too short —
-      // pickState would roll idle most of the time (30% chance)
-      // and the companion would feel static for a few seconds.
-      // A 4-7s walk guarantees the user sees movement on load.
-      // Direction starts L or R (not 0=down) so the sprite
-      // shows the side-view walking animation immediately.
-      state: 'walk',
-      direction: Math.random() < 0.5 ? 2 : 3, // L or R walking sprite row
-      vx: (Math.random() < 0.5 ? -1 : 1) * (0.025 + Math.random() * 0.015), // 0.025-0.040 px/ms
+      loadResults,  // v3.1.43: diagnostic
+      // v3.1.43: animation state. animation is the sheet to draw;
+      // state is the AI state. They can differ (e.g. animation=walk
+      // even when state=run, if run sheet is missing).
+      state: 'idle',
+      animation: 'idle',
+      direction: 0,    // 0=down, 1=up, 2=left, 3=right
+      vx: 0,
       vy: 0,
-      stateTimer: 4000 + (_h % 3000), // 4-7s before first pickState
+      stateTimer: 2000 + Math.random() * 3000, // 2-5s for first roll
       frame: 0,
       frameTimer: 0,
       isActive: false,
     };
   }
 
-  // ── Layout ────────────────────────────────────────────
-  // v3.1.42: Android WebView's window.innerHeight returns the FULL
-  // viewport height, not the WebView container's height. This causes
-  // the canvas to be much larger than the visible WebView, and
-  // every ground-line / boundary calculation is wrong. The fix:
-  // use the canvas element's own clientWidth/clientHeight (its
-  // rendered CSS dimensions), which DOES match the WebView
-  // container's size because the canvas CSS is width:100%; height:100%
-  // of body which is width:100vw; height:100% of html which is
-  // width:100vw; height:100% of the WebView... well, this is the
-  // part that's broken. On Android WebView, 100vh = full viewport,
-  // not WebView size. So we still get the wrong size from clientWidth.
-  //
-  // The truly reliable fix: React Native passes the WebView size
-  // in via an `init(canvasW, canvasH)` call injected from the RN
-  // side. We use those values if available, falling back to the
-  // canvas's clientWidth/clientHeight which IS the rendered CSS size
-  // of the canvas (and that, at least, is bounded by the WebView's
-  // own size even if window.innerHeight is wrong).
-  let explicitCanvasW = null;
-  let explicitCanvasH = null;
+  // v3.1.43: pick the best available animation for the desired state.
+  // Tries the state, then walk (if we want idle but only walk loaded),
+  // then any available. Never returns null if any animation loaded.
+  function pickAnimation(c, desiredState) {
+    // Prefer the exact state
+    if (c.images[desiredState]) return c.images[desiredState];
+    // Then try other common ones in priority order
+    const fallbackOrder = ['walk', 'run', 'idle', 'attack', 'flight'];
+    for (const k of fallbackOrder) {
+      if (c.images[k]) return c.images[k];
+    }
+    // Last resort: first available
+    for (const k of Object.keys(c.images)) return c.images[k];
+    return null;
+  }
 
+  // ── Layout ────────────────────────────────────────────
   function resize() {
-    // Prefer the explicit values from RN. Fall back to clientWidth/
-    // clientHeight of the canvas (its own CSS-rendered size). Last
-    // resort: window.innerWidth/Height (broken on Android WebView).
-    const w = explicitCanvasW != null ? explicitCanvasW
-            : (canvas.clientWidth || window.innerWidth);
-    const h = explicitCanvasH != null ? explicitCanvasH
-            : (canvas.clientHeight || window.innerHeight);
-    canvas.width = w;
-    canvas.height = h;
+    const w = explicitCanvasW != null ? explicitCanvasW : (canvas.clientWidth || 360);
+    const h = explicitCanvasH != null ? explicitCanvasH : (canvas.clientHeight || 200);
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
     notifyRN({ type: 'arena_resize', w, h, windowInnerH: window.innerHeight });
     layout();
   }
 
-  // Public init — React Native calls this once on load with the
-  // known ARENA_HEIGHT and SCREEN_WIDTH from Dimensions.get('window').
-  // After this, resize() uses these values instead of guessing.
   function init(canvasW, canvasH) {
     if (typeof canvasW === 'number' && canvasW > 0) explicitCanvasW = canvasW;
     if (typeof canvasH === 'number' && canvasH > 0) explicitCanvasH = canvasH;
     resize();
   }
 
-  // v3.1.42: ground line. React Native now passes the canvas size
-  // explicitly via Arena.init(SCREEN_WIDTH, ARENA_HEIGHT). canvas.height
-  // matches the actual WebView container's height, so positioning is
-  // accurate. The bgImage (1266x631, 2:1 aspect) is stretched to fill
-  // the canvas (typically 1.85:1), so the grass band (starting at
-  // ~70% of the bgImage) ends up at 0.70 * canvas.height. Feet on
-  // the grass: c.y = 0.70 * h - dh.
+  // v3.1.43: ground line. bgImage (1266x631, 2:1 aspect) has grass
+  // starting at ~70% of image height. Stretched to canvas, grass
+  // is at 0.70 * canvas.height. c.y = groundLine - dh puts feet
+  // on the grass.
   const GROUND_FRACTION = 0.70;
 
   function layout() {
@@ -537,113 +497,61 @@ canvas{
       const [fw, fh] = c.data.frameSize;
       const dw = fw * c.scale;
       const dh = fh * c.scale;
+      // Evenly spread across width
       const x = w * (i + 1) / (n + 1) - dw / 2;
       c.x = x;
-      c.y = groundLine - dh; // feet on the ground line, not top-left
+      c.y = groundLine - dh;
     }
   }
 
-  // ── Update + Draw ────────────────────────────────────
-  // v3.1.38: state-machine AI (mirrors the desktop's pixel-arena.js).
-  // The mobile arena is still a read-only mirror — no click handlers,
-  // no toys/treats, no speech bubbles, no user-initiated actions — but
-  // the companions now walk and run around on their own. The mobile
-  // arena is small and the user notices stillness quickly, so v3.1.39
-  // drops idle probability and shortens idle duration vs the desktop's
-  // 60/30/10 — mobile uses 30/45/20/5 (idle/walk/run/zoomies) with
-  // idle stateTimer 1–3s (was 2–6s). The result: a companion is
-  // almost always moving within ~1–2s of loading.
+  // ── State Machine ────────────────────────────────────
+  // v3.1.43: simple state machine. Idle 40% / Walk 50% / Run 10%.
+  // Each state sets vx and direction. The animation is then picked
+  // by pickAnimation() based on what's actually loaded.
   function pickState(c) {
     const roll = Math.random();
-    if (roll < 0.30) {
-      // idle — chill in place. v3.1.42: reset direction to 0 (forward)
-      // so the idle pose shows the front-facing sprite. Without this
-      // reset, the idle pose would keep whatever side-direction the
-      // previous walk had, looking like a sideways idle pose.
+    if (roll < 0.40) {
       c.state = 'idle';
       c.vx = 0;
-      c.vy = 0;
-      c.direction = 0;
-      c.stateTimer = 1000 + Math.random() * 2000; // 1–3s
-    } else if (roll < 0.75) {
-      // walk — gentle wander. Mobile is narrower than the desktop so
-      // we use a single horizontal direction (L or R) to keep them
-      // on the ground line. The sprite still gets the correct
-      // facing row (left vs right) via the direction update below.
+      c.direction = 0;  // forward-facing
+      c.stateTimer = 1500 + Math.random() * 2500;  // 1.5-4s idle
+    } else if (roll < 0.90) {
       c.state = 'walk';
-      c.direction = Math.random() < 0.5 ? 2 : 3; // left or right
-      c.vx = c.direction === 2 ? -(0.015 + Math.random() * 0.010) : (0.015 + Math.random() * 0.010);
-      c.vy = 0;
-      c.stateTimer = 1500 + Math.random() * 2500; // 1.5–4s
-    } else if (roll < 0.95) {
-      // run — energetic burst
-      c.state = 'run';
       c.direction = Math.random() < 0.5 ? 2 : 3;
-      c.vx = c.direction === 2 ? -(0.06 + Math.random() * 0.03) : (0.06 + Math.random() * 0.03);
-      c.vy = 0;
-      c.stateTimer = 800 + Math.random() * 1200; // 0.8–2s
+      const speed = 0.025 + Math.random() * 0.015;  // 0.025-0.040 px/ms
+      c.vx = c.direction === 2 ? -speed : speed;
+      c.stateTimer = 2000 + Math.random() * 3000;  // 2-5s walk
     } else {
-      // zoomies — fast dash. Kept short (0.4–0.9s) so the small
-      // mobile viewport doesn't turn into a blur of bouncing
-      // sprites.
       c.state = 'run';
       c.direction = Math.random() < 0.5 ? 2 : 3;
-      c.vx = c.direction === 2 ? -(0.10 + Math.random() * 0.04) : (0.10 + Math.random() * 0.04);
-      c.vy = 0;
-      c.stateTimer = 400 + Math.random() * 500; // 0.4–0.9s
+      const speed = 0.06 + Math.random() * 0.03;  // 0.06-0.09 px/ms
+      c.vx = c.direction === 2 ? -speed : speed;
+      c.stateTimer = 1000 + Math.random() * 1500;  // 1-2.5s run
     }
     c.frame = 0;
     c.frameTimer = 0;
   }
 
-  // v3.1.38: pick the best available animation for the current state.
-  // If the state isn't loaded (e.g. the 'walk' PNG is missing on disk)
-  // fall back to 'idle' so the companion is never invisible.
-  function pickAnim(c) {
-    if (c.images[c.state]) return c.images[c.state];
-    if (c.images['idle']) return c.images['idle'];
-    // No animations at all — return the first one we have, whatever
-    // it's called. Better than returning undefined and breaking draw.
-    for (const k of Object.keys(c.images)) return c.images[k];
-    return null;
-  }
-
   function update(dt) {
-    const now = performance.now();
     for (const c of companions) {
-      // 1. State timer — roll a new behaviour when it expires.
       c.stateTimer -= dt;
       if (c.stateTimer <= 0) pickState(c);
 
-      // 2. Apply velocity. Mobile is single-row (no vertical movement
-      // across the horizon line), so vy stays at 0 and we only update x.
+      // Apply velocity
       c.x += c.vx * dt;
-      // y is the ground line — clamp to the canvas (small bottom
-      // clip is allowed, same as the desktop's loose bounds).
+
+      // Bounce off sides
       const [fw, fh] = c.data.frameSize;
       const dw = fw * c.scale;
-      const dh = fh * c.scale;
       const halfW = dw / 2;
-      const halfH = dh / 2;
-      // Sides: bounce. Keep half the sprite visible on each edge.
       if (c.x + halfW < 0) { c.x = -halfW; c.vx = Math.abs(c.vx); c.direction = 3; }
       if (c.x + halfW > canvas.width) { c.x = canvas.width - halfW; c.vx = -Math.abs(c.vx); c.direction = 2; }
-      // Vertical bounds — the ground line is at c.y already, and we
-      // allow a small clip below the canvas for a "feet partially off
-      // screen" feel. Top: don't let them fly above the horizon.
-      if (c.y < -halfH) c.y = -halfH;
-      if (c.y + halfH > canvas.height) c.y = canvas.height - halfH;
 
-      // 3. While moving, keep the facing row in sync with velocity.
-      // (pickState() sets it at state start, but it can drift if we
-      // bounced off a wall.) Mirror the desktop's preference: use the
-      // side sprites (L/R) for any mostly-horizontal motion.
-      if (c.state === 'walk' || c.state === 'run') {
-        if (Math.abs(c.vx) > 0.001) c.direction = c.vx < 0 ? 2 : 3;
-      }
+      // Animation: pick the best sheet for the current state
+      c.animation = pickAnimationKey(c);
 
-      // 4. Advance the current animation's frame counter.
-      const animData = pickAnim(c);
+      // Advance frame
+      const animData = c.images[c.animation];
       if (animData) {
         c.frameTimer += dt;
         if (c.frameTimer >= animData.frameInterval) {
@@ -652,258 +560,137 @@ canvas{
         }
       }
     }
-    lastFrame = now;
   }
 
-  // v3.1.35: a small vertical bob for each companion, so the
-  // idle pose is visibly alive. The bob is 2 px on a sine wave
-  // with a per-companion period (so they don't all bob in sync),
-  // computed from c.id so it's stable across renders.
-  function bobFor(c) {
-    const t = performance.now() * 0.003;
-    // Per-id period multiplier in 0.85..1.15 (stable hash)
-    let h = 0;
-    for (let i = 0; i < c.id.length; i++) h = (h * 31 + c.id.charCodeAt(i)) >>> 0;
-    const periodMult = 0.85 + ((h % 100) / 100) * 0.30;
-    return Math.sin(t * periodMult) * 2; // -2..+2 px
+  // v3.1.43: pick the animation SHEET NAME to display. If the
+  // state is 'walk' but the walk sheet failed to load, fall back
+  // to run, then to idle. This ensures the companion ALWAYS has
+  // a visible animation matching its direction.
+  function pickAnimationKey(c) {
+    if (c.images[c.state]) return c.state;
+    if (c.state === 'run' && c.images['walk']) return 'walk';
+    if (c.state === 'walk' && c.images['run']) return 'run';
+    if (c.images['walk']) return 'walk';
+    if (c.images['idle']) return 'idle';
+    for (const k of Object.keys(c.images)) return k;
+    return 'idle';
   }
 
-  // Stars are placed deterministically (no random — would flicker
-  // on resize). Each star is a 1-2px white pixel with occasional
-  // twinkle. The pattern below has 40 stars spread across the sky
-  // region (top 65% of the canvas).
-  const STARS = (() => {
-    const arr = [];
-    let s = 42; // simple LCG seed for reproducibility
-    for (let i = 0; i < 40; i++) {
-      s = (s * 1103515245 + 12345) & 0x7fffffff;
-      const x = (s % 1000) / 1000;
-      s = (s * 1103515245 + 12345) & 0x7fffffff;
-      const y = ((s % 1000) / 1000) * 0.6; // top 60%
-      s = (s * 1103515245 + 12345) & 0x7fffffff;
-      const twinkleSpeed = 0.0005 + ((s % 1000) / 1000) * 0.002;
-      arr.push({ x, y, twinkleSpeed, phase: (s % 1000) / 1000 * Math.PI * 2 });
-    }
-    return arr;
-  })();
-
-  // v3.1.36: load the desktop's background image (or a custom
-  // one set via setBackground). The default is 'forest' to
-  // match the desktop's default. If the image fails to load
-  // (e.g. file:// blocked, or wrong path), we fall back to the
-  // procedural gradient + stars + ground band. Either way the
-  // user always sees a visible arena.
-  const BACKGROUNDS_BASE = 'file:///android_asset/backgrounds/';
+  // ── Background ───────────────────────────────────────
   let bgImage = null;
-  let bgLoadFailed = false;
   let currentBgId = 'forest';
+  const BACKGROUNDS_BASE = 'file:///android_asset/backgrounds/';
 
   function loadBackground(id) {
     const file = id === 'meadow' ? 'pixel_landscape_1.png'
               : id === 'grove'  ? 'pixel_landscape_3.png'
-              : 'pixel_landscape_2.png';  // default 'forest'
+              : 'pixel_landscape_2.png';
     currentBgId = id;
     bgImage = null;
-    bgLoadFailed = false;
     const img = new Image();
-    img.onload = () => {
-      bgImage = img;
-      notifyRN({ type: 'arena_bg_loaded', id: id });
-    };
-    img.onerror = () => {
-      bgLoadFailed = true;
-      notifyRN({ type: 'arena_bg_load_failed', id: id });
-    };
+    img.onload = () => { bgImage = img; notifyRN({ type: 'arena_bg_loaded', id }); };
+    img.onerror = () => { notifyRN({ type: 'arena_bg_load_failed', id }); };
     img.src = BACKGROUNDS_BASE + file;
   }
 
-  // Public wrapper exposed as window.Arena.setBackground.
   function setBackground(id) {
     if (typeof id !== 'string') return;
     loadBackground(id);
   }
 
   function drawBackground() {
-    const w = canvas.width;
-    const h = canvas.height;
-
-    // If the background image loaded, draw it covering the
-    // whole canvas. This is the SAME image the desktop uses
-    // — the mobile is a read-only mirror of the desktop's
-    // arena, per the user's instruction.
+    const w = canvas.width, h = canvas.height;
     if (bgImage && bgImage.complete && bgImage.naturalWidth > 0) {
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(bgImage, 0, 0, w, h);
       return;
     }
-
-    // Fallback: procedural gradient + stars + ground band.
-    // Used when the image hasn't loaded yet OR failed to load.
-    // The skyEnd at 0.65 mirrors the desktop's default
-    // horizon line (0.5) — the procedural version puts the
-    // horizon a bit lower so the sky has more room for stars.
-    const skyEnd = h * 0.65;
-    const skyGrad = ctx.createLinearGradient(0, 0, 0, skyEnd);
-    skyGrad.addColorStop(0, '#1a1a4a');
-    skyGrad.addColorStop(0.5, '#2a2a5a');
-    skyGrad.addColorStop(1, '#3a2a3a');
-    ctx.fillStyle = skyGrad;
-    ctx.fillRect(0, 0, w, skyEnd);
-
-    // Stars (with twinkle — they get brighter/dimmer slowly)
-    const now = performance.now();
-    for (const star of STARS) {
-      const twinkle = (Math.sin(now * star.twinkleSpeed + star.phase) + 1) * 0.5;
-      const alpha = 0.3 + twinkle * 0.7;
-      ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-      ctx.fillRect(star.x * w, star.y * h, 1, 1);
-    }
-
-    // Ground band (bottom 35%)
-    const groundGrad = ctx.createLinearGradient(0, skyEnd, 0, h);
-    groundGrad.addColorStop(0, '#2a3a1a');
-    groundGrad.addColorStop(1, '#0a1a0a');
-    ctx.fillStyle = groundGrad;
-    ctx.fillRect(0, skyEnd, w, h - skyEnd);
-
-    // Bright horizon line
-    ctx.fillStyle = '#f7931a';
-    ctx.fillRect(0, skyEnd, w, 1);
-
-    // Grass patches near the ground
-    const patchY = skyEnd + 2;
-    for (let i = 0; i < 20; i++) {
-      const px = (i * 73 + 17) % w;
-      ctx.fillStyle = `rgba(${30 + (i % 3) * 10}, ${60 + (i % 4) * 15}, ${20 + (i % 2) * 8}, 0.6)`;
-      ctx.fillRect(px, patchY + (i % 3) * 4, 8 + (i % 4) * 4, 3);
-    }
+    // Fallback
+    ctx.fillStyle = '#1a1a4a';
+    ctx.fillRect(0, 0, w, h);
   }
 
+  // ── Draw ─────────────────────────────────────────────
   function drawShadow(c) {
     if (!c.shadow || !c.shadow.complete) return;
     const [fw, fh] = c.data.frameSize;
     const sw = fw * c.scale * 1.2;
     const sh = sw * 0.25;
     const sx = c.x + (fw * c.scale - sw) / 2;
-    // Shadow stays on the ground (no bob) so the companion
-    // appears to "bounce" above the shadow rather than carry
-    // it with them.
     const sy = c.y + fh * c.scale - sh * 0.3;
     ctx.globalAlpha = 0.35;
     ctx.drawImage(c.shadow, sx, sy, sw, sh);
     ctx.globalAlpha = 1;
   }
 
-  function drawRing(c) {
-    const [fw, fh] = c.data.frameSize;
-    const dw = fw * c.scale;
-    const dh = fh * c.scale;
-    const cx = c.x + dw / 2;
-    const cy = (c._drawY !== undefined ? c._drawY : c.y) + dh / 2;
-    const r = Math.max(dw, dh) * 0.6;
-    if (c.isActive) {
-      const t = (Math.sin(lastFrame * 0.003) + 1) * 0.5;
-      ctx.strokeStyle = '#f7931a';
-      ctx.lineWidth = 3;
-      ctx.globalAlpha = 0.5 + t * 0.4;
-      ctx.beginPath();
-      ctx.ellipse(cx, cy + dh * 0.2, r * 1.05, r * 0.35, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    } else {
-      ctx.strokeStyle = '#444';
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = 0.4;
-      ctx.beginPath();
-      ctx.ellipse(cx, cy + dh * 0.2, r * 1.0, r * 0.33, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-  }
-
   function drawCompanion(c) {
-    // v3.1.38: pick the current state's animation (idle/walk/run)
-    // and use the direction as the sprite-sheet ROW (0=down, 1=up,
-    // 2=left, 3=right — matches the desktop's pixel-arena.js).
-    // Previously we only used the idle sheet's first row.
-    const animData = pickAnim(c);
+    const animData = c.images[c.animation];
+    if (!animData) return;
     const [fw, fh] = c.data.frameSize;
     const dw = fw * c.scale;
     const dh = fh * c.scale;
-    const y = (c._drawY !== undefined ? c._drawY : c.y);
-    if (animData && animData.img && animData.img.complete) {
-      const cols = animData.cols || animData.frames || 1;
-      const rows = animData.rows || 1;
-      const col = c.frame % cols;
-      // Clamp direction to the rows the sheet actually has. Most
-      // sheets are 4 rows (desktop convention) but the catalog
-      // doesn't guarantee it for every animation.
-      const row = Math.min(c.direction, rows - 1);
-      const sx = col * fw;
-      const sy = row * fh;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(animData.img, sx, sy, fw, fh, c.x, y, dw, dh);
-      return;
-    }
-    // v3.1.34: fallback if the sprite didn't load — draw a
-    // colored rectangle with the companion's initial so the
-    // user sees SOMETHING in the arena. This is what we see
-    // if the catalog says 'boar' but Boar/Boar_Idle.png
-    // 404s, or the WebView blocks file:// images for some
-    // reason. Better than an invisible empty arena.
-    ctx.fillStyle = c.isActive ? '#f7931a' : '#666';
-    ctx.fillRect(c.x, y, dw, dh);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 16px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const ch = (c.name || '?').charAt(0).toUpperCase();
-    ctx.fillText(ch, c.x + dw / 2, y + dh / 2);
+    if (!animData.img || !animData.img.complete) return;
+    const cols = animData.cols || animData.frames || 1;
+    const rows = animData.rows || 1;
+    const col = c.frame % cols;
+    const row = Math.min(c.direction, rows - 1);
+    const sx = col * fw;
+    const sy = row * fh;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(animData.img, sx, sy, fw, fh, c.x, c.y, dw, dh);
   }
 
   function drawName(c) {
     if (!c.name) return;
     const [fw, fh] = c.data.frameSize;
     const dw = fw * c.scale;
-    const y = (c._drawY !== undefined ? c._drawY : c.y);
-    ctx.fillStyle = c.isActive ? '#f7931a' : '#888';
-    ctx.font = 'bold 11px "Orbitron", monospace';
+    ctx.fillStyle = c.isActive ? '#f7931a' : '#aaa';
+    ctx.font = 'bold 10px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(c.name, c.x + dw / 2, y - 8);
+    ctx.fillText(c.name, c.x + dw / 2, c.y - 4);
+  }
+
+  function drawDebug() {
+    if (!debugMode) return;
+    const lines = [
+      'canvas: ' + canvas.width + 'x' + canvas.height,
+      'winH: ' + window.innerHeight,
+      'exp: ' + (explicitCanvasW || '-') + 'x' + (explicitCanvasH || '-'),
+    ];
+    for (const c of companions) {
+      lines.push(
+        c.id + ': s=' + c.state + ' a=' + c.animation +
+        ' vx=' + c.vx.toFixed(3) +
+        ' x=' + Math.round(c.x) + ' y=' + Math.round(c.y) +
+        ' dir=' + c.direction
+      );
+    }
+    debugEl.textContent = lines.join('\n');
   }
 
   function render() {
     drawBackground();
     for (const c of companions) {
-      // v3.1.35: apply a small per-companion vertical bob so
-      // the idle pose is visibly alive (the sprite sheets
-      // have multiple idle frames but they're nearly
-      // identical, so a 2px sine-wave bob makes the
-      // animation obvious without changing the look).
-      const bob = bobFor(c);
-      c._drawY = c.y + bob;
       drawShadow(c);
-      drawRing(c);
       drawCompanion(c);
       drawName(c);
     }
+    drawDebug();
   }
 
   function loop(ts) {
     if (!lastFrame) lastFrame = ts;
-    const dt = ts - lastFrame;
+    const dt = Math.min(ts - lastFrame, 100);
     lastFrame = ts;
     update(dt);
     render();
     requestAnimationFrame(loop);
   }
 
-  // ── Public API (called from React Native) ──────────────────
+  // ── Public API ───────────────────────────────────────
   async function setAgents(agents) {
     if (!Array.isArray(agents)) return;
     if (!catalog) return;
-    // Cap to MAX_MOBILE_COMPANIONS — the desktop already caps
-    // before sending, but if a future desktop regression lets
-    // more through, the mobile still shows only 6.
     const MAX = 6;
     const list = agents.length > MAX ? agents.slice(0, MAX) : agents;
     notifyRN({ type: 'arena_set_agents_start', count: list.length });
@@ -918,14 +705,16 @@ canvas{
     companions = built.filter(Boolean);
     for (const c of companions) c.isActive = (c.id === activeId);
     layout();
-    // Diagnostic: report per-companion build results so we can see
-    // when sprites failed to load (idle img missing → won't draw).
-    const details = companions.map(c => {
-      const hasIdle = !!(c.images && c.images.idle && c.images.idle.img && c.images.idle.img.complete);
-      const hasShadow = !!(c.shadow && c.shadow.complete);
-      return { id: c.id, name: c.name, hasIdle, hasShadow, scale: c.scale };
+    notifyRN({
+      type: 'arena_set_agents',
+      count: companions.length,
+      details: companions.map(c => ({
+        id: c.id, name: c.name, scale: c.scale,
+        // v3.1.43: report which animations loaded
+        anims: c.loadResults,
+        canvasW: canvas.width, canvasH: canvas.height,
+      })),
     });
-    notifyRN({ type: 'arena_set_agents', count: companions.length, details });
   }
 
   function setActive(id) {
@@ -933,62 +722,39 @@ canvas{
     for (const c of companions) c.isActive = (c.id === activeId);
   }
 
-  window.Arena = {
-    setAgents,
-    setActive,
-    setBackground,        // accepts 'meadow' | 'forest' | 'grove'
-    init,                 // v3.1.42: RN calls this with canvasW, canvasH
-    getActiveId: () => activeId,
-    getCompanionCount: () => companions.length,
-    getBackground: () => currentBgId,
-    // diagnostic — report canvas dimensions and where the
-    // first companion is actually positioned. Used for debugging
-    // the floating-feet bug; can be removed once we confirm
-    // positioning is stable across device sizes.
-    getDebug: () => {
-      const c0 = companions[0];
-      return {
-        canvasW: canvas.width,
-        canvasH: canvas.height,
-        windowInnerW: window.innerWidth,
-        windowInnerH: window.innerHeight,
-        explicitW: explicitCanvasW,
-        explicitH: explicitCanvasH,
-        groundLine: canvas.height * GROUND_FRACTION,
-        firstCompanionY: c0 ? c0.y : null,
-        firstCompanionScale: c0 ? c0.scale : null,
-        firstCompanionDh: c0 ? (c0.data.frameSize[1] * c0.scale) : null,
-      };
-    },
-  };
-
-  // ── React Native bridge ──────────────────────────────
   function notifyRN(payload) {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
       try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (_) {}
     }
   }
 
-  window.addEventListener('message', (e) => {
-    let msg = e.data;
-    if (typeof msg === 'string') {
-      try { msg = JSON.parse(msg); } catch (_) { return; }
-    }
-    if (!msg || !msg.type) return;
-    if (msg.type === 'setAgents') {
-      setAgents(msg.agents);
-    } else if (msg.type === 'setActive') {
-      setActive(msg.id);
-    } else if (msg.type === 'setBackground') {
-      loadBackground(msg.id || 'forest');
-    }
-  });
+  window.Arena = {
+    setAgents,
+    setActive,
+    setBackground,
+    init,
+    getActiveId: () => activeId,
+    getCompanionCount: () => companions.length,
+    getBackground: () => currentBgId,
+    getDebug: () => ({
+      canvasW: canvas.width,
+      canvasH: canvas.height,
+      windowInnerH: window.innerHeight,
+      explicitW: explicitCanvasW,
+      explicitH: explicitCanvasH,
+      companions: companions.map(c => ({
+        id: c.id, state: c.state, animation: c.animation,
+        scale: c.scale, vx: c.vx, x: c.x, y: c.y,
+        anims: c.loadResults,
+      })),
+    }),
+  };
 
-  // ── Boot ────────────────────────────────────────────
+  // ── Boot ─────────────────────────────────────────────
   window.addEventListener('resize', resize);
   resize();
   loadCatalog();
-  loadBackground('forest'); // default — matches the desktop's default
+  loadBackground('forest');
   requestAnimationFrame(loop);
 })();
 </script>
