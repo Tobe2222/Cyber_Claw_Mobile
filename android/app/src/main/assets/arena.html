@@ -38,6 +38,7 @@ canvas{
 }
 .ctrlBtn:active{background:rgba(247,147,26,0.25)}
 .ctrlBtn.active{border-color:#4ade80;color:#4ade80}
+body.wake-mode #ctrlRight{display:none!important}
 #status{
   position:absolute;top:8px;left:0;right:0;
   text-align:center;
@@ -55,10 +56,9 @@ canvas{
 <body>
 <canvas id="arena"></canvas>
 <div id="status">Loading arena…</div>
-<!-- v3.1.46: Voice Mode and Wake Mode buttons (overlay on the
-     arena). Send messages to React Native via ReactNativeWebView.
-     The RN side handles 'fullscreen' and 'wakeword' messages. -->
-<div id="ctrlRight">
+<!-- v3.1.50: voice/wake buttons hidden in wake mode (the wake mode
+     IS the wake screen, no need for the buttons to launch it). -->
+<div id="ctrlRight" style="display:none">
   <button class="ctrlBtn" id="voiceBtn" title="Enter Voice Mode"
     onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'wakeword'})); } catch(e) {}">Voice Mode</button>
   <button class="ctrlBtn" id="wakeWordBtn" title="Activate Wake Word Mode"
@@ -674,12 +674,26 @@ canvas{
   let currentBgId = 'forest';
   const BACKGROUNDS_BASE = 'file:///android_asset/backgrounds/';
 
+  // v3.1.50: ?mode=wake query param. When set, the arena renders
+  // without the forest background — just the companion on a solid
+  // black canvas. Used by WakeModeScreen so the wake mode has a
+  // distinct visual identity (boar on black) instead of inheriting
+  // the home screen's forest backdrop. Companion movement, sprite
+  // drawing, name label — all the same. Just no background image.
+  const WAKE_MODE = /[?&]mode=wake\b/.test(location.search);
+  if (WAKE_MODE) document.body.classList.add('wake-mode');
+
   function loadBackground(id) {
     const file = id === 'meadow' ? 'pixel_landscape_1.png'
               : id === 'grove'  ? 'pixel_landscape_3.png'
               : 'pixel_landscape_2.png';
     currentBgId = id;
     bgImage = null;
+    if (WAKE_MODE) {
+      // Skip background load in wake mode — drawBackground() uses
+      // the solid black fallback instead.
+      return;
+    }
     const img = new Image();
     img.onload = () => { bgImage = img; notifyRN({ type: 'arena_bg_loaded', id }); };
     img.onerror = () => { notifyRN({ type: 'arena_bg_load_failed', id }); };
@@ -693,6 +707,14 @@ canvas{
 
   function drawBackground() {
     const w = canvas.width, h = canvas.height;
+    if (WAKE_MODE) {
+      // Wake mode: solid black background. The WebView is wrapped
+      // by the WakeModeScreen's black container too, so the canvas
+      // blends seamlessly with the rest of the wake UI.
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, w, h);
+      return;
+    }
     if (bgImage && bgImage.complete && bgImage.naturalWidth > 0) {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(bgImage, 0, 0, w, h);

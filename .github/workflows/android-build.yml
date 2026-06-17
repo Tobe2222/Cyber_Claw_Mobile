@@ -46,6 +46,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-3.1.49
+          name: app-debug-3.1.50
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7

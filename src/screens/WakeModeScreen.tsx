@@ -30,6 +30,10 @@ import { extractAudioFeatures, matchAgainstTraining, AudioFeatures } from '../se
 import { base64ToInt16Array } from '../services/AudioUtils';
 
 import { addLogEntry } from './HomeScreen';
+// v3.1.50: APP_VERSION is used as a WebView cache-buster (forces
+// fresh asset load on every APK upgrade) and to detect "wake mode"
+// vs "home mode" in the arena via ?mode=wake.
+import { version as APP_VERSION } from '../../package.json';
 
 const { AppControl, WakeWordModule } = NativeModules;
 
@@ -385,7 +389,12 @@ export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenPr
       <WebView
         key={webViewKey}
         ref={webViewRef}
-        source={{ uri: `file:///android_asset/arena.html?companion=${companionId}&platform=mobile` }}
+        // v3.1.50: include ?mode=wake so the arena renders with a
+        // solid black background (no forest). Also include the
+        // APP_VERSION cache-buster so an APK upgrade forces a
+        // fresh arena.html load (Android WebView caches
+        // file:///android_asset/ aggressively by URI).
+        source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&companion=${companionId}&platform=mobile&mode=wake` }}
         style={styles.webview}
         scrollEnabled={false}
         bounces={false}
