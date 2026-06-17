@@ -473,35 +473,58 @@ canvas{
   }
 
   // ── Layout ────────────────────────────────────────────
+  // v3.1.42: Android WebView's window.innerHeight returns the FULL
+  // viewport height, not the WebView container's height. This causes
+  // the canvas to be much larger than the visible WebView, and
+  // every ground-line / boundary calculation is wrong. The fix:
+  // use the canvas element's own clientWidth/clientHeight (its
+  // rendered CSS dimensions), which DOES match the WebView
+  // container's size because the canvas CSS is width:100%; height:100%
+  // of body which is width:100vw; height:100% of html which is
+  // width:100vw; height:100% of the WebView... well, this is the
+  // part that's broken. On Android WebView, 100vh = full viewport,
+  // not WebView size. So we still get the wrong size from clientWidth.
+  //
+  // The truly reliable fix: React Native passes the WebView size
+  // in via an `init(canvasW, canvasH)` call injected from the RN
+  // side. We use those values if available, falling back to the
+  // canvas's clientWidth/clientHeight which IS the rendered CSS size
+  // of the canvas (and that, at least, is bounded by the WebView's
+  // own size even if window.innerHeight is wrong).
+  let explicitCanvasW = null;
+  let explicitCanvasH = null;
+
   function resize() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    // Prefer the explicit values from RN. Fall back to clientWidth/
+    // clientHeight of the canvas (its own CSS-rendered size). Last
+    // resort: window.innerWidth/Height (broken on Android WebView).
+    const w = explicitCanvasW != null ? explicitCanvasW
+            : (canvas.clientWidth || window.innerWidth);
+    const h = explicitCanvasH != null ? explicitCanvasH
+            : (canvas.clientHeight || window.innerHeight);
     canvas.width = w;
     canvas.height = h;
+    notifyRN({ type: 'arena_resize', w, h, windowInnerH: window.innerHeight });
     layout();
   }
 
-  // v3.1.41: ground line. Earlier versions used 0.78 / 0.6 — both
-  // were wrong because they tried to use the actual image's grass
-  // position. The problem is the Android WebView reports
-  // window.innerHeight = the FULL viewport height, not the WebView
-  // container's height. So canvas.height is huge (e.g. 800 on a
-  // typical phone) but only the top ARENA_HEIGHT portion (~187 CSS
-  // px on iPhone mini) is visible. Putting feet at 78% of canvas
-  // puts them WAY off-screen below the WebView's bottom border.
-  //
-  // The fix: stop using canvas.height as the reference. Use the
-  // CSS height of the WebView container instead, which we read
-  // from the offsetHeight of the WebView's parent element. If we
-  // can't get that, fall back to canvas.height (which will then
-  // still be wrong, but at least this is rare).
-  //
-  // Empirically, on iPhone mini the visible arena is ~187 CSS px
-  // tall. The grass+path band in the bgImage starts at the bottom
-  // ~25% of the image. When the image fills the 1.85:1 canvas,
-  // the walkable band ends up at ~95% of canvas height. So we
-  // use 0.95 as the ground fraction.
-  const GROUND_FRACTION = 0.95;
+  // Public init — React Native calls this once on load with the
+  // known ARENA_HEIGHT and SCREEN_WIDTH from Dimensions.get('window').
+  // After this, resize() uses these values instead of guessing.
+  function init(canvasW, canvasH) {
+    if (typeof canvasW === 'number' && canvasW > 0) explicitCanvasW = canvasW;
+    if (typeof canvasH === 'number' && canvasH > 0) explicitCanvasH = canvasH;
+    resize();
+  }
+
+  // v3.1.42: ground line. React Native now passes the canvas size
+  // explicitly via Arena.init(SCREEN_WIDTH, ARENA_HEIGHT). canvas.height
+  // matches the actual WebView container's height, so positioning is
+  // accurate. The bgImage (1266x631, 2:1 aspect) is stretched to fill
+  // the canvas (typically 1.85:1), so the grass band (starting at
+  // ~70% of the bgImage) ends up at 0.70 * canvas.height. Feet on
+  // the grass: c.y = 0.70 * h - dh.
+  const GROUND_FRACTION = 0.70;
 
   function layout() {
     const n = companions.length;
@@ -533,10 +556,14 @@ canvas{
   function pickState(c) {
     const roll = Math.random();
     if (roll < 0.30) {
-      // idle — chill in place, but briefly
+      // idle — chill in place. v3.1.42: reset direction to 0 (forward)
+      // so the idle pose shows the front-facing sprite. Without this
+      // reset, the idle pose would keep whatever side-direction the
+      // previous walk had, looking like a sideways idle pose.
       c.state = 'idle';
       c.vx = 0;
       c.vy = 0;
+      c.direction = 0;
       c.stateTimer = 1000 + Math.random() * 2000; // 1–3s
     } else if (roll < 0.75) {
       // walk — gentle wander. Mobile is narrower than the desktop so
@@ -910,10 +937,11 @@ canvas{
     setAgents,
     setActive,
     setBackground,        // accepts 'meadow' | 'forest' | 'grove'
+    init,                 // v3.1.42: RN calls this with canvasW, canvasH
     getActiveId: () => activeId,
     getCompanionCount: () => companions.length,
     getBackground: () => currentBgId,
-    // v3.1.41: diagnostic — report canvas dimensions and where the
+    // diagnostic — report canvas dimensions and where the
     // first companion is actually positioned. Used for debugging
     // the floating-feet bug; can be removed once we confirm
     // positioning is stable across device sizes.
@@ -924,6 +952,8 @@ canvas{
         canvasH: canvas.height,
         windowInnerW: window.innerWidth,
         windowInnerH: window.innerHeight,
+        explicitW: explicitCanvasW,
+        explicitH: explicitCanvasH,
         groundLine: canvas.height * GROUND_FRACTION,
         firstCompanionY: c0 ? c0.y : null,
         firstCompanionScale: c0 ? c0.scale : null,

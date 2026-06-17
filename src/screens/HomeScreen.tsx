@@ -2368,6 +2368,17 @@ useEffect(() => {
             originWhitelist={['*']}
             onMessage={handleArenaMessage}
             onLoadEnd={() => {
+              // v3.1.42: tell the WebView its actual rendered size so
+              // it doesn't have to rely on window.innerWidth/Height
+              // (which on Android WebView returns the full viewport,
+              // not the WebView container's size — see the floating-
+              // feet bug history in MEMORY.md and CHANGES_3.1.42.md).
+              // We pass SCREEN_WIDTH (the full WebView width) and
+              // ARENA_HEIGHT (the configured arena height). The
+              // canvas inside the WebView uses these instead of
+              // guessing from window.innerHeight.
+              const initJs = `window.Arena && window.Arena.init(${SCREEN_WIDTH}, ${ARENA_HEIGHT}); true;`;
+              webViewRef.current?.injectJavaScript(initJs);
               Promise.all([
                 AsyncStorage.getItem('cyberclaw-arena-bg'),
                 AsyncStorage.getItem('cyberclaw-arena-comp'),
