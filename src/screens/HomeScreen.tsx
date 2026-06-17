@@ -2784,15 +2784,18 @@ const styles = StyleSheet.create({
   tabTextActive: { color: '#f7931a', fontWeight: 'bold' },
   // v3.1.17: companion tab bar (one tab per companion). Sits
   // between the system tabs and the chat content.
+  // v3.1.48: companion tab bar tightened — Tobe asked for minimal
+  // space between companion tabs (Clawsuu / Lamasuu / etc). Reduced
+  // padding, margin, and max height.
   companionTabBar: {
     backgroundColor: '#0a0a14',
     borderBottomWidth: 1,
     borderBottomColor: '#1a1a2e',
-    maxHeight: 64,
+    maxHeight: 36,
   },
   companionTabBarContent: {
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     alignItems: 'center',
   },
   // v3.1.16: small inline label that shows in place of the tab
@@ -2805,14 +2808,15 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     paddingVertical: 6,
   },
+  // v3.1.48: tighter companion tab — less padding, smaller margins.
   companionTab: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#15151f',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginRight: 6,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginRight: 4,
     borderWidth: 1,
     borderColor: '#222',
   },
@@ -2820,15 +2824,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(247,147,26,0.18)',
     borderColor: '#f7931a',
   },
+  // v3.1.48: tighter companion tab emoji and name.
   companionTabEmoji: {
-    fontSize: 16,
-    marginRight: 6,
+    fontSize: 12,
+    marginRight: 4,
   },
   companionTabName: {
     color: '#888',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
-    maxWidth: 90,
+    maxWidth: 80,
   },
   companionTabNameActive: {
     color: '#f7931a',
