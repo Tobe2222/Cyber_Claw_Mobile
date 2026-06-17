@@ -68,8 +68,9 @@ canvas{
 //   idle, vx=0 and the companion bobs in place. On walk/run, the
 //   companion moves horizontally and shows the side-view sprite.
 // - Sprite sheet rows: 0=down, 1=up, 2=left, 3=right. Same as desktop.
-// - scale: default 2 for mobile (desktop default is 5). If desktop
-//   sends a different scale, we use it.
+// - scale: mobile = desktop / 2. Desktop default is 5, so mobile
+//   default is 2.5 floored to 2. If desktop sends an explicit
+//   scale (e.g. lamasuu at 3), mobile uses 3/2 = 1.
 // - Companion floats slightly off the ground line so the shadow
 //   renders underneath (matching the desktop feel).
 //
@@ -421,10 +422,21 @@ canvas{
     if (compData.shadow) {
       shadowImg = await loadImage(assetsBase + compData.folder + '/' + compData.shadow);
     }
-    // v3.1.43: scale handling. Desktop default is 5 (large canvas),
-    // mobile default is 2 (small canvas). We respect whatever the
-    // desktop sends via the agents_list payload.
-    const scale = (typeof agent.scale === 'number' && agent.scale >= 1 && agent.scale <= 8) ? agent.scale : 2;
+    // v3.1.44: scale handling. The mobile arena is small; we render
+    // every companion at HALF the desktop's scale so the sprites
+    // fit the viewport. Concretely:
+    //   - If the desktop sends an explicit scale (e.g. 3 for lamasuu),
+    //     we use desktopScale / 2.
+    //   - If the desktop sends null/undefined, the desktop would have
+    //     used its default of 5 → we use 5 / 2 = 2.5 → 2 (floor).
+    //   - If the resulting value is < 1, clamp to 1.
+    // The mobile no longer uses a hardcoded default — it always
+    // reflects what the desktop would show, just at half size.
+    const DESKTOP_DEFAULT_SCALE = 5;
+    const desktopScale = (typeof agent.scale === 'number' && agent.scale >= 1 && agent.scale <= 8)
+        ? agent.scale
+        : DESKTOP_DEFAULT_SCALE;
+    const scale = Math.max(1, Math.floor(desktopScale / 2));
     return {
       id: agent.id,
       name: agent.name || 'Companion',

@@ -49,10 +49,10 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
-        run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-3.1.43.apk
+        run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-3.1.44.apk
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: CyberClaw-Android-3.1.43.apk
+          files: CyberClaw-Android-3.1.44.apk
           draft: false
