@@ -1177,10 +1177,15 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
           const training = trainingJson ? JSON.parse(trainingJson) : null;
           if (training?.features?.length) {
             sampleListenerCleanupRef.current?.();
+            // v3.1.49: read the user-configured foreground threshold
+            // from settings (was hardcoded 0.55). Fall back to the
+            // default if not set.
+            const fgThrStr = await AsyncStorage.getItem('cyberclaw-wake-fg-threshold');
+            const fgThr = fgThrStr ? parseFloat(fgThrStr) : SAMPLE_MATCH_THRESHOLD_FG;
             sampleListenerCleanupRef.current = startSampleMatchListener(
               usedPhrase, training.features, handleWakeWord,
               (msg) => addLogEntry(msg, 'debug'),
-              SAMPLE_MATCH_THRESHOLD_FG,
+              fgThr,
             );
             // v3.1.30: log the threshold change so the user
             // can see why a previously-stable 60% (or
@@ -1191,7 +1196,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
             // user and the audio is cleaner when the app
             // is foregrounded.
             addLogEntry(
-              `🎙️ App foregrounded — wake threshold: ${Math.round(SAMPLE_MATCH_THRESHOLD_FG * 100)}% (was stricter in background)`,
+              `🎙️ App foregrounded — wake threshold: ${Math.round(fgThr * 100)}% (was stricter in background)`,
               'info',
             );
           }
@@ -1296,10 +1301,14 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode }: { onOpenS
         const training = trainingJson ? JSON.parse(trainingJson) : null;
         if (training?.features?.length) {
           sampleListenerCleanupRef.current?.();
+          // v3.1.49: same as the foreground branch — read
+          // user-configured FG threshold from settings.
+          const fgThrStr = await AsyncStorage.getItem('cyberclaw-wake-fg-threshold');
+          const fgThr = fgThrStr ? parseFloat(fgThrStr) : SAMPLE_MATCH_THRESHOLD_FG;
           sampleListenerCleanupRef.current = startSampleMatchListener(
             usedPhrase, training.features, handleWakeWord,
             (msg) => addLogEntry(msg, 'debug'),
-            SAMPLE_MATCH_THRESHOLD_FG,
+            fgThr,
           );
           addLogEntry(
             `Starting sample-match wake detection, phrase: "${usedPhrase}", threshold: ${Math.round(SAMPLE_MATCH_THRESHOLD_FG * 100)}% (foreground)`,

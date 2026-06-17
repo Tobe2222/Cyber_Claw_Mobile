@@ -209,7 +209,9 @@ export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenPr
             training.features,
             handleWakeWordInner,
             (msg) => addLogEntry(msg, 'debug'),
-            SAMPLE_MATCH_THRESHOLD_FG,
+            // v3.1.49: read the user-configured FG threshold from
+            // settings. Defaults to 0.55 if not set.
+            (parseFloat(await AsyncStorage.getItem('cyberclaw-wake-fg-threshold') || '0.55')),
           );
           sampleListenerCleanupRef.current = cleanup;
         } else {

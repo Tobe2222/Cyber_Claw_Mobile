@@ -83,6 +83,13 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   // ── Wake Word ─────────────────────────────────────────────────
   const [bgListening, setBgListening] = useState(true);
+  // v3.1.49: foreground threshold (separate from background). The
+  // user was getting accidental wake matches — both background
+  // audio (TV, podcast, other voices) AND foreground false-positives.
+  // Making both thresholds adjustable gives the user a way to tune
+  // wake detection without retraining. Default FG: 55% (matches
+  // SAMPLE_MATCH_THRESHOLD_FG in HomeScreen/WakeModeScreen).
+  const [fgThreshold, setFgThreshold] = useState(55);
   const [bgThreshold, setBgThreshold] = useState(65);
   const [readyPhrase, setReadyPhrase] = useState('Ready to chat');
   const [readyPhraseSavedAt, setReadyPhraseSavedAt] = useState<number | null>(null);
@@ -139,6 +146,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
     AsyncStorage.getItem('cyberclaw-wake-bg-threshold').then(v => { if (v) setBgThreshold(Math.round(parseFloat(v) * 100)); });
+    AsyncStorage.getItem('cyberclaw-wake-fg-threshold').then(v => { if (v) setFgThreshold(Math.round(parseFloat(v) * 100)); });
     AsyncStorage.getItem('cyberclaw-ready-phrase').then(v => { if (v) setReadyPhrase(v); });
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -551,6 +559,34 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             }
           }}
         />
+
+        {/* v3.1.49: foreground threshold (was previously hardcoded to 55%).
+            Adjustable so the user can tighten wake detection without
+            retraining. */}
+        <Label>Foreground match threshold: {fgThreshold}%</Label>
+        <Hint>Minimum match score to trigger the wake word when the app is in the foreground. Higher = stricter.</Hint>
+        <View style={styles.thresholdRow}>
+          <Text style={styles.thresholdEdge}>40%</Text>
+          <View style={{ flex: 1, flexDirection: 'row' }}>
+            {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
+              <TouchableOpacity
+                key={v}
+                onPress={async () => {
+                  setFgThreshold(v);
+                  await AsyncStorage.setItem('cyberclaw-wake-fg-threshold', String(v / 100));
+                }}
+                style={[
+                  styles.thresholdCell,
+                  fgThreshold === v ? styles.thresholdCellActive :
+                  fgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
+                ]}
+              >
+                <Text style={[styles.thresholdCellText, fgThreshold === v && { color: '#fff' }]}>{v}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.thresholdEdge}>90%</Text>
+        </View>
 
         <Label>Background match threshold: {bgThreshold}%</Label>
         <Hint>Minimum match score to trigger the wake word in the background. Higher = stricter.</Hint>
