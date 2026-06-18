@@ -90,9 +90,17 @@ interface WakeModeScreenProps {
   companionId: string;
   agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>;
   onExit: () => void;
+  // v3.1.61: voiceMode disables the wake word listener. The
+  // screen renders the same (centered companion on black
+  // background) but doesn't start the sample-match listener or
+  // the recorder. Used by the "Voice Mode" button to give a
+  // visual that's similar to wake mode (so users can see who
+  // they're talking to) but doesn't try to listen for the wake
+  // word. Default false (real wake mode).
+  voiceMode?: boolean;
 }
 
-export default function WakeModeScreen({ companionId, agents, onExit }: WakeModeScreenProps) {
+export default function WakeModeScreen({ companionId, agents, onExit, voiceMode = false }: WakeModeScreenProps) {
   const webViewRef = useRef<WebView>(null);
   const recorderActiveRef = useRef<boolean>(false);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
@@ -101,8 +109,8 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
 
-  const [voiceStatus, setVoiceStatus] = useState<string>('listening');
-  const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
+  const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'ready' : 'listening');
+  const [voiceLogs, setVoiceLogs] = useState<string[]>(voiceMode ? ['🎙️ Voice Mode ready'] : []);
   const [webViewKey, setWebViewKey] = useState(0);
 
   const addVoiceLog = useCallback((text: string) => {
@@ -178,7 +186,15 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
   }, []);
 
   // Start the sample-match wake listener. When matched, start recording.
+  // v3.1.61: skipped in voiceMode (the screen is just for visual
+  // presentation — no wake listening or recording). Without this
+  // early return, voice mode would still start the listener and
+  // show "Listening for wake word..." / "Matching: 'hey clawsuu'"
+  // / "Recording..." in the voice log — Tobe: "voice mode seems
+  // to be confused again thinking its wake mode according to its
+  // texts".
   useEffect(() => {
+    if (voiceMode) return;
     let cleanup: (() => void) | null = null;
     let cancelled = false;
 

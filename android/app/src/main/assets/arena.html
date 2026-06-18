@@ -677,21 +677,28 @@ body.wake-mode #ctrlRight{display:none!important}
   function update(dt) {
     for (const c of companions) {
       // v3.1.60: centered mode (wake/voice). Skip the state
-      // machine entirely — the companion stands still at the
-      // canvas center, idle, no movement. The position is set
-      // once in setAgents() and never changes.
+      // machine, position updates, and bounce — the companion
+      // stands still at the canvas center, idle, no movement.
+      // The position is set once in setAgents() and never
+      // changes.
+      //
+      // v3.1.61: let the idle animation cycle naturally. The
+      // previous version set c.frame = 0 which held the first
+      // frame and made the companion look frozen. Now we just
+      // set animation = 'idle' and let the frame advance
+      // happen via the shared code path below (no `continue`,
+      // so the frame-advance code at the end of this loop
+      // body runs and cycles the idle frames).
       if (c._centered) {
         c.animation = 'idle';
-        c.frame = 0;  // hold first frame of idle
         c.direction = 0;  // face camera
-        continue;
-      }
-      c.stateTimer -= dt;
-      if (c.stateTimer <= 0) pickState(c);
+      } else {
+        c.stateTimer -= dt;
+        if (c.stateTimer <= 0) pickState(c);
 
-      // Apply velocity in both axes
-      c.x += c.vx * dt;
-      c.y += c.vy * dt;
+        // Apply velocity in both axes
+        c.x += c.vx * dt;
+        c.y += c.vy * dt;
 
       // Bounce off all 4 edges. The desktop's bounce code only
       // bounces horizontally (y stays on the ground line), but
@@ -757,8 +764,13 @@ body.wake-mode #ctrlRight{display:none!important}
           c.direction = c.vx < 0 ? 2 : 3;  // left : right
         }
       }
+      }  // close else (was: v3.1.60 centered block)
 
-      // Advance frame
+      // v3.1.61: Advance frame for ALL companions (centered
+      // and non-centered). Centered companions have
+      // c.animation = 'idle' set above, so this cycles the
+      // idle frames naturally. Without this, centered
+      // companions would be frozen on the first frame.
       const animData = c.images[c.animation];
       if (animData) {
         c.frameTimer += dt;
@@ -1035,10 +1047,16 @@ body.wake-mode #ctrlRight{display:none!important}
       // stop the state machine (vx=vy=0, no walking). The
       // companion stands still, facing the camera. Tobe asked
       // for "much bigger" — the default mobile scale (1-2,
-      // 32-64px) is too small for the wake/voice mode display,
-      // so override to scale 6 (192px on a 32x32 sprite).
+      // 32-64px) is too small for the wake/voice mode display.
+      // v3.1.61: bumped from scale 6 (192px) to scale 10
+      // (320px) — Tobe: "should be perhaps 1.75 times bigger".
+      // At 320px on a 360x187 canvas, the companion fills
+      // almost the whole width. The sprite extends past the
+      // top/bottom edges (which is fine for a centered focus
+      // view — the name label and status overlay are still
+      // visible).
       const c = companions[0];
-      c.scale = 6;
+      c.scale = 10;
       const [fw, fh] = c.data.frameSize;
       const dw = fw * c.scale;
       const dh = fh * c.scale;
