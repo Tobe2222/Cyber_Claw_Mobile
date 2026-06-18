@@ -912,12 +912,28 @@ body.wake-mode #ctrlRight{display:none!important}
     if (sameSet && companions.length > 0) {
       // Same companions — just update metadata in place, no rebuild,
       // no layout() call. Preserves positions and state.
+      //
+      // v3.1.58: apply the SAME scale transform as buildCompanion
+      // (mobile_scale = max(1, floor(desktop_scale / 2))). Previously
+      // the in-place path applied a.scale raw, but the build path
+      // halved it. So the same desktop value (e.g. 3) would render
+      // as mobile-scale 1 on the first setAgents (build) and
+      // mobile-scale 3 on a later setAgents (in-place update) —
+      // Tobe's "lamasuu suddenly turned big" bug. The 2026-06-18
+      // log showed: `🔍 scale_update: lamasuu 1→3 (desktop sent: 3)`.
+      const DESKTOP_DEFAULT_SCALE = 5;
+      const desktopToMobileScale = (desktopScale) => {
+        const ds = (typeof desktopScale === 'number' && desktopScale >= 1 && desktopScale <= 8)
+          ? desktopScale
+          : DESKTOP_DEFAULT_SCALE;
+        return Math.max(1, Math.floor(ds / 2));
+      };
       for (let i = 0; i < list.length && i < companions.length; i++) {
         const a = list[i];
         const c = companions[i];
         if (c.id !== a.id) continue;
         c.name = a.name || c.name;
-        const newScale = (typeof a.scale === 'number' && a.scale >= 1 && a.scale <= 8) ? a.scale : c.scale;
+        const newScale = desktopToMobileScale(a.scale);
         // v3.1.56: log scale changes so we can see if the
         // desktop is sending unexpected updates. The size bug
         // Tobe reported ("lamasuu suddenly turned big") is
