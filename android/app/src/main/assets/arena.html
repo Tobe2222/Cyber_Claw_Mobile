@@ -608,11 +608,17 @@ body.wake-mode #ctrlRight{display:none!important}
   function pickState(c) {
     const roll = Math.random();
     if (roll < 0.45) {
-      // Idle — chill in one spot, facing down (camera)
+      // Idle — chill in one spot. Do NOT set c.direction here
+      // (the desktop doesn't either, src/js/pixel-arena.js
+      // ~line 825). The companion keeps facing whatever
+      // direction it was facing when the state rolled to idle,
+      // so idle happens in all 4 directions — matching the
+      // desktop's "idling in all directions" feel. The
+      // velocity-based facing in update() won't fire while
+      // idle (vx=vy=0), so c.direction stays at its last value.
       c.state = 'idle';
       c.vx = 0;
       c.vy = 0;
-      c.direction = 0;
       c.stateTimer = 3000 + Math.random() * 5000;  // 3-8s
     } else if (roll < 0.75) {
       // Walk — fresh random cardinal direction
@@ -897,13 +903,59 @@ body.wake-mode #ctrlRight{display:none!important}
         const c = companions[i];
         if (c.id !== a.id) continue;
         c.name = a.name || c.name;
-        c.scale = (typeof a.scale === 'number' && a.scale >= 1 && a.scale <= 8) ? a.scale : c.scale;
+        const newScale = (typeof a.scale === 'number' && a.scale >= 1 && a.scale <= 8) ? a.scale : c.scale;
+        // v3.1.56: log scale changes so we can see if the
+        // desktop is sending unexpected updates. The size bug
+        // Tobe reported ("lamasuu suddenly turned big") is
+        // caused by a scale change here or by a rebuild
+        // below — this log captures the former.
+        if (newScale !== c.scale) {
+          console.log('[Arena] scale update', c.id, c.scale, '->', newScale, '(incoming a.scale=' + a.scale + ')');
+          notifyRN({
+            type: 'arena_scale_update',
+            id: c.id,
+            from: c.scale,
+            to: newScale,
+            incoming: a.scale,
+          });
+        }
+        c.scale = newScale;
         c.isActive = (c.id === activeId);
+        // v3.1.56: re-clamp c.x / c.y to the new band. The
+        // bounce bounds depend on c.scale (feet-relative
+        // band, see v3.1.54). If scale changes mid-walk, the
+        // current c.x / c.y might be outside the new band —
+        // the next update() will clamp it, but the visual
+        // jump is jarring. Clamp here so the transition is
+        // immediate.
+        const [fw2, fh2] = c.data.frameSize;
+        const dw2 = fw2 * c.scale;
+        const dh2 = fh2 * c.scale;
+        const halfW2 = dw2 / 2;
+        const minY2 = canvas.height * 0.70 - dh2;
+        const maxY2 = canvas.height - dh2;
+        if (c.x + halfW2 > canvas.width) c.x = canvas.width - halfW2;
+        if (c.x - halfW2 < 0) c.x = halfW2;
+        if (c.y < minY2) c.y = minY2;
+        if (c.y > maxY2) c.y = maxY2;
       }
       return;
     }
 
     // Different set of companions — full rebuild
+    // v3.1.56: log the rebuild so we can see when the WebView
+    // is forced to throw away existing companions (which is
+    // when the size bug could happen if the desktop is sending
+    // a different scale value in the rebuild list).
+    if (companions.length > 0) {
+      const oldIds = companions.map(c => `${c.id}@${c.scale}`).join(',');
+      console.log('[Arena] full rebuild triggered', { from: oldIds, to: newIds });
+      notifyRN({
+        type: 'arena_full_rebuild',
+        from: companions.map(c => ({ id: c.id, scale: c.scale })),
+        to: list.map(a => ({ id: a.id, scale: a.scale })),
+      });
+    }
     notifyRN({ type: 'arena_set_agents_start', count: list.length });
     let built;
     try {
