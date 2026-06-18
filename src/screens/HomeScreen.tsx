@@ -387,6 +387,21 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
   useEffect(() => { messagesByAgentRef.current = messagesByAgent; }, [messagesByAgent]);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
 
+  // v3.1.63: inject setCentered(true) when voice mode
+  // (fullscreen) is entered, setCentered(false) when exited.
+  // Tobe: "voice mode should have the same look as wake mode"
+  // (centered companion on black bg). v3.1.62 added the
+  // setCentered function to window.Arena, but the useEffect
+  // that calls it was lost in the diff. Without this, voice
+  // mode keeps the regular home view (forest bg, both
+  // companions in default layout) instead of the wake-mode
+  // look. The wake listener is NOT involved — this is purely
+  // visual; voice mode keeps its VAD + recorder logic.
+  useEffect(() => {
+    const js = `window.Arena && window.Arena.setCentered(${fullscreen}); true;`;
+    webViewRef.current?.injectJavaScript(js);
+  }, [fullscreen]);
+
   // v3.1.18: hydrate the agents list from AsyncStorage on mount so
   // the companion tab bar shows immediately, even if the desktop
   // hasn't sent agents_list yet (slow reconnect, etc.).

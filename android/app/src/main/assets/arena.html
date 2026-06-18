@@ -833,10 +833,16 @@ body.wake-mode #ctrlRight{display:none!important}
 
   function drawBackground() {
     const w = canvas.width, h = canvas.height;
-    if (WAKE_MODE) {
-      // Wake mode: solid black background. The WebView is wrapped
-      // by the WakeModeScreen's black container too, so the canvas
-      // blends seamlessly with the rest of the wake UI.
+    // v3.1.63: solid black background in either wake mode
+    // (the dedicated WakeModeScreen) or centered mode (voice
+    // mode, set via setCentered(true)). Without this, voice
+    // mode would show the forest background instead of the
+    // wake-mode-style black — Tobe: "voice mode should have
+    // the same look as wake mode".
+    if (WAKE_MODE || CENTERED_MODE) {
+      // Wake mode / centered mode: solid black background.
+      // The WebView's container is also black, so the canvas
+      // blends seamlessly.
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, w, h);
       return;
@@ -887,10 +893,18 @@ body.wake-mode #ctrlRight{display:none!important}
     const dw = fw * c.scale;
     // v3.1.49: smaller font (8px) and orange color for both active
     // and inactive companions (was: 10px, active=orange / inactive=#aaa).
+    // v3.1.63: in wake/voice mode (centered), use a larger font
+    // (16px, ~2x) so the name is readable when the companion is
+    // scaled to 10. Tobe: "the companion name in these modes can
+    // be twice as big".
+    const fontSize = c._centered ? 16 : 8;
     ctx.fillStyle = '#f7931a';
-    ctx.font = 'bold 8px "Orbitron", monospace';
+    ctx.font = `bold ${fontSize}px "Orbitron", monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText(c.name, c.x + dw / 2, c.y - 3);
+    // In centered mode, the companion fills the canvas so the
+    // name goes ABOVE the canvas (negative y).
+    const nameY = c._centered ? Math.max(12, c.y - 6) : c.y - 3;
+    ctx.fillText(c.name, c.x + dw / 2, nameY);
   }
 
   // v3.1.48: drawDebug removed (overlay turned off per Tobe's request).
@@ -1093,7 +1107,16 @@ body.wake-mode #ctrlRight{display:none!important}
   // (the source URI stays stable). The centered companions stand
   // still at canvas center with scale 10; non-centered companions
   // resume normal layout.
+  // v3.1.63: presentation mode flag. When true, the WebView
+  // draws a solid black background instead of the forest
+  // image, and the companion is centered+big+idle. Used by
+  // voice mode (HomeScreen's fullscreen) to match the wake
+  // mode visual. The original `?mode=wake` URL param
+  // (WakeModeScreen) still works via the WAKE_MODE constant.
+  let CENTERED_MODE = false;
+
   function setCentered(enabled) {
+    CENTERED_MODE = !!enabled;
     if (enabled && activeId) {
       // Filter to just the active companion
       const active = companions.find(c => c.id === activeId);
