@@ -321,6 +321,14 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
   const chatRef = useRef<FlatList>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
+  // v3.1.57: only auto-scroll the log to the bottom if the
+  // user is already near the bottom. If the user has scrolled
+  // up to read older entries, new log entries should NOT jump
+  // them to the bottom. We track the last-known content offset
+  // + content size in the onScroll handler, and only call
+  // scrollToEnd if the user was within ~32px of the bottom
+  // when the new content was added.
+  const logStickyBottomRef = useRef(true);
   const webViewRef = useRef<WebView>(null);
   // v3.1.14: chat auto-scroll state — only auto-scroll to the newest
   // message when the user is already at (or near) the bottom of the
@@ -720,6 +728,22 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
     try {
       const msg = JSON.parse(e.nativeEvent.data);
       addLogEntry(`🎬 Arena message: type=${msg.type}`, 'debug');
+      // v3.1.57: show the payload for the diagnostic events
+      // added in v3.1.56, so the log captures the actual
+      // scale values flowing through (not just the type).
+      if (msg.type === 'arena_scale_update') {
+        addLogEntry(
+          `🔍 scale_update: ${msg.id} ${msg.from}→${msg.to} (desktop sent: ${msg.incoming})`,
+          'info',
+        );
+      } else if (msg.type === 'arena_full_rebuild') {
+        const fromStr = (msg.from || []).map((c: any) => `${c.id}@${c.scale}`).join(',');
+        const toStr = (msg.to || []).map((c: any) => `${c.id}@${c.scale}`).join(',');
+        addLogEntry(
+          `🔍 full_rebuild: from=[${fromStr}] to=[${toStr}]`,
+          'info',
+        );
+      }
       // v3.1.12: openArenaSettings is a no-op now. The mobile is just an
       // extension of the desktop, which owns arena background / companion
       // show/hide. If a stale WebView still sends this, ignore gracefully
@@ -2724,7 +2748,27 @@ useEffect(() => {
               renderItem={renderLog}
               contentContainerStyle={styles.logList}
               showsVerticalScrollIndicator={false}
-              onContentSizeChange={() => logRef.current?.scrollToEnd({ animated: false })}
+              onScroll={(e) => {
+                // v3.1.57: detect whether the user is at the
+                // bottom. contentOffset.y is the scrolled
+                // position; contentSize.height is the total
+                // content height; layoutMeasurement.height is
+                // the viewport. Distance from bottom =
+                // contentSize - layoutMeasurement - offset.
+                const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+                const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+                logStickyBottomRef.current = distanceFromBottom < 32;
+              }}
+              scrollEventThrottle={16}
+              onContentSizeChange={() => {
+                // v3.1.57: only auto-scroll if the user was
+                // already at the bottom when new content
+                // arrived. If they scrolled up to read, leave
+                // them there.
+                if (logStickyBottomRef.current) {
+                  logRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
               ListEmptyComponent={<Text style={[styles.emptyChatText, { padding: 20 }]}>No log entries</Text>}
             />
           </>
