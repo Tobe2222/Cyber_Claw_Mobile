@@ -27,6 +27,14 @@ const getWakeWordEmitter = () => {
 export default function App(): React.JSX.Element {
   const [screen, setScreen] = useState<'home' | 'settings' | 'wake-mode'>('home');
   const [companionId, setCompanionId] = useState('boar');
+  // v3.1.59: lift agents list to App.tsx so WakeModeScreen can
+  // inject setAgents into its (fresh) WebView on mount. Without
+  // this, the wake mode WebView has no companions in its array
+  // and the companion is missing from wake mode. The home screen's
+  // WebView had the agents (setAgents injected on every
+  // agents_list broadcast), but the wake mode WebView is a
+  // separate instance and never receives setAgents.
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>([]);
 
   // v3.1.12: Listen for the wake event at the App level (not inside
   // HomeScreen). When the native bridge fires wakeWordOpenedApp (or
@@ -112,6 +120,10 @@ export default function App(): React.JSX.Element {
               onActiveCompanionChange={(id) => {
                 if (id && id !== companionId) setCompanionId(id);
               }}
+              // v3.1.59: HomeScreen reports the agents list to
+              // App.tsx so WakeModeScreen can inject setAgents
+              // into its fresh WebView.
+              onAgentsChange={(next) => setAgents(next)}
             />
           )}
           {screen === 'settings' && (
@@ -120,6 +132,7 @@ export default function App(): React.JSX.Element {
           {screen === 'wake-mode' && (
             <WakeModeScreen
               companionId={companionId}
+              agents={agents}
               onExit={() => {
                 AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
                 setScreen('home');

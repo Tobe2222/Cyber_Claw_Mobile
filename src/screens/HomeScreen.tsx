@@ -260,7 +260,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCompanionChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onActiveCompanionChange?: (id: string) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -349,6 +349,15 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
   // other handlers can read the latest names without a stale
   // closure over the `agents` state.
   const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>([]);
+  // v3.1.59: report the latest agents list to App.tsx so
+  // WakeModeScreen (which mounts a fresh WebView) can call
+  // setAgents with the same data. Without this, the wake
+  // mode WebView has no companions in its array and the
+  // companion is missing from wake mode. Use a ref so the
+  // useEffect can read the latest value without re-running
+  // on every state change.
+  const onAgentsChangeRef = useRef(onAgentsChange);
+  onAgentsChangeRef.current = onAgentsChange;
   // v3.1.27: the companion id the WebView was initialised with.
   // The WebView's source URI includes this on first mount so it
   // knows which sprite to render on first paint. After that, the
@@ -388,6 +397,11 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setAgents(parsed);
+          // v3.1.59: propagate cached agents to App.tsx too,
+          // so WakeModeScreen has the list immediately if the
+          // user opens wake mode before the WebSocket delivers
+          // a fresh agents_list.
+          onAgentsChangeRef.current?.(parsed);
           addLogEntry(`Loaded ${parsed.length} companion(s) from local cache`, 'info');
         }
       } catch (_) {}
@@ -1870,6 +1884,9 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
         // desktop-side bugs and means the mobile UI doesn't
         // agree with the desktop on what the limit is.
         setAgents(msg.agents);
+        // v3.1.59: propagate to App.tsx so WakeModeScreen has
+        // the current list when it mounts.
+        onAgentsChangeRef.current?.(msg.agents);
         // v3.1.17: initialise per-companion chat slots and request
         // each companion's history from the desktop. The desktop
         // stores chatHistoryByAgent[id] and we mirror it locally so

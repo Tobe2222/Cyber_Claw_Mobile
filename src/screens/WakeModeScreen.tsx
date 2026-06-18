@@ -88,10 +88,11 @@ function startSampleMatchListener(
 
 interface WakeModeScreenProps {
   companionId: string;
+  agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>;
   onExit: () => void;
 }
 
-export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenProps) {
+export default function WakeModeScreen({ companionId, agents, onExit }: WakeModeScreenProps) {
   const webViewRef = useRef<WebView>(null);
   const recorderActiveRef = useRef<boolean>(false);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
@@ -142,6 +143,31 @@ export default function WakeModeScreen({ companionId, onExit }: WakeModeScreenPr
     const t2 = setTimeout(applyWakeModeClass, 600);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [webViewKey]);
+
+  // v3.1.59: inject setAgents into the WebView on mount so the
+  // companion is drawn. The home screen's WebView had setAgents
+  // injected on every agents_list broadcast, but the wake mode
+  // WebView is a separate instance with an empty companions array.
+  // Without this, the companion is missing from wake mode.
+  // We do this once on mount and once after a short delay (in case
+  // the WebView wasn't ready when the first inject fired).
+  useEffect(() => {
+    const injectAgents = () => {
+      try {
+        const slim = agents.map((a) => ({
+          id: a.id, name: a.name, sprite: a.sprite || null, scale: a.scale || null,
+        }));
+        webViewRef.current?.injectJavaScript(
+          `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)}); true;`,
+        );
+      } catch (_) {}
+    };
+    if (agents.length > 0) {
+      injectAgents();
+      const t = setTimeout(injectAgents, 300);
+      return () => clearTimeout(t);
+    }
+  }, [agents, webViewKey]);
 
   // Keep screen on while in Wake Mode
   useEffect(() => {

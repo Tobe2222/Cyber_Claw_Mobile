@@ -64,8 +64,15 @@ body.wake-mode #ctrlRight{display:none!important}
      `body.wake-mode #ctrlRight { display:none }` already hides
      them in wake mode (since the wake mode IS the wake screen). -->
 <div id="ctrlRight">
+  <!-- v3.1.59: Voice Mode sends {type:'fullscreen'} (in-home
+       voice mode UI), Wake Mode sends {type:'wakeword'}
+       (dedicated WakeModeScreen with sample-match wake
+       listener). Previously BOTH buttons sent 'wakeword',
+       so tapping "Voice Mode" opened Wake Mode instead.
+       Tobe: "voice mode says the same as wake mode,
+       listening for wake it says." -->
   <button class="ctrlBtn" id="voiceBtn" title="Enter Voice Mode"
-    onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'wakeword'})); } catch(e) {}">Voice Mode</button>
+    onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); } catch(e) {}">Voice Mode</button>
   <button class="ctrlBtn" id="wakeWordBtn" title="Activate Wake Word Mode"
     onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'wakeword'})); } catch(e) {}">Wake Mode</button>
 </div>
