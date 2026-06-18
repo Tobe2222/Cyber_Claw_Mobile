@@ -572,63 +572,76 @@ body.wake-mode #ctrlRight{display:none!important}
   // update()'s velocity application.
   const DIRS = [[0, 1], [0, -1], [-1, 0], [1, 0]];  // cardinal: [dx, dy] for dir 0..3
 
-  // v3.1.53: state distribution tuned even further down. Tobe
-  // reported clawsuu was "spamming up and down hastily" — even
-  // at 3% zoomies + 60% direction bias, the random walk was
-  // still bouncing too much.
+  // v3.1.55: state machine rewritten to match the desktop's
+  // (src/js/pixel-arena.js) exactly. The previous 75% direction
+  // bias and 60% idle distribution (v3.1.53) made the companion
+  // walk in a straight line for 3-6s before changing direction.
+  // On the small mobile arena (230px tall, 69px walkable band),
+  // straight-line walks always hit a wall and the companion
+  // ping-ponged in the same area — exactly the behaviour Tobe
+  // reported as "not strolling randomly in all directions".
   //
-  // New distribution: idle 60% / walk 38% / zoomies 2%.
-  // Direction bias up to 75% (companion keeps going in the
-  // same direction for longer).
-  // Idle duration extended to 3-6s (rest periods between
-  // activity bursts).
-  // Walk duration 3-6s.
-  // Zoomies duration 0.3-0.6s (very short).
+  // The desktop does NOT bias direction. It picks a fresh
+  // random cardinal direction on EVERY walk/run/zoomies roll.
+  // Combined with the velocity-based facing in update() (added
+  // in v3.1.55), the result is a natural-looking random stroll
+  // even on a small arena.
   //
-  // The "spam up and down" pattern is the state machine
-  // alternating between dir=0 (down) and dir=1 (up) on
-  // consecutive rolls. With 75% direction bias, the
-  // companion has a 75% chance of keeping the same
-  // direction on the next walk, which breaks the
-  // alternation. Combined with longer idle (60%), the
-  // companion spends more time resting.
+  // State distribution (from desktop, lines 814-855 of
+  // src/js/pixel-arena.js):
+  //   - 45% idle
+  //   - 30% walk
+  //   - 15% run (cardinal)
+  //   - 10% zoomies (diagonal)
+  // Total moving: 55%. This is the desktop's "feels alive" mix.
+  //
+  // Speeds (from desktop):
+  //   - walk: 0.015-0.025 (slower than v3.1.53's 0.020-0.032)
+  //   - run:  0.06-0.10
+  //   - zoomies: 0.08-0.13
+  //
+  // Durations (from desktop):
+  //   - idle: 3-8s
+  //   - walk: 2-6s
+  //   - run:  1-3s
+  //   - zoomies: 0.6-1.4s
   function pickState(c) {
     const roll = Math.random();
-    if (roll < 0.60) {
+    if (roll < 0.45) {
+      // Idle — chill in one spot, facing down (camera)
       c.state = 'idle';
       c.vx = 0;
       c.vy = 0;
       c.direction = 0;
-      c.stateTimer = 3000 + Math.random() * 3000;  // 3-6s idle
-    } else if (roll < 0.98) {
-      // walk — cardinal direction with a strong bias toward
-      // the previous direction (if any)
+      c.stateTimer = 3000 + Math.random() * 5000;  // 3-8s
+    } else if (roll < 0.75) {
+      // Walk — fresh random cardinal direction
       c.state = 'walk';
-      let newDir;
-      if (c._lastWalkDir != null && Math.random() < 0.75) {
-        newDir = c._lastWalkDir;
-      } else {
-        newDir = Math.floor(Math.random() * 4);
-      }
-      c._lastWalkDir = newDir;
-      c.direction = newDir;
-      const speed = 0.020 + Math.random() * 0.012;
-      c.vx = DIRS[newDir][0] * speed;
-      c.vy = DIRS[newDir][1] * speed;
-      c.stateTimer = 3000 + Math.random() * 3000;  // 3-6s walk
+      c.direction = Math.floor(Math.random() * 4);
+      const speed = 0.015 + Math.random() * 0.01;
+      c.vx = DIRS[c.direction][0] * speed;
+      c.vy = DIRS[c.direction][1] * speed;
+      c.stateTimer = 2000 + Math.random() * 4000;  // 2-6s
+    } else if (roll < 0.90) {
+      // Run — fresh random cardinal direction
+      c.state = 'run';
+      c.direction = Math.floor(Math.random() * 4);
+      const speed = 0.06 + Math.random() * 0.04;
+      c.vx = DIRS[c.direction][0] * speed;
+      c.vy = DIRS[c.direction][1] * speed;
+      c.stateTimer = 1000 + Math.random() * 2000;  // 1-3s
     } else {
-      // zoomies — diagonal random angle, very short dash
+      // Zoomies — diagonal random angle, fast dash
       c.state = 'run';
       const angle = Math.random() * Math.PI * 2;
-      const speed = 0.07 + Math.random() * 0.04;
+      const speed = 0.08 + Math.random() * 0.05;
       c.vx = Math.cos(angle) * speed;
       c.vy = Math.sin(angle) * speed;
-      if (Math.abs(c.vx) > Math.abs(c.vy)) {
-        c.direction = c.vx > 0 ? 3 : 2;
-      } else {
-        c.direction = c.vy > 0 ? 0 : 1;
-      }
-      c.stateTimer = 300 + Math.random() * 300;  // 0.3-0.6s
+      // Direction is set by the velocity-based facing in update(),
+      // not here. That code prefers left/right (side sprites look
+      // better for diagonal movement) and only uses up/down when
+      // vertical is clearly dominant (>2x horizontal).
+      c.stateTimer = 600 + Math.random() * 800;  // 0.6-1.4s
     }
     c.frame = 0;
     c.frameTimer = 0;
@@ -654,9 +667,12 @@ body.wake-mode #ctrlRight{display:none!important}
       const dh = fh * c.scale;
       const halfW = dw / 2;
       const halfH = dh / 2;
-      // Horizontal: full canvas bounce
-      if (c.x + halfW < 0) { c.x = -halfW; c.vx = Math.abs(c.vx); c.direction = 3; }
-      if (c.x + halfW > canvas.width) { c.x = canvas.width - halfW; c.vx = -Math.abs(c.vx); c.direction = 2; }
+      // Horizontal: full canvas bounce (no direction override —
+      // velocity-based facing at the end of update() will pick
+      // the right sprite row from the post-bounce vx/vy).
+      if (c.x + halfW < 0) { c.x = -halfW; c.vx = Math.abs(c.vx); }
+      if (c.x + halfW > canvas.width) { c.x = canvas.width - halfW; c.vx = -Math.abs(c.vx); }
+
       // v3.1.54: Vertical band is now FEET-relative, not sprite-top.
       // Previously the band was 0.60*h to 0.95*h - dh, which made
       // the walkable HEIGHT = 0.35*h - dh. For larger companions
@@ -681,6 +697,29 @@ body.wake-mode #ctrlRight{display:none!important}
 
       // Animation: pick the best sheet for the current state
       c.animation = pickAnimationKey(c);
+
+      // v3.1.55: Update facing direction based on actual velocity
+      // AFTER all bounces. From desktop src/js/pixel-arena.js
+      // lines 866-878. pickState() sets an initial direction, but
+      // the bounce code flips velocity without updating direction.
+      // If we computed facing from the pre-bounce vx/vy, the
+      // sprite would be moonwalking along the wall. This code
+      // re-derives facing from the dominant velocity axis AFTER
+      // the bounce, so the sprite always faces the way it's
+      // actually moving.
+      //
+      // Threshold: prefer left/right (side sprites look better
+      // for diagonal movement). Only use up/down when vertical
+      // is clearly dominant (>2x horizontal).
+      const amx = Math.abs(c.vx);
+      const amy = Math.abs(c.vy);
+      if (amx > 0.002 || amy > 0.002) {
+        if (amy > amx * 2.0) {
+          c.direction = c.vy > 0 ? 0 : 1;  // down : up
+        } else {
+          c.direction = c.vx < 0 ? 2 : 3;  // left : right
+        }
+      }
 
       // Advance frame
       const animData = c.images[c.animation];
