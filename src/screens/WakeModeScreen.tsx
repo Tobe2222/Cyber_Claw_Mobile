@@ -90,9 +90,18 @@ interface WakeModeScreenProps {
   companionId: string;
   agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>;
   onExit: () => void;
+  // v3.1.65: voiceMode disables the wake word listener AND
+  // starts the VAD + recorder automatically (the voice mode
+  // process). Tobe: "wake mode looks good, just copy the
+  // style of wake mode. It should look exactly the same.
+  // Why are you screwing so much about it?" — the simplest
+  // path is to use this SAME component for both modes, with
+  // a prop that swaps the function (wake listener vs VAD+
+  // recorder) while keeping the visual identical.
+  voiceMode?: boolean;
 }
 
-export default function WakeModeScreen({ companionId, agents, onExit }: WakeModeScreenProps) {
+export default function WakeModeScreen({ companionId, agents, onExit, voiceMode = false }: WakeModeScreenProps) {
   const webViewRef = useRef<WebView>(null);
   const recorderActiveRef = useRef<boolean>(false);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
@@ -101,8 +110,12 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
 
-  const [voiceStatus, setVoiceStatus] = useState<string>('listening');
+  const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'listening' : 'listening');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
+  // v3.1.65: when voiceMode, the wake listener is skipped
+  // (set in the useEffect below) and the VAD + recorder
+  // process starts instead. The voice status text adapts
+  // to the mode via the JSX below.
   const [webViewKey, setWebViewKey] = useState(0);
 
   const addVoiceLog = useCallback((text: string) => {
@@ -178,7 +191,53 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
   }, []);
 
   // Start the sample-match wake listener. When matched, start recording.
+  // v3.1.65: in voiceMode, skip the wake listener entirely
+  // and start the VAD + recorder (the voice mode process).
   useEffect(() => {
+    if (voiceMode) {
+      // Voice mode: start the VAD + recorder. This is the
+      // same code that was in HomeScreen's enterVoiceMode('focus')
+      // before v3.1.62 — bringing it back into a dedicated
+      // screen so the visual is consistent with wake mode.
+      addVoiceLog('🎙️ Voice Mode');
+      addVoiceLog('🎙️ Listening...');
+      const startVoiceRecording = async () => {
+        try {
+          const fs = require('react-native-fs');
+          const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
+          const recorder = getSimpleAudioRecorder();
+          await recorder.start(recPath, 5000);
+          addVoiceLog('🔴 Recording...');
+          setVoiceStatus('recording');
+          const unsubSilence = recorder.once('silence', async () => {
+            addVoiceLog('⏳ Silence detected...');
+            setVoiceStatus('silence_countdown');
+            let count = 3;
+            const tick = setInterval(async () => {
+              count--;
+              if (count <= 0) {
+                clearInterval(tick);
+                try {
+                  const resultPath = await recorder.stop();
+                  if (resultPath) {
+                    const base64 = await fs.readFile(resultPath, 'base64');
+                    setVoiceStatus('transcribing');
+                    syncClient.sendAudioInput(base64, 'audio/m4a');
+                    addVoiceLog('📏 Sent');
+                  }
+                } catch (e: any) {
+                  addVoiceLog('Send error');
+                }
+              }
+            }, 1000);
+          });
+        } catch (e: any) {
+          addVoiceLog(`Voice start failed: ${e?.message}`);
+        }
+      };
+      startVoiceRecording();
+      return;
+    }
     let cleanup: (() => void) | null = null;
     let cancelled = false;
 
@@ -445,12 +504,12 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
       {/* Voice status overlay (top) */}
       <View style={styles.voiceStatusOverlay} pointerEvents="none">
         <Text style={styles.voiceStatusText}>
-          {voiceStatus === 'listening' ? '🎧 Listening for wake word...' :
+          {voiceStatus === 'listening' ? (voiceMode ? '🎧 Listening...' : '🎧 Listening for wake word...') :
            voiceStatus === 'recording' ? '🔴 Recording...' :
            voiceStatus === 'silence_countdown' ? '⏳ Sending...' :
            voiceStatus === 'transcribing' ? '📝 Transcribing...' :
            voiceStatus === 'responding' ? '💬 Responding...' :
-           '🎧 Listening for wake word...'}
+           voiceMode ? '🎧 Listening...' : '🎧 Listening for wake word...'}
         </Text>
       </View>
 

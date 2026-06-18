@@ -260,7 +260,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -398,28 +398,10 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
   // look. The wake listener is NOT involved — this is purely
   // visual; voice mode keeps its VAD + recorder logic.
   //
-  // v3.1.64: also re-init the canvas with the fullscreen
-  // dimensions when entering voice mode. Without this, the
-  // canvas stays at 360x187 (the home arena size) and the
-  // CSS-stretched canvas makes the 320px companion look
-  // gigantic on a fullscreen WebView (1330px+ on a tall
-  // phone). Tobe's screenshot showed the boar filling the
-  // entire screen vertically. Re-initializing to the full
-  // WebView size keeps the companion at the intended visual
-  // size regardless of fullscreen state.
-  useEffect(() => {
-    if (fullscreen) {
-      // v3.1.64: also pass fullscreen dimensions to the canvas
-      const { width: SW, height: SH } = require('react-native').Dimensions.get('window');
-      webViewRef.current?.injectJavaScript(
-        `window.Arena && window.Arena.init(${SW}, ${SH}) && window.Arena.setCentered(true); true;`,
-      );
-    } else {
-      webViewRef.current?.injectJavaScript(
-        `window.Arena && window.Arena.setCentered(false) && window.Arena.init(${SCREEN_WIDTH}, ${ARENA_HEIGHT}); true;`,
-      );
-    }
-  }, [fullscreen]);
+  // v3.1.65: voice mode now uses a dedicated VoiceModeScreen
+  // (same component as WakeModeScreen, voiceMode prop), so
+  // the home screen's fullscreen mode is unused for voice.
+// (no setCentered injection needed)
 
   // v3.1.18: hydrate the agents list from AsyncStorage on mount so
   // the companion tab bar shows immediately, even if the desktop
@@ -808,20 +790,19 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
       }
 
       if (msg.type === 'fullscreen') {
-        // User clicked Voice Mode button in arena. v3.1.62: route
-        // back to the in-home fullscreen voice UI (which has the
-        // VAD + recorder + silence-detection + auto-send logic).
-        // v3.1.60/v3.1.61 routed this to a dedicated screen via
-        // onOpenVoiceMode, which lost the actual voice functionality
-        // — Tobe: "voice mode is no wake listener. Their functionality
-        // and process has always been correct. If you have edited
-        // either voice mode or wake modes logic and process you need
-        // to restore it."
+        // v3.1.65: route to the dedicated VoiceModeScreen
+        // (same component as WakeModeScreen but with the wake
+        // listener replaced by the VAD + recorder). This gives
+        // voice mode the same visual as wake mode (centered
+        // companion on black bg) while keeping its own
+        // functionality (VAD + recorder + auto-send). Tobe:
+        // "wake mode looks good, just copy the style of wake
+        // mode. It should look exactly the same."
         if (isWakeWordModeRef.current) {
           addLogEntry('Ignoring fullscreen msg - Wake Mode active', 'debug');
         } else {
-          addLogEntry(`🎙️ Voice Mode: opening in-home fullscreen`, 'debug');
-          enterVoiceMode('focus');
+          addLogEntry(`🎙️ Voice Mode: opening dedicated screen`, 'debug');
+          onOpenVoiceMode?.();
         }
       }
       if (msg.type === 'wakeword') {
