@@ -1087,6 +1087,47 @@ body.wake-mode #ctrlRight{display:none!important}
     for (const c of companions) c.isActive = (c.id === activeId);
   }
 
+  // v3.1.62: runtime version of the ?onlyActive=true&centered=true
+  // URL params. Called by HomeScreen when voice mode toggles
+  // fullscreen, so the WebView doesn't need to be re-mounted
+  // (the source URI stays stable). The centered companions stand
+  // still at canvas center with scale 10; non-centered companions
+  // resume normal layout.
+  function setCentered(enabled) {
+    if (enabled && activeId) {
+      // Filter to just the active companion
+      const active = companions.find(c => c.id === activeId);
+      if (active) {
+        companions = [active];
+        active.isActive = true;
+      } else {
+        companions = companions.slice(0, 1);
+        if (companions[0]) companions[0].isActive = true;
+      }
+    }
+    if (companions.length > 0) {
+      const c = companions[0];
+      if (enabled) {
+        c.scale = 10;
+        const [fw, fh] = c.data.frameSize;
+        const dw = fw * c.scale;
+        const dh = fh * c.scale;
+        c.x = (canvas.width - dw) / 2;
+        c.y = (canvas.height - dh) / 2;
+        c.vx = 0;
+        c.vy = 0;
+        c.state = 'idle';
+        c.direction = 0;
+        c._centered = true;
+        c._positioned = true;
+      } else {
+        c._centered = false;
+        c._positioned = false;  // re-trigger layout() to restore default positions
+        layout();
+      }
+    }
+  }
+
   function notifyRN(payload) {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
       try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (_) {}
@@ -1097,6 +1138,7 @@ body.wake-mode #ctrlRight{display:none!important}
     setAgents,
     setActive,
     setBackground,
+    setCentered,
     init,
     getActiveId: () => activeId,
     getCompanionCount: () => companions.length,
