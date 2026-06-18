@@ -427,6 +427,19 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
         javaScriptEnabled
         allowFileAccess
         originWhitelist={['*']}
+        onLoadEnd={() => {
+          // v3.1.64: init the canvas with the full screen
+          // dimensions, not the small ARENA_HEIGHT. Without
+          // this, the canvas stays at 360x200 (the default
+          // fallback) and the CSS-stretched canvas makes the
+          // 320px companion look gigantic. Re-initializing to
+          // the full WebView size keeps the companion at the
+          // intended visual size.
+          const { width: SW, height: SH } = require('react-native').Dimensions.get('window');
+          webViewRef.current?.injectJavaScript(
+            `window.Arena && window.Arena.init(${SW}, ${SH}); true;`,
+          );
+        }}
       />
 
       {/* Voice status overlay (top) */}

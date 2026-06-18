@@ -397,9 +397,28 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
   // companions in default layout) instead of the wake-mode
   // look. The wake listener is NOT involved — this is purely
   // visual; voice mode keeps its VAD + recorder logic.
+  //
+  // v3.1.64: also re-init the canvas with the fullscreen
+  // dimensions when entering voice mode. Without this, the
+  // canvas stays at 360x187 (the home arena size) and the
+  // CSS-stretched canvas makes the 320px companion look
+  // gigantic on a fullscreen WebView (1330px+ on a tall
+  // phone). Tobe's screenshot showed the boar filling the
+  // entire screen vertically. Re-initializing to the full
+  // WebView size keeps the companion at the intended visual
+  // size regardless of fullscreen state.
   useEffect(() => {
-    const js = `window.Arena && window.Arena.setCentered(${fullscreen}); true;`;
-    webViewRef.current?.injectJavaScript(js);
+    if (fullscreen) {
+      // v3.1.64: also pass fullscreen dimensions to the canvas
+      const { width: SW, height: SH } = require('react-native').Dimensions.get('window');
+      webViewRef.current?.injectJavaScript(
+        `window.Arena && window.Arena.init(${SW}, ${SH}) && window.Arena.setCentered(true); true;`,
+      );
+    } else {
+      webViewRef.current?.injectJavaScript(
+        `window.Arena && window.Arena.setCentered(false) && window.Arena.init(${SCREEN_WIDTH}, ${ARENA_HEIGHT}); true;`,
+      );
+    }
   }, [fullscreen]);
 
   // v3.1.18: hydrate the agents list from AsyncStorage on mount so

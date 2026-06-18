@@ -1115,17 +1115,52 @@ body.wake-mode #ctrlRight{display:none!important}
   // (WakeModeScreen) still works via the WAKE_MODE constant.
   let CENTERED_MODE = false;
 
+  // v3.1.64: snapshot of the full companions array before
+  // entering centered mode. Used to restore the array when
+  // exiting centered mode (setCentered(false)). Without this,
+  // the WebView would stay on a single companion after the
+  // user exits voice mode — Tobe's screenshot showed a JS
+  // error and the canvas in a broken state.
+  let savedCompanions = null;
+
   function setCentered(enabled) {
     CENTERED_MODE = !!enabled;
-    if (enabled && activeId) {
-      // Filter to just the active companion
-      const active = companions.find(c => c.id === activeId);
-      if (active) {
-        companions = [active];
-        active.isActive = true;
-      } else {
-        companions = companions.slice(0, 1);
-        if (companions[0]) companions[0].isActive = true;
+    if (enabled) {
+      // v3.1.64: ALWAYS filter to one companion when entering
+      // centered mode, not just when activeId is set. Previously
+      // the if (enabled && activeId) check failed silently when
+      // activeId was null, and the rest of the loop centered the
+      // first companion without filtering the others. The other
+      // companions stayed in the array with their layout
+      // positions, drawn alongside the centered one — Tobe's
+      // screenshot showed BOTH companions in centered mode.
+      // Now: pick the active companion if available, otherwise
+      // the first one, and filter the array to that one. Also
+      // save the original array so we can restore on exit.
+      if (!savedCompanions && companions.length > 1) {
+        savedCompanions = companions.slice();
+      }
+      let target = null;
+      if (activeId) {
+        target = companions.find(c => c.id === activeId);
+      }
+      if (!target && companions.length > 0) {
+        target = companions[0];
+      }
+      if (target) {
+        target.isActive = true;
+        companions = [target];
+      }
+    } else if (savedCompanions) {
+      // v3.1.64: restore the original companions array on exit.
+      // Without this, the WebView would have only 1 companion
+      // (the one that was centered) and the user would see a
+      // single sprite instead of the full arena.
+      companions = savedCompanions;
+      savedCompanions = null;
+      for (const c of companions) {
+        c._centered = false;
+        c._positioned = false;  // re-trigger layout() to restore default positions
       }
     }
     if (companions.length > 0) {
