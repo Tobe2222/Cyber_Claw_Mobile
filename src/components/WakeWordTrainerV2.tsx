@@ -26,6 +26,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { extractAudioFeatures, compareAudioFeatures, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array, validateAudio } from '../services/AudioUtils';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
+import { NativeModules } from 'react-native';
+
+const { WakeWordModule } = NativeModules;
 import TrainingSummary from './TrainingSummary';
 import RNFS from 'react-native-fs';
 
@@ -83,9 +86,35 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
 
       const recorder = getSimpleAudioRecorder();
       const path = `${RNFS.CachesDirectoryPath}/wake_sample_${currentSample}_temp.m4a`;
-      await recorder.start(path, 5000);  // Record for up to 5 seconds
+      // v3.1.66: stop the wake word listener while training so
+      // the user's own voice saying the wake phrase doesn't
+      // trigger wake mode mid-training. Tobe: "when training
+      // more wake samples the wake word triggered. That should
+      // be disabled during that." Without this, every "hey
+      // clawsuu" the user says during training would route to
+      // WakeModeScreen, killing the training session.
+      try { await WakeWordModule?.stopSampleListening?.(); } catch (_) {}
 
-      setTimeout(async () => {
+      // v3.1.66: shorter silence timeout (1500ms) and listen
+      // for the recorder's 'silence' event so short wake
+      // words are captured quickly. Previously used a hard
+      // 4s setTimeout — the trainer waited 4 seconds no
+      // matter what, which is way too long for a 1-word
+      // phrase. Tobe: "the wake trainer wanted the recording
+      // to be longer in duration, making my attempts invalid.
+      // The minimum Length should be very short. Less than
+      // half of what it is now. Perhaps people want very
+      // short wake words."
+      const SILENCE_TIMEOUT_MS = 1500;
+      const MAX_DURATION_MS = 3000;
+      await recorder.start(path, SILENCE_TIMEOUT_MS);
+
+      let stopped = false;
+      const stopRecording = async () => {
+        if (stopped) return;
+        stopped = true;
+        clearTimeout(maxTimer);
+        try { unsubSilence(); } catch (_) {}
         try {
           stopPulse();
           setIsRecording(false);
@@ -156,7 +185,22 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
           setMessage(`❌ Recording error: ${e.message}`);
           setIsRecording(false);
         }
-      }, 4000);
+      };
+
+      // Listen for the recorder's 'silence' event to stop the
+      // recording as soon as the user finishes speaking. The
+      // native module fires this after SILENCE_TIMEOUT_MS of
+      // silence.
+      const unsubSilence = recorder.once('silence', () => {
+        addLogEntry?.('🎤 Silence detected, stopping', 'debug');
+        stopRecording();
+      });
+
+      // Max-duration fallback in case the user keeps talking
+      // (or never talks).
+      const maxTimer = setTimeout(() => {
+        stopRecording();
+      }, MAX_DURATION_MS);
     } catch (e: any) {
       setMessage(`❌ Failed to start recording: ${e.message}`);
       setIsRecording(false);
@@ -199,6 +243,18 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
       startRecording();
     };
     autoStart();
+  }, []);
+
+  // v3.1.66: re-enable the wake word listener when the trainer
+  // unmounts. The listener is stopped in startRecording() so
+  // the user's voice during training doesn't trigger wake mode.
+  // On unmount, restart it so wake mode works again after
+  // training. Without this, the user would have to restart
+  // the app to use wake mode.
+  useEffect(() => {
+    return () => {
+      try { WakeWordModule?.startSampleListening?.(); } catch (_) {}
+    };
   }, []);
 
   // Handle back button during training - only add if BackHandler is available
