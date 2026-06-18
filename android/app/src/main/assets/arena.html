@@ -541,9 +541,14 @@ body.wake-mode #ctrlRight{display:none!important}
       const dw = fw * c.scale;
       const dh = fh * c.scale;
       c.x = w * (i + 1) / (n + 1) - dw / 2;
-      // Stagger Y starting positions so two companions start at
-      // different depths (one closer, one further).
-      const yFrac = 0.65 + (i / Math.max(1, n - 1)) * 0.20;
+      // v3.1.54: Stagger Y starting positions so two companions
+      // start at different depths (one closer, one further). The
+      // yFrac is now the FEET Y as a fraction of canvas height —
+      // previously it was the SPRITE TOP Y, which made larger
+      // companions start above the walkable band. With the new
+      // feet-based bounds in update() (band is 0.70*h to h), the
+      // starting feet positions must be in [0.70, 1.0].
+      const yFrac = 0.78 + (i / Math.max(1, n - 1)) * 0.14;  // 0.78 .. 0.92
       c.y = h * yFrac - dh;
       c._positioned = true;
     }
@@ -652,17 +657,27 @@ body.wake-mode #ctrlRight{display:none!important}
       // Horizontal: full canvas bounce
       if (c.x + halfW < 0) { c.x = -halfW; c.vx = Math.abs(c.vx); c.direction = 3; }
       if (c.x + halfW > canvas.width) { c.x = canvas.width - halfW; c.vx = -Math.abs(c.vx); c.direction = 2; }
-      // Vertical: constrain to the walkable band.
-      // Upper bound: stay below the sky/horizon (don't go above
-      // the upper grass). Lower bound: stay above the bottom edge
-      // of the canvas (don't go past the dirt path).
-      // Walkable band = 60%-95% of canvas height. That gives the
-      // companion room to walk "up" (toward the horizon) and
-      // "down" (toward the foreground) without leaving the grass.
-      const minY = canvas.height * 0.60;  // upper limit (don't fly into sky)
-      const maxY = canvas.height * 0.95 - dh;  // lower limit (don't go past foreground)
-      if (c.y < minY) { c.y = minY; c.vy = Math.abs(c.vy); c.direction = 0; }
-      if (c.y > maxY) { c.y = maxY; c.vy = -Math.abs(c.vy); c.direction = 1; }
+      // v3.1.54: Vertical band is now FEET-relative, not sprite-top.
+      // Previously the band was 0.60*h to 0.95*h - dh, which made
+      // the walkable HEIGHT = 0.35*h - dh. For larger companions
+      // (clawsuu at scale 2, dh=64 on a 230px canvas), the band
+      // collapsed to just 16.5px tall — the companion hit a wall
+      // every ~0.5s and the bounce code forced direction=0/1,
+      // creating the "spam up and down" pattern.
+      //
+      // New band: feet range from grass-top (0.70*h) to canvas
+      // bottom (h), regardless of sprite size. Band height =
+      // 0.30*h, same for all companions.
+      //   - minY (sprite top when feet at grass top) = 0.70*h - dh
+      //   - maxY (sprite top when feet at canvas bottom) = h - dh
+      //
+      // Bounce only flips velocity, NOT direction — the AI owns
+      // direction. Overriding direction on bounce caused the
+      // _lastWalkDir to fight the AI's 75% bias.
+      const minY = canvas.height * 0.70 - dh;
+      const maxY = canvas.height - dh;
+      if (c.y < minY) { c.y = minY; c.vy = Math.abs(c.vy); }
+      if (c.y > maxY) { c.y = maxY; c.vy = -Math.abs(c.vy); }
 
       // Animation: pick the best sheet for the current state
       c.animation = pickAnimationKey(c);
