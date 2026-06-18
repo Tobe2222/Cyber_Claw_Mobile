@@ -25,7 +25,7 @@ const getWakeWordEmitter = () => {
 };
 
 export default function App(): React.JSX.Element {
-  const [screen, setScreen] = useState<'home' | 'settings' | 'wake-mode'>('home');
+  const [screen, setScreen] = useState<'home' | 'settings' | 'wake-mode' | 'voice-mode'>('home');
   const [companionId, setCompanionId] = useState('boar');
   // v3.1.59: lift agents list to App.tsx so WakeModeScreen can
   // inject setAgents into its (fresh) WebView on mount. Without
@@ -110,6 +110,7 @@ export default function App(): React.JSX.Element {
             <HomeScreen
               onOpenSettings={() => setScreen('settings')}
               onOpenWakeMode={() => setScreen('wake-mode')}
+              onOpenVoiceMode={() => setScreen('voice-mode')}
               // v3.1.52: HomeScreen reports the currently active chat
               // companion back to App.tsx so WakeModeScreen can show
               // the SAME companion the user is looking at. Previously
@@ -137,6 +138,14 @@ export default function App(): React.JSX.Element {
                 AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
                 setScreen('home');
               }}
+            />
+          )}
+          {screen === 'voice-mode' && (
+            <WakeModeScreen
+              companionId={companionId}
+              agents={agents}
+              voiceMode
+              onExit={() => setScreen('home')}
             />
           )}
         </SafeAreaView>

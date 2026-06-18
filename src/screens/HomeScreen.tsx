@@ -260,7 +260,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -774,13 +774,18 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onActiveCom
       }
 
       if (msg.type === 'fullscreen') {
-        // User clicked Voice Mode button in arena → enter fullscreen
-        // But not if we're already in Wake Mode - that takes priority
+        // User clicked Voice Mode button in arena. v3.1.60: route
+        // to the dedicated voice-mode screen (similar to wake mode
+        // but without the wake listener). Previously this opened
+        // the in-home fullscreen voice UI, which showed the forest
+        // background and both companions — Tobe asked for it to
+        // "look the same as wake mode" (black, single companion,
+        // centered).
         if (isWakeWordModeRef.current) {
           addLogEntry('Ignoring fullscreen msg - Wake Mode active', 'debug');
         } else {
-          addLogEntry(`🎙️ Fullscreen message received from arena`, 'debug');
-          enterVoiceMode('focus');
+          addLogEntry(`🎙️ Voice Mode: opening dedicated screen`, 'debug');
+          onOpenVoiceMode?.();
         }
       }
       if (msg.type === 'wakeword') {

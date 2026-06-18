@@ -420,7 +420,7 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
         // APP_VERSION cache-buster so an APK upgrade forces a
         // fresh arena.html load (Android WebView caches
         // file:///android_asset/ aggressively by URI).
-        source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&companion=${companionId}&platform=mobile&mode=wake` }}
+        source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&companion=${companionId}&platform=mobile&mode=wake&onlyActive=true&centered=true` }}
         style={styles.webview}
         scrollEnabled={false}
         bounces={false}
@@ -437,6 +437,8 @@ export default function WakeModeScreen({ companionId, agents, onExit }: WakeMode
            voiceStatus === 'silence_countdown' ? '⏳ Sending...' :
            voiceStatus === 'transcribing' ? '📝 Transcribing...' :
            voiceStatus === 'responding' ? '💬 Responding...' :
+           voiceStatus === 'ready' ? '🎙️ Voice Mode' :
+           voiceMode ? '🎙️ Voice Mode' :
            '🎧 Listening for wake word...'}
         </Text>
       </View>

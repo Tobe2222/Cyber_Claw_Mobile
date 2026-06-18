@@ -676,6 +676,16 @@ body.wake-mode #ctrlRight{display:none!important}
 
   function update(dt) {
     for (const c of companions) {
+      // v3.1.60: centered mode (wake/voice). Skip the state
+      // machine entirely — the companion stands still at the
+      // canvas center, idle, no movement. The position is set
+      // once in setAgents() and never changes.
+      if (c._centered) {
+        c.animation = 'idle';
+        c.frame = 0;  // hold first frame of idle
+        c.direction = 0;  // face camera
+        continue;
+      }
       c.stateTimer -= dt;
       if (c.stateTimer <= 0) pickState(c);
 
@@ -1004,6 +1014,43 @@ body.wake-mode #ctrlRight{display:none!important}
     }
     companions = built.filter(Boolean);
     for (const c of companions) c.isActive = (c.id === activeId);
+    // v3.1.60: filter to only the active companion if the
+    // ?onlyActive URL param is set (wake mode / voice mode).
+    // The active companion is the one matching activeId; if no
+    // activeId match, the first companion is shown as a fallback.
+    if (ONLY_ACTIVE && activeId) {
+      const active = companions.find(c => c.id === activeId);
+      if (active) {
+        companions = [active];
+        active.isActive = true;
+      } else {
+        // activeId doesn't match any companion — fall back to
+        // the first one, mark it active
+        companions = companions.slice(0, 1);
+        if (companions[0]) companions[0].isActive = true;
+      }
+    }
+    if (CENTERED && companions.length > 0) {
+      // v3.1.60: center the (only) companion on the canvas and
+      // stop the state machine (vx=vy=0, no walking). The
+      // companion stands still, facing the camera. Tobe asked
+      // for "much bigger" — the default mobile scale (1-2,
+      // 32-64px) is too small for the wake/voice mode display,
+      // so override to scale 6 (192px on a 32x32 sprite).
+      const c = companions[0];
+      c.scale = 6;
+      const [fw, fh] = c.data.frameSize;
+      const dw = fw * c.scale;
+      const dh = fh * c.scale;
+      c.x = (canvas.width - dw) / 2;
+      c.y = (canvas.height - dh) / 2;
+      c.vx = 0;
+      c.vy = 0;
+      c.state = 'idle';
+      c.direction = 0;
+      c._centered = true;  // signal to update() to skip state machine
+      c._positioned = true;
+    }
     layout();
     notifyRN({
       type: 'arena_set_agents',
@@ -1066,6 +1113,16 @@ body.wake-mode #ctrlRight{display:none!important}
     const m = location.search.match(/[?&]companion=([^&]+)/);
     if (m) activeId = decodeURIComponent(m[1]);
   } catch (_) {}
+
+  // v3.1.60: read ?onlyActive=true and ?centered=true. Used by
+  // wake mode and voice mode to show ONLY the active chat
+  // companion, centered, idle — instead of the full arena
+  // layout. Tobe: "wake mode should show just the active
+  // companion, much bigger, not walking around, and voice
+  // mode should look the same".
+  const URL_PARAMS = new URLSearchParams(location.search);
+  const ONLY_ACTIVE = URL_PARAMS.get('onlyActive') === 'true';
+  const CENTERED = URL_PARAMS.get('centered') === 'true';
 
   // v3.1.51: read ?mode=wake and add the wake-mode class to body
   // (moved here from the WAKE_MODE flag init so the class is set
