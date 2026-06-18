@@ -155,3 +155,42 @@ export async function matchAgainstTraining(
     bestMatchIndex,
   };
 }
+
+/**
+ * v3.1.67: per-companion matching. Each companion can have
+ * its own wake word (e.g. "hey clawsuu" for clawsuu, "yo
+ * lamasuu" for lamasuu). The wake listener matches against
+ * ALL companions' training data and returns the matched
+ * companionId so the wake mode can show the right one.
+ * Tobe: "we should rather train other wake words for other
+ * companions. So, in the settings for wake training the
+ * user should select which companion to train for."
+ */
+export async function matchAgainstAllCompanions(
+  incomingFeatures: AudioFeatures,
+  companionsTraining: Array<{ companionId: string; features: AudioFeatures[] }>,
+  threshold: number = 0.55
+): Promise<{
+  matched: boolean;
+  score: number;
+  matchedCompanionId: string | null;
+}> {
+  let bestScore = 0;
+  let bestCompanionId: string | null = null;
+
+  for (const { companionId, features } of companionsTraining) {
+    for (const training of features) {
+      const score = compareAudioFeatures(incomingFeatures, training);
+      if (score > bestScore) {
+        bestScore = score;
+        bestCompanionId = companionId;
+      }
+    }
+  }
+
+  return {
+    matched: bestScore >= threshold,
+    score: bestScore,
+    matchedCompanionId: bestCompanionId,
+  };
+}

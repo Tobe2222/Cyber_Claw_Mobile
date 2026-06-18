@@ -69,9 +69,19 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
       const emitter = new NativeEventEmitter(WakeWordModule);
       emitterRef.current = emitter;
     }
+    // v3.1.67: stop the wake word listener while the
+    // tester is open. The tester records audio and matches
+    // it against training data, but the live wake listener
+    // would also fire if the user says the wake word during
+    // testing. Tobe: "i tried to test wake after that but
+    // that triggered the wake mode again and disrupted my
+    // check."
+    try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
     return () => {
       sampleDoneSubRef.current?.remove?.();
       if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
+      // v3.1.67: re-enable the wake listener on unmount.
+      try { WakeWordModule?.startSampleListening?.(); } catch (_) {}
     };
   }, []);
 
@@ -82,27 +92,35 @@ export default function WakeWordTester({ phrase, onClose }: Props) {
 
   const loadTraining = async () => {
     try {
-      // Try phrase-specific key first (V2), then legacy key
-      let trainingJson =
-        (await AsyncStorage.getItem(getWakeSamplesKey(phrase))) ||
-        (await AsyncStorage.getItem('cyberclaw-wake-samples'));
-
-      if (!trainingJson) {
+      // v3.1.67: per-companion storage. Load all
+      // companions' training data and aggregate. The
+      // tester will match against all of them.
+      const allKeys = await AsyncStorage.getAllKeys();
+      const sampleKeys = allKeys.filter(k => k.startsWith('cyberclaw-wake-samples-'));
+      const allFeatures: AudioFeatures[] = [];
+      const loadedCompanions: string[] = [];
+      for (const key of sampleKeys) {
+        try {
+          const raw = await AsyncStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw);
+          if (parsed?.features?.length) {
+            allFeatures.push(...parsed.features);
+            const cid = key.replace('cyberclaw-wake-samples-', '');
+            loadedCompanions.push(cid);
+          }
+        } catch (_) {}
+      }
+      if (allFeatures.length === 0) {
         setTrainingInfo('⚠️  No training data — train first in Settings');
         return;
       }
-      const training = JSON.parse(trainingJson);
-      if (!training.features || !Array.isArray(training.features) || training.features.length === 0) {
-        setTrainingInfo('⚠️  Training found but no features — retrain with V2 trainer');
-        return;
-      }
-      trainingFeaturesRef.current = training.features as AudioFeatures[];
-      const q = training.overallQuality ? ` • Quality: ${(training.overallQuality * 100).toFixed(0)}%` : '';
+      trainingFeaturesRef.current = allFeatures;
       setTrainingInfo(
-        `✅ ${training.features.length} samples loaded${q}\n   Phrase: "${training.phrase}"`
+        `✅ ${allFeatures.length} samples loaded\n   Companions: ${loadedCompanions.join(', ')}`
       );
       setTrainingLoaded(true);
-      addLog(`✅ Training loaded — ${training.features.length} sample(s)${q}`);
+      addLog(`✅ Training loaded — ${allFeatures.length} sample(s) from ${loadedCompanions.length} companion(s)`);
     } catch (e: any) {
       setTrainingInfo(`❌ Could not load training: ${e.message}`);
     }

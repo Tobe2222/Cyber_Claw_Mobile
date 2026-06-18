@@ -101,6 +101,25 @@ export default function App(): React.JSX.Element {
     }).catch(() => {});
   }, []);
 
+  // v3.1.67: hydrate the agents list from local cache on
+  // mount so WakeModeScreen has the list immediately when
+  // triggered by the wake word. Without this, if the user
+  // was in Settings (HomeScreen unmounted) when the wake
+  // word fired, App.tsx's agents would be empty (only
+  // HomeScreen's WebSocket handler propagates them) and
+  // WakeModeScreen's WebView would show no companion.
+  useEffect(() => {
+    AsyncStorage.getItem('cyberclaw-agents-cache').then(raw => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAgents(parsed);
+        }
+      } catch (_) {}
+    }).catch(() => {});
+  }, []);
+
   return (
     <GestureHandlerRootView style={styles.container}>
       <SafeAreaProvider>
@@ -137,6 +156,13 @@ export default function App(): React.JSX.Element {
               onExit={() => {
                 AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
                 setScreen('home');
+              }}
+              // v3.1.67: when the wake word matches, update
+              // the active companion so the wake mode shows
+              // the right one. Each companion has its own
+              // wake word now.
+              onWakeMatch={(id) => {
+                if (id && id !== companionId) setCompanionId(id);
               }}
             />
           )}

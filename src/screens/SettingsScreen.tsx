@@ -102,6 +102,36 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [showWakePhraseMenu, setShowWakePhraseMenu] = useState(false);
   const [showTrainingDetail, setShowTrainingDetail] = useState(false);
   const [showTester, setShowTester] = useState(false);
+
+  // v3.1.67: per-companion wake training. Each companion has
+  // its own wake word. The trainer takes a companionId +
+  // companionName. The user picks which companion to train
+  // for. Companion list is loaded from the local cache (the
+  // same one HomeScreen writes) so we don't need to be
+  // connected to the desktop to open the trainer.
+  const [trainingCompanionId, setTrainingCompanionId] = useState<string | null>(null);
+  const [trainingCompanionName, setTrainingCompanionName] = useState<string>('');
+  const [availableCompanions, setAvailableCompanions] = useState<Array<{ id: string; name: string }>>([]);
+
+  // Hydrate the companion list from local cache on mount.
+  // v3.1.67: the wake trainer is per-companion now, so the
+  // settings screen needs to know which companions exist.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('cyberclaw-agents-cache');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setAvailableCompanions(parsed.map((a: any) => ({ id: a.id, name: a.name })));
+            // Default to the first companion for the trainer
+            setTrainingCompanionId(parsed[0].id);
+            setTrainingCompanionName(parsed[0].name);
+          }
+        }
+      } catch (_) {}
+    })();
+  }, []);
   const [selectedWakePhrase, setSelectedWakePhrase] = useState('hey clawsuu');
 
   // ── Voice & Speech ────────────────────────────────────────────
@@ -394,7 +424,16 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   if (showTrainerV2) {
     return (
       <WakeWordTrainerV2
-        wakePhrase={selectedWakePhrase}
+        companionId={trainingCompanionId || 'unknown'}
+        companionName={trainingCompanionName || 'Companion'}
+        availableCompanions={availableCompanions}
+        onSelectCompanion={(id) => {
+          const c = availableCompanions.find(x => x.id === id);
+          if (c) {
+            setTrainingCompanionId(c.id);
+            setTrainingCompanionName(c.name);
+          }
+        }}
         onComplete={() => { setShowTrainerV2(false); }}
         onCancel={() => { setShowTrainerV2(false); }}
       />
@@ -614,9 +653,45 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         </View>
 
         <SubTitle>Training</SubTitle>
-        <TouchableOpacity style={styles.trainBtn} onPress={() => setShowWakePhraseMenu(true)}>
+        <TouchableOpacity style={styles.trainBtn} onPress={() => {
+          // v3.1.67: open the companion picker first (each
+          // companion has its own wake word). After the
+          // user picks a companion, show the trainer.
+          if (availableCompanions.length === 0) {
+            Alert.alert(
+              'No companions yet',
+              'Connect to the desktop and load at least one companion before training the wake word.',
+            );
+            return;
+          }
+          if (availableCompanions.length === 1) {
+            // Only one companion — go straight to the trainer
+            setTrainingCompanionId(availableCompanions[0].id);
+            setTrainingCompanionName(availableCompanions[0].name);
+            setShowTrainerV2(true);
+            return;
+          }
+          // Multiple companions — show a picker via Alert
+          // (the trainer itself doesn't have a back button
+          // to navigate to a picker, so we use Alert which
+          // the user can dismiss with Cancel).
+          const options = availableCompanions.map(c => ({
+            text: c.name,
+            onPress: () => {
+              setTrainingCompanionId(c.id);
+              setTrainingCompanionName(c.name);
+              setShowTrainerV2(true);
+            },
+          }));
+          options.push({ text: 'Cancel', onPress: () => {}, style: 'cancel' });
+          Alert.alert('Train wake word for which companion?', 'Each companion has its own wake word.', options);
+        }}>
           <Text style={[styles.trainBtnText, { color: '#10b981' }]}>🎤 Wake training</Text>
-          <Text style={styles.trainBtnSub}>Record 3 voice samples for a chosen phrase</Text>
+          <Text style={styles.trainBtnSub}>
+            {trainingCompanionId
+              ? `Record 3 voice samples for ${trainingCompanionName} (${availableCompanions.length} companion${availableCompanions.length === 1 ? '' : 's'} on this device)`
+              : 'Loading companions…'}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.trainBtn, { borderColor: '#10b981' }]} onPress={() => setShowTester(true)}>
           <Text style={[styles.trainBtnText, { color: '#10b981' }]}>🎤 Test wake detection</Text>

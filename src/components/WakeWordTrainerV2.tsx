@@ -32,7 +32,11 @@ const { WakeWordModule } = NativeModules;
 import TrainingSummary from './TrainingSummary';
 import RNFS from 'react-native-fs';
 
-const getWakeSamplesKey = (phrase: string) => `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
+// v3.1.67: per-companion storage key. Each companion has
+// its own wake word stored under its agent ID (e.g.
+// "cyberclaw-wake-samples-clawsuu"). Tobe: "we should
+// rather train other wake words for other companions."
+const getWakeSamplesKey = (id: string) => `cyberclaw-wake-samples-${id}`;
 const REQUIRED_SAMPLES = 3;
 
 interface TrainedSample {
@@ -43,13 +47,26 @@ interface TrainedSample {
 }
 
 interface Props {
-  wakePhrase?: string;
+  // v3.1.67: companion to train for. The wake word is
+  // specific to this companion. Each companion has its own
+  // wake word (e.g. "hey clawsuu" for clawsuu, "yo
+  // lamasuu" for lamasuu). Tobe: "we should rather train
+  // other wake words for other companions. So, in the
+  // settings for wake training the user should select which
+  // companion to train for."
+  companionId: string;
+  companionName: string;
+  availableCompanions?: Array<{ id: string; name: string }>;  // for the selector UI
+  onSelectCompanion?: (id: string) => void;
   onComplete: (success: boolean) => void;
   onCancel: () => void;
 }
 
-export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey clawsuu', onComplete, onCancel }: Props) {
-  const [wakePhrase, setWakePhrase] = useState(initialPhrase);
+export default function WakeWordTrainerV2({ companionId, companionName, availableCompanions, onSelectCompanion, onComplete, onCancel }: Props) {
+  // v3.1.67: default wake phrase is "hey {companionName}".
+  // The user can edit it but it's pre-filled so the common
+  // case is just "train this companion's wake word".
+  const [wakePhrase, setWakePhrase] = useState(`hey ${companionName}`);
   const [started, setStarted] = useState(true); // Start recording immediately
   const [currentSample, setCurrentSample] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
@@ -209,24 +226,49 @@ export default function WakeWordTrainerV2({ wakePhrase: initialPhrase = 'hey cla
 
   const saveSamples = useCallback(async () => {
     try {
+      // v3.1.67: storage key is per-companion, not per-phrase.
+      // Each companion has its own wake word stored under its
+      // agent ID. The phrase is saved as metadata.
+      const key = getWakeSamplesKey(companionId);
+      // v3.1.67: read existing samples and append the new
+      // ones, instead of overwriting. Tobe: "i tried to add
+      // more samples to train wake word better but it replaced
+      // my old ones. Could we not just add even more for
+      // better accuracy?" The trainer previously overwrote
+      // the storage entry on save, losing previous samples.
+      // Now we read the existing entry, append the new
+      // features, and write back. Caps at MAX_SAMPLES (12)
+      // to prevent unbounded growth.
+      const MAX_SAMPLES = 12;
+      let existingFeatures = [];
+      try {
+        const existing = await AsyncStorage.getItem(key);
+        if (existing) {
+          const parsed = JSON.parse(existing);
+          if (parsed?.features?.length) existingFeatures = parsed.features;
+        }
+      } catch (_) {}
+      const mergedFeatures = [...existingFeatures, ...samples.map(s => s.features)].slice(-MAX_SAMPLES);
+      const mergedQualityScores = [...qualityScores];  // current session's quality scores
+
       await AsyncStorage.setItem(
-        getWakeSamplesKey(wakePhrase),
+        key,
         JSON.stringify({
           phrase: wakePhrase,
-          sampleCount: samples.length,
-          qualityScores,
+          sampleCount: mergedFeatures.length,
+          qualityScores: mergedQualityScores,
           overallQuality,
           trainedAt: new Date().toISOString(),
-          features: samples.map(s => s.features),
+          features: mergedFeatures,
         })
       );
       
-      setMessage('✅ Training saved! Ready to use.');
-      setTimeout(() => onComplete(true), 1000);
+      setMessage(`✅ Saved! Now have ${mergedFeatures.length} samples total.`);
+      setTimeout(() => onComplete(true), 1500);
     } catch (e: any) {
       setMessage(`Error saving: ${e.message}`);
     }
-  }, [samples, qualityScores, overallQuality, wakePhrase, onComplete]);
+  }, [samples, qualityScores, overallQuality, companionId, wakePhrase, onComplete]);
 
   const resetTraining = () => {
     setCurrentSample(0);

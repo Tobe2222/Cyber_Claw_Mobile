@@ -26,7 +26,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import { getVAD, resetVAD } from '../services/SileroVAD';
-import { extractAudioFeatures, matchAgainstTraining, AudioFeatures } from '../services/AudioSampleMatcher';
+import { extractAudioFeatures, matchAgainstTraining, matchAgainstAllCompanions, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array } from '../services/AudioUtils';
 
 import { addLogEntry } from './HomeScreen';
@@ -52,9 +52,8 @@ const getWakeSamplesKey = (phrase: string) =>
   `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 
 function startSampleMatchListener(
-  _phrase: string,
-  trainingFeatures: AudioFeatures[],
-  onDetected: () => void,
+  companionsTraining: Array<{ companionId: string; features: AudioFeatures[] }>,
+  onDetected: (matchedCompanionId: string) => void,
   onLog?: (msg: string) => void,
   threshold?: number,
 ): () => void {
@@ -66,11 +65,13 @@ function startSampleMatchListener(
       const pcm16 = base64ToInt16Array(e.wav);
       if (pcm16.length < 1600) return;
       const features = extractAudioFeatures(pcm16);
-      const result = await matchAgainstTraining(features, trainingFeatures, matchThreshold);
-      if (result.score > 0.45) onLog?.(`sample match: ${(result.score * 100).toFixed(0)}% (thr: ${(matchThreshold * 100).toFixed(0)}%)`);
-      if (result.matched && !stopped) {
-        onLog?.(`\u2705 Wake word matched! (${(result.score * 100).toFixed(0)}%)`);
-        onDetected();
+      // v3.1.67: per-companion matcher. Returns which
+      // companion's wake word matched (if any).
+      const result = await matchAgainstAllCompanions(features, companionsTraining, matchThreshold);
+      if (result.score > 0.45) onLog?.(`sample match: ${(result.score * 100).toFixed(0)}% (${result.matchedCompanionId || 'no-companion'}) (thr: ${(matchThreshold * 100).toFixed(0)}%)`);
+      if (result.matched && !stopped && result.matchedCompanionId) {
+        onLog?.(`\u2705 Wake word matched for ${result.matchedCompanionId}! (${(result.score * 100).toFixed(0)}%)`);
+        onDetected(result.matchedCompanionId);
       }
     } catch (err: any) {
       onLog?.(`sample match error: ${err.message}`);
@@ -99,9 +100,14 @@ interface WakeModeScreenProps {
   // a prop that swaps the function (wake listener vs VAD+
   // recorder) while keeping the visual identical.
   voiceMode?: boolean;
+  // v3.1.67: called when the wake word matches. Receives
+  // the matched companionId so the parent (App.tsx) can
+  // update its active companion and the wake mode can show
+  // the right one.
+  onWakeMatch?: (matchedCompanionId: string) => void;
 }
 
-export default function WakeModeScreen({ companionId, agents, onExit, voiceMode = false }: WakeModeScreenProps) {
+export default function WakeModeScreen({ companionId, agents, onExit, voiceMode = false, onWakeMatch }: WakeModeScreenProps) {
   const webViewRef = useRef<WebView>(null);
   const recorderActiveRef = useRef<boolean>(false);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
@@ -243,49 +249,37 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
     (async () => {
       try {
-        const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-        const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
-        const phrase = settings.wakeWord || 'hey clawsuu';
-        // v3.1.29: same fallback as HomeScreen. If the
-        // settings-phrase has no training data, look for any
-        // trained phrase in AsyncStorage and use that. This
-        // handles the case where the settings got reset to
-        // a different phrase after training. The user is
-        // told which phrase is actually being used so they
-        // can re-train if they want.
-        let trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
-        let usedPhrase = phrase;
-        if (!trainingJson || !JSON.parse(trainingJson || '{}')?.features?.length) {
+        // v3.1.67: per-companion wake training. Load all
+        // companions' training data (keyed by companion ID,
+        // not phrase) and match against all of them. When
+        // a match fires, the matched companionId is sent
+        // to App.tsx so the wake mode shows the right one.
+        // Falls back to the old single-phrase format if no
+        // per-companion data exists.
+        const allKeys = await AsyncStorage.getAllKeys();
+        const sampleKeys = allKeys.filter(k => k.startsWith('cyberclaw-wake-samples-'));
+        const companionsTraining = [];
+        for (const key of sampleKeys) {
           try {
-            const allKeys = await AsyncStorage.getAllKeys();
-            const sampleKeys = allKeys.filter(k => k.startsWith('cyberclaw-wake-samples-'));
-            for (const key of sampleKeys) {
-              const raw = await AsyncStorage.getItem(key).catch(() => null);
-              if (!raw) continue;
-              const parsed = JSON.parse(raw);
-              if (parsed?.features?.length) {
-                trainingJson = raw;
-                const slug = key.replace('cyberclaw-wake-samples-', '');
-                usedPhrase = slug.replace(/-/g, ' ').toLowerCase();
-                addLogEntry(
-                  `⚠️ No samples for "${phrase}" — using samples for "${usedPhrase}" instead. Re-train to fix.`,
-                  'warn',
-                );
-                break;
-              }
+            const raw = await AsyncStorage.getItem(key);
+            if (!raw) continue;
+            const parsed = JSON.parse(raw);
+            if (parsed?.features?.length) {
+              const companionId = key.replace('cyberclaw-wake-samples-', '');
+              companionsTraining.push({ companionId, features: parsed.features });
             }
-          } catch {
-            // fall through
-          }
+          } catch (_) {}
         }
-        const training = trainingJson ? JSON.parse(trainingJson) : null;
 
         if (cancelled) return;
 
-        if (training?.features?.length) {
-          addLogEntry(`🎤 Wake Mode active — listening for: "${usedPhrase}"`, 'info');
+        if (companionsTraining.length > 0) {
+          addLogEntry(`🎤 Wake Mode active — listening for ${companionsTraining.length} companion wake word(s)`, 'info');
           addVoiceLog('Wake listening...');
-          addVoiceLog(`Matching: "${usedPhrase}"`);
+          for (const c of companionsTraining) {
+            const comp = c.companionId;
+            addVoiceLog(`Matching: ${comp}`);
+          }
           addVoiceLog('🔴 Recording...');
 
           // Speak "ready to chat"
@@ -294,8 +288,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           }).catch(() => speak('Ready to chat'));
 
           cleanup = startSampleMatchListener(
-            usedPhrase,
-            training.features,
+            companionsTraining,
             handleWakeWordInner,
             (msg) => addLogEntry(msg, 'debug'),
             // v3.1.49: read the user-configured FG threshold from
@@ -319,12 +312,21 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   }, []);
 
   // When a wake match fires inside Wake Mode, start recording
-  const handleWakeWordInner = useCallback(async () => {
+  // v3.1.67: takes the matched companionId from the matcher
+  // so we can update App.tsx's active companion.
+  const handleWakeWordInner = useCallback(async (matchedCompanionId?: string) => {
     if (wakeWordBusyRef.current) return;
     wakeWordBusyRef.current = true;
     setVoiceStatus('listening');
-    addLogEntry('🎤 Wake word matched - recording', 'info');
+    addLogEntry(`🎤 Wake word matched for ${matchedCompanionId || 'unknown'} - recording`, 'info');
     addVoiceLog('🎤 Listening...');
+
+    // v3.1.67: tell the parent (App.tsx) which companion
+    // matched so it can update the active companion and
+    // the wake mode shows the right one.
+    if (matchedCompanionId) {
+      onWakeMatch?.(matchedCompanionId);
+    }
 
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
@@ -411,14 +413,25 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         setVoiceStatus('listening');
         addVoiceLog('Wake listening...');
         try {
-          const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-          const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
-          const phrase = settings.wakeWord || 'hey clawsuu';
-          const trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase)).catch(() => null);
-          const training = trainingJson ? JSON.parse(trainingJson) : null;
-          if (training?.features?.length && !sampleListenerCleanupRef.current) {
+          // v3.1.67: per-companion matcher on listener
+          // restart (after the response audio finishes).
+          const allKeysRestart = await AsyncStorage.getAllKeys();
+          const sampleKeysRestart = allKeysRestart.filter(k => k.startsWith('cyberclaw-wake-samples-'));
+          const companionsTrainingRestart = [];
+          for (const key of sampleKeysRestart) {
+            try {
+              const raw = await AsyncStorage.getItem(key);
+              if (!raw) continue;
+              const parsed = JSON.parse(raw);
+              if (parsed?.features?.length) {
+                const cid = key.replace('cyberclaw-wake-samples-', '');
+                companionsTrainingRestart.push({ companionId: cid, features: parsed.features });
+              }
+            } catch (_) {}
+          }
+          if (companionsTrainingRestart.length > 0 && !sampleListenerCleanupRef.current) {
             sampleListenerCleanupRef.current = startSampleMatchListener(
-              phrase, training.features, handleWakeWordInner,
+              companionsTrainingRestart, handleWakeWordInner,
               (m) => addLogEntry(m, 'debug'),
             );
             addLogEntry('🔄 Wake Mode: sample listener restarted', 'debug');
