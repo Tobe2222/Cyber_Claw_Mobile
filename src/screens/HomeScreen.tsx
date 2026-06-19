@@ -260,7 +260,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null }>) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -307,7 +307,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
   // agents_list replay arrives. The desktop broadcast (or the
   // on-mount requestAgentsList call) refreshes the cached list
   // shortly after.
-  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>(() => {
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null }>>(() => {
     try {
       // Eager synchronous read isn't possible with AsyncStorage, so
       // we leave this empty and let the useEffect below hydrate it
@@ -348,7 +348,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
   // v3.1.16: same trick for the agents list so onTyping and
   // other handlers can read the latest names without a stale
   // closure over the `agents` state.
-  const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null }>>([]);
+  const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null }>>([]);
   // v3.1.59: report the latest agents list to App.tsx so
   // WakeModeScreen (which mounts a fresh WebView) can call
   // setAgents with the same data. Without this, the wake
@@ -2336,7 +2336,9 @@ useEffect(() => {
       if (item.agentName) return item.agentName;
       if (item.agentId) {
         const a = (agents || []).find(x => x.id === item.agentId);
-        if (a) return `${a.emoji || '🐾'} ${a.name}`;
+        // v3.1.68: prefer agent.emoji, fall back to the sprite icon
+        // sent by the desktop, finally to the generic paw.
+        if (a) return `${a.emoji || a.icon || '🐾'} ${a.name}`;
         return `🐾 ${item.agentId}`;
       }
       return '🐾 Clawsuu';
@@ -2653,9 +2655,13 @@ useEffect(() => {
                 {/* v3.1.47: companion tab no longer shows the robot emoji
                     fallback when a.emoji is missing. The companion name is
                     the only label now. If a.emoji is set we use it; if not,
-                    we just show the name. */}
-                {a.emoji ? (
-                  <Text style={styles.companionTabEmoji}>{a.emoji}</Text>
+                    we just show the name.
+                    v3.1.68: fall back to the sprite icon (sent by the
+                    desktop's agents_list payload) so newly added companions
+                    show a meaningful icon next to the name without the user
+                    having to set an emoji manually. */}
+                {(a.emoji || a.icon) ? (
+                  <Text style={styles.companionTabEmoji}>{a.emoji || a.icon}</Text>
                 ) : null}
                 <Text style={[styles.companionTabName, isActive && styles.companionTabNameActive]} numberOfLines={1}>
                   {a.name}
@@ -2735,7 +2741,7 @@ useEffect(() => {
                         : (() => {
                             const a = (agents || []).find(x => x.id === activeChatAgentId);
                             const name = a?.name || activeChatAgentId;
-                            return `Say hi to ${name}! ${a?.emoji || '🐾'}`;
+                            return `Say hi to ${name}! ${a?.emoji || a?.icon || '🐾'}`;
                           })()}
                   </Text>
                 </View>

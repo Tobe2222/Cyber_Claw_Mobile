@@ -22,6 +22,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
   Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules, BackHandler,
+  Modal, Pressable,
 } from 'react-native';
 const { BackgroundService, WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -102,6 +103,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [showWakePhraseMenu, setShowWakePhraseMenu] = useState(false);
   const [showTrainingDetail, setShowTrainingDetail] = useState(false);
   const [showTester, setShowTester] = useState(false);
+  // v3.1.68: companion picker is a proper modal sheet now (not a
+  // system Alert). State holds the open/close flag.
+  const [showCompanionPicker, setShowCompanionPicker] = useState(false);
 
   // v3.1.67: per-companion wake training. Each companion has
   // its own wake word. The trainer takes a companionId +
@@ -111,7 +115,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // connected to the desktop to open the trainer.
   const [trainingCompanionId, setTrainingCompanionId] = useState<string | null>(null);
   const [trainingCompanionName, setTrainingCompanionName] = useState<string>('');
-  const [availableCompanions, setAvailableCompanions] = useState<Array<{ id: string; name: string }>>([]);
+  const [availableCompanions, setAvailableCompanions] = useState<Array<{ id: string; name: string; emoji?: string | null; icon?: string | null }>>([]);
 
   // Hydrate the companion list from local cache on mount.
   // v3.1.67: the wake trainer is per-companion now, so the
@@ -123,7 +127,12 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setAvailableCompanions(parsed.map((a: any) => ({ id: a.id, name: a.name })));
+            setAvailableCompanions(parsed.map((a: any) => ({
+              id: a.id,
+              name: a.name,
+              emoji: a.emoji || null,
+              icon: a.icon || null,
+            })));
             // Default to the first companion for the trainer
             setTrainingCompanionId(parsed[0].id);
             setTrainingCompanionName(parsed[0].name);
@@ -450,6 +459,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   // ── Main settings render ─────────────────────────────────────
   return (
+    <>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack}>
@@ -657,6 +667,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           // v3.1.67: open the companion picker first (each
           // companion has its own wake word). After the
           // user picks a companion, show the trainer.
+          // v3.1.68: replaced the native Alert with a proper
+          // modal sheet (CompanionPickerModal) that shows each
+          // companion with its sprite icon.
           if (availableCompanions.length === 0) {
             Alert.alert(
               'No companions yet',
@@ -671,20 +684,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             setShowTrainerV2(true);
             return;
           }
-          // Multiple companions — show a picker via Alert
-          // (the trainer itself doesn't have a back button
-          // to navigate to a picker, so we use Alert which
-          // the user can dismiss with Cancel).
-          const options = availableCompanions.map(c => ({
-            text: c.name,
-            onPress: () => {
-              setTrainingCompanionId(c.id);
-              setTrainingCompanionName(c.name);
-              setShowTrainerV2(true);
-            },
-          }));
-          options.push({ text: 'Cancel', onPress: () => {}, style: 'cancel' });
-          Alert.alert('Train wake word for which companion?', 'Each companion has its own wake word.', options);
+          // Multiple companions — open the custom modal picker.
+          setShowCompanionPicker(true);
         }}>
           <Text style={[styles.trainBtnText, { color: '#10b981' }]}>🎤 Wake training</Text>
           <Text style={styles.trainBtnSub}>
@@ -827,6 +828,52 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
       <View style={{ height: 40 }} />
     </ScrollView>
+
+    {/* v3.1.68: companion picker modal (replaces the native
+        Alert.alert that was here). Each row shows the
+        companion's sprite icon next to its name so the user
+        can pick the right one to train the wake word for. */}
+    <Modal
+      visible={showCompanionPicker}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowCompanionPicker(false)}
+    >
+      <Pressable
+        style={styles.pickerOverlay}
+        onPress={() => setShowCompanionPicker(false)}
+      >
+        <Pressable style={styles.pickerSheet} onPress={() => { /* swallow */ }}>
+          <Text style={styles.pickerTitle}>Train wake word for…</Text>
+          <Text style={styles.pickerSub}>Each companion has its own wake word.</Text>
+          <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
+            {availableCompanions.map((c) => (
+              <TouchableOpacity
+                key={c.id}
+                style={styles.pickerRow}
+                onPress={() => {
+                  setTrainingCompanionId(c.id);
+                  setTrainingCompanionName(c.name);
+                  setShowCompanionPicker(false);
+                  setShowTrainerV2(true);
+                }}
+              >
+                <Text style={styles.pickerRowIcon}>{c.emoji || c.icon || '🐾'}</Text>
+                <Text style={styles.pickerRowName} numberOfLines={1}>{c.name}</Text>
+                <Text style={styles.pickerRowHint}>train →</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <TouchableOpacity
+            style={styles.pickerCancel}
+            onPress={() => setShowCompanionPicker(false)}
+          >
+            <Text style={styles.pickerCancelText}>Cancel</Text>
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  </>
   );
 }
 
@@ -939,4 +986,82 @@ const styles = StyleSheet.create({
   aboutFooter: { alignItems: 'center', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#222' },
   aboutVersion: { color: '#666', fontSize: 12 },
   aboutLink: { color: '#444', fontSize: 11, marginTop: 4 },
+  // v3.1.68: wake-training companion picker modal. Bottom
+  // sheet style with a dimmed backdrop. The backdrop
+  // Pressable closes the modal; the inner Pressable
+  // swallows taps so clicking a row or the Cancel button
+  // doesn't bubble up and close the sheet.
+  pickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  pickerSheet: {
+    backgroundColor: '#111',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: Platform.OS === 'android' ? 24 : 16,
+    borderTopWidth: 1,
+    borderColor: '#222',
+  },
+  pickerTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  pickerSub: {
+    color: '#888',
+    fontSize: 12,
+    marginBottom: 12,
+  },
+  pickerList: {
+    maxHeight: 360,
+  },
+  pickerListContent: {
+    paddingBottom: 4,
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1a1a2e',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  pickerRowIcon: {
+    fontSize: 24,
+    width: 36,
+    textAlign: 'center',
+    marginRight: 12,
+  },
+  pickerRowName: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+    flex: 1,
+  },
+  pickerRowHint: {
+    color: '#f7931a',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  pickerCancel: {
+    backgroundColor: '#222',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  pickerCancelText: {
+    color: '#ccc',
+    fontSize: 15,
+    fontWeight: '600',
+  },
 });
