@@ -1,6 +1,6 @@
 {
   "name": "CyberClawMobile",
-  "version": "3.1.67",
+  "version": "3.1.68",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
@@ -47,5 +47,5 @@
   "engines": {
     "node": ">= 22.11.0"
   },
-  "description": "CyberClaw Mobile — Voice-first mobile companion for CyberClaw. Talk to your AI companion, use wake word, and extend agent reach to your device."
+  "description": "CyberClaw Mobile \u2014 Voice-first mobile companion for CyberClaw. Talk to your AI companion, use wake word, and extend agent reach to your device."
 }
