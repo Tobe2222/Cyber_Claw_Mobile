@@ -260,7 +260,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null }>) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -307,7 +307,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
   // agents_list replay arrives. The desktop broadcast (or the
   // on-mount requestAgentsList call) refreshes the cached list
   // shortly after.
-  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null }>>(() => {
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>>(() => {
     try {
       // Eager synchronous read isn't possible with AsyncStorage, so
       // we leave this empty and let the useEffect below hydrate it
@@ -348,7 +348,7 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
   // v3.1.16: same trick for the agents list so onTyping and
   // other handlers can read the latest names without a stale
   // closure over the `agents` state.
-  const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null }>>([]);
+  const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>>([]);
   // v3.1.59: report the latest agents list to App.tsx so
   // WakeModeScreen (which mounts a fresh WebView) can call
   // setAgents with the same data. Without this, the wake
@@ -2664,10 +2664,10 @@ useEffect(() => {
                     when available — it renders smoothly at any size and
                     looks identical across all devices, unlike system
                     emoji fonts which vary by OS. */}
-                {(a.iconFile || a.emoji || a.icon) ? (
-                  a.iconFile ? (
+                {(a.iconDataUri || a.iconFile || a.emoji || a.icon) ? (
+                  (a.iconDataUri || a.iconFile) ? (
                     <Image
-                      source={{ uri: a.iconFile }}
+                      source={{ uri: a.iconDataUri || a.iconFile }}
                       style={styles.companionTabIconImg}
                       resizeMode="contain"
                     />
