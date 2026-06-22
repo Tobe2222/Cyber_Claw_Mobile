@@ -881,7 +881,17 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
                   setTrainingCompanionId(c.id);
                   setTrainingCompanionName(c.name);
                   setShowCompanionPicker(false);
-                  setShowTrainerV2(true);
+                  // v3.1.76: take the user to the Wake Phrases menu
+                  // first (a per-companion list of trained phrases),
+                  // not directly into the recording screen. The user
+                  // can then see what's already trained, add a new
+                  // phrase, or pick an existing phrase to add more
+                  // samples to. The recording screen is one click
+                  // away from there. The previous flow skipped the
+                  // "what phrases are trained?" context and dropped
+                  // the user straight into recording a default
+                  // phrase.
+                  setShowWakePhraseMenu(true);
                 }}
               >
                 <Text style={styles.pickerRowIcon}>{c.emoji || c.icon || '🐾'}</Text>
