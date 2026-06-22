@@ -897,6 +897,14 @@ body.wake-mode #ctrlRight{display:none!important}
     // (16px, ~2x) so the name is readable when the companion is
     // scaled to 10. Tobe: "the companion name in these modes can
     // be twice as big".
+    // v3.1.72: prefix the sprite catalog emoji (e.g. 🦊 for fox)
+    // to the name so the arena label matches the chat tab/label
+    // on the mobile. The catalog entry for the sprite has an
+    // `icon` field that's a single-emoji string. If the catalog
+    // doesn't have one (or the WebView was built before the
+    // catalog gained the field), fall through to the bare name.
+    const spriteIcon = (c.data && c.data.icon) ? `${c.data.icon} ` : '';
+    const displayName = `${spriteIcon}${c.name}`;
     const fontSize = c._centered ? 16 : 8;
     ctx.fillStyle = '#f7931a';
     ctx.font = `bold ${fontSize}px "Orbitron", monospace`;
@@ -904,7 +912,7 @@ body.wake-mode #ctrlRight{display:none!important}
     // In centered mode, the companion fills the canvas so the
     // name goes ABOVE the canvas (negative y).
     const nameY = c._centered ? Math.max(12, c.y - 6) : c.y - 3;
-    ctx.fillText(c.name, c.x + dw / 2, nameY);
+    ctx.fillText(displayName, c.x + dw / 2, nameY);
   }
 
   // v3.1.48: drawDebug removed (overlay turned off per Tobe's request).
