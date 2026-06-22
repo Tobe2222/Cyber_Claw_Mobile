@@ -2678,16 +2678,16 @@ useEffect(() => {
                     when available — it renders smoothly at any size and
                     looks identical across all devices, unlike system
                     emoji fonts which vary by OS. */}
-                {(a.iconDataUri || a.iconFile || a.emoji || a.icon) ? (
-                  (a.iconDataUri || a.iconFile) ? (
-                    <Image
-                      source={{ uri: a.iconDataUri || a.iconFile }}
-                      style={styles.companionTabIconImg}
-                      resizeMode="contain"
-                    />
-                  ) : (
-                    <Text style={styles.companionTabEmoji}>{a.emoji || a.icon}</Text>
-                  )
+                {/* v3.1.73: drop the <Image>/SVG path and always render
+                    the catalog emoji as text. The mobile doesn't have
+                    react-native-svg installed, so a.iconDataUri (an
+                    SVG data URI) silently failed to load in <Image> —
+                    the chat tab rendered nothing while the chat label
+                    used a.icon directly and worked. Same chain as the
+                    chat label: a.emoji (per-agent override) → a.icon
+                    (sprite catalog emoji) → nothing. */}
+                {(a.emoji || a.icon) ? (
+                  <Text style={styles.companionTabEmoji}>{a.emoji || a.icon}</Text>
                 ) : null}
                 <Text style={[styles.companionTabName, isActive && styles.companionTabNameActive]} numberOfLines={1}>
                   {a.name}
