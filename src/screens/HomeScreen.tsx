@@ -2331,16 +2331,25 @@ useEffect(() => {
     // v3.1.16: prefer a lookup against the cached `agents` list so
     // the fallback label uses the user's chosen name (customName on
     // the desktop) and emoji instead of the hard-coded 'Clawsuu'.
+    // v3.1.71: always look up the agent from the cached `agents`
+    // list first — `item.agentName` from the desktop is just the
+    // bare name with no emoji prefix, so returning it directly
+    // short-circuited the v3.1.68 emoji/icon fallback and the
+    // message labels rendered without an icon. The desktop v3.1.29
+    // already sends emoji + icon + iconFile + iconDataUri per
+    // agent in the agents_list broadcast, so the lookup is the
+    // canonical source for the rendered label.
     const agentLabel = (() => {
       if (item.isUser) return '👤 You';
-      if (item.agentName) return item.agentName;
       if (item.agentId) {
         const a = (agents || []).find(x => x.id === item.agentId);
-        // v3.1.68: prefer agent.emoji, fall back to the sprite icon
-        // sent by the desktop, finally to the generic paw.
+        // prefer agent.emoji, fall back to the sprite icon sent by
+        // the desktop, finally to the generic paw.
         if (a) return `${a.emoji || a.icon || '🐾'} ${a.name}`;
+        if (item.agentName) return item.agentName;
         return `🐾 ${item.agentId}`;
       }
+      if (item.agentName) return item.agentName;
       return '🐾 Clawsuu';
     })();
 
@@ -2358,7 +2367,12 @@ useEffect(() => {
         </View>
       </View>
     );
-  }, [messages]);
+    // v3.1.71: also depend on `agents` so the message label re-renders
+    // when the agents state is hydrated from cache or refreshed by a
+    // fresh `agents_list` broadcast from the desktop. Without this,
+    // messages rendered with the old (stale, no-icon) agents state
+    // never updated when new agent data arrived.
+  }, [messages, agents]);
 
   const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
     // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)
