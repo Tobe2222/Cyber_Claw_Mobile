@@ -28,7 +28,7 @@ const { BackgroundService, WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/AudioBuffer';
-import WakeWordTrainerV2 from '../components/WakeWordTrainerV2';
+
 import WakePhraseMenu from '../components/WakePhraseMenu';
 import TrainingDetailScreen from '../components/TrainingDetailScreen';
 import WakeWordTester from '../components/WakeWordTester';
@@ -99,7 +99,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [audioSettingsSavedAt, setAudioSettingsSavedAt] = useState<number | null>(null);
 
   // Wake training sub-screens (full-screen modals)
-  const [showTrainerV2, setShowTrainerV2] = useState(false);
+  
   const [showWakePhraseMenu, setShowWakePhraseMenu] = useState(false);
   const [showTrainingDetail, setShowTrainingDetail] = useState(false);
   const [showTester, setShowTester] = useState(false);
@@ -136,6 +136,16 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             // Default to the first companion for the trainer
             setTrainingCompanionId(parsed[0].id);
             setTrainingCompanionName(parsed[0].name);
+            // v3.1.77: migrate legacy wake-samples keys into the
+            // per-companion training entry. Idempotent — only
+            // runs once per device (companions with new-shape
+            // data are skipped).
+            (async () => {
+              try {
+                const { migrateLegacyPhraseKeys } = await import('../services/WakeTrainingModel');
+                await migrateLegacyPhraseKeys(parsed.map((a: any) => ({ id: a.id, name: a.name })));
+              } catch (_) {}
+            })();
           }
         }
       } catch (_) {}
@@ -168,7 +178,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // ── Back button: navigate sub-screens first, then exit ───────
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (showTrainerV2) { setShowTrainerV2(false); setShowWakePhraseMenu(true); return true; }
       if (showTrainingDetail) { setShowTrainingDetail(false); setShowWakePhraseMenu(true); return true; }
       if (showWakePhraseMenu) { setShowWakePhraseMenu(false); return true; }
       if (showTester) { setShowTester(false); return true; }
@@ -176,7 +185,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       return true;
     });
     return () => backHandler.remove();
-  }, [onBack, showTrainerV2, showTrainingDetail, showWakePhraseMenu, showTester]);
+  }, [onBack, showTrainingDetail, showWakePhraseMenu, showTester]);
 
   // Clear pending debounce on unmount
   useEffect(() => () => {
@@ -420,47 +429,32 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     Alert.alert('🔊 Sent to desktop', 'The desktop should speak the test phrase.');
   };
 
-  // ── Sub-screens (full-screen modals) ─────────────────────────
+  // v3.1.77: TrainingDetailScreen now handles per-phrase
+  // style-tagged sample capture internally (it mounts
+  // SampleTrainer for each style row). The previous
+  // onAddTraining → setShowTrainerV2 path is gone — the
+  // recording happens inside the detail screen.
   if (showTrainingDetail) {
     return (
       <TrainingDetailScreen
+        companionId={trainingCompanionId || 'unknown'}
+        companionName={trainingCompanionName || 'Companion'}
         phrase={selectedWakePhrase}
         onBack={() => { setShowTrainingDetail(false); setShowWakePhraseMenu(true); }}
-        onAddTraining={(phrase: string) => {
-          setSelectedWakePhrase(phrase);
-          setShowTrainingDetail(false);
-          setShowTrainerV2(true);
-        }}
       />
     );
   }
   if (showWakePhraseMenu) {
     return (
       <WakePhraseMenu
+        companionId={trainingCompanionId || 'unknown'}
+        companionName={trainingCompanionName || 'Companion'}
         onSelectPhrase={(phrase) => {
           setSelectedWakePhrase(phrase);
           setShowWakePhraseMenu(false);
           setShowTrainingDetail(true);
         }}
         onClose={() => setShowWakePhraseMenu(false)}
-      />
-    );
-  }
-  if (showTrainerV2) {
-    return (
-      <WakeWordTrainerV2
-        companionId={trainingCompanionId || 'unknown'}
-        companionName={trainingCompanionName || 'Companion'}
-        availableCompanions={availableCompanions}
-        onSelectCompanion={(id) => {
-          const c = availableCompanions.find(x => x.id === id);
-          if (c) {
-            setTrainingCompanionId(c.id);
-            setTrainingCompanionName(c.name);
-          }
-        }}
-        onComplete={() => { setShowTrainerV2(false); }}
-        onCancel={() => { setShowTrainerV2(false); }}
       />
     );
   }
@@ -694,10 +688,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             return;
           }
           if (availableCompanions.length === 1) {
-            // Only one companion — go straight to the trainer
+            // Only one companion — skip the picker and go straight
+            // to that companion's Wake Phrases menu.
             setTrainingCompanionId(availableCompanions[0].id);
             setTrainingCompanionName(availableCompanions[0].name);
-            setShowTrainerV2(true);
+            setShowWakePhraseMenu(true);
             return;
           }
           // Multiple companions — open the custom modal picker.
@@ -706,7 +701,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={[styles.trainBtnText, { color: '#10b981' }]}>🎤 Wake training</Text>
           <Text style={styles.trainBtnSub}>
             {trainingCompanionId
-              ? `Record 3 voice samples for ${trainingCompanionName} (${availableCompanions.length} companion${availableCompanions.length === 1 ? '' : 's'} on this device)`
+              ? `Train ${trainingCompanionName}'s wake phrase(s) — Normal / Loud / Whisper / Short / Elongated`
               : 'Loading companions…'}
           </Text>
         </TouchableOpacity>

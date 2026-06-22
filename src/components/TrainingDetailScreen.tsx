@@ -1,277 +1,262 @@
-import React, { useState, useEffect } from 'react';
+/**
+ * TrainingDetailScreen — v3.1.77 wake training detail view.
+ *
+ * Replaces the v3.1.13 flat sample list with a per-style
+ * breakdown. For a given (companionId, phrase) pair, shows:
+ *   - 5 style rows (Normal / Loud / Whisper / Short / Elongated)
+ *     each with X/Y samples (Y = WAKE_STYLE_MAX = 3)
+ *   - "Add sample" button per style (disabled when X == Y)
+ *   - Per-sample list within each style (quality + delete)
+ *
+ * The parent (WakePhraseMenu → TrainingDetailScreen) owns
+ * which (companionId, phrase) is selected. When the user taps
+ * "Add sample" on a style row, we mount the SampleTrainer
+ * with the chosen style as a sub-view. After recording, we
+ * refresh from storage.
+ */
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert, BackHandler,
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  Alert,
+  BackHandler,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  WakeSample,
+  WakeSampleStyle,
+  WakeTrainingEntry,
+  loadWakeTraining,
+  saveWakeTraining,
+  WAKE_SAMPLE_STYLES,
+  WAKE_SAMPLE_STYLE_LABELS,
+  WAKE_STYLE_MIN,
+  WAKE_STYLE_MAX,
+  countByStyle,
+} from '../services/WakeTrainingModel';
+import SampleTrainer from './SampleTrainer';
 
-interface TrainingSample {
-  id: string;
-  date: string;
-  quality: number;
-}
-
-export default function TrainingDetailScreen({ phrase, onBack, onAddTraining }: {
+interface Props {
+  companionId: string;
+  companionName: string;
   phrase: string;
   onBack: () => void;
-  onAddTraining: (phrase: string) => void;
-}) {
-  const [samples, setSamples] = useState<TrainingSample[]>([]);
+}
+
+export default function TrainingDetailScreen({ companionId, companionName, phrase, onBack }: Props) {
+  const [entry, setEntry] = useState<WakeTrainingEntry | null>(null);
+  const [trainingStyle, setTrainingStyle] = useState<WakeSampleStyle | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
-    loadSamples();
-    
-    // Handle back button
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+    let cancelled = false;
+    (async () => {
+      const e = await loadWakeTraining(companionId);
+      if (!cancelled) setEntry(e);
+    })();
+    return () => { cancelled = true; };
+  }, [companionId, reloadKey]);
+
+  useEffect(() => {
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (trainingStyle) {
+        setTrainingStyle(null);
+        setReloadKey(k => k + 1);
+        return true;
+      }
       onBack();
       return true;
     });
-    return () => backHandler.remove();
-  }, [onBack]);
+    return () => handler.remove();
+  }, [trainingStyle, onBack]);
 
-  const loadSamples = async () => {
-    try {
-      const key = `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
-      const json = await AsyncStorage.getItem(key);
-      if (json) {
-        const data = JSON.parse(json);
-        // Create samples from quality scores
-        if (data.qualityScores && data.qualityScores.length > 0) {
-          const mockSamples = data.qualityScores.map((score: number, idx: number) => ({
-            id: `${idx}`,
-            date: data.trainedAt || new Date().toISOString(),
-            quality: score || 0.8,
-          }));
-          setSamples(mockSamples);
-        } else if (data.sampleCount && data.sampleCount > 0) {
-          // Fallback if qualityScores not available
-          const mockSamples = Array(data.sampleCount).fill(0).map((_, idx) => ({
-            id: `${idx}`,
-            date: data.trainedAt || new Date().toISOString(),
-            quality: data.overallQuality || 0.8,
-          }));
-          setSamples(mockSamples);
-        }
-      }
-    } catch (e) {
-      console.error('Error loading samples:', e);
-    }
-  };
+  const phraseEntry = entry?.phrases.find(p => p.phrase.toLowerCase() === phrase.toLowerCase());
+  const samples = phraseEntry?.samples ?? [];
+  const counts = countByStyle(samples);
+  const totalSamples = samples.length;
 
-  const deleteSample = (id: string) => {
-    Alert.alert('Delete Sample?', 'This will remove this training sample.', [
+  const handleDeleteSample = async (idx: number) => {
+    if (!entry) return;
+    Alert.alert('Delete sample?', 'Remove this training sample.', [
       { text: 'Cancel' },
       {
         text: 'Delete',
-        onPress: () => {
-          setSamples(prev => prev.filter(s => s.id !== id));
-        },
         style: 'destructive',
+        onPress: async () => {
+          const updated = JSON.parse(JSON.stringify(entry)) as WakeTrainingEntry;
+          const p = updated.phrases.find(pp => pp.phrase.toLowerCase() === phrase.toLowerCase());
+          if (p) p.samples.splice(idx, 1);
+          await saveWakeTraining(companionId, updated);
+          setEntry(updated);
+        },
       },
     ]);
   };
 
-  // Back swipe gesture
+  const refresh = useCallback(() => {
+    setTrainingStyle(null);
+    setReloadKey(k => k + 1);
+  }, []);
+
+  if (trainingStyle) {
+    return (
+      <SampleTrainer
+        companionId={companionId}
+        companionName={companionName}
+        phrase={phrase}
+        style={trainingStyle}
+        onComplete={(success) => {
+          if (success) refresh();
+          else setTrainingStyle(null);
+        }}
+        onCancel={() => setTrainingStyle(null)}
+      />
+    );
+  }
+
   return (
     <View style={styles.container}>
-            <ScrollView contentContainerStyle={styles.content}>
-              <View style={styles.header}>
-                <TouchableOpacity onPress={onBack} style={styles.backBtn}>
-                  <Text style={styles.backBtnText}>← Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.title}>📊 {phrase}</Text>
-              </View>
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+            <Text style={styles.backBtnText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>📊 "{phrase}"</Text>
+          <Text style={styles.subtitle}>{companionName}</Text>
+        </View>
 
-              <View style={styles.statsBox}>
-                <Text style={styles.statsLabel}>Total Samples</Text>
-                <Text style={styles.statsValue}>{samples.length}</Text>
-              </View>
+        <View style={styles.statsBox}>
+          <Text style={styles.statsLabel}>Total samples</Text>
+          <Text style={styles.statsValue}>{totalSamples}</Text>
+        </View>
 
-              {samples.length === 0 ? (
-                <View style={styles.emptyBox}>
-                  <Text style={styles.emptyText}>No samples yet</Text>
-                  <Text style={styles.emptySubtext}>Add your first training sample below</Text>
-                </View>
+        {WAKE_SAMPLE_STYLES.map(style => {
+          const ofStyle = samples.filter(s => s.style === style);
+          const count = counts[style];
+          const minOk = count >= WAKE_STYLE_MIN;
+          const atMax = count >= WAKE_STYLE_MAX;
+          return (
+            <View key={style} style={styles.styleBox}>
+              <View style={styles.styleHeader}>
+                <Text style={styles.styleLabel}>
+                  {WAKE_SAMPLE_STYLE_LABELS[style]}
+                </Text>
+                <Text style={[styles.styleCount, !minOk && styles.styleCountMissing]}>
+                  {count}/{WAKE_STYLE_MAX}
+                  {!minOk && '  • 1+ required'}
+                </Text>
+              </View>
+              {ofStyle.length === 0 ? (
+                <Text style={styles.styleEmpty}>No samples yet</Text>
               ) : (
-                <View style={styles.samplesList}>
-                  <Text style={styles.samplesTitle}>Training Samples</Text>
-                  {samples.map((sample, idx) => (
-                    <View key={sample.id} style={styles.sampleCard}>
-                      <View style={styles.sampleInfo}>
-                        <Text style={styles.sampleLabel}>Sample {idx + 1}</Text>
-                        <Text style={styles.sampleMeta}>
-                          Quality: {(sample.quality * 100).toFixed(0)}%
-                        </Text>
-                        <Text style={styles.sampleDate}>
-                          {new Date(sample.date).toLocaleDateString()}
-                        </Text>
-                      </View>
-
-                      <View
-                        style={[
-                          styles.qualityDot,
-                          {
-                            backgroundColor:
-                              sample.quality > 0.7 ? '#10b981' : sample.quality > 0.5 ? '#f59e0b' : '#ef4444',
-                          },
-                        ]}
-                      />
-
-                      <TouchableOpacity
-                        style={styles.deleteBtn}
-                        onPress={() => deleteSample(sample.id)}
-                      >
-                        <Text style={styles.deleteBtnText}>✕</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </View>
+                ofStyle.map((s, idx) => (
+                  <SampleRow
+                    key={`${s.date}-${idx}`}
+                    sample={s}
+                    index={samples.indexOf(s) + 1}
+                    onDelete={() => handleDeleteSample(samples.indexOf(s))}
+                  />
+                ))
               )}
-
-              <TouchableOpacity style={styles.addBtn} onPress={() => onAddTraining(phrase)}>
-                <Text style={styles.addBtnText}>+ Add More Samples</Text>
+              <TouchableOpacity
+                style={[styles.addStyleBtn, atMax && styles.addStyleBtnDisabled]}
+                onPress={() => setTrainingStyle(style)}
+                disabled={atMax}
+              >
+                <Text style={styles.addStyleBtnText}>
+                  {atMax ? `${WAKE_SAMPLE_STYLE_LABELS[style]} • full` : `+ Add ${WAKE_SAMPLE_STYLE_LABELS[style].toLowerCase()} sample`}
+                </Text>
               </TouchableOpacity>
-            </ScrollView>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function SampleRow({ sample, index, onDelete }: { sample: WakeSample; index: number; onDelete: () => void }) {
+  return (
+    <View style={styles.sampleRow}>
+      <View style={styles.sampleInfo}>
+        <Text style={styles.sampleLabel}>Sample {index}</Text>
+        <Text style={styles.sampleMeta}>
+          Quality {(sample.quality * 100).toFixed(0)}% · {sample.duration.toFixed(1)}s · {new Date(sample.date).toLocaleDateString()}
+        </Text>
+      </View>
+      <View
+        style={[
+          styles.qualityDot,
+          {
+            backgroundColor:
+              sample.quality > 0.7 ? '#10b981' : sample.quality > 0.5 ? '#f59e0b' : '#ef4444',
+          },
+        ]}
+      />
+      <TouchableOpacity style={styles.deleteBtn} onPress={onDelete}>
+        <Text style={styles.deleteBtnText}>✕</Text>
+      </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0a1a',
-  },
-  content: {
-    paddingTop: 70,
-    paddingHorizontal: 16,
-    paddingBottom: 100,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-    gap: 12,
-  },
-  backBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  backBtnText: {
-    color: '#f7931a',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  title: {
-    color: '#f7931a',
-    fontSize: 24,
-    fontWeight: 'bold',
-    flex: 1,
-  },
+  container: { flex: 1, backgroundColor: '#0a0a1a' },
+  content: { paddingTop: 60, paddingHorizontal: 16, paddingBottom: 80 },
+  header: { marginBottom: 24 },
+  backBtn: { paddingVertical: 8, paddingHorizontal: 4, marginBottom: 12 },
+  backBtnText: { color: '#f7931a', fontSize: 16, fontWeight: '600' },
+  title: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
+  subtitle: { color: '#888', fontSize: 13, marginTop: 2 },
   statsBox: {
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    borderWidth: 1,
-    borderColor: '#3b82f6',
+    backgroundColor: '#111',
     borderRadius: 12,
     padding: 16,
-    marginBottom: 24,
-    alignItems: 'center',
-  },
-  statsLabel: {
-    color: '#999',
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  statsValue: {
-    color: '#3b82f6',
-    fontSize: 28,
-    fontWeight: 'bold',
-  },
-  emptyBox: {
-    backgroundColor: 'rgba(139, 92, 246, 0.1)',
-    borderWidth: 2,
-    borderColor: '#8b5cf6',
-    borderRadius: 12,
-    padding: 24,
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  emptyText: {
-    color: '#8b5cf6',
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  emptySubtext: {
-    color: '#666',
-    fontSize: 12,
-  },
-  samplesList: {
-    marginBottom: 24,
-  },
-  samplesTitle: {
-    color: '#f7931a',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  sampleCard: {
-    backgroundColor: '#1a1a2e',
+    marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: '#f7931a',
+    alignItems: 'center',
+  },
+  statsLabel: { color: '#888', fontSize: 12, textTransform: 'uppercase' },
+  statsValue: { color: '#f7931a', fontSize: 32, fontWeight: 'bold' },
+  styleBox: {
+    backgroundColor: '#111',
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#222',
+  },
+  styleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  styleLabel: { color: '#e0e0e0', fontSize: 15, fontWeight: '600' },
+  styleCount: { color: '#888', fontSize: 13 },
+  styleCountMissing: { color: '#f59e0b' },
+  styleEmpty: { color: '#555', fontSize: 12, fontStyle: 'italic', marginBottom: 8 },
+  sampleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    backgroundColor: '#1a1a2e',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 6,
   },
-  sampleInfo: {
-    flex: 1,
-  },
-  sampleLabel: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  sampleMeta: {
-    color: '#999',
-    fontSize: 12,
-    marginBottom: 2,
-  },
-  sampleDate: {
-    color: '#666',
-    fontSize: 11,
-  },
-  qualityDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  deleteBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#ef4444',
-    justifyContent: 'center',
+  sampleInfo: { flex: 1 },
+  sampleLabel: { color: '#e0e0e0', fontSize: 13, fontWeight: '600' },
+  sampleMeta: { color: '#888', fontSize: 11, marginTop: 2 },
+  qualityDot: { width: 10, height: 10, borderRadius: 5, marginHorizontal: 8 },
+  deleteBtn: { paddingHorizontal: 8, paddingVertical: 4 },
+  deleteBtnText: { color: '#ef4444', fontSize: 16, fontWeight: 'bold' },
+  addStyleBtn: {
+    marginTop: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#f7931a',
+    borderStyle: 'dashed',
     alignItems: 'center',
   },
-  deleteBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  addBtn: {
-    backgroundColor: '#f7931a',
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  addBtnText: {
-    color: '#000',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  addStyleBtnDisabled: { borderColor: '#333', borderStyle: 'solid' },
+  addStyleBtnText: { color: '#f7931a', fontSize: 13, fontWeight: '600' },
 });
