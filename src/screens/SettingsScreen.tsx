@@ -144,10 +144,13 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [selectedWakePhrase, setSelectedWakePhrase] = useState('hey clawsuu');
 
   // ── Voice & Speech ────────────────────────────────────────────
-  // Local TTS (free, works offline, uses Android's built-in TTS)
-  const [voiceLocalEnabled, setVoiceLocalEnabled] = useState(true);
+  // v3.1.75: single engine toggle (local vs premium API) replaces
+  // the two-always-visible sub-sections. Local TTS uses Android's
+  // built-in Text-to-Speech engine (free, works offline). Premium
+  // API is a placeholder for the upcoming desktop bridge.
+  const [voiceEngine, setVoiceEngine] = useState<'local' | 'api'>('local');
   const [voiceLocalId, setVoiceLocalId] = useState('default');
-  // Premium API (placeholder — not yet wired to the desktop)
+  // Premium API settings (placeholder — not yet wired to the desktop)
   const [voiceApiProvider, setVoiceApiProvider] = useState('elevenlabs');
   const [voiceApiKey, setVoiceApiKey] = useState('');
   const [voiceApiVoice, setVoiceApiVoice] = useState('nova');
@@ -200,7 +203,15 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       .catch(() => {});
 
     // Voice settings (new in v3.1.13)
-    AsyncStorage.getItem('cyberclaw-voice-local').then(v => { if (v !== null) setVoiceLocalEnabled(v === 'true'); });
+    // v3.1.75: cyberclaw-voice-engine replaces cyberclaw-voice-local.
+    // On first load, migrate: if voice-engine isn't set but the old
+    // voice-local key is, derive engine from it (true → local, false → api).
+    AsyncStorage.getItem('cyberclaw-voice-engine').then(v => {
+      if (v === 'local' || v === 'api') { setVoiceEngine(v); return; }
+      AsyncStorage.getItem('cyberclaw-voice-local').then(old => {
+        setVoiceEngine(old === 'false' ? 'api' : 'local');
+      });
+    });
     AsyncStorage.getItem('cyberclaw-voice-local-id').then(v => { if (v) setVoiceLocalId(v); });
     AsyncStorage.getItem('cyberclaw-voice-api-provider').then(v => { if (v) setVoiceApiProvider(v); });
     AsyncStorage.getItem('cyberclaw-voice-api-key').then(v => { if (v) setVoiceApiKey(v); });
@@ -346,9 +357,14 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   };
 
   // Voice settings (auto-save on change)
-  const setVoiceLocalEnabledAndSave = async (v: boolean) => {
-    setVoiceLocalEnabled(v);
-    await AsyncStorage.setItem('cyberclaw-voice-local', v.toString());
+  // v3.1.75: removed setVoiceLocalEnabledAndSave. The old "Use local
+  // voice" boolean is now derived from voiceEngine: local enabled iff
+  // voiceEngine === 'local'. The old cyberclaw-voice-local key is
+  // read on first load as a migration fallback (see the useEffect
+  // below) but never written again.
+  const setVoiceEngineAndSave = async (v: 'local' | 'api') => {
+    setVoiceEngine(v);
+    await AsyncStorage.setItem('cyberclaw-voice-engine', v);
   };
   const setVoiceLocalIdAndSave = async (v: string) => {
     setVoiceLocalId(v);
@@ -747,52 +763,62 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
       {/* ── 🔊 Voice & Speech ────────────────────────────────── */}
       <Section title="🔊 Voice & Speech" desc="How your companion speaks back to you.">
-        <SubTitle>Local voice (free)</SubTitle>
-        <Hint>Uses your Android device's built-in Text-to-Speech engine. Works offline.</Hint>
-        <Toggle
-          title="Use local voice"
-          sub="Speak responses aloud via the device TTS"
-          value={voiceLocalEnabled}
-          onValueChange={setVoiceLocalEnabledAndSave}
-        />
-        <Label>Voice</Label>
+        {/* v3.1.75: single engine toggle (local vs premium API) at
+            the top, settings below swap based on which is selected.
+            Replaces the v3.1.13 layout that always showed both
+            Local and Premium sub-sections in sequence — too noisy. */}
+        <Label>Engine</Label>
         <View style={styles.optionRow}>
-          {LOCAL_VOICES.map(v => (
-            <OptionBtn key={v.id} active={voiceLocalId === v.id} label={v.label} onPress={() => setVoiceLocalIdAndSave(v.id)} />
-          ))}
+          <OptionBtn active={voiceEngine === 'local'} label="📱 Local (free)" onPress={() => setVoiceEngineAndSave('local')} />
+          <OptionBtn active={voiceEngine === 'api'} label="✨ Premium API" onPress={() => setVoiceEngineAndSave('api')} />
         </View>
-        <TouchableOpacity style={styles.testBtn} onPress={testLocalVoice}>
-          <Text style={styles.testBtnText}>🔊 Test local voice on phone</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.testBtn, { marginTop: 8 }]} onPress={testDesktopVoice}>
-          <Text style={styles.testBtnText}>🖥️ Test voice on desktop</Text>
-        </TouchableOpacity>
 
-        <SubTitle>Premium voice API (coming soon)</SubTitle>
-        <Hint>Cloud voices with higher quality. The desktop bridge to use these for synthesis is planned — the key is stored locally so it'll be picked up when the bridge lands.</Hint>
-        <Label>Provider</Label>
-        <View style={styles.optionRow}>
-          {PREMIUM_PROVIDERS.map(p => (
-            <OptionBtn key={p.id} active={voiceApiProvider === p.id} label={p.label} onPress={() => setVoiceApiProviderAndSave(p.id)} />
-          ))}
-        </View>
-        <Label>API key</Label>
-        <TextInput
-          style={styles.input}
-          value={voiceApiKey}
-          onChangeText={setVoiceApiKeyAndSave}
-          placeholder="Paste your API key"
-          placeholderTextColor="#555"
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Label>Voice</Label>
-        <View style={styles.optionRow}>
-          {PREMIUM_PROVIDERS.find(p => p.id === voiceApiProvider)?.voices.map(v => (
-            <OptionBtn key={v.id} active={voiceApiVoice === v.id} label={v.label} onPress={() => setVoiceApiVoiceAndSave(v.id)} />
-          ))}
-        </View>
+        {voiceEngine === 'local' ? (
+          <>
+            <SubTitle>Local voice (free)</SubTitle>
+            <Hint>Uses your Android device's built-in Text-to-Speech engine. Works offline.</Hint>
+            <Label>Voice</Label>
+            <View style={styles.optionRow}>
+              {LOCAL_VOICES.map(v => (
+                <OptionBtn key={v.id} active={voiceLocalId === v.id} label={v.label} onPress={() => setVoiceLocalIdAndSave(v.id)} />
+              ))}
+            </View>
+            <TouchableOpacity style={styles.testBtn} onPress={testLocalVoice}>
+              <Text style={styles.testBtnText}>🔊 Test local voice on phone</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.testBtn, { marginTop: 8 }]} onPress={testDesktopVoice}>
+              <Text style={styles.testBtnText}>🖥️ Test voice on desktop</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <SubTitle>Premium voice API (coming soon)</SubTitle>
+            <Hint>Cloud voices with higher quality. The desktop bridge to use these for synthesis is planned — the key is stored locally so it'll be picked up when the bridge lands.</Hint>
+            <Label>Provider</Label>
+            <View style={styles.optionRow}>
+              {PREMIUM_PROVIDERS.map(p => (
+                <OptionBtn key={p.id} active={voiceApiProvider === p.id} label={p.label} onPress={() => setVoiceApiProviderAndSave(p.id)} />
+              ))}
+            </View>
+            <Label>API key</Label>
+            <TextInput
+              style={styles.input}
+              value={voiceApiKey}
+              onChangeText={setVoiceApiKeyAndSave}
+              placeholder="Paste your API key"
+              placeholderTextColor="#555"
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Label>Voice</Label>
+            <View style={styles.optionRow}>
+              {PREMIUM_PROVIDERS.find(p => p.id === voiceApiProvider)?.voices.map(v => (
+                <OptionBtn key={v.id} active={voiceApiVoice === v.id} label={v.label} onPress={() => setVoiceApiVoiceAndSave(v.id)} />
+              ))}
+            </View>
+          </>
+        )}
       </Section>
 
       {/* ── 🤖 Agent Reach ───────────────────────────────────── */}
@@ -931,7 +957,12 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingTop: Platform.OS === 'android' ? 34 : 10 },
   backBtn: { color: '#f7931a', fontSize: 16 },
   title: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginLeft: 16 },
-  section: { backgroundColor: '#111', borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#222' },
+  // v3.1.75: orange section border for better visual distinction
+  // (was #222 — almost invisible against the #111 background).
+  // Uses the same #f7931a brand orange as the active option pills
+  // and the test buttons, so the whole settings page reads as
+  // one consistent colour system.
+  section: { backgroundColor: '#111', borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#f7931a' },
   sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
   sectionDesc: { color: '#888', fontSize: 13, marginBottom: 16, lineHeight: 18 },
   subGroupTitle: { color: '#aaa', fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12, letterSpacing: 0.5 },
