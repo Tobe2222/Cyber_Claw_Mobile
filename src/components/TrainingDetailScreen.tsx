@@ -127,6 +127,32 @@ export default function TrainingDetailScreen({ companionId, companionName, phras
           <Text style={styles.subtitle}>{companionName}</Text>
         </View>
 
+        {/* v3.1.81: brief explanation of the 5 style
+            categories. Tobe: "It should briefly be
+            explained with a text also. Small texts." The
+            goal: the user understands why there are 5
+            styles and what "Retrain (auto-replace worst)"
+            means without reading the source. Short, on-
+            brand with the existing UI, fades into the
+            background. */}
+        <View style={styles.helpBox}>
+          <Text style={styles.helpTitle}>5 speaking styles</Text>
+          <Text style={styles.helpText}>
+            Record the same phrase in different ways so the
+            matcher accepts it in different contexts.
+          </Text>
+          <Text style={styles.helpList}>
+            🗣️ Normal — your normal voice • 📢 Loud — clearly louder
+            • 🤫 Whisper — very quiet • ⚡ Short — clipped/fast
+            • 🐢 Elongated — drawn out
+          </Text>
+          <Text style={styles.helpText}>
+            1 of each is required, up to 3. Recording a 4th
+            Normal auto-replaces your worst Normal sample if the
+            new one is more consistent.
+          </Text>
+        </View>
+
         <View style={styles.statsBox}>
           <Text style={styles.statsLabel}>Total samples</Text>
           <Text style={styles.statsValue}>{totalSamples}</Text>
@@ -160,15 +186,43 @@ export default function TrainingDetailScreen({ companionId, companionName, phras
                   />
                 ))
               )}
-              <TouchableOpacity
-                style={[styles.addStyleBtn, atMax && styles.addStyleBtnDisabled]}
-                onPress={() => setTrainingStyle(style)}
-                disabled={atMax}
-              >
-                <Text style={styles.addStyleBtnText}>
-                  {atMax ? `${WAKE_SAMPLE_STYLE_LABELS[style]} • full` : `+ Add ${WAKE_SAMPLE_STYLE_LABELS[style].toLowerCase()} sample`}
-                </Text>
-              </TouchableOpacity>
+              {atMax ? (
+                // v3.1.81: at max samples, show a "Retrain"
+                // button (active orange) + a short hint
+                // explaining the auto-replace mechanic.
+                // Tobe: "I still see no retrain here. It
+                // should briefly be explained with a text
+                // also. Small texts." The button is
+                // tappable — it opens the SampleTrainer
+                // with this style, and the trainer
+                // auto-replaces the worst sample if the new
+                // one is more consistent. The hint line
+                // tells the user what's about to happen.
+                <>
+                  <TouchableOpacity
+                    style={[styles.addStyleBtn, styles.addStyleBtnRetrain]}
+                    onPress={() => setTrainingStyle(style)}
+                  >
+                    <Text style={styles.addStyleBtnRetrainText}>
+                      🔁 Retrain {WAKE_SAMPLE_STYLE_LABELS[style].toLowerCase()}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={styles.retrainHint}>
+                    We'll auto-replace the worst sample if your
+                    new one is more consistent. Or ✕ to delete
+                    one first and add fresh.
+                  </Text>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={styles.addStyleBtn}
+                  onPress={() => setTrainingStyle(style)}
+                >
+                  <Text style={styles.addStyleBtnText}>
+                    {`+ Add ${WAKE_SAMPLE_STYLE_LABELS[style].toLowerCase()} sample`}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           );
         })}
@@ -257,6 +311,59 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     alignItems: 'center',
   },
-  addStyleBtnDisabled: { borderColor: '#333', borderStyle: 'solid' },
   addStyleBtnText: { color: '#f7931a', fontSize: 13, fontWeight: '600' },
+  // v3.1.81: solid orange border for the active "Retrain"
+  // button (was a disabled-looking solid gray border in
+  // v3.1.77, which is why the user thought the retrain
+  // path didn't exist).
+  addStyleBtnRetrain: {
+    borderStyle: 'solid',
+    borderWidth: 1.5,
+    backgroundColor: 'rgba(247, 147, 26, 0.1)',
+  },
+  addStyleBtnRetrainText: {
+    color: '#f7931a',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  // v3.1.81: small hint text below the Retrain button.
+  // Two short lines max, dimmed, italic feel. Explains
+  // the auto-replace mechanic so the user understands
+  // what tapping it will do.
+  retrainHint: {
+    color: '#888',
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 6,
+    marginBottom: 4,
+    paddingHorizontal: 4,
+  },
+  // v3.1.81: top-of-screen help box. Subtle dark
+  // background, small text, explains the 5 style
+  // categories in one screenful.
+  helpBox: {
+    backgroundColor: 'rgba(100, 100, 100, 0.1)',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+  },
+  helpTitle: {
+    color: '#f7931a',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  helpText: {
+    color: '#bbb',
+    fontSize: 11,
+    lineHeight: 15,
+    marginBottom: 6,
+  },
+  helpList: {
+    color: '#999',
+    fontSize: 11,
+    lineHeight: 15,
+    marginBottom: 6,
+    fontStyle: 'italic',
+  },
 });

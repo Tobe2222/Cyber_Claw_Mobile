@@ -92,19 +92,19 @@ export async function loadWakeTraining(companionId: string): Promise<WakeTrainin
       return parsed as WakeTrainingEntry;
     }
     if (Array.isArray(parsed.features) && parsed.features.length > 0) {
-      return {
+      // v3.1.78: AudioFeatures.duration is the PCM sample
+      // count (set by extractAudioFeatures), NOT seconds.
+      // Pre-v3.1.77 the trainer wrote f.duration straight
+      // into the WakeSample.duration slot, producing
+      // "3934.0s" / "3921.0s" / "3959.0s" on the Normal
+      // samples (i.e. ~65 min of audio that doesn't
+      // exist). Divide by 16kHz to get seconds. Default
+      // 1.0s if the field is missing.
+      const migrated: WakeTrainingEntry = {
         features: parsed.features,
         phrases: [{
           phrase: parsed.phrase || `hey ${companionId}`,
           samples: parsed.features.map((f: AudioFeatures) => {
-            // v3.1.78: AudioFeatures.duration is the PCM sample
-            // count (set by extractAudioFeatures), NOT seconds.
-            // Pre-v3.1.77 the trainer wrote f.duration straight
-            // into the WakeSample.duration slot, producing
-            // "3934.0s" / "3921.0s" / "3959.0s" on the Normal
-            // samples (i.e. ~65 min of audio that doesn't
-            // exist). Divide by 16kHz to get seconds. Default
-            // 1.0s if the field is missing.
             const durSamples = f.duration ?? 16000;
             return {
               style: 'normal' as WakeSampleStyle,
@@ -117,6 +117,20 @@ export async function loadWakeTraining(companionId: string): Promise<WakeTrainin
         }],
         trainedAt: parsed.trainedAt ?? new Date().toISOString(),
       };
+      // v3.1.81: persist the migrated shape immediately so
+      // the user's screen reflects the corrected duration
+      // (e.g. 1.0s instead of 3934.0s) on this load, not
+      // just on the next save. Without this, the user
+      // opens the menu after upgrading and STILL sees the
+      // wrong duration until they record a new sample or
+      // delete one. Idempotent: saveWakeTraining writes
+      // the same shape back.
+      try {
+        await saveWakeTraining(companionId, migrated);
+      } catch {
+        // best-effort — don't fail the load on write error
+      }
+      return migrated;
     }
     return null;
   } catch {
