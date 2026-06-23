@@ -55,6 +55,17 @@ export default function App(): React.JSX.Element {
     };
     const clearWakePending = () => {
       AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
+      // v3.1.82: also clear the native SharedPreferences
+      // flag set by MainActivity.checkWakeIntent. The
+      // native side sets wake_pending=true in
+      // SharedPreferences when the wake intent extra is
+      // present, and clears it when emitWakeOpenedWithRetry
+      // succeeds. If we're consuming the wake event here
+      // (via the JS listener), the emit also succeeded
+      // (or is about to clear on its own). We clear
+      // defensively so a future isWakePending() check
+      // returns false.
+      WakeWordModule?.clearWakePending?.().catch(() => {});
     };
 
     const emitter = getWakeWordEmitter();
@@ -70,21 +81,39 @@ export default function App(): React.JSX.Element {
       handleWake();
     });
 
-    // AsyncStorage fallback: if a wake-pending flag was persisted
-    // (because the activity was torn down between the native event
-    // firing and our React listener being ready), pick it up here.
-    // Run on mount AND on every foregrounding.
-    const checkPending = () => {
-      AsyncStorage.getItem('cyberclaw-wake-pending').then(pending => {
-        if (pending === '1') {
+    // v3.1.82: native recovery path. MainActivity sets
+    // wake_pending=true in SharedPreferences when the
+    // wake intent is detected. If the JS context wasn't
+    // ready when MainActivity emitted wakeWordOpenedApp
+    // (cold start from the lock screen, JS bundle still
+    // loading), the emit was dropped. The native flag
+    // persists across that race. We check it on mount
+    // AND on every AppState=active. If it's set, we
+    // consume it (clear + handleWake). This is the
+    // "wake fires while phone locked → opens to home
+    // instead of wake mode" fix.
+    //
+    // Tobe: "I still see no retrain here. It should
+    // briefly be explained with a text also. Small
+    // texts." Wait, that was the previous message. This
+    // one: "wake word opens to home screen still". The
+    // v3.1.79 onResume retry wasn't enough on its own
+    // because if the JS context never comes up
+    // (e.g., the React tree crashed during init), the
+    // retry also fails. The SharedPreferences flag
+    // survives that and is checked by the next mount.
+    const checkNativePending = () => {
+      if (!WakeWordModule?.isWakePending) return;
+      WakeWordModule.isWakePending().then((pending: boolean) => {
+        if (pending) {
           clearWakePending();
           handleWake();
         }
       }).catch(() => {});
     };
-    checkPending();
+    checkNativePending();
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') checkPending();
+      if (s === 'active') checkNativePending();
     });
 
     return () => {

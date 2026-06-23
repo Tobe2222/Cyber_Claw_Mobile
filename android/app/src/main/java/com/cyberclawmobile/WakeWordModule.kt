@@ -33,6 +33,37 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun addListener(eventName: String) {}
     @ReactMethod fun removeListeners(count: Int) {}
 
+    // v3.1.82: persistent wake-pending flag. Read by
+    // App.tsx on mount + AppState=active to recover from
+    // the race where MainActivity emitted wakeWordOpenedApp
+    // BEFORE App.tsx's listener subscribed (cold start
+    // from lock-screen notification, the JS context can
+    // take longer to init than the 5s emit-retry budget
+    // covers). The flag is set in MainActivity.checkWakeIntent
+    // when the wake intent extra is present, and cleared
+    // by the JS side once consumed. Stored in
+    // SharedPreferences so it survives process death
+    // (which AsyncStorage writes may not, in the brief
+    // window between kill and JS consume).
+    @ReactMethod fun isWakePending(promise: Promise) {
+      try {
+        val prefs = reactContext.getSharedPreferences("wake_state", android.content.Context.MODE_PRIVATE)
+        promise.resolve(prefs.getBoolean("wake_pending", false))
+      } catch (e: Exception) {
+        promise.reject("error", e.message)
+      }
+    }
+
+    @ReactMethod fun clearWakePending(promise: Promise) {
+      try {
+        val prefs = reactContext.getSharedPreferences("wake_state", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("wake_pending", false).apply()
+        promise.resolve(true)
+      } catch (e: Exception) {
+        promise.reject("error", e.message)
+      }
+    }
+
     private val handler = Handler(Looper.getMainLooper())
 
     private fun emit(event: String, state: String, text: String? = null) {
