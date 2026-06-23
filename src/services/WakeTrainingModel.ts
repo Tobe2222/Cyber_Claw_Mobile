@@ -96,13 +96,24 @@ export async function loadWakeTraining(companionId: string): Promise<WakeTrainin
         features: parsed.features,
         phrases: [{
           phrase: parsed.phrase || `hey ${companionId}`,
-          samples: parsed.features.map((f: AudioFeatures) => ({
-            style: 'normal' as WakeSampleStyle,
-            features: f,
-            duration: f.duration ?? 1.0,
-            quality: parsed.overallQuality ?? 0.8,
-            date: parsed.trainedAt ?? new Date().toISOString(),
-          })),
+          samples: parsed.features.map((f: AudioFeatures) => {
+            // v3.1.78: AudioFeatures.duration is the PCM sample
+            // count (set by extractAudioFeatures), NOT seconds.
+            // Pre-v3.1.77 the trainer wrote f.duration straight
+            // into the WakeSample.duration slot, producing
+            // "3934.0s" / "3921.0s" / "3959.0s" on the Normal
+            // samples (i.e. ~65 min of audio that doesn't
+            // exist). Divide by 16kHz to get seconds. Default
+            // 1.0s if the field is missing.
+            const durSamples = f.duration ?? 16000;
+            return {
+              style: 'normal' as WakeSampleStyle,
+              features: f,
+              duration: durSamples / 16000,
+              quality: parsed.overallQuality ?? 0.8,
+              date: parsed.trainedAt ?? new Date().toISOString(),
+            };
+          }),
         }],
         trainedAt: parsed.trainedAt ?? new Date().toISOString(),
       };

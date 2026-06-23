@@ -80,8 +80,21 @@ export function normalizeAudio(pcm16: Int16Array): Float32Array {
 
 /**
  * Simple audio validation - check if audio has content
+ *
+ * v3.1.78: minDuration 0.15 → 0.08s. Consonant attacks in
+ * "hey" are 30-80ms; 0.15s required the trailing "y" to
+ * finish, which is unintuitive. 0.08s still rejects
+ * accidental taps (typically <50ms) but accepts clipped
+ * "hey" attempts.
+ *
+ * v3.1.78: split the "is this real audio" check into two:
+ *   1) overall non-zero ratio (loose — 5% of samples > 200)
+ *   2) first 50ms must contain at least one sample > 1000
+ * The second catches the "recorder fired silence immediately"
+ * bug where the native module returns 0 audio but the
+ * silence event still fires, leaving a 0-length file.
  */
-export function validateAudio(pcm16: Int16Array, minDuration: number = 0.15): {
+export function validateAudio(pcm16: Int16Array, minDuration: number = 0.08): {
   valid: boolean;
   reason?: string;
 } {
@@ -95,18 +108,34 @@ export function validateAudio(pcm16: Int16Array, minDuration: number = 0.15): {
     };
   }
 
-  // Check for non-zero data
+  // Overall: at least 5% of samples have meaningful amplitude
   let nonZero = 0;
   for (let i = 0; i < pcm16.length; i++) {
-    if (Math.abs(pcm16[i]) > 100) {
+    if (Math.abs(pcm16[i]) > 200) {
       nonZero++;
     }
   }
 
-  if (nonZero < pcm16.length * 0.1) {
+  if (nonZero < pcm16.length * 0.05) {
     return {
       valid: false,
       reason: `Audio is too quiet or silent`,
+    };
+  }
+
+  // First 50ms must have a loud sample — catches empty
+  // recordings (silence event fired with no actual audio
+  // captured). 50ms × 16kHz = 800 samples.
+  const onsetWindow = Math.min(pcm16.length, 800);
+  let onsetPeak = 0;
+  for (let i = 0; i < onsetWindow; i++) {
+    const a = Math.abs(pcm16[i]);
+    if (a > onsetPeak) onsetPeak = a;
+  }
+  if (onsetPeak < 1000) {
+    return {
+      valid: false,
+      reason: `No speech detected at start of recording`,
     };
   }
 

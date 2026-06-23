@@ -34,6 +34,7 @@ import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import {
   WakeSampleStyle,
   addWakeSample,
+  loadWakeTraining,
   saveWakeTraining,
 } from '../services/WakeTrainingModel';
 
@@ -111,21 +112,47 @@ export default function SampleTrainer({ companionId, companionName, phrase, styl
             return;
           }
           const features = extractAudioFeatures(pcm16);
-          setMessage(`✅ Got ${(features.duration / 16000).toFixed(1)}s — saving…`);
+          const durationSec = features.duration / 16000;
+          setMessage(`✅ Got ${durationSec.toFixed(1)}s — saving…`);
           setPhase('saving');
+
+          // v3.1.78: load existing same-style samples for this
+          // phrase and check whether the new one is too similar
+          // to an existing one. If best DTW score > 0.85, the
+          // user is recording the same utterance they already
+          // have — reject and ask them to vary tone/volume/
+          // mic distance so the 3 slots stay diverse.
+          const existing = await loadWakeTraining(companionId);
+          const existingPhrase = existing?.phrases.find(p => p.phrase.toLowerCase() === phrase.toLowerCase());
+          const sameStyle = (existingPhrase?.samples ?? []).filter(s => s.style === style);
+          if (sameStyle.length > 0) {
+            const sims = sameStyle.map(s => compareAudioFeatures(features, s.features));
+            const best = Math.max(...sims);
+            if (best > 0.85) {
+              setPhase('error');
+              setMessage(`❌ Too similar to an existing ${style} sample (${(best * 100).toFixed(0)}% match) — try a different tone, volume, or mic position.`);
+              return;
+            }
+          }
+
+          // v3.1.78: write quality 0 placeholder so the saved
+          // record is obviously "not yet scored" if we crash
+          // before recomputing. Pre-v3.1.77 we hard-coded 0.8
+          // here, so the user always saw 80% on the success
+          // screen even when the actual DTW score differed.
           const saved = await addWakeSample(companionId, phrase, {
             style,
             features,
-            duration: features.duration / 16000,
-            quality: 0.8,
+            duration: durationSec,
+            quality: 0,
             date: new Date().toISOString(),
           });
           // Compute quality vs existing samples of the same style for this phrase.
           const phraseEntry = saved.phrases.find(p => p.phrase.toLowerCase() === phrase.toLowerCase());
-          const sameStyle = (phraseEntry?.samples ?? []).filter(s => s.style === style);
-          let computedQuality = 0.8;
-          if (sameStyle.length > 1) {
-            const others = sameStyle.slice(0, -1);
+          const sameStyleAfter = (phraseEntry?.samples ?? []).filter(s => s.style === style);
+          let computedQuality = 1.0;
+          if (sameStyleAfter.length > 1) {
+            const others = sameStyleAfter.slice(0, -1);
             const sims = others.map(s => compareAudioFeatures(features, s.features));
             computedQuality = sims.reduce((a, b) => a + b, 0) / sims.length;
           }
