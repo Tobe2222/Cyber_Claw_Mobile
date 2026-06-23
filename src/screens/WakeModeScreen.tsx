@@ -34,6 +34,11 @@ import { addLogEntry } from './HomeScreen';
 // fresh asset load on every APK upgrade) and to detect "wake mode"
 // vs "home mode" in the arena via ?mode=wake.
 import { version as APP_VERSION } from '../../package.json';
+// v3.1.79: false-open detector + idle timeout. Auto-tightens the
+// match threshold if Wake / Voice Mode keeps getting opened by
+// accident (TV, another person, false positive), and auto-closes
+// the mode if no input has happened for 60s.
+import { noteWakeModeOpen, noteWakeModeExit } from '../services/WakeTrainingModel';
 
 const { AppControl, WakeWordModule } = NativeModules;
 
@@ -461,6 +466,126 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     });
     return () => handler.remove();
   }, []);
+
+  // v3.1.79: auto-close + false-open detection.
+  //
+  // Tobe: "the recording starts getting long. Perhaps we
+  // should set a maximum or a smart feature to detect false
+  // opens. The same for voice mode."
+  //
+  // Three guards in this effect:
+  //
+  //   1. IDLE_TIMEOUT (60s) — if Wake / Voice Mode is open
+  //      and no wake match has fired AND no recording has
+  //      started AND no message has been received, auto-
+  //      close. This catches the "I walked away after
+  //      triggering this by accident" case, and the "I was
+  //      asleep" case. A 60s window is long enough that a
+  //      real user mid-thought can still talk to the
+  //      companion.
+  //
+  //   2. HARD_CAP (5 min) — absolute max time Wake / Voice
+  //      Mode can stay open, regardless of activity. If a
+  //      session runs this long something has gone wrong
+  //      (stuck state, infinite loop, etc). Close it.
+  //
+  //   3. FALSE_OPEN tracking — on unmount, tell the
+  //      detector how long the mode was open and whether a
+  //      real recording happened. Short opens with no
+  //      recording count as a false open. After 3 false
+  //      opens in 5 minutes, the match threshold is
+  //      auto-tightened by 0.05 (capped at 0.85). The
+  //      threshold decays back to 0 if 5 minutes pass with
+  //      no false opens.
+  //
+  // Implementation notes:
+  //   - The 60s timer is reset on every state change that
+  //     indicates the user is actually using the mode
+  //     (recording, transcribing, responding). The hard cap
+  //     is NOT reset \u2014 it always counts from mount.
+  //   - The false-open check runs in the unmount cleanup,
+  //     so it fires for any exit path: back button, X
+  //     button, idle timeout, hard cap.
+  const openStartedAtRef = useRef<number>(Date.now());
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hardCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hadRecordingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    openStartedAtRef.current = Date.now();
+    hadRecordingRef.current = false;
+
+    // Tell the false-open detector we just opened. Returns
+    // the current auto-incremented threshold bump (0 if no
+    // recent false opens). We log it but don't apply it
+    // here \u2014 the matcher reads the bump from storage on
+    // its next init.
+    noteWakeModeOpen().then((bump) => {
+      if (bump > 0) {
+        addLogEntry(`\ud83d\udd0a Auto-tightened match threshold by +${(bump * 100).toFixed(0)}% (recent false opens)`, 'info');
+      }
+    }).catch(() => {});
+
+    // Hard cap: 5 minutes absolute max. We never reset this.
+    hardCapTimerRef.current = setTimeout(() => {
+      addLogEntry('\u23f9\ufe0f Wake/Voice Mode: 5 min hard cap reached, closing', 'info');
+      addVoiceLog('\u23f9\ufe0f Auto-closing (5 min cap)');
+      exitRef.current();
+    }, 5 * 60 * 1000);
+
+    // Idle timeout: 60s with no activity. Reset by the
+    // effect below on every voiceStatus change that
+    // indicates activity.
+    const resetIdle = () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        addLogEntry('\u23f9\ufe0f Wake/Voice Mode: 60s idle, closing', 'info');
+        addVoiceLog('\u23f9\ufe0f Auto-closing (idle)');
+        exitRef.current();
+      }, 60 * 1000);
+    };
+    resetIdle();
+
+    return () => {
+      // Unmount: stop timers, report false-open status.
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      if (hardCapTimerRef.current) clearTimeout(hardCapTimerRef.current);
+      const openDuration = Date.now() - openStartedAtRef.current;
+      const mode: 'wake' | 'voice' = voiceMode ? 'voice' : 'wake';
+      noteWakeModeExit(mode, openDuration, hadRecordingRef.current).then((res) => {
+        if (res.falseOpenRecorded) {
+          addLogEntry(`\u26a0\ufe0f False open recorded (${mode} mode, ${(openDuration / 1000).toFixed(0)}s, no recording)`, 'debug');
+        }
+        if (res.newThreshold > 0) {
+          addLogEntry(`\ud83d\udd0a Match threshold auto-tightened to +${(res.newThreshold * 100).toFixed(0)}% after 3 false opens`, 'info');
+        }
+      }).catch(() => {});
+    };
+  }, []);
+
+  // Reset the idle timer whenever the user does something
+  // that counts as real activity.
+  useEffect(() => {
+    if (voiceStatus === 'recording' || voiceStatus === 'transcribing' || voiceStatus === 'silence_countdown') {
+      hadRecordingRef.current = true;
+      // Re-arm the idle timer with a longer window (2 min)
+      // for the response to play back.
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        addLogEntry('\u23f9\ufe0f Wake/Voice Mode: 2 min idle during response, closing', 'info');
+        addVoiceLog('\u23f9\ufe0f Auto-closing (idle)');
+        exitRef.current();
+      }, 2 * 60 * 1000);
+    } else if (voiceStatus === 'listening') {
+      // Reset to 60s idle window when we go back to listening
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        addLogEntry('\u23f9\ufe0f Wake/Voice Mode: 60s idle (no wake match), closing', 'info');
+        addVoiceLog('\u23f9\ufe0f Auto-closing (idle)');
+        exitRef.current();
+      }, 60 * 1000);
+    }
+  }, [voiceStatus]);
 
   // Handle app state changes: if app goes to background while Wake Mode
   // is active, that's fine — when it comes back, Wake Mode is still showing.

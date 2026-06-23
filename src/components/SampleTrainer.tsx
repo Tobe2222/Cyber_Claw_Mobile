@@ -34,6 +34,7 @@ import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import {
   WakeSampleStyle,
   addWakeSample,
+  autoRetrainNormal,
   loadWakeTraining,
   saveWakeTraining,
 } from '../services/WakeTrainingModel';
@@ -165,6 +166,36 @@ export default function SampleTrainer({ companionId, companionName, phrase, styl
           setQuality(computedQuality);
           setPhase('done');
           setMessage(`✅ Saved! Quality: ${(computedQuality * 100).toFixed(0)}%`);
+          // v3.1.79: auto-retrain for NORMAL samples. If the user
+          // already has 3 normal samples and this new one is
+          // meaningfully more consistent than the worst existing
+          // one, replace the worst with the new one silently.
+          // Tobe: "I did not see a retrain button for normal
+          // samples. That should automatically use better
+          // samples which is retrained to replace worse
+          // samples." Only NORMAL is auto-retrained — loud /
+          // whisper / short / elongated have intentional
+          // acoustic differences; replacing them would erase
+          // the diversity the user explicitly trained.
+          if (style === 'normal' && computedQuality > 0) {
+            const retrain = await autoRetrainNormal(
+              companionId,
+              phrase,
+              {
+                style,
+                features,
+                duration: durationSec,
+                quality: computedQuality,
+                date: new Date().toISOString(),
+              },
+              computedQuality,
+            );
+            if (retrain.replaced && retrain.oldQuality !== null) {
+              const oldPct = (retrain.oldQuality * 100).toFixed(0);
+              const newPct = (retrain.newQuality * 100).toFixed(0);
+              setMessage(`✅ Auto-replaced Normal sample #${(retrain.replacedIndex ?? 0) + 1} (old: ${oldPct}% → new: ${newPct}%)`);
+            }
+          }
           setTimeout(() => onComplete(true, computedQuality), 1000);
         } catch (e: any) {
           setPhase('error');
