@@ -123,10 +123,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
   const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'listening' : 'listening');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
-  // v3.1.65: when voiceMode, the wake listener is skipped
-  // (set in the useEffect below) and the VAD + recorder
-  // process starts instead. The voice status text adapts
-  // to the mode via the JSX below.
+  // v3.1.80: two-phase wake. When Wake Mode opens (NOT
+  // voice mode), we play the greeting first and the wake
+  // listener stays muted until the greeting is done. The
+  // user then says the wake word again to begin recording.
+  // This is the standard two-step wake pattern (Siri /
+  // Alexa / Google Assistant) and avoids the previous
+  // bug where the mic would pick up the system's own
+  // greeting TTS and either false-positive or saturate
+  // the matcher.
+  const [greetingPhase, setGreetingPhase] = useState<'playing' | 'done' | 'skipped'>(
+    voiceMode ? 'skipped' : 'playing',
+  );
   const [webViewKey, setWebViewKey] = useState(0);
 
   const addVoiceLog = useCallback((text: string) => {
@@ -280,27 +288,77 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
         if (companionsTraining.length > 0) {
           addLogEntry(`🎤 Wake Mode active — listening for ${companionsTraining.length} companion wake word(s)`, 'info');
-          addVoiceLog('Wake listening...');
+          addVoiceLog('🔊 Greeting...');
+          setVoiceStatus('greeting');
           for (const c of companionsTraining) {
             const comp = c.companionId;
             addVoiceLog(`Matching: ${comp}`);
           }
-          addVoiceLog('🔴 Recording...');
 
-          // Speak "ready to chat"
-          AsyncStorage.getItem('cyberclaw-ready-phrase').then(p => {
-            speak(p || 'Ready to chat');
-          }).catch(() => speak('Ready to chat'));
-
-          cleanup = startSampleMatchListener(
-            companionsTraining,
-            handleWakeWordInner,
-            (msg) => addLogEntry(msg, 'debug'),
-            // v3.1.49: read the user-configured FG threshold from
-            // settings. Defaults to 0.55 if not set.
-            (parseFloat(await AsyncStorage.getItem('cyberclaw-wake-fg-threshold') || '0.55')),
+          // v3.1.80: two-phase wake. Play the greeting
+          // first, then start the listener after a fixed
+          // delay. The native AudioRecord stays OFF during
+          // the greeting, so the system TTS isn't picked
+          // up by the matcher. After the delay, the
+          // listener comes on and the user says the wake
+          // word a SECOND time to begin recording.
+          //
+          // Tobe: "wake mode should not need a second wake
+          // confirmation. perhaps we should introduce a
+          // slight change into how wake mode works. Or
+          // perhaps not a change really but when i have
+          // tested it before i have never gotten the wake
+          // greeting. When wake mode opens with the first
+          // wake phrase it should open in wake mode and
+          // say the wake greeting. Then the user says the
+          // wake phrase again to continue."
+          //
+          // The 1500ms delay is the typical "Ready to
+          // chat" TTS duration. The user-configured
+          // `cyberclaw-ready-phrase` controls what gets
+          // said; empty string disables the greeting
+          // entirely. We don't try to detect TTS
+          // completion (unreliable on Android) — fixed
+          // delay is simpler and predictable.
+          let greetingMs = 1500;
+          let greetingText = 'Ready to chat';
+          try {
+            const stored = await AsyncStorage.getItem('cyberclaw-ready-phrase');
+            if (stored !== null) {
+              if (stored.trim() === '') {
+                // User disabled the greeting — skip the
+                // delay and start the listener now.
+                greetingMs = 0;
+                greetingText = '';
+              } else {
+                greetingText = stored;
+              }
+            }
+          } catch (_) {}
+          // v3.1.49: read the user-configured FG threshold
+          // from settings. Defaults to 0.55 if not set.
+          // Read FRESH here so a change made during the
+          // greeting delay takes effect immediately when
+          // the listener starts.
+          const fgThreshold = parseFloat(
+            (await AsyncStorage.getItem('cyberclaw-wake-fg-threshold')) || '0.55',
           );
-          sampleListenerCleanupRef.current = cleanup;
+          if (greetingMs > 0 && greetingText) {
+            speak(greetingText);
+          }
+          setTimeout(() => {
+            if (cancelled) return;
+            setGreetingPhase('done');
+            setVoiceStatus('listening');
+            addVoiceLog('🎧 Listening for wake word...');
+            cleanup = startSampleMatchListener(
+              companionsTraining,
+              handleWakeWordInner,
+              (msg) => addLogEntry(msg, 'debug'),
+              fgThreshold,
+            );
+            sampleListenerCleanupRef.current = cleanup;
+          }, greetingMs);
         } else {
           addLogEntry('No training data for sample match — open Wake Mode and tap "Train wake phrase" to record 3 samples.', 'error');
         }
@@ -642,7 +700,8 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       {/* Voice status overlay (top) */}
       <View style={styles.voiceStatusOverlay} pointerEvents="none">
         <Text style={styles.voiceStatusText}>
-          {voiceStatus === 'listening' ? (voiceMode ? '🎧 Listening...' : '🎧 Listening for wake word...') :
+          {voiceStatus === 'greeting' ? '🔊 Greeting... (say wake word to continue)' :
+           voiceStatus === 'listening' ? (voiceMode ? '🎧 Listening...' : '🎧 Listening for wake word...') :
            voiceStatus === 'recording' ? '🔴 Recording...' :
            voiceStatus === 'silence_countdown' ? '⏳ Sending...' :
            voiceStatus === 'transcribing' ? '📝 Transcribing...' :
