@@ -81,27 +81,24 @@ export default function App(): React.JSX.Element {
       handleWake();
     });
 
-    // v3.1.82: native recovery path. MainActivity sets
-    // wake_pending=true in SharedPreferences when the
-    // wake intent is detected. If the JS context wasn't
-    // ready when MainActivity emitted wakeWordOpenedApp
-    // (cold start from the lock screen, JS bundle still
-    // loading), the emit was dropped. The native flag
-    // persists across that race. We check it on mount
-    // AND on every AppState=active. If it's set, we
-    // consume it (clear + handleWake). This is the
-    // "wake fires while phone locked → opens to home
-    // instead of wake mode" fix.
+    // v3.1.82 / v3.1.83: native recovery path.
+    // MainActivity sets wake_pending=true in
+    // SharedPreferences when the wake intent is detected.
+    // If the JS context wasn't ready when MainActivity
+    // emitted wakeWordOpenedApp (cold start from the
+    // lock screen, JS bundle still loading), the emit
+    // was dropped. The native flag persists across that
+    // race and is consumed by checkNativePending below.
     //
-    // Tobe: "I still see no retrain here. It should
-    // briefly be explained with a text also. Small
-    // texts." Wait, that was the previous message. This
-    // one: "wake word opens to home screen still". The
-    // v3.1.79 onResume retry wasn't enough on its own
-    // because if the JS context never comes up
-    // (e.g., the React tree crashed during init), the
-    // retry also fails. The SharedPreferences flag
-    // survives that and is checked by the next mount.
+    // v3.1.82 also re-checked on AppState=active as
+    // belt-and-suspenders, but that turned into a bug:
+    // if the flag was still set when the user manually
+    // exited Wake Mode, every subsequent foreground
+    // transition would re-fire handleWake and yank them
+    // back. v3.1.83 checks the flag ONLY on first mount.
+    // The "JS context loaded but event dropped" race is
+    // already covered by MainActivity.onResume's
+    // emitWakeOpenedWithRetry path.
     const checkNativePending = () => {
       if (!WakeWordModule?.isWakePending) return;
       WakeWordModule.isWakePending().then((pending: boolean) => {
@@ -111,15 +108,29 @@ export default function App(): React.JSX.Element {
         }
       }).catch(() => {});
     };
+    // v3.1.83: check the native wake-pending flag ONLY on
+    // first mount, not on every AppState=active transition.
+    //
+    // v3.1.82 also re-checked on AppState=active as
+    // belt-and-suspenders, but this created a ping-pong:
+    // if the flag was still set when the user exited Wake
+    // Mode by tapping X, every subsequent foreground
+    // transition (notification shade, screen lock+unlock,
+    // anything) would re-fire handleWake and yank the user
+    // back to Wake Mode.
+    //
+    // The cold-start recovery case (JS context never came
+    // up, MainActivity emitted into the void) is the only
+    // case we actually need to recover from, and the first
+    // mount handles it. MainActivity.onResume also
+    // re-emits via emitWakeOpenedWithRetry, which is the
+    // belt-and-suspenders for the JS-context-loaded-but-
+    // event-dropped race.
     checkNativePending();
-    const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') checkNativePending();
-    });
 
     return () => {
       wakeSub?.remove?.();
       wakeOpenSub?.remove?.();
-      sub?.remove?.();
     };
   }, []);
 
@@ -184,6 +195,17 @@ export default function App(): React.JSX.Element {
               agents={agents}
               onExit={() => {
                 AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
+                // v3.1.83: also clear the native wake-pending
+                // flag defensively. The flag is normally
+                // cleared by MainActivity.emitWakeOpenedWithRetry
+                // on success or by the wake listener path, but
+                // if the user exits Wake Mode before either
+                // path runs (e.g. tapped X during the greeting
+                // phase before the listener came up), the flag
+                // would persist. Without this clear, a future
+                // checkNativePending (on the next mount after a
+                // restart) would re-trigger Wake Mode.
+                WakeWordModule?.clearWakePending?.().catch(() => {});
                 setScreen('home');
               }}
               // v3.1.67: when the wake word matches, update

@@ -676,7 +676,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
-    private fun getTts(onReady: (TextToSpeech) -> Unit) {
+    private fun getTts(onReady: (TextToSpeech) -> Unit, onError: (String) -> Unit) {
         if (ttsReady && tts != null) { onReady(tts!!); return }
         tts?.shutdown()
         tts = TextToSpeech(reactContext) { status ->
@@ -687,13 +687,22 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 tts?.setPitch(1.1f)
                 onReady(tts!!)
             } else {
-                handler.post { emitDebug("error", "TTS init failed: status=$status") }
+                // v3.1.83: notify the caller of init failure
+                // instead of silently swallowing it. Previously
+                // getTts only called onReady on success, so if
+                // the system TTS service was busy/unavailable
+                // at cold start, speakText's promise never
+                // resolved AND never rejected, and the JS
+                // catch + WebView speechSynthesis fallback
+                // never ran. The greeting was silently dropped.
+                emitDebug("error", "TTS init failed: status=$status")
+                onError("TTS init failed: status=$status")
             }
         }
     }
 
     @ReactMethod fun speakText(text: String, promise: Promise) {
-        getTts { engine ->
+        getTts({ engine ->
             engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
                 override fun onDone(utteranceId: String?) {
@@ -711,7 +720,13 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             })
             engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "claw-tts")
             promise.resolve(null)
-        }
+        }, { err ->
+            // v3.1.83: surface the failure to JS so the
+            // WebView speechSynthesis fallback actually
+            // runs. Previously this branch never executed
+            // because getTts had no onError callback.
+            promise.reject("TTS_INIT_FAILED", err)
+        })
     }
 
     @ReactMethod fun stopSpeaking(promise: Promise) {

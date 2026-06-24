@@ -142,14 +142,55 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   }, []);
 
   // Speak via native TTS (works even when AudioRecord is active)
+  //
+  // v3.1.83: log every attempt to the voice overlay so we can
+  // see whether the speak fired, and add a 600ms fallback
+  // timeout — if the native TTS doesn't speak within that
+  // window (cold-start race where the system TextToSpeech
+  // service hasn't initialized yet, or init silently fails),
+  // fall through to the WebView's speechSynthesis instead of
+  // dropping the greeting on the floor.
+  //
+  // Tobe: "wake mode opens to wake mode now, which is good.
+  // But i still dont get the greeting phrase." — was the
+  // cold-start race in getTts: when TextToSpeech init fails,
+  // the onReady callback never fires, so speak()'s promise
+  // never resolves AND never rejects, and the JS .catch
+  // fallback never runs. The greeting silently no-ops.
   const speak = useCallback((text: string) => {
-    if (WakeWordModule?.speakText) {
-      WakeWordModule.speakText(text).catch(() => {
+    addVoiceLog(`🔊 Speaking: "${text}"`);
+    const speakViaWebView = () => {
+      try {
         const escaped = text.replace(/'/g, "\\'").replace(/\n/g, ' ');
         webViewRef.current?.injectJavaScript(
           `if('speechSynthesis'in window){window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('${escaped}');u.rate=0.95;u.pitch=1.1;window.speechSynthesis.speak(u);}true;`
         );
+        addVoiceLog('🔊 (webview fallback)');
+      } catch (_) {
+        addVoiceLog('🔊 ❌ both TTS paths failed');
+      }
+    };
+    if (WakeWordModule?.speakText) {
+      let fellBack = false;
+      const fallbackTimer = setTimeout(() => {
+        if (!fellBack) {
+          fellBack = true;
+          speakViaWebView();
+        }
+      }, 600);
+      WakeWordModule.speakText(text).then(() => {
+        if (!fellBack) {
+          clearTimeout(fallbackTimer);
+        }
+      }).catch(() => {
+        if (!fellBack) {
+          fellBack = true;
+          clearTimeout(fallbackTimer);
+          speakViaWebView();
+        }
       });
+    } else {
+      speakViaWebView();
     }
   }, []);
 
