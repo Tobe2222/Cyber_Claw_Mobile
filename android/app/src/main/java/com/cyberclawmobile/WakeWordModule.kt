@@ -752,4 +752,22 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         tts?.stop()
         promise.resolve(null)
     }
+
+    // v3.1.87: initialize the Android TextToSpeech engine
+    // without speaking anything. Called from App.tsx on mount
+    // to "pre-warm" the engine so the first real speak()
+    // after a wake event doesn't have to wait for cold-start
+    // init (which can take 1-2 seconds and was the root cause
+    // of the silent-drop bugs in v3.1.83 / v3.1.85).
+    //
+    // The init is async — the Promise resolves on init success
+    // and rejects on init failure. Either way, the engine is in
+    // a known state by the time the Promise settles.
+    @ReactMethod fun prewarmTts(promise: Promise) {
+        getTts({ engine ->
+            promise.resolve(true)
+        }, { err ->
+            promise.reject("TTS_INIT_FAILED", err)
+        })
+    }
 }

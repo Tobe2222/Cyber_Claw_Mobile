@@ -153,6 +153,20 @@ export default function App(): React.JSX.Element {
     };
   }, []);
 
+  // v3.1.87: pre-warm the Android TextToSpeech engine at app
+  // mount. Android's TTS init is async and can take 1-2 seconds
+  // on cold start; without pre-warming, the first speak() after
+  // a wake event races with the init and the greeting is
+  // silently dropped or cut off. Calling prewarmTts here means
+  // by the time the user actually wakes the app (a few seconds
+  // later), the engine is ready and speakText works on the first
+  // call with a reliable ttsDone event.
+  useEffect(() => {
+    if (WakeWordModule?.prewarmTts) {
+      WakeWordModule.prewarmTts().catch(() => {});
+    }
+  }, []);
+
   // Load companion id from storage so WakeModeScreen renders the right sprite
   useEffect(() => {
     AsyncStorage.getItem('cyberclaw-arena-comp').then(v => {
