@@ -82,8 +82,8 @@ android {
         applicationId "com.cyberclawmobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 134
-        versionName "3.1.84"
+        versionCode 135
+        versionName "3.1.85"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

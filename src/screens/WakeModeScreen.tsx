@@ -141,57 +141,103 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     setVoiceLogs(prev => [...prev, text].slice(-4));
   }, []);
 
-  // Speak via native TTS (works even when AudioRecord is active)
+  // Speak via native TTS (works even when AudioRecord is active).
   //
-  // v3.1.83: log every attempt to the voice overlay so we can
-  // see whether the speak fired, and add a 600ms fallback
-  // timeout — if the native TTS doesn't speak within that
-  // window (cold-start race where the system TextToSpeech
-  // service hasn't initialized yet, or init silently fails),
-  // fall through to the WebView's speechSynthesis instead of
-  // dropping the greeting on the floor.
+  // v3.1.85: returns a Promise that resolves when the
+  // greeting has actually finished speaking (or fails). The
+  // wake-mode useEffect awaits this before starting the
+  // sample-match listener, so AudioRecord no longer steals
+  // audio focus and cuts the greeting off mid-utterance.
   //
-  // Tobe: "wake mode opens to wake mode now, which is good.
-  // But i still dont get the greeting phrase." — was the
-  // cold-start race in getTts: when TextToSpeech init fails,
-  // the onReady callback never fires, so speak()'s promise
-  // never resolves AND never rejects, and the JS .catch
-  // fallback never runs. The greeting silently no-ops.
-  const speak = useCallback((text: string) => {
-    addVoiceLog(`🔊 Speaking: "${text}"`);
-    const speakViaWebView = () => {
-      try {
-        const escaped = text.replace(/'/g, "\\'").replace(/\n/g, ' ');
-        webViewRef.current?.injectJavaScript(
-          `if('speechSynthesis'in window){window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('${escaped}');u.rate=0.95;u.pitch=1.1;window.speechSynthesis.speak(u);}true;`
-        );
-        addVoiceLog('🔊 (webview fallback)');
-      } catch (_) {
-        addVoiceLog('🔊 ❌ both TTS paths failed');
+  // Completion detection:
+  // - Native TTS: listen for the `ttsDone` event that
+  //   WakeWordModule emits from its UtteranceProgressListener
+  //   onDone / onError. One-shot listener per speak() call.
+  // - WebView fallback (used when native TTS init fails or
+  //   doesn't respond within 600ms): use a duration estimate
+  //   based on text length (60ms per char, capped at 4s).
+  //   Real speechSynthesis.onend would be more accurate but
+  //   requires a callback bridge from WebView JS back to RN,
+  //   which is out of scope.
+  // - Safety: a 5s hard timeout resolves the promise no
+  //   matter what, so a stuck TTS never hangs the wake
+  //   listener start.
+  //
+  // Tobe (v3.1.84 screenshot): the voice log showed
+  //   🔊 Speaking: "Greetings master Toby"
+  //   🔊 (webview fallback)
+  //   🎧 Listening for wake word...
+  // but no audio. The 1500ms hardcoded delay was too short
+  // for the WebView speechSynthesis path — the listener
+  // started at T=1500ms and AudioRecord stole audio focus,
+  // cutting the WebView utterance off mid-word.
+  const speak = useCallback((text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      addVoiceLog(`🔊 Speaking: "${text}"`);
+      let resolved = false;
+      let ttsDoneSub: { remove: () => void } | null = null;
+      let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+      let estimateTimer: ReturnType<typeof setTimeout> | null = null;
+      const done = (source: string) => {
+        if (resolved) return;
+        resolved = true;
+        if (ttsDoneSub) { ttsDoneSub.remove(); ttsDoneSub = null; }
+        clearTimeout(fallbackTimer);
+        clearTimeout(estimateTimer);
+        clearTimeout(safetyTimer);
+        addVoiceLog(`🔊 done (${source})`);
+        resolve();
+      };
+      // v3.1.85: subscribe to the native ttsDone event. The
+      // WakeWordModule emits it from UtteranceProgressListener
+      // onDone / onError. One-shot: we remove the listener
+      // when the promise resolves.
+      const emitter = getWakeWordEmitter();
+      ttsDoneSub = emitter?.addListener('ttsDone', () => done('native')) ?? null;
+
+      const speakViaWebView = () => {
+        try {
+          const escaped = text.replace(/'/g, "\\'").replace(/\n/g, ' ');
+          webViewRef.current?.injectJavaScript(
+            `if('speechSynthesis'in window){window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('${escaped}');u.rate=0.95;u.pitch=1.1;window.speechSynthesis.speak(u);}true;`
+          );
+          addVoiceLog('🔊 (webview fallback)');
+          // Estimate duration: ~60ms per char, cap at 4s.
+          // 60ms is roughly the natural speech rate after
+          // the rate=0.95 adjustment.
+          const estimateMs = Math.min(4000, Math.max(600, text.length * 60));
+          estimateTimer = setTimeout(() => done('webview-estimate'), estimateMs);
+        } catch (_) {
+          addVoiceLog('🔊 ❌ both TTS paths failed');
+          done('failed');
+        }
+      };
+
+      const safetyTimer = setTimeout(() => done('safety'), 5000);
+
+      if (WakeWordModule?.speakText) {
+        fallbackTimer = setTimeout(() => {
+          if (!resolved) {
+            addVoiceLog('🔊 native TTS slow, falling back');
+            speakViaWebView();
+          }
+        }, 600);
+        WakeWordModule.speakText(text).then(() => {
+          // The native speakText promise resolves as soon as
+          // engine.speak() is called, NOT when TTS finishes
+          // speaking. The ttsDone event (subscribed above)
+          // is the signal that speaking actually completed.
+          // We don't resolve here.
+        }).catch(() => {
+          if (!resolved) {
+            clearTimeout(fallbackTimer);
+            speakViaWebView();
+          }
+        });
+      } else {
+        speakViaWebView();
       }
-    };
-    if (WakeWordModule?.speakText) {
-      let fellBack = false;
-      const fallbackTimer = setTimeout(() => {
-        if (!fellBack) {
-          fellBack = true;
-          speakViaWebView();
-        }
-      }, 600);
-      WakeWordModule.speakText(text).then(() => {
-        if (!fellBack) {
-          clearTimeout(fallbackTimer);
-        }
-      }).catch(() => {
-        if (!fellBack) {
-          fellBack = true;
-          clearTimeout(fallbackTimer);
-          speakViaWebView();
-        }
-      });
-    } else {
-      speakViaWebView();
-    }
+    });
   }, []);
 
   // Apply Wake Mode visual style to the WebView. We do this once on
@@ -336,32 +382,36 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
             addVoiceLog(`Matching: ${comp}`);
           }
 
-          // v3.1.80: two-phase wake. Play the greeting
-          // first, then start the listener after a fixed
-          // delay. The native AudioRecord stays OFF during
-          // the greeting, so the system TTS isn't picked
-          // up by the matcher. After the delay, the
-          // listener comes on and the user says the wake
-          // word a SECOND time to begin recording.
+          // v3.1.80 / v3.1.85: two-phase wake. Play the
+          // greeting first, then start the listener after
+          // the greeting actually finishes speaking. The
+          // native AudioRecord stays OFF during the
+          // greeting, so the system TTS isn't picked up
+          // by the matcher.
           //
-          // Tobe: "wake mode should not need a second wake
-          // confirmation. perhaps we should introduce a
-          // slight change into how wake mode works. Or
-          // perhaps not a change really but when i have
-          // tested it before i have never gotten the wake
-          // greeting. When wake mode opens with the first
-          // wake phrase it should open in wake mode and
-          // say the wake greeting. Then the user says the
-          // wake phrase again to continue."
+          // Tobe (v3.1.85): "perhaps we need some delay?"
+          // — yes, but not a fixed delay. The v3.1.80
+          // approach used a 1500ms setTimeout (the typical
+          // "Ready to chat" native-TTS duration). That was
+          // too short for the WebView speechSynthesis
+          // fallback path, which has longer queue/synthesis
+          // overhead. Result: greeting got cut off
+          // mid-utterance when AudioRecord stole audio
+          // focus at T=1500ms.
           //
-          // The 1500ms delay is the typical "Ready to
-          // chat" TTS duration. The user-configured
-          // `cyberclaw-ready-phrase` controls what gets
-          // said; empty string disables the greeting
-          // entirely. We don't try to detect TTS
-          // completion (unreliable on Android) — fixed
-          // delay is simpler and predictable.
-          let greetingMs = 1500;
+          // v3.1.85 replaces the fixed delay with
+          // `await speak()` — the speak() Promise resolves
+          // when TTS actually finishes (native ttsDone
+          // event, or estimated duration for WebView
+          // fallback, or a 5s safety timeout). The
+          // listener doesn't start until the greeting is
+          // done, so it can no longer cut the audio off.
+          //
+          // The user-configured `cyberclaw-ready-phrase`
+          // controls what gets said; empty string disables
+          // the greeting entirely.
+          let greetingMs = 0; // v3.1.85: legacy var, no longer drives a setTimeout
+          // (kept for the empty-string skip logic below).
           let greetingText = 'Ready to chat';
           try {
             const stored = await AsyncStorage.getItem('cyberclaw-ready-phrase');
@@ -384,22 +434,34 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           const fgThreshold = parseFloat(
             (await AsyncStorage.getItem('cyberclaw-wake-fg-threshold')) || '0.55',
           );
+          // v3.1.85: await the speak() Promise so the
+          // listener doesn't start until the greeting
+          // actually finishes. Previously we used a fixed
+          // 1500ms setTimeout, which was the typical
+          // native-TTS duration. But the WebView fallback
+          // path is slower (queue overhead, longer actual
+          // utterance synthesis) and the 1500ms cap was
+          // cutting the greeting off mid-utterance as soon
+          // as AudioRecord stole audio focus.
+          //
+          // speak() also has its own 5s safety timeout
+          // (returns from the Promise after 5s no matter
+          // what), so a stuck TTS never hangs the listener
+          // start.
           if (greetingMs > 0 && greetingText) {
-            speak(greetingText);
+            await speak(greetingText);
           }
-          setTimeout(() => {
-            if (cancelled) return;
-            setGreetingPhase('done');
-            setVoiceStatus('listening');
-            addVoiceLog('🎧 Listening for wake word...');
-            cleanup = startSampleMatchListener(
-              companionsTraining,
-              handleWakeWordInner,
-              (msg) => addLogEntry(msg, 'debug'),
-              fgThreshold,
-            );
-            sampleListenerCleanupRef.current = cleanup;
-          }, greetingMs);
+          if (cancelled) return;
+          setGreetingPhase('done');
+          setVoiceStatus('listening');
+          addVoiceLog('🎧 Listening for wake word...');
+          cleanup = startSampleMatchListener(
+            companionsTraining,
+            handleWakeWordInner,
+            (msg) => addLogEntry(msg, 'debug'),
+            fgThreshold,
+          );
+          sampleListenerCleanupRef.current = cleanup;
         } else {
           addLogEntry('No training data for sample match — open Wake Mode and tap "Train wake phrase" to record 3 samples.', 'error');
         }
