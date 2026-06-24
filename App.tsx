@@ -89,75 +89,59 @@ export default function App(): React.JSX.Element {
       handleWake();
     });
 
-    // v3.1.82 / v3.1.83: native recovery path.
-    // MainActivity sets wake_pending=true in
-    // SharedPreferences when the wake intent is detected.
-    // If the JS context wasn't ready when MainActivity
-    // emitted wakeWordOpenedApp (cold start from the
-    // lock screen, JS bundle still loading), the emit
-    // was dropped. The native flag persists across that
-    // race and is consumed by checkNativePending below.
+    // v3.1.86: timestamped wake-pending flag.
     //
-    // v3.1.82 also re-checked on AppState=active as
-    // belt-and-suspenders, but that turned into a bug:
-    // if the flag was still set when the user manually
-    // exited Wake Mode, every subsequent foreground
-    // transition would re-fire handleWake and yank them
-    // back. v3.1.83 checks the flag ONLY on first mount.
-    // The "JS context loaded but event dropped" race is
-    // already covered by MainActivity.onResume's
-    // emitWakeOpenedWithRetry path.
-    const checkNativePending = () => {
+    // v3.1.82 added a SharedPreferences `wake_pending` flag
+    // for cold-launch wake recovery (when the JS context
+    // never comes up within the 5s emit-retry budget and
+    // the user has to kill+reopen). But Tobe reported
+    // this caused spurious wake-mode entry on cold launch
+    // (a stale flag from a prior session opening wake mode
+    // on next launch). He prefers the app to ALWAYS open
+    // to home on cold launch.
+    //
+    // The fix: the flag now has an expiration. MainActivity
+    // also stores `wake_pending_at = currentTimeMillis`
+    // when setting the flag. The JS bridge returns both the
+    // flag value and the timestamp; we consume only if
+    // `now - setAt < 30s` (i.e. the flag is fresh from a
+    // real wake event in this session). Stale flags are
+    // cleared without consuming.
+    //
+    // The wake-from-cold path still works:
+    // - JS context up at wake time: emit immediately,
+    //   wakeOpenSub catches it. Flag set but consumed
+    //   within milliseconds.
+    // - JS context NOT up at wake time: flag set with
+    //   timestamp, retry loop runs. If retries succeed,
+    //   wakeOpenSub catches it. If retries exhaust and
+    //   user reopens within 30s, this listener consumes
+    //   the flag and opens wake mode. If user reopens
+    //   after 30s, flag is stale, cleared without
+    //   consuming.
+    const STALE_FLAG_MS = 30_000;
+    const checkNativePending = async () => {
       if (!WakeWordModule?.isWakePending) return;
-      // v3.1.83 hotfix: only consume the flag if we're not
-      // already in wake-mode / settings / voice-mode.
-      // Without this guard, an AppState=active transition
-      // would re-fire handleWake and yank the user back to
-      // Wake Mode after they manually exited (the v3.1.82
-      // ping-pong bug). The check uses screenRef because
-      // useEffect's [] deps capture 'screen' at mount time.
       if (screenRef.current !== 'home') return;
-      WakeWordModule.isWakePending().then((pending: boolean) => {
-        if (pending) {
+      try {
+        const result = await WakeWordModule.isWakePending();
+        const pending = !!result?.pending;
+        const setAt = result?.setAt ?? 0;
+        if (!pending) return;
+        const ageMs = Date.now() - setAt;
+        if (ageMs > STALE_FLAG_MS) {
+          // Stale flag from a prior session. Clear it
+          // without consuming — user gets a fresh home
+          // screen launch, not a re-entry into wake mode.
           clearWakePending();
-          handleWake();
+          return;
         }
-      }).catch(() => {});
+        // Fresh flag from a real wake event. Consume it.
+        clearWakePending();
+        handleWake();
+      } catch (_) {}
     };
-    // v3.1.83: check the native wake-pending flag ONLY on
-    // first mount, not on every AppState=active transition.
-    //
-    // v3.1.82 also re-checked on AppState=active as
-    // belt-and-suspenders, but this created a ping-pong:
-    // if the flag was still set when the user exited Wake
-    // Mode by tapping X, every subsequent foreground
-    // transition (notification shade, screen lock+unlock,
-    // anything) would re-fire handleWake and yank the user
-    // back to Wake Mode.
-    //
-    // The cold-start recovery case (JS context never came
-    // up, MainActivity emitted into the void) is the only
-    // case we actually need to recover from, and the first
-    // mount handles it. MainActivity.onResume also
-    // re-emits via emitWakeOpenedWithRetry, which is the
-    // belt-and-suspenders for the JS-context-loaded-but-
-    // event-dropped race.
     checkNativePending();
-    // v3.1.83 hotfix: re-add the AppState=active listener.
-    // v3.1.83 (first cut) removed it because it caused the
-    // ping-pong after manual exit, but the listener is
-    // also needed for the cold-launch wake path:
-    // MainActivity schedules the first
-    // emitWakeOpenedWithRetry 250ms after onCreate. If the
-    // JS context comes up in that window,
-    // checkNativePending() above catches it on mount. If
-    // the user re-foregrounds before that retry fires
-    // (e.g. notification shade toggle), AppState=active is
-    // what consumes the flag. The screenRef guard inside
-    // checkNativePending prevents the ping-pong after
-    // manual exit: the listener still fires, but no-ops
-    // because screenRef.current is 'wake-mode' (or
-    // 'settings' / 'voice-mode').
     const sub = AppState.addEventListener('change', (s) => {
       if (s === 'active') checkNativePending();
     });

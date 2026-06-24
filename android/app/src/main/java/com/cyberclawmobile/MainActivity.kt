@@ -95,9 +95,18 @@ class MainActivity : ReactActivity() {
       // re-emit. If it was cleared, the user has
       // already seen (and possibly exited) Wake Mode and
       // we must not yank them back.
+      //
+      // v3.1.86: also stamp the flag with the current
+      // time. The JS side (App.tsx checkNativePending)
+      // uses the timestamp to distinguish fresh flags
+      // (from a real wake event in this session) from
+      // stale flags (persisted across an app kill). A
+      // stale flag used to cause spurious wake-mode
+      // entry on cold launch.
       getSharedPreferences("wake_state", MODE_PRIVATE)
         .edit()
         .putBoolean("wake_pending", true)
+        .putLong("wake_pending_at", System.currentTimeMillis())
         .apply()
       // Post-delayed so React context is ready, and retry if context is not
       // ready yet (cold start can take longer than 600ms on some devices).
@@ -128,9 +137,15 @@ class MainActivity : ReactActivity() {
           // NOT to re-emit. Without this, onResume would
           // re-emit and yank the user back to Wake Mode
           // after they exited.
+          //
+          // v3.1.86: also clear the timestamp so a stale
+          // timestamp from a prior session can't combine
+          // with a freshly-set flag to confuse the JS
+          // side.
           getSharedPreferences("wake_state", MODE_PRIVATE)
             .edit()
             .putBoolean("wake_pending", false)
+            .putLong("wake_pending_at", 0L)
             .apply()
         } else if (attempt < maxAttempts) {
           // Context not ready (cold start) — try again

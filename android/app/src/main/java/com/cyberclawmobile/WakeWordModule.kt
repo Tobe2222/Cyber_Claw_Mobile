@@ -33,7 +33,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun addListener(eventName: String) {}
     @ReactMethod fun removeListeners(count: Int) {}
 
-    // v3.1.82: persistent wake-pending flag. Read by
+    // v3.1.82 / v3.1.86: persistent wake-pending flag. Read by
     // App.tsx on mount + AppState=active to recover from
     // the race where MainActivity emitted wakeWordOpenedApp
     // BEFORE App.tsx's listener subscribed (cold start
@@ -45,10 +45,23 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     // SharedPreferences so it survives process death
     // (which AsyncStorage writes may not, in the brief
     // window between kill and JS consume).
+    //
+    // v3.1.86: also returns the timestamp at which the
+    // flag was set. The JS side uses this to distinguish
+    // fresh flags (real wake event in this session) from
+    // stale flags (persisted across an app kill). Stale
+    // flags are cleared without consuming, so the user
+    // doesn't get spuriously yanked into Wake Mode on a
+    // cold launch.
     @ReactMethod fun isWakePending(promise: Promise) {
       try {
         val prefs = reactContext.getSharedPreferences("wake_state", android.content.Context.MODE_PRIVATE)
-        promise.resolve(prefs.getBoolean("wake_pending", false))
+        val pending = prefs.getBoolean("wake_pending", false)
+        val setAt = prefs.getLong("wake_pending_at", 0L)
+        val map = com.facebook.react.bridge.Arguments.createMap()
+        map.putBoolean("pending", pending)
+        map.putDouble("setAt", setAt.toDouble())
+        promise.resolve(map)
       } catch (e: Exception) {
         promise.reject("error", e.message)
       }
@@ -57,7 +70,13 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun clearWakePending(promise: Promise) {
       try {
         val prefs = reactContext.getSharedPreferences("wake_state", android.content.Context.MODE_PRIVATE)
-        prefs.edit().putBoolean("wake_pending", false).apply()
+        // v3.1.86: also clear the timestamp so a stale
+        // timestamp from a prior session can't combine
+        // with a freshly-set flag.
+        prefs.edit()
+          .putBoolean("wake_pending", false)
+          .putLong("wake_pending_at", 0L)
+          .apply()
         promise.resolve(true)
       } catch (e: Exception) {
         promise.reject("error", e.message)
