@@ -2,7 +2,7 @@
  * CyberClaw Mobile — Your AI companion on the go
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StatusBar, SafeAreaView, StyleSheet, NativeModules, NativeEventEmitter, AppState,
 } from 'react-native';
@@ -26,6 +26,14 @@ const getWakeWordEmitter = () => {
 
 export default function App(): React.JSX.Element {
   const [screen, setScreen] = useState<'home' | 'settings' | 'wake-mode' | 'voice-mode'>('home');
+  // v3.1.83: ref so the AppState=active listener (re-added below)
+  // can read the CURRENT screen value, not the value captured at
+  // useEffect mount time. Without this, the listener would always
+  // see 'home' (the initial state) and fire even when the user is
+  // already in wake-mode or settings, which is what caused the
+  // ping-pong in v3.1.82.
+  const screenRef = useRef<'home' | 'settings' | 'wake-mode' | 'voice-mode'>('home');
+  useEffect(() => { screenRef.current = screen; }, [screen]);
   const [companionId, setCompanionId] = useState('boar');
   // v3.1.59: lift agents list to App.tsx so WakeModeScreen can
   // inject setAgents into its (fresh) WebView on mount. Without
@@ -101,6 +109,14 @@ export default function App(): React.JSX.Element {
     // emitWakeOpenedWithRetry path.
     const checkNativePending = () => {
       if (!WakeWordModule?.isWakePending) return;
+      // v3.1.83 hotfix: only consume the flag if we're not
+      // already in wake-mode / settings / voice-mode.
+      // Without this guard, an AppState=active transition
+      // would re-fire handleWake and yank the user back to
+      // Wake Mode after they manually exited (the v3.1.82
+      // ping-pong bug). The check uses screenRef because
+      // useEffect's [] deps capture 'screen' at mount time.
+      if (screenRef.current !== 'home') return;
       WakeWordModule.isWakePending().then((pending: boolean) => {
         if (pending) {
           clearWakePending();
@@ -127,10 +143,29 @@ export default function App(): React.JSX.Element {
     // belt-and-suspenders for the JS-context-loaded-but-
     // event-dropped race.
     checkNativePending();
+    // v3.1.83 hotfix: re-add the AppState=active listener.
+    // v3.1.83 (first cut) removed it because it caused the
+    // ping-pong after manual exit, but the listener is
+    // also needed for the cold-launch wake path:
+    // MainActivity schedules the first
+    // emitWakeOpenedWithRetry 250ms after onCreate. If the
+    // JS context comes up in that window,
+    // checkNativePending() above catches it on mount. If
+    // the user re-foregrounds before that retry fires
+    // (e.g. notification shade toggle), AppState=active is
+    // what consumes the flag. The screenRef guard inside
+    // checkNativePending prevents the ping-pong after
+    // manual exit: the listener still fires, but no-ops
+    // because screenRef.current is 'wake-mode' (or
+    // 'settings' / 'voice-mode').
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') checkNativePending();
+    });
 
     return () => {
       wakeSub?.remove?.();
       wakeOpenSub?.remove?.();
+      sub?.remove?.();
     };
   }, []);
 
