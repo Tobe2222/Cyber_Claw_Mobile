@@ -411,16 +411,27 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // The user-configured `cyberclaw-ready-phrase`
           // controls what gets said; empty string disables
           // the greeting entirely.
-          let greetingMs = 0; // v3.1.85: legacy var, no longer drives a setTimeout
-          // (kept for the empty-string skip logic below).
+          //
+          // v3.1.88: the legacy `greetingMs` variable is
+          // removed. It was used to drive a setTimeout in
+          // the v3.1.80 two-phase wake, and to gate
+          // `speak()` via `if (greetingMs > 0 && greetingText)`.
+          // In v3.1.85 the setTimeout was replaced with
+          // `await speak()`, but the `greetingMs > 0` gate
+          // stayed — and since the new default was 0,
+          // speak() was silently NEVER called. Tobe
+          // reported "still no wake greeting sound" for
+          // v3.1.85 / v3.1.86 / v3.1.87. Now speak() is
+          // gated on `if (greetingText)` only, which is
+          // false only when the user explicitly set
+          // `cyberclaw-ready-phrase` to an empty string.
           let greetingText = 'Ready to chat';
           try {
             const stored = await AsyncStorage.getItem('cyberclaw-ready-phrase');
             if (stored !== null) {
               if (stored.trim() === '') {
-                // User disabled the greeting — skip the
-                // delay and start the listener now.
-                greetingMs = 0;
+                // User disabled the greeting — skip
+                // speaking entirely.
                 greetingText = '';
               } else {
                 greetingText = stored;
@@ -449,7 +460,23 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // (returns from the Promise after 5s no matter
           // what), so a stuck TTS never hangs the listener
           // start.
-          if (greetingMs > 0 && greetingText) {
+          //
+          // v3.1.88 hotfix: the check used to be
+          // `if (greetingMs > 0 && greetingText)`. In
+          // v3.1.85 I changed the default greetingMs from
+          // 1500 to 0 (comment: "no longer drives a
+          // setTimeout") and didn't update this check, so
+          // speak() was silently NEVER called — the
+          // greeting was always skipped, regardless of
+          // whether the user had a custom phrase. Tobe
+          // reported "still no wake greeting sound" for
+          // v3.1.85 / v3.1.86 / v3.1.87. The check is now
+          // `if (greetingText)` — only the empty-string
+          // case (which sets greetingText='') skips
+          // speaking. The greetingMs variable is no
+          // longer needed at all (kept as a no-op for
+          // clarity, will be removed in a future cleanup).
+          if (greetingText) {
             await speak(greetingText);
           }
           if (cancelled) return;
