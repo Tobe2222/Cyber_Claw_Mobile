@@ -857,12 +857,11 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
             // ACTION_INSTALL_TTS_DATA is deprecated in API 29+
             // but still works. Use it as a best-effort.
-            val currentActivity = currentActivity
-            if (currentActivity != null) {
-                currentActivity.startActivity(intent)
-            } else {
-                reactContext.startActivity(intent)
-            }
+            // We use reactContext (the application context) to
+            // start the activity — FLAG_ACTIVITY_NEW_TASK is
+            // already set above so this is safe even from a
+            // non-Activity context.
+            reactContext.startActivity(intent)
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("TTS_INSTALL_ERROR", e.message)
