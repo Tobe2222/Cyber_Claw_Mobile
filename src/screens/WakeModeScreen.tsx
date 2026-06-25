@@ -481,6 +481,41 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
             addVoiceLog(`Matching: ${comp}`);
           }
 
+          // v3.1.91: pre-warm the greeting cache BEFORE
+          // the wake event fires. The synthesis request
+          // takes 2-5s on the desktop, so doing it at
+          // Wake Mode open time means the cache is
+          // (usually) ready by the time the user actually
+          // says the wake word. Without this, the first
+          // wake event after install gets a no-tts-engine
+          // log and silent audio; the user has to wait
+          // for the second wake event to actually hear
+          // the greeting. With pre-warm, the very first
+          // wake event can use the freshly-cached audio.
+          // The greetingText value is read later in this
+          // same effect, so we read it once here to share
+          // the AsyncStorage hit (and to log "no phrase"
+          // if the user disabled greetings).
+          let prewarmPhrase = 'Ready to chat';
+          try {
+            const stored = await AsyncStorage.getItem('cyberclaw-ready-phrase');
+            if (stored !== null) {
+              prewarmPhrase = stored;
+            }
+          } catch (_) {}
+          if (prewarmPhrase && prewarmPhrase.trim()) {
+            // Fire-and-forget: log whether a cache
+            // already exists so the user can see in the
+            // voice log whether synthesis is needed.
+            const prewarmCached = await getCachedGreetingPath(prewarmPhrase);
+            if (prewarmCached) {
+              addVoiceLog(`🔊 greeting cached ✓ (${prewarmCached.split('/').pop()})`);
+            } else {
+              addVoiceLog(`🔊 pre-warming greeting via desktop...`);
+              ensureGreetingCached(prewarmPhrase).catch(() => {});
+            }
+          }
+
           // v3.1.80 / v3.1.85: two-phase wake. Play the
           // greeting first, then start the listener after
           // the greeting actually finishes speaking. The

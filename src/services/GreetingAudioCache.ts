@@ -106,15 +106,35 @@ export async function getCachedGreetingPath(
 // calls saveGreetingAudio().
 export function requestGreetingSynthesis(phrase: string): void {
   if (!phrase || !phrase.trim()) return;
-  if (pendingSynthesis && lastRequestedPhrase === phrase) return;
+  if (pendingSynthesis && lastRequestedPhrase === phrase) {
+    console.log(`[GreetingAudioCache] Synthesis already pending for "${phrase.substring(0, 30)}", skipping duplicate request`);
+    return;
+  }
   pendingSynthesis = true;
   lastRequestedPhrase = phrase;
   try {
+    console.log(`[GreetingAudioCache] Requesting desktop synthesis for "${phrase.substring(0, 40)}"`);
     syncClient.requestGreetingAudio(phrase);
+    // The send() method in SyncClient will log a warning
+    // if the WS is not open. The user can then check
+    // the connection state via the home screen's
+    // connection indicator.
   } catch (e: any) {
     console.warn('[GreetingAudioCache] requestGreetingAudio failed:', e?.message);
     pendingSynthesis = false;
   }
+}
+
+// v3.1.92: was the synthesis request we made
+// acknowledged by the desktop? If we sent the request
+// but no audio_response arrived within the timeout,
+// the desktop is probably not running an updated
+// version (v3.1.31+) that handles the new message.
+// Used by the wake greeting flow to give a clearer
+// diagnostic when the cache stays empty across
+// multiple wake events.
+export function isSynthesisPending(): boolean {
+  return pendingSynthesis;
 }
 
 // v3.1.91: save the desktop-synthesized audio to permanent
