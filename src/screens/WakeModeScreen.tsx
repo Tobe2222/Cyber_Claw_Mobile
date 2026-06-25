@@ -137,8 +137,13 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   );
   const [webViewKey, setWebViewKey] = useState(0);
 
+  // v3.1.89: keep last 5 log lines so the WebView fallback
+  // decision and the Speaking / Greeting / Matching prelude
+  // are all visible at once. Previously only the last 3 were
+  // shown, which hid the Speaking call and made it impossible
+  // to tell whether speak() was reached at all.
   const addVoiceLog = useCallback((text: string) => {
-    setVoiceLogs(prev => [...prev, text].slice(-4));
+    setVoiceLogs(prev => [...prev, text].slice(-5));
   }, []);
 
   // Speak via native TTS (works even when AudioRecord is active).
@@ -160,8 +165,26 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // commonly takes 800-1200ms on cold start, and the previous
   // value was racing past the init. With prewarmTts called
   // at App.tsx mount (v3.1.87), the engine is usually
-  // already warm by the time speak() is called, and the 1500ms
-  // gives slow devices more headroom.
+  // already warm by the time speak() is called, and the
+  // v3.1.89 fallback timeout (3500ms) gives slow devices
+  // plenty of headroom without racing past the actual
+  // speech.
+  //
+  // v3.1.89 critical fix: the v3.1.87 WebView fallback
+  // called `WakeWordModule.stopSpeaking()` before
+  // injecting the WebView speechSynthesis call. That was
+  // KILLING any pending native TTS utterance that was
+  // still in the queue (e.g. voice data finishing loading
+  // or init finalising 100-500ms after speakText resolved).
+  // Result: even when native TTS would have spoken a
+  // moment later, we cancelled it before it could produce
+  // audio. v3.1.89 removes the stopSpeaking call from the
+  // fallback path. The two paths can no longer "race" for
+  // audio output once the fallback decision is made,
+  // because the WebView's speechSynthesis on Android is
+  // almost always a no-op — so in practice the fallback
+  // only adds visual noise; native TTS is the only
+  // path that actually plays audio.
   const speak = useCallback((text: string): Promise<void> => {
     return new Promise((resolve) => {
       const t0 = Date.now();
@@ -189,24 +212,27 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       ttsDoneSub = emitter?.addListener('ttsDone', () => done('native')) ?? null;
 
       const speakViaWebView = () => {
-        // v3.1.87: stop any pending native TTS before
-        // delegating to the WebView. Otherwise both paths
-        // would race for audio output once native TTS init
-        // finally completes (could be 700-1500ms after start).
-        WakeWordModule?.stopSpeaking?.().catch(() => {});
+        // v3.1.89: do NOT call stopSpeaking() here. We
+        // used to kill any pending native TTS utterance
+        // (see comment block above). Let native TTS keep
+        // going — if it's actually working, the ttsDone
+        // event will resolve done() and we'll naturally
+        // skip the estimate timer.
         try {
           const escaped = text.replace(/'/g, "\\'").replace(/\n/g, ' ');
           webViewRef.current?.injectJavaScript(
             `if('speechSynthesis'in window){window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('${escaped}');u.rate=0.95;u.pitch=1.1;window.speechSynthesis.speak(u);}true;`
           );
           addVoiceLog('🔊 (webview fallback)');
-          // Estimate duration: ~80ms per char, cap at 4s.
-          // v3.1.87: bumped from 60 to 80 ms/char — the
-          // WebView's speechSynthesis is consistently
-          // slower than native TTS in our testing, and
-          // 60ms was cutting some utterances off when the
-          // listener started.
-          const estimateMs = Math.min(4000, Math.max(1500, text.length * 80));
+          // v3.1.89: estimate bumped from 80ms/char to
+          // 100ms/char with a 2000ms minimum. The WebView
+          // speechSynthesis API on Android is unreliable
+          // (often a no-op), so when this path runs we're
+          // usually just waiting for native TTS to actually
+          // start speaking (which ttsDone will resolve
+          // first). The longer estimate ensures we don't
+          // double-log "done" prematurely.
+          const estimateMs = Math.min(6000, Math.max(2000, text.length * 100));
           estimateTimer = setTimeout(() => done('webview-estimate'), estimateMs);
         } catch (_) {
           addVoiceLog('🔊 ❌ both TTS paths failed');
@@ -214,23 +240,42 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         }
       };
 
-      const safetyTimer = setTimeout(() => done('safety'), 5000);
+      // v3.1.89: 8-second safety. Native TTS on slow
+      // devices + cold voice data load can take up to
+      // 5-6 seconds for the first utterance after a wake
+      // event. The previous 5s safety was firing before
+      // ttsDone had a chance to arrive, which then masked
+      // the actual completion (we'd report "done (safety)"
+      // and skip ttsDone).
+      const safetyTimer = setTimeout(() => done('safety'), 8000);
 
       if (WakeWordModule?.speakText) {
+        // v3.1.89: fallback timeout 1500ms → 3500ms. The
+        // earlier 1500ms was tuned for native TTS that
+        // finishes in 800-1200ms, but on Tobe's device the
+        // post-wake cold-start can take 2-3s before
+        // ttsDone fires. 1500ms was firing the fallback
+        // every time, even when native TTS was about to
+        // produce audio. 3500ms gives native plenty of time
+        // while still letting the WebView fallback catch
+        // genuine native-TTS failures.
         fallbackTimer = setTimeout(() => {
           if (!resolved) {
             addVoiceLog('🔊 native TTS slow, falling back');
             speakViaWebView();
           }
-        }, 1500);
+        }, 3500);
         WakeWordModule.speakText(text).then(() => {
-          // The native speakText promise resolves as soon as
-          // engine.speak() is called, NOT when TTS finishes
-          // speaking. The ttsDone event (subscribed above)
-          // is the signal that speaking actually completed.
-          // We don't resolve here.
-        }).catch(() => {
+          // v3.1.89: log the native promise resolution.
+          // speakText resolves as soon as engine.speak() is
+          // called, NOT when speech actually starts. The
+          // elapsed time from t0 tells us how long native
+          // took to enqueue the utterance (which is also a
+          // useful "is native TTS healthy?" signal).
+          addVoiceLog(`🔊 native enqueued (${Date.now() - t0}ms)`);
+        }).catch((err: any) => {
           if (!resolved) {
+            addVoiceLog(`🔊 native failed: ${err?.message || err}`);
             clearTimeout(fallbackTimer);
             speakViaWebView();
           }
@@ -841,10 +886,10 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         </Text>
       </View>
 
-      {/* Voice log overlay (bottom) */}
+      {/* Voice log overlay (bottom) — v3.1.89 shows last 5 lines */}
       <View style={styles.voiceLogOverlay} pointerEvents="none">
         <Text style={styles.voiceLogText}>
-          {voiceLogs.slice(-3).map((l, i) => `${l}`).join('\n')}
+          {voiceLogs.slice(-5).map((l, i) => `${l}`).join('\n')}
         </Text>
       </View>
 

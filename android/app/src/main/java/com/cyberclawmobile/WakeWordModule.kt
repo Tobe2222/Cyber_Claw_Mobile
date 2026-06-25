@@ -694,16 +694,41 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    // v3.1.89: track whether voice data has actually
+    // finished loading. TextToSpeech.onInit returns SUCCESS
+    // as soon as the engine binds, but voice data for the
+    // requested locale is loaded async — and engine.speak()
+    // before voices are ready can silently drop the
+    // utterance on some devices. We use this flag as a
+    // diagnostic (logged on each speak) but no longer gate
+    // speak() on it — the engine's own queue handles
+    // backpressure, and the JS-side fallback timeout
+    // covers the worst-case cold-start delay.
+    private var ttsVoicesReady = false
 
     private fun getTts(onReady: (TextToSpeech) -> Unit, onError: (String) -> Unit) {
-        if (ttsReady && tts != null) { onReady(tts!!); return }
+        // If engine exists and is bound, just hand it over
+        // immediately. The speak() call will queue the
+        // utterance, and the engine's own internal queue
+        // handles backpressure if voice data isn't loaded
+        // yet (the first utterance after wake may take
+        // 2-3s to actually start producing audio, but it
+        // WILL start, not silently drop).
+        if (tts != null && ttsReady) {
+            onReady(tts!!)
+            return
+        }
+        // Engine doesn't exist or init hasn't finished:
+        // (re)create it.
         tts?.shutdown()
+        ttsVoicesReady = false
         tts = TextToSpeech(reactContext) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             if (ttsReady) {
                 tts?.language = Locale.US
                 tts?.setSpeechRate(0.95f)
                 tts?.setPitch(1.1f)
+                emitDebug("info", "TTS init OK, calling onReady")
                 onReady(tts!!)
             } else {
                 // v3.1.83: notify the caller of init failure
@@ -722,23 +747,14 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod fun speakText(text: String, promise: Promise) {
         getTts({ engine ->
-            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
-                override fun onDone(utteranceId: String?) {
-                    handler.post {
-                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                            .emit("ttsDone", null)
-                    }
-                }
-                override fun onError(utteranceId: String?) {
-                    handler.post {
-                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                            .emit("ttsDone", null)
-                    }
-                }
-            })
-            engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "claw-tts")
-            promise.resolve(null)
+            // v3.1.89: always call actuallySpeak directly.
+            // The onStart callback in actuallySpeak will
+            // mark ttsVoicesReady=true when the first
+            // utterance actually begins speaking. The JS
+            // side has its own fallback timeout (3.5s in
+            // v3.1.89) that covers the worst-case slow
+            // first utterance after wake.
+            actuallySpeak(text, promise)
         }, { err ->
             // v3.1.83: surface the failure to JS so the
             // WebView speechSynthesis fallback actually
@@ -746,6 +762,44 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             // because getTts had no onError callback.
             promise.reject("TTS_INIT_FAILED", err)
         })
+    }
+
+    private fun actuallySpeak(text: String, promise: Promise) {
+        val engine = tts ?: run {
+            promise.reject("TTS_NULL", "tts engine is null")
+            return
+        }
+        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                if (!ttsVoicesReady) {
+                    ttsVoicesReady = true
+                    emitDebug("info", "TTS voices ready (via real speak)")
+                }
+            }
+            override fun onDone(utteranceId: String?) {
+                handler.post {
+                    reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                        .emit("ttsDone", null)
+                }
+            }
+            override fun onError(utteranceId: String?) {
+                handler.post {
+                    reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                        .emit("ttsDone", null)
+                }
+            }
+        })
+        val status = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "claw-tts")
+        // v3.1.89: log the engine.speak() return code so we
+        // can tell from JS logs whether the utterance was
+        // actually accepted into the queue or silently
+        // rejected. SUCCESS == 0.
+        emitDebug("info", "TTS speak() returned $status for \"${text.take(40)}\"")
+        if (status == TextToSpeech.SUCCESS) {
+            promise.resolve(null)
+        } else {
+            promise.reject("TTS_SPEAK_FAILED", "engine.speak returned $status")
+        }
     }
 
     @ReactMethod fun stopSpeaking(promise: Promise) {

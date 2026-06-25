@@ -530,11 +530,12 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
     webViewRef.current?.injectJavaScript(inject);
   }, []);
 
-  // Helper: Add log to voice logs display (only visible in voice mode)
+  // v3.1.89: bump from 4 to 5 log lines so the Speaking /
+  // Greeting / fallback decision are all visible together.
   const addVoiceLog = useCallback((text: string) => {
     setVoiceLogs(prev => {
       const updated = [...prev, text];
-      return updated.slice(-4);  // Keep last 4 logs
+      return updated.slice(-5);  // Keep last 5 logs
     });
   }, []);
 
@@ -2557,11 +2558,11 @@ useEffect(() => {
               </Text>
             </View>
           )}
-          {/* Voice mode log display - green terminal at bottom */}
+          {/* v3.1.89: voice log overlay shows last 5 lines (was 3) */}
           {fullscreen && (
             <View style={styles.voiceLogOverlay} pointerEvents="none">
               <Text style={styles.voiceLogText}>
-                {voiceLogs.slice(-3).map((log, i) => `${log}`).join('\n')}
+                {voiceLogs.slice(-5).map((log, i) => `${log}`).join('\n')}
               </Text>
             </View>
           )}
