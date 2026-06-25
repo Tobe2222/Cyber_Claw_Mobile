@@ -275,6 +275,24 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           addVoiceLog(`🔊 native enqueued (${Date.now() - t0}ms)`);
         }).catch((err: any) => {
           if (!resolved) {
+            // v3.1.90: special-case the "no TTS engine"
+            // error so the user sees a clear, actionable
+            // message instead of a generic native-failed
+            // log. status=-1 from the TTS init listener
+            // means the device has no TTS engine binding
+            // — the most common cause on stripped Android
+            // skins or devices where the user uninstalled
+            // the default engine.
+            const code = err?.code || '';
+            if (code === 'TTS_INIT_FAILED' && /status=-1/.test(err?.message || '')) {
+              addVoiceLog('🔊 ❌ no TTS engine — install one');
+              // Don't bother with the WebView fallback
+              // here — speechSynthesis is also a no-op on
+              // these devices. Just resolve immediately
+              // so the listener can start.
+              done('no-tts-engine');
+              return;
+            }
             addVoiceLog(`🔊 native failed: ${err?.message || err}`);
             clearTimeout(fallbackTimer);
             speakViaWebView();

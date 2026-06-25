@@ -401,12 +401,47 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // Test voice on mobile (local Android TTS)
   const testLocalVoice = () => {
     const phrase = 'Ready to chat. The boar is happy.';
-    if (WakeWordModule?.speakText) {
+    if (!WakeWordModule?.speakText) {
+      Alert.alert('TTS unavailable', 'WakeWordModule not available.');
+      return;
+    }
+    // v3.1.90: probe whether the device has any TTS engine
+    // installed before attempting to speak. If not, offer
+    // to launch the system install dialog so the user can
+    // install Google TTS / eSpeak NG.
+    const tryInstall = () => {
+      if (WakeWordModule?.installTtsData) {
+        WakeWordModule.installTtsData().catch(() => {});
+      }
+    };
+    if (WakeWordModule?.hasTtsEngine) {
+      WakeWordModule.hasTtsEngine()
+        .then((hasEngine: boolean) => {
+          if (!hasEngine) {
+            Alert.alert(
+              'No TTS engine installed',
+              'CyberClaw needs a Text-to-Speech engine for voice greetings. Install Google TTS or eSpeak NG?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Install', onPress: tryInstall },
+              ],
+            );
+            return;
+          }
+          WakeWordModule.speakText(phrase).catch(() => {
+            Alert.alert('TTS init failed', 'Engine is installed but failed to initialise. Try installing voice data in Android Settings → Accessibility → Text-to-speech output.');
+          });
+        })
+        .catch(() => {
+          // hasTtsEngine probe failed; just try speak anyway.
+          WakeWordModule.speakText(phrase).catch(() => {
+            Alert.alert('TTS unavailable', 'Your device has no Text-to-Speech engine installed.');
+          });
+        });
+    } else {
       WakeWordModule.speakText(phrase).catch(() => {
         Alert.alert('TTS unavailable', 'Your device has no Text-to-Speech engine installed.');
       });
-    } else {
-      Alert.alert('TTS unavailable', 'WakeWordModule not available.');
     }
   };
 

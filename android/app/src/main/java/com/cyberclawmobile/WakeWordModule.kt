@@ -824,4 +824,48 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             promise.reject("TTS_INIT_FAILED", err)
         })
     }
+
+    // v3.1.90: probe installed TTS engines via the system
+    // PackageManager. Returns true if at least one engine
+    // responds to the TTS_SERVICE intent, false otherwise.
+    // Useful for diagnosing "init failed: status=-1" on
+    // devices where no engine is installed (e.g. stripped
+    // Android skins without Google TTS).
+    @ReactMethod fun hasTtsEngine(promise: Promise) {
+        try {
+            val pm = reactContext.packageManager
+            val intent = android.content.Intent(
+                android.speech.tts.TextToSpeech.Engine.ACTION_CHECK_TTS_DATA
+            )
+            val resolves = pm.queryIntentActivities(intent, 0)
+            promise.resolve(resolves.isNotEmpty())
+        } catch (e: Exception) {
+            promise.reject("TTS_PROBE_ERROR", e.message)
+        }
+    }
+
+    // v3.1.90: launch the system TTS install activity.
+    // The system shows a dialog with available engines
+    // (Google TTS, Samsung TTS, etc.) and lets the user
+    // install one. Returns true if the install activity
+    // was successfully launched.
+    @ReactMethod fun installTtsData(promise: Promise) {
+        try {
+            val intent = android.content.Intent(
+                android.speech.tts.TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA
+            )
+            intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            // ACTION_INSTALL_TTS_DATA is deprecated in API 29+
+            // but still works. Use it as a best-effort.
+            val currentActivity = currentActivity
+            if (currentActivity != null) {
+                currentActivity.startActivity(intent)
+            } else {
+                reactContext.startActivity(intent)
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("TTS_INSTALL_ERROR", e.message)
+        }
+    }
 }

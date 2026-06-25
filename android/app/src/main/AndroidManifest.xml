@@ -16,6 +16,29 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- v3.1.90: declare TTS engine intent so Android 11+
+         package visibility allows us to discover installed
+         TTS engines. Without this, TextToSpeech onInit
+         returns status=-1 (ERROR) on devices where the
+         TTS engine is installed but only resolvable via
+         Intent. The Google TTS engine is the most common
+         affected one — it's a separate APK (com.google.android.tts)
+         that needs to be discovered across the package
+         visibility boundary. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <!-- v3.1.90: also declare the install intent so we
+             can prompt the user to install a TTS engine if
+             none is available. The standard TTS install
+             intent opens Play Store to the user's default
+             TTS engine picker. -->
+        <intent>
+            <action android:name="android.intent.action.INSTALL_TTS_DATA" />
+        </intent>
+    </queries>
+
     <application
       android:name=".MainApplication"
       android:label="@string/app_name"

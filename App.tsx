@@ -161,10 +161,36 @@ export default function App(): React.JSX.Element {
   // by the time the user actually wakes the app (a few seconds
   // later), the engine is ready and speakText works on the first
   // call with a reliable ttsDone event.
+  //
+  // v3.1.90: if prewarm fails, check whether the device has
+  // any TTS engine installed at all. If `hasTtsEngine()`
+  // returns false, the device is missing a TTS engine (e.g.
+  // a stripped Android skin or one without Google TTS) and
+  // the wake greeting will be silent until the user installs
+  // one. We log a clear console message but don't interrupt
+  // the user — the install path is exposed in the Settings
+  // screen so they can fix it at their leisure.
   useEffect(() => {
-    if (WakeWordModule?.prewarmTts) {
-      WakeWordModule.prewarmTts().catch(() => {});
-    }
+    if (!WakeWordModule?.prewarmTts) return;
+    WakeWordModule.prewarmTts().catch((err: any) => {
+      console.warn('[TTS] prewarmTts failed:', err?.message || err);
+      if (WakeWordModule?.hasTtsEngine) {
+        WakeWordModule.hasTtsEngine()
+          .then((hasEngine: boolean) => {
+            if (!hasEngine) {
+              console.warn('[TTS] No TTS engine installed on device. ' +
+                'Voice greetings will be silent. ' +
+                'Install Google TTS or eSpeak NG from Play Store, ' +
+                'then re-open CyberClaw.');
+            } else {
+              console.warn('[TTS] Engine is installed but init failed. ' +
+                'May need voice data download — check Android ' +
+                'Settings → Accessibility → Text-to-speech output.');
+            }
+          })
+          .catch(() => {});
+      }
+    });
   }, []);
 
   // Load companion id from storage so WakeModeScreen renders the right sprite
