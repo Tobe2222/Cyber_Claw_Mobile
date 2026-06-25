@@ -238,6 +238,20 @@ export default function App(): React.JSX.Element {
     });
   }, []);
 
+  // v3.1.95: pre-warm the openWakeWord TFLite models at app
+  // mount. TFLite interpreter creation takes ~500ms on cold
+  // load. Without pre-warming, the first wake event after the
+  // app opens races with interpreter init and the first wake
+  // phrase is missed. Calling initOww here means by the time
+  // the user says the wake word, the interpreter is warm and
+  // the first frame of audio gets a real classification.
+  useEffect(() => {
+    if (!WakeWordModule?.initOww) return;
+    WakeWordModule.initOww('hey_jarvis', 0.5).catch((err: any) => {
+      console.warn('[OWW] prewarm initOww failed:', err?.message || err);
+    });
+  }, []);
+
   // v3.1.91: listen for desktop-synthesized greeting
   // audio and save it to permanent storage. Mounted at
   // App level so the cache works regardless of which

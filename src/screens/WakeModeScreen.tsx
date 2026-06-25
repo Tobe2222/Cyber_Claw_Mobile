@@ -63,33 +63,25 @@ function startSampleMatchListener(
   onLog?: (msg: string) => void,
   threshold?: number,
 ): () => void {
-  const matchThreshold = threshold ?? SAMPLE_MATCH_THRESHOLD_FG;
+  // v3.1.95: replaced DTW-based sample matcher with openWakeWord
+  // TFLite inference. Native-side ML on the audio stream emits
+  // 'owwWakeDetected' when a wake word fires. See the matching
+  // comment in HomeScreen.tsx for the full rationale.
   let stopped = false;
-  const sub = wakeWordEmitter?.addListener('sampleAudioChunk', async (e: { wav: string }) => {
+  const sub = wakeWordEmitter?.addListener('owwWakeDetected', (e: { score: number; wakeword: string }) => {
     if (stopped) return;
-    try {
-      const pcm16 = base64ToInt16Array(e.wav);
-      if (pcm16.length < 1600) return;
-      const features = extractAudioFeatures(pcm16);
-      // v3.1.67: per-companion matcher. Returns which
-      // companion's wake word matched (if any).
-      const result = await matchAgainstAllCompanions(features, companionsTraining, matchThreshold);
-      if (result.score > 0.45) onLog?.(`sample match: ${(result.score * 100).toFixed(0)}% (${result.matchedCompanionId || 'no-companion'}) (thr: ${(matchThreshold * 100).toFixed(0)}%)`);
-      if (result.matched && !stopped && result.matchedCompanionId) {
-        onLog?.(`\u2705 Wake word matched for ${result.matchedCompanionId}! (${(result.score * 100).toFixed(0)}%)`);
-        onDetected(result.matchedCompanionId);
-      }
-    } catch (err: any) {
-      onLog?.(`sample match error: ${err.message}`);
-    }
+    onLog?.(`✅ Wake word detected: ${e.wakeword} (${(e.score * 100).toFixed(0)}%)`);
+    const activeId = companionsTraining[0]?.companionId;
+    if (activeId) onDetected(activeId);
   });
-  WakeWordModule?.startSampleListening?.().catch((e: any) => {
-    onLog?.(`startSampleListening failed: ${e?.message}`);
-  });
+  WakeWordModule?.initOww?.('hey_jarvis', 0.5)
+    .catch((e: any) => onLog?.(`initOww failed: ${e?.message}`))
+    .then(() => WakeWordModule?.startOwwListening?.())
+    .catch((e: any) => onLog?.(`startOwwListening failed: ${e?.message}`));
   return () => {
     stopped = true;
     sub?.remove?.();
-    WakeWordModule?.stopSampleListening?.().catch(() => {});
+    WakeWordModule?.stopOwwListening?.().catch(() => {});
   };
 }
 

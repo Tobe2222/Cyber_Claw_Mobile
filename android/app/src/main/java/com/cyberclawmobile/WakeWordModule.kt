@@ -655,6 +655,127 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         return out.toByteArray()
     }
 
+    // ── openWakeWord Listener (v3.1.95) ───────────────────────────────────
+    // Replaces the DTW sample-matcher that was triggering on any
+    // consonant-vowel speech pattern. Uses the openWakeWord
+    // TFLite pipeline (melspectrogram → embedding → wake-word
+    // classifier) for proper ML-based detection.
+    //
+    // Models are bundled in assets/openwakeword/ as .tflite
+    // files. Pre-trained: hey_jarvis, hey_mycroft, alexa,
+    // hey_rhasspy. Default: hey_jarvis. Custom training is a
+    // separate desktop-side pipeline (see CHANGES_3.1.95).
+    private var owwDetector: OpenWakeWordDetector? = null
+    private var owwRecord: AudioRecord? = null
+    private var owwThread: Thread? = null
+    @Volatile private var isOwwListening = false
+    private var owwWakeword = "hey_jarvis"
+
+    @ReactMethod fun initOww(wakeword: String, threshold: Double = 0.5, promise: Promise) {
+        try {
+            owwWakeword = wakeword
+            owwDetector?.close()
+            owwDetector = OpenWakeWordDetector(reactContext).apply {
+                val ok = loadModels(wakeword)
+                setThreshold(threshold.toFloat())
+                if (!ok) throw Exception("Failed to load TFLite models")
+            }
+            emitDebug("info", "OWW initialized: $wakeword @ $threshold")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("OWW_INIT", e.message)
+        }
+    }
+
+    @ReactMethod fun startOwwListening(promise: Promise) {
+        if (isOwwListening) { promise.resolve(null); return }
+        val detector = owwDetector
+        if (detector == null) {
+            promise.reject("OWW_NOT_INIT", "Call initOww first")
+            return
+        }
+        try {
+            isOwwListening = true
+            val sampleRate = 16000
+            val chunkSamples = 1280  // 80ms at 16kHz — openWakeWord's natural frame size
+            val bufferSize = AudioRecord.getMinBufferSize(
+                sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+            ).coerceAtLeast(chunkSamples * 2)
+
+            val rec = AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC,
+                sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                isOwwListening = false
+                promise.reject("INIT_ERROR", "AudioRecord failed")
+                return
+            }
+            owwRecord = rec
+            rec.startRecording()
+
+            owwThread = Thread {
+                val readBuf = ShortArray(bufferSize / 2)
+                val chunkBuf = ShortArray(chunkSamples)
+                var chunkFill = 0
+                var highScoreFrames = 0
+                val HIGH_SCORE_RUN = 3  // 3 consecutive frames above threshold = wake word
+
+                while (isOwwListening) {
+                    val read = rec.read(readBuf, 0, readBuf.size)
+                    if (read <= 0) continue
+
+                    var i = 0
+                    while (i < read && isOwwListening) {
+                        val toCopy = minOf(read - i, chunkSamples - chunkFill)
+                        System.arraycopy(readBuf, i, chunkBuf, chunkFill, toCopy)
+                        chunkFill += toCopy
+                        i += toCopy
+
+                        if (chunkFill == chunkSamples) {
+                            // Run inference on the chunk
+                            val score = detector.predictScore(chunkBuf) ?: 0f
+                            if (score >= 0.5f) {
+                                highScoreFrames++
+                                if (highScoreFrames >= HIGH_SCORE_RUN) {
+                                    // Wake word detected!
+                                    handler.post {
+                                        val params = Arguments.createMap()
+                                        params.putDouble("score", score.toDouble())
+                                        params.putString("wakeword", owwWakeword)
+                                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                            .emit("owwWakeDetected", params)
+                                    }
+                                    highScoreFrames = 0
+                                }
+                            } else {
+                                highScoreFrames = 0
+                            }
+                            chunkFill = 0
+                        }
+                    }
+                }
+            }.also { it.isDaemon = true; it.start() }
+
+            emitDebug("info", "OWW listening: $owwWakeword")
+            promise.resolve(null)
+        } catch (e: Exception) {
+            isOwwListening = false
+            promise.reject("START_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun stopOwwListening(promise: Promise) {
+        isOwwListening = false
+        try { owwRecord?.stop() } catch (_: Exception) {}
+        try { owwRecord?.release() } catch (_: Exception) {}
+        owwRecord = null
+        try { owwThread?.join(2000) } catch (_: Exception) {}
+        owwThread = null
+        promise.resolve(null)
+    }
+
     // ── Audio Playback ─────────────────────────────────────────────────────
 
     private var mediaPlayer: MediaPlayer? = null
