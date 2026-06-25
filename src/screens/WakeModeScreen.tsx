@@ -630,23 +630,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     addLogEntry(`🎤 Wake word matched for ${matchedCompanionId || 'unknown'} - recording`, 'info');
     addVoiceLog('🎤 Listening...');
 
-    // v3.1.93: play a short audible tone (880Hz, 150ms)
-    // so the user gets confirmation the device heard
-    // their wake phrase. Without this, there's a
-    // confusing gap between "I said the wake word" and
-    // "the mic started recording" — users couldn't tell
-    // if it was listening. Now the beep fires
-    // immediately on match, then ~150ms later the
-    // recorder starts. The recorder takes a moment to
-    // ramp up so the beep isn't clipped by it.
-    try {
-      WakeWordModule?.playBeep?.(150, 880).catch(() => {});
-    } catch (_) {}
-    // Wait a tick so the beep's start takes priority over
-    // the recorder's audio session claim. Without this,
-    // MediaRecorder's prepare() can race with AudioTrack
-    // and clip the first 50-80ms of the beep.
-    await new Promise((r) => setTimeout(r, 180));
+    // v3.1.93 (reverted): an 880Hz audio beep was added
+    // here as wake-word confirmation. Tobe: "we dont need
+    // audio beep on wake detection. the wake greetings is
+    // that function." The greeting spoken at wake match IS
+    // the audio confirmation — e.g. "Greetings master Toby"
+    // is much more useful than a generic beep. Removed.
 
     // v3.1.67: tell the parent (App.tsx) which companion
     // matched so it can update the active companion and

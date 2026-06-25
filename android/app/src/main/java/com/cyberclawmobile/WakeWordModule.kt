@@ -659,61 +659,6 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private var mediaPlayer: MediaPlayer? = null
 
-    // v3.1.93: short tone played when the wake word is
-    // detected. Uses AudioTrack to generate a 440Hz sine
-    // wave on the fly — no asset file needed, instant
-    // playback, ~150ms duration. Gives the user audible
-    // confirmation that the device heard them, before
-    // we open the mic for the actual voice input.
-    //
-    // 440Hz is the standard A4 note — easy to recognise
-    // and unlikely to be confused with speech.
-    private var toneTrack: AudioTrack? = null
-
-    @ReactMethod fun playBeep(durationMs: Int = 150, frequencyHz: Int = 880, promise: Promise) {
-        try {
-            val sampleRate = 44100
-            val numSamples = (durationMs * sampleRate) / 1000
-            val samples = ShortArray(numSamples)
-            for (i in 0 until numSamples) {
-                // Sine wave with a short fade-in/fade-out
-                // envelope to avoid click artifacts at the
-                // start and end.
-                val phase = 2.0 * Math.PI * frequencyHz * i / sampleRate
-                val envelope = when {
-                    i < 200 -> i / 200.0
-                    i > numSamples - 200 -> (numSamples - i) / 200.0
-                    else -> 1.0
-                }
-                samples[i] = (Math.sin(phase) * envelope * Short.MAX_VALUE * 0.6).toInt().toShort()
-            }
-            toneTrack?.release()
-            toneTrack = AudioTrack(
-                android.media.AudioManager.STREAM_MUSIC,
-                sampleRate,
-                android.media.AudioFormat.CHANNEL_OUT_MONO,
-                android.media.AudioFormat.ENCODING_PCM_16BIT,
-                samples.size * 2,
-                android.media.AudioTrack.MODE_STATIC
-            ).apply {
-                write(samples, 0, samples.size)
-                setNotificationMarkerPosition(numSamples)
-                setPlaybackPositionUpdateListener(object : android.media.AudioTrack.OnPlaybackPositionUpdateListener {
-                    override fun onMarkerReached(t: AudioTrack?) {
-                        stop()
-                        release()
-                        if (toneTrack === t) toneTrack = null
-                    }
-                    override fun onPeriodicNotification(t: AudioTrack?) {}
-                })
-                play()
-            }
-            promise.resolve(null)
-        } catch (e: Exception) {
-            promise.reject("BEEP_ERROR", e.message)
-        }
-    }
-
     @ReactMethod fun startPlayer(path: String, promise: Promise) {
         try {
             mediaPlayer?.release()
