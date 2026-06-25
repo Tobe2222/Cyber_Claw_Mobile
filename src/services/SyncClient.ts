@@ -279,6 +279,18 @@ class SyncClient {
     this.send({ type: 'companion_interaction', action });
   }
 
+  // v3.1.91: ask the desktop to synthesize the wake
+  // greeting audio and stream it back. The desktop calls
+  // piper TTS via local-ai.synthesizeSpeech and replies
+  // with an audio_response tagged requestId='greeting'.
+  // Use this when the device-side native TTS is
+  // unavailable (no engine installed) — the phone
+  // caches the desktop's audio for instant playback on
+  // every subsequent wake event.
+  requestGreetingAudio(text: string) {
+    this.send({ type: 'request_greeting_audio', text });
+  }
+
   setCompanionId(companionId: string) {
     this.send({ type: 'set_companion_id', companionId });
   }
@@ -368,6 +380,18 @@ class SyncClient {
         break;
 
       case 'audio_response':
+        // v3.1.91: if the audio_response is tagged as a
+        // greeting (requestId === 'greeting'), re-emit on
+        // a separate 'greeting_audio' channel for the
+        // cache handler AND suppress the regular
+        // 'audio_response' channel so the AI-reply
+        // playback path doesn't try to play it (which
+        // would race with the greeting cache write and
+        // cause duplicate playback).
+        if (msg.requestId === 'greeting') {
+          this.emit('greeting_audio', msg);
+          break;
+        }
         this.emit('audio_response', msg);
         break;
 

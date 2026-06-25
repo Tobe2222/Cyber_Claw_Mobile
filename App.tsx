@@ -13,6 +13,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import HomeScreen from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import WakeModeScreen from './src/screens/WakeModeScreen';
+import syncClient from './src/services/SyncClient';
+import { saveGreetingAudio } from './src/services/GreetingAudioCache';
 
 const { WakeWordModule } = NativeModules;
 
@@ -191,6 +193,36 @@ export default function App(): React.JSX.Element {
           .catch(() => {});
       }
     });
+  }, []);
+
+  // v3.1.91: listen for desktop-synthesized greeting
+  // audio and save it to permanent storage. Mounted at
+  // App level so the cache works regardless of which
+  // screen is active — Settings → save greeting triggers
+  // a synthesis, the audio response arrives a few
+  // seconds later, and we cache it whether the user is
+  // on Settings, Home, or even Wake Mode.
+  //
+  // The desktop tags the audio_response with
+  // requestId='greeting' (handled in SyncClient) so this
+  // listener doesn't compete with the AI-reply playback
+  // handler.
+  useEffect(() => {
+    const onGreetingAudio = async (msg: any) => {
+      const phrase = msg?.text;
+      if (!phrase) {
+        console.warn('[App] Greeting audio received without text, dropping');
+        return;
+      }
+      const path = await saveGreetingAudio(phrase, msg.audioBase64);
+      if (path) {
+        console.log(`[App] Greeting audio cached: ${path.split('/').pop()}`);
+      } else {
+        console.warn('[App] Failed to save greeting audio');
+      }
+    };
+    syncClient.on('greeting_audio', onGreetingAudio);
+    return () => { syncClient.off?.('greeting_audio', onGreetingAudio); };
   }, []);
 
   // Load companion id from storage so WakeModeScreen renders the right sprite

@@ -39,6 +39,7 @@ import { version as APP_VERSION } from '../../package.json';
 // accident (TV, another person, false positive), and auto-closes
 // the mode if no input has happened for 60s.
 import { noteWakeModeOpen, noteWakeModeExit } from '../services/WakeTrainingModel';
+import { getCachedGreetingPath, ensureGreetingCached } from '../services/GreetingAudioCache';
 
 const { AppControl, WakeWordModule } = NativeModules;
 
@@ -304,6 +305,40 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     });
   }, []);
 
+  // v3.1.91: play a cached greeting audio file (WAV
+  // synthesized by the desktop's piper TTS). Resolves
+  // when the file finishes playing OR after a safety
+  // timeout, whichever comes first. Uses
+  // WakeWordModule.startPlayer which emits
+  // audioPlayerFinished on completion.
+  const playCachedGreeting = useCallback(async (filePath: string): Promise<void> => {
+    if (!WakeWordModule?.startPlayer) {
+      addVoiceLog('🔊 cached play: startPlayer unavailable');
+      return;
+    }
+    const t0 = Date.now();
+    let resolved = false;
+    const finish = (source: string) => {
+      if (resolved) return;
+      resolved = true;
+      if (sub) sub.remove();
+      clearTimeout(safetyTimer);
+      addVoiceLog(`🔊 done (cached-${source}, ${Date.now() - t0}ms)`);
+    };
+    let sub: { remove: () => void } | null = null;
+    const emitter = getWakeWordEmitter();
+    sub = emitter?.addListener('audioPlayerFinished', () => finish('play')) ?? null;
+    // Safety: max 10s for the greeting. Cache files
+    // are typically 1-3s.
+    const safetyTimer = setTimeout(() => finish('safety'), 10000);
+    try {
+      await WakeWordModule.startPlayer(filePath);
+    } catch (e: any) {
+      addVoiceLog(`🔊 cached play failed: ${e?.message}`);
+      finish('error');
+    }
+  }, []);
+
   // Apply Wake Mode visual style to the WebView. We do this once on
   // mount and on every load. Unlike the HomeScreen approach (which
   // races state updates), this screen ALWAYS renders in wake mode so
@@ -540,7 +575,26 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // longer needed at all (kept as a no-op for
           // clarity, will be removed in a future cleanup).
           if (greetingText) {
-            await speak(greetingText);
+            // v3.1.91: try cached desktop-synthesized
+            // audio first. On devices with no native TTS
+            // engine (status=-1 from OnInitListener), the
+            // native speakText path is permanently broken
+            // — using cached audio side-steps the whole
+            // problem. If no cache exists, fall through to
+            // speakText (which logs no-tts-engine clearly
+            // when the engine is missing) and kick off a
+            // background synthesis request so the NEXT
+            // wake event has a cache to use.
+            const cachedPath = await getCachedGreetingPath(greetingText);
+            if (cachedPath) {
+              addVoiceLog(`🔊 playing cached (${cachedPath.split('/').pop()})`);
+              await playCachedGreeting(cachedPath);
+            } else {
+              addVoiceLog('🔊 no cached audio, requesting synthesis');
+              // Kick off background synthesis for next time.
+              ensureGreetingCached(greetingText).catch(() => {});
+              await speak(greetingText);
+            }
           }
           if (cancelled) return;
           setGreetingPhase('done');

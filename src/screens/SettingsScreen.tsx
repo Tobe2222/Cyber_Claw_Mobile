@@ -362,6 +362,20 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     readyPhraseSaveTimer.current = setTimeout(async () => {
       await AsyncStorage.setItem('cyberclaw-ready-phrase', v);
       setReadyPhraseSavedAt(Date.now());
+      // v3.1.91: kick off a desktop synthesis for the new
+      // phrase so the next wake event has a cached audio
+      // to play. Fire-and-forget — the greeting_audio
+      // listener in WakeModeScreen saves the result when
+      // it arrives (the listener is only mounted in Wake
+      // Mode, so the audio response might arrive while
+      // Settings is showing — that's fine, the cache
+      // write is the important bit, not the listening).
+      if (v && v.trim()) {
+        try {
+          const { ensureGreetingCached } = require('../services/GreetingAudioCache');
+          ensureGreetingCached(v.trim());
+        } catch (_) {}
+      }
     }, 600);
   };
 
