@@ -396,53 +396,16 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   }, []);
 
   // Start the sample-match wake listener. When matched, start recording.
-  // v3.1.65: in voiceMode, skip the wake listener entirely
-  // and start the VAD + recorder (the voice mode process).
+  // v3.1.93: voiceMode is now IDENTICAL to wake mode — both
+  // run the sample-matcher first, then on match play a short
+  // beep, then record. Pre-v3.1.93, voiceMode skipped the
+  // wake listener and went straight to VAD + recording (no
+  // wake phrase needed). After Tobe's request to fold wake
+  // detection into voice mode ("remove wake mode, add wake
+  // phrase to voice mode"), both modes do the same thing.
+  // The `voiceMode` prop still affects UI styling but no
+  // longer the wake-listener path.
   useEffect(() => {
-    if (voiceMode) {
-      // Voice mode: start the VAD + recorder. This is the
-      // same code that was in HomeScreen's enterVoiceMode('focus')
-      // before v3.1.62 — bringing it back into a dedicated
-      // screen so the visual is consistent with wake mode.
-      addVoiceLog('🎙️ Voice Mode');
-      addVoiceLog('🎙️ Listening...');
-      const startVoiceRecording = async () => {
-        try {
-          const fs = require('react-native-fs');
-          const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
-          const recorder = getSimpleAudioRecorder();
-          await recorder.start(recPath, 5000);
-          addVoiceLog('🔴 Recording...');
-          setVoiceStatus('recording');
-          const unsubSilence = recorder.once('silence', async () => {
-            addVoiceLog('⏳ Silence detected...');
-            setVoiceStatus('silence_countdown');
-            let count = 3;
-            const tick = setInterval(async () => {
-              count--;
-              if (count <= 0) {
-                clearInterval(tick);
-                try {
-                  const resultPath = await recorder.stop();
-                  if (resultPath) {
-                    const base64 = await fs.readFile(resultPath, 'base64');
-                    setVoiceStatus('transcribing');
-                    syncClient.sendAudioInput(base64, 'audio/m4a');
-                    addVoiceLog('📏 Sent');
-                  }
-                } catch (e: any) {
-                  addVoiceLog('Send error');
-                }
-              }
-            }, 1000);
-          });
-        } catch (e: any) {
-          addVoiceLog(`Voice start failed: ${e?.message}`);
-        }
-      };
-      startVoiceRecording();
-      return;
-    }
     let cleanup: (() => void) | null = null;
     let cancelled = false;
 
@@ -666,6 +629,24 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     setVoiceStatus('listening');
     addLogEntry(`🎤 Wake word matched for ${matchedCompanionId || 'unknown'} - recording`, 'info');
     addVoiceLog('🎤 Listening...');
+
+    // v3.1.93: play a short audible tone (880Hz, 150ms)
+    // so the user gets confirmation the device heard
+    // their wake phrase. Without this, there's a
+    // confusing gap between "I said the wake word" and
+    // "the mic started recording" — users couldn't tell
+    // if it was listening. Now the beep fires
+    // immediately on match, then ~150ms later the
+    // recorder starts. The recorder takes a moment to
+    // ramp up so the beep isn't clipped by it.
+    try {
+      WakeWordModule?.playBeep?.(150, 880).catch(() => {});
+    } catch (_) {}
+    // Wait a tick so the beep's start takes priority over
+    // the recorder's audio session claim. Without this,
+    // MediaRecorder's prepare() can race with AudioTrack
+    // and clip the first 50-80ms of the beep.
+    await new Promise((r) => setTimeout(r, 180));
 
     // v3.1.67: tell the parent (App.tsx) which companion
     // matched so it can update the active companion and

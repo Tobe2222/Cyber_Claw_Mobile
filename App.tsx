@@ -27,6 +27,49 @@ const getWakeWordEmitter = () => {
 };
 
 export default function App(): React.JSX.Element {
+  // v3.1.93: defensive clear of stale wake-pending flags on
+  // mount. Tobe reported 2026-06-25 that opening the app
+  // normally (launcher tap) sometimes jumped straight into
+  // Wake Mode. Root cause: the AsyncStorage flag persisted
+  // across an app kill (e.g. force-close during a wake
+  // session) and was honoured on the next launch even
+  // though there was no actual wake intent. The 30s
+  // TTL in checkNativePending catches the most common
+  // case but not the rare "force-killed within 30s of
+  // wake" case.
+  //
+  // We DON'T want to wipe a flag that was just set by a
+  // real wake intent extra — that's what handleWake
+  // does, and it needs the flag to survive into the
+  // mount where checkNativePending reads it.
+  //
+  // Compromise: clear the flag on mount ONLY if the
+  // native side didn't just set it. We check the native
+  // SharedPreferences flag too — if it's also stale,
+  // we clear both. The native flag has a 30s TTL baked
+  // in via the wake_pending_at timestamp, which
+  // checkNativePending already honours. So a real wake
+  // intent will have wake_pending_at within the last 30s
+  // and we leave it alone.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await WakeWordModule?.isWakePending?.();
+        const pending = !!result?.pending;
+        const setAt = result?.setAt ?? 0;
+        const ageMs = setAt ? Date.now() - setAt : Infinity;
+        const STALE_MS = 30_000;
+        if (pending && ageMs > STALE_MS) {
+          console.log('[App] Stale native wake-pending flag (age ' + Math.round(ageMs/1000) + 's), clearing');
+          await WakeWordModule?.clearWakePending?.().catch(() => {});
+          await AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
+        }
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const [screen, setScreen] = useState<'home' | 'settings' | 'wake-mode' | 'voice-mode'>('home');
   // v3.1.83: ref so the AppState=active listener (re-added below)
   // can read the CURRENT screen value, not the value captured at
