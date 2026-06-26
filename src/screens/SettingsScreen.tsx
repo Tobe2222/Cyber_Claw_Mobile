@@ -104,11 +104,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // companions that have a saved custom wake model. Used
   // to show "✓ trained" badges in the companion picker.
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
-  // v3.2.0: map of agentId -> {phrase, path, savedAt} for
-  // companions that have a saved custom wake model. Refreshed
-  // when the picker opens and when training completes. Used
-  // to show "✓ trained" badges in the companion picker.
-  const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
   // v3.1.68: companion picker is a proper modal sheet now (not a
   // system Alert). State holds the open/close flag.
   const [showCompanionPicker, setShowCompanionPicker] = useState(false);
