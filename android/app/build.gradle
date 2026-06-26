@@ -82,8 +82,8 @@ android {
         applicationId "com.cyberclawmobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 146
-        versionName "3.2.0"
+        versionCode 147
+        versionName "3.2.1"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -119,7 +119,7 @@ dependencies {
     implementation("com.facebook.react:react-android")
     // Vosk offline speech recognition (wake word, no Google services required)
     implementation("com.alphacephei:vosk-android:0.3.47")
-    // v3.2.0: TensorFlow Lite for openWakeWord inference.
+    // v3.2.1: TensorFlow Lite for openWakeWord inference.
     // Replaces the broken DTW sample-matcher that was
     // triggering on any consonant-vowel speech pattern.
     // openWakeWord is the proper ML-based detector, far

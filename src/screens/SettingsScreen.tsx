@@ -109,6 +109,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // of the legacy DTW-based one.
   const [showOwwTrainer, setShowOwwTrainer] = useState(false);
   const [owwTrainerPending, setOwwTrainerPending] = useState(false);
+  // v3.2.0: map of agentId -> {phrase, path, savedAt} for
+  // companions that have a saved custom wake model. Refreshed
+  // when the picker opens and when training completes. Used
+  // to show "✓ trained" badges in the companion picker.
+  const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
   // v3.1.68: companion picker is a proper modal sheet now (not a
   // system Alert). State holds the open/close flag.
   const [showCompanionPicker, setShowCompanionPicker] = useState(false);
@@ -198,6 +203,33 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   useEffect(() => () => {
     if (readyPhraseSaveTimer.current) clearTimeout(readyPhraseSaveTimer.current);
   }, []);
+
+  // v3.2.0: refresh the saved-wake-models map whenever the
+  // companion picker opens or a training completes. The
+  // Kotlin side keeps this in SharedPreferences — the query
+  // is sync-ish (single SharedPreferences read) so it's safe
+  // to fire on every picker open.
+  useEffect(() => {
+    if (!showCompanionPicker) return;
+    WakeWordModule?.getSavedWakeModels?.()
+      .then((models: any) => {
+        if (!models) return;
+        // models is a JS Map<string, {agentId, phrase, path, savedAt}>
+        const out: Record<string, { phrase: string; path: string; savedAt: number }> = {};
+        for (const agentId of Object.keys(models)) {
+          const entry = models[agentId];
+          if (entry?.phrase && entry?.path) {
+            out[agentId] = {
+              phrase: entry.phrase,
+              path: entry.path,
+              savedAt: entry.savedAt || 0,
+            };
+          }
+        }
+        setSavedWakeModels(out);
+      })
+      .catch(() => {});
+  }, [showCompanionPicker]);
 
   // ── Initial load ──────────────────────────────────────────────
   useEffect(() => {
@@ -534,10 +566,26 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         companionName={trainingCompanionName || 'Companion'}
         onComplete={(ok) => {
           setShowOwwTrainer(false);
-          // Refresh the saved-models list so any UI showing
-          // '✓ trained' badges updates immediately
+          // Refresh the saved-models list so the '✓ trained'
+          // badges in the companion picker update immediately.
           if (ok) {
-            WakeWordModule?.getSavedWakeModels?.().catch(() => {});
+            WakeWordModule?.getSavedWakeModels?.()
+              .then((models: any) => {
+                if (!models) return;
+                const out: Record<string, { phrase: string; path: string; savedAt: number }> = {};
+                for (const agentId of Object.keys(models)) {
+                  const entry = models[agentId];
+                  if (entry?.phrase && entry?.path) {
+                    out[agentId] = {
+                      phrase: entry.phrase,
+                      path: entry.path,
+                      savedAt: entry.savedAt || 0,
+                    };
+                  }
+                }
+                setSavedWakeModels(out);
+              })
+              .catch(() => {});
           }
         }}
         onCancel={() => setShowOwwTrainer(false)}
@@ -999,6 +1047,9 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               >
                 <Text style={styles.pickerRowIcon}>{c.emoji || c.icon || '🐾'}</Text>
                 <Text style={styles.pickerRowName} numberOfLines={1}>{c.name}</Text>
+                {savedWakeModels[c.id] ? (
+                  <Text style={styles.pickerRowBadge}>✓ trained</Text>
+                ) : null}
                 <Text style={styles.pickerRowHint}>train →</Text>
               </TouchableOpacity>
             ))}
@@ -1195,6 +1246,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     marginLeft: 8,
+  },
+  pickerRowBadge: {
+    color: '#10b981',
+    fontSize: 10,
+    fontWeight: '700',
+    backgroundColor: '#10b98122',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginLeft: 8,
+    overflow: 'hidden',
   },
   pickerCancel: {
     backgroundColor: '#222',
