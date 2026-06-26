@@ -416,7 +416,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0a0a0a' },
-  scroll: { padding: 20, paddingBottom: 100 },
+  scroll: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 100 },
   title: { color: '#fff', fontSize: 22, fontWeight: '700', marginBottom: 8 },
   subtitle: { color: '#9ca3af', fontSize: 14, lineHeight: 20, marginBottom: 24 },
   phraseRow: { marginBottom: 24 },
