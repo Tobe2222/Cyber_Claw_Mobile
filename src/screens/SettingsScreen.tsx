@@ -32,6 +32,7 @@ import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/
 import WakePhraseMenu from '../components/WakePhraseMenu';
 import TrainingDetailScreen from '../components/TrainingDetailScreen';
 import WakeWordTester from '../components/WakeWordTester';
+import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import {
   getPermissions,
   setPermission,
@@ -103,6 +104,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [showWakePhraseMenu, setShowWakePhraseMenu] = useState(false);
   const [showTrainingDetail, setShowTrainingDetail] = useState(false);
   const [showTester, setShowTester] = useState(false);
+  // v3.2.0: openWakeWord trainer modal + a flag for the
+  // multi-companion picker to route to OWW trainer instead
+  // of the legacy DTW-based one.
+  const [showOwwTrainer, setShowOwwTrainer] = useState(false);
+  const [owwTrainerPending, setOwwTrainerPending] = useState(false);
   // v3.1.68: companion picker is a proper modal sheet now (not a
   // system Alert). State holds the open/close flag.
   const [showCompanionPicker, setShowCompanionPicker] = useState(false);
@@ -181,11 +187,12 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       if (showTrainingDetail) { setShowTrainingDetail(false); setShowWakePhraseMenu(true); return true; }
       if (showWakePhraseMenu) { setShowWakePhraseMenu(false); return true; }
       if (showTester) { setShowTester(false); return true; }
+      if (showOwwTrainer) { setShowOwwTrainer(false); return true; }
       onBack();
       return true;
     });
     return () => backHandler.remove();
-  }, [onBack, showTrainingDetail, showWakePhraseMenu, showTester]);
+  }, [onBack, showTrainingDetail, showWakePhraseMenu, showTester, showOwwTrainer]);
 
   // Clear pending debounce on unmount
   useEffect(() => () => {
@@ -515,6 +522,28 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       />
     );
   }
+  // v3.2.0: the openWakeWord trainer UI. Sends the user's
+  // recorded samples to the desktop for actual openWakeWord
+  // training (Piper TTS synthesis + DNN training), then
+  // hot-swaps the trained .tflite into the running
+  // OpenWakeWordDetector. See OpenWakeWordTrainer.tsx.
+  if (showOwwTrainer) {
+    return (
+      <OpenWakeWordTrainer
+        companionId={trainingCompanionId || 'unknown'}
+        companionName={trainingCompanionName || 'Companion'}
+        onComplete={(ok) => {
+          setShowOwwTrainer(false);
+          // Refresh the saved-models list so any UI showing
+          // '✓ trained' badges updates immediately
+          if (ok) {
+            WakeWordModule?.getSavedWakeModels?.().catch(() => {});
+          }
+        }}
+        onCancel={() => setShowOwwTrainer(false)}
+      />
+    );
+  }
 
   // ── Main settings render ─────────────────────────────────────
   return (
@@ -759,6 +788,35 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.trainBtnSub}>Listen in real-time to see what the app hears</Text>
         </TouchableOpacity>
 
+        {/* v3.2.0: dedicated entry point for the openWakeWord
+            training flow. The desktop does the actual TTS +
+            DNN training and ships the trained .tflite back
+            over the sync-server WebSocket. See OpenWakeWordTrainer.tsx. */}
+        <TouchableOpacity
+          style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
+          onPress={() => {
+            if (availableCompanions.length === 0) {
+              Alert.alert(
+                'No companions yet',
+                'Connect to the desktop and load at least one companion before training the wake word.',
+              );
+              return;
+            }
+            if (availableCompanions.length === 1) {
+              setTrainingCompanionId(availableCompanions[0].id);
+              setTrainingCompanionName(availableCompanions[0].name);
+              setShowOwwTrainer(true);
+              return;
+            }
+            // Multi-companion: store intent, picker will route to OWW trainer
+            setOwwTrainerPending(true);
+            setShowCompanionPicker(true);
+          }}
+        >
+          <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🧠 Train with AI</Text>
+          <Text style={styles.trainBtnSub}>Record yourself 6 times — desktop trains a custom neural network wake word</Text>
+        </TouchableOpacity>
+
         <SubTitle>Wake greeting</SubTitle>
         <Hint>Phrase spoken when the wake word is detected. Auto-saves as you type.</Hint>
         <TextInput
@@ -925,17 +983,18 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
                   setTrainingCompanionId(c.id);
                   setTrainingCompanionName(c.name);
                   setShowCompanionPicker(false);
-                  // v3.1.76: take the user to the Wake Phrases menu
-                  // first (a per-companion list of trained phrases),
-                  // not directly into the recording screen. The user
-                  // can then see what's already trained, add a new
-                  // phrase, or pick an existing phrase to add more
-                  // samples to. The recording screen is one click
-                  // away from there. The previous flow skipped the
-                  // "what phrases are trained?" context and dropped
-                  // the user straight into recording a default
-                  // phrase.
-                  setShowWakePhraseMenu(true);
+                  // v3.2.0: route to the new openWakeWord trainer
+                  // if that's what the user picked, otherwise
+                  // continue to the legacy DTW-based Wake Phrases menu.
+                  if (owwTrainerPending) {
+                    setOwwTrainerPending(false);
+                    setShowOwwTrainer(true);
+                  } else {
+                    // v3.1.76: take the user to the Wake Phrases menu
+                    // first (a per-companion list of trained phrases),
+                    // not directly into the recording screen.
+                    setShowWakePhraseMenu(true);
+                  }
                 }}
               >
                 <Text style={styles.pickerRowIcon}>{c.emoji || c.icon || '🐾'}</Text>

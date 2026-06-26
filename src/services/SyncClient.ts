@@ -295,6 +295,30 @@ class SyncClient {
     this.send({ type: 'set_companion_id', companionId });
   }
 
+  // v3.2.0: kick off a custom openWakeWord training job on the
+  // desktop. The desktop spawns the Python training script, streams
+  // progress back via 'wake_training_progress' messages, and finally
+  // sends 'wake_training_result' with the trained .tflite path.
+  //
+  // Subscribers should listen for:
+  //   syncClient.on('wake_training_progress', (msg) => ...)
+  //   syncClient.on('wake_training_result', (msg) => ...)
+  //
+  // The sample paths are absolute paths to WAV files the mobile has
+  // already saved to disk (e.g. via SimpleAudioRecorder). The desktop
+  // will read them as-is.
+  requestWakeTraining(agentId: string, phrase: string, samplePaths: string[]) {
+    this.send({ type: 'request_wake_training', agentId, phrase, samplePaths });
+  }
+
+  // v3.2.0: fetch the bytes of a trained .tflite as base64. Used
+  // after wake_training_result returns with a tflitePath. The reply
+  // comes back as a 'wake_model_data' message which is re-emitted
+  // via the default case.
+  readWakeModel(tflitePath: string) {
+    this.send({ type: 'read_wake_model', tflitePath });
+  }
+
   get state(): ConnectionState { return this._state; }
   get connected(): boolean { return this._state === 'connected' || this._state === 'reconnecting'; }
   get authenticated(): boolean { return this._authenticated; }

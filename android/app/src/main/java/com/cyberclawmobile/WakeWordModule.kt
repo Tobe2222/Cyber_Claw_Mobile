@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.Base64
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -684,6 +685,137 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("OWW_INIT", e.message)
+        }
+    }
+
+    // v3.2.0: receive a freshly-trained .tflite (base64) and
+    // hot-swap it into the running OpenWakeWordDetector's
+    // wake-word classifier slot. Persists the file to
+    // filesDir/wake_models/<agentId>.tflite so it survives
+    // app restarts (loadOwwSavedModel below re-applies it on
+    // boot).
+    //
+    // Why hot-swap rather than re-init: the OWW listening
+    // thread is already running with the AudioRecord open.
+    // A full re-init would require stopping + restarting the
+    // thread, which causes a brief window where wake events
+    // are missed. setWakewordModelFromFile is a one-interpreter
+    // atomic swap that keeps the melspec + embedding models
+    // alive across the change.
+    @ReactMethod fun setWakeModelFromBase64(agentId: String, base64: String, phrase: String, promise: Promise) {
+        try {
+            if (agentId.isBlank() || base64.isBlank()) {
+                promise.reject("ARG", "agentId and base64 required")
+                return
+            }
+            val dir = File(reactContext.filesDir, "wake_models")
+            if (!dir.exists()) dir.mkdirs()
+            val tflite = File(dir, "${agentId}.tflite")
+            tflite.writeBytes(Base64.decode(base64, Base64.DEFAULT))
+            emitDebug("info", "Wrote custom wake model: ${tflite.absolutePath} (${tflite.length()} bytes)")
+
+            // Persist the binding so we can re-apply on app restart.
+            // Key: wake_model_<agentId> -> {path, phrase, savedAt}
+            val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("${agentId}_path", tflite.absolutePath)
+                .putString("${agentId}_phrase", phrase)
+                .putLong("${agentId}_savedAt", System.currentTimeMillis())
+                .apply()
+
+            // Hot-swap into the running detector (if any). If the
+            // detector isn't initialized yet, the loadOwwSavedModel
+            // helper will pick up the file when initOww runs.
+            val detector = owwDetector
+            if (detector != null) {
+                val ok = detector.setWakewordModelFromFile(tflite.absolutePath)
+                if (ok) {
+                    owwWakeword = phrase
+                    emitDebug("info", "Hot-swapped wake model for $agentId: $phrase")
+                } else {
+                    emitDebug("warn", "Hot-swap failed; will retry on next initOww")
+                }
+            }
+            promise.resolve(tflite.absolutePath)
+        } catch (e: Exception) {
+            promise.reject("WAKE_MODEL_SAVE", e.message)
+        }
+    }
+
+    // v3.2.0: look up the saved wake model for an agent (if any)
+    // and apply it. Called from initOww so a freshly-trained
+    // custom wake word auto-loads on every app launch.
+    //
+    // Returns the phrase that was trained, or null if no model
+    // is saved for this agent. The caller can use this to fall
+    // back to a pre-trained model if the agent hasn't been
+    // trained yet.
+    fun loadOwwSavedModel(agentId: String): String? {
+        if (agentId.isBlank()) return null
+        val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+        val path = prefs.getString("${agentId}_path", null) ?: return null
+        val phrase = prefs.getString("${agentId}_phrase", null) ?: return null
+        if (!File(path).exists()) {
+            // Stale binding (file deleted); clean up.
+            prefs.edit().remove("${agentId}_path").remove("${agentId}_phrase").remove("${agentId}_savedAt").apply()
+            return null
+        }
+        val detector = owwDetector ?: return null
+        val ok = detector.setWakewordModelFromFile(path)
+        if (ok) {
+            owwWakeword = phrase
+            emitDebug("info", "Loaded saved wake model for $agentId: $phrase")
+            return phrase
+        }
+        return null
+    }
+
+    // v3.2.0: list the agents that have a saved custom wake model.
+    // Used by the UI to show "✓ trained" badges in the wake
+    // menu without having to round-trip to the desktop.
+    @ReactMethod fun getSavedWakeModels(promise: Promise) {
+        try {
+            val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+            val all = prefs.all
+            val result = com.facebook.react.bridge.Arguments.createMap()
+            for ((key, value) in all) {
+                if (key.endsWith("_phrase") && value is String) {
+                    val agentId = key.removeSuffix("_phrase")
+                    val path = prefs.getString("${agentId}_path", null)
+                    val savedAt = prefs.getLong("${agentId}_savedAt", 0L)
+                    if (path != null && File(path).exists()) {
+                        val entry = com.facebook.react.bridge.Arguments.createMap()
+                        entry.putString("agentId", agentId)
+                        entry.putString("phrase", value)
+                        entry.putString("path", path)
+                        entry.putDouble("savedAt", savedAt.toDouble())
+                        result.putMap(agentId, entry)
+                    }
+                }
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("WAKE_MODEL_LIST", e.message)
+        }
+    }
+
+    // v3.2.0: delete the saved wake model for an agent. Falls
+    // back to the previously-active model on next initOww.
+    @ReactMethod fun deleteSavedWakeModel(agentId: String, promise: Promise) {
+        try {
+            val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+            val path = prefs.getString("${agentId}_path", null)
+            if (path != null) {
+                File(path).delete()
+            }
+            prefs.edit()
+                .remove("${agentId}_path")
+                .remove("${agentId}_phrase")
+                .remove("${agentId}_savedAt")
+                .apply()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("WAKE_MODEL_DELETE", e.message)
         }
     }
 

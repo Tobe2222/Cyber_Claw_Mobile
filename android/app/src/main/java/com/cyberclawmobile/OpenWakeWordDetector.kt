@@ -78,6 +78,33 @@ class OpenWakeWordDetector(private val context: Context) {
     }
 
     /**
+     * v3.2.0: hot-swap only the wake-word classifier interpreter,
+     * keeping the melspec + embedding models in memory. This is
+     * how we activate a freshly-trained custom wake word without
+     * tearing down the listening thread.
+     *
+     * The .tflite is loaded from an absolute filesystem path
+     * (we don't ship custom models in the APK). Caller is
+     * responsible for persisting the path so we can re-load it
+     * on app restart (see WakeWordModule's setWakeModelFromBase64).
+     */
+    fun setWakewordModelFromFile(tflitePath: String): Boolean {
+        return try {
+            val newInterp = loadInterpreterFromFile(tflitePath)
+            // Close the old one to free native memory
+            wakewordInterpreter?.close()
+            wakewordInterpreter = newInterp
+            melspecHistory.clear()  // history is biased toward the old model's
+                                    // expected input distribution
+            Log.i(tag, "Wake-word model swapped: $tflitePath (history cleared)")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to load wake model from $tflitePath: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
      * Set detection threshold. 0.5 is the openWakeWord default.
      * Higher = stricter (fewer false positives, more false negatives).
      */
@@ -192,6 +219,28 @@ class OpenWakeWordDetector(private val context: Context) {
         val buffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
         return Interpreter(buffer, Interpreter.Options().apply {
             setNumThreads(1)  // single-threaded keeps CPU usage low for always-on listening
+        })
+    }
+
+    /**
+     * v3.2.0: load a TFLite interpreter from an absolute filesystem
+     * path. Used for user-trained custom wake models which live in
+     * filesDir (not bundled in the APK assets).
+     *
+     * Memory-maps the file like the asset loader does — TFLite
+     * reads directly from the mapped buffer, no copy into Java
+     * heap. The .tflite is ~200 KB so the mapping is tiny.
+     */
+    private fun loadInterpreterFromFile(path: String): Interpreter {
+        val file = File(path)
+        if (!file.exists()) {
+            throw java.io.FileNotFoundException("Wake model file not found: $path")
+        }
+        val inputStream = FileInputStream(file)
+        val fileChannel = inputStream.channel
+        val buffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, file.length())
+        return Interpreter(buffer, Interpreter.Options().apply {
+            setNumThreads(1)
         })
     }
 }
