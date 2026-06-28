@@ -312,6 +312,16 @@ class SyncClient {
     this.send({ type: 'request_wake_training', agentId, phrase, samples });
   }
 
+  // v3.2.6: ask the desktop for the most recent wake-training
+  // result for an agent. The desktop caches the last result per
+  // agent for 15 minutes, so a phone that lost its socket
+  // mid-training (Android background-killed the WebSocket, network
+  // blip, etc.) can pick up where it left off on reconnect.
+  // The response is a normal 'wake_training_result' message.
+  requestLatestWakeTrainingResult(agentId: string) {
+    this.send({ type: 'get_latest_wake_training_result', agentId });
+  }
+
   // v3.2.0: fetch the bytes of a trained .tflite as base64. Used
   // after wake_training_result returns with a tflitePath. The reply
   // comes back as a 'wake_model_data' message which is re-emitted

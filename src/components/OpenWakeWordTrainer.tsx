@@ -107,15 +107,42 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   // Cleanup on unmount: stop any in-flight recorder and stop listening
   // for progress events from the sync server.
   useEffect(() => {
+    // v3.2.6: on mount, ask the desktop if there's a recent wake
+    // training result for this companion. The user may have lost
+    // their socket mid-training (Android killed the WebSocket, brief
+    // network blip, app was backgrounded) and the desktop finished
+    // the run while we were offline. The desktop caches the last
+    // result per agent for 15 minutes — if it's there, we can pick
+    // up where the training left off without re-recording samples.
+    // Only do this when the trainer is in the idle state, so we
+    // don't conflate a fresh training with a cached previous one.
+    const sync = syncClient;
+    const queryLatest = () => {
+      if (sync?.connected) {
+        sync.requestLatestWakeTrainingResult(companionId);
+      }
+    };
+    if (stage === 'idle') {
+      if (sync?.connected) {
+        queryLatest();
+      } else {
+        const onAuth = () => {
+          sync?.off?.('authenticated', onAuth);
+          queryLatest();
+        };
+        sync?.on?.('authenticated', onAuth);
+      }
+    }
+
     return () => {
       try { getSimpleAudioRecorder().stop(); } catch (_) {}
       try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
-      const sync = syncClient;
-      sync?.off?.('wake_training_progress', _onProgress);
-      sync?.off?.('wake_training_result', _onResult);
-      sync?.off?.('wake_model_data', _onModel);
+      const s = syncClient;
+      s?.off?.('wake_training_progress', _onProgress);
+      s?.off?.('wake_training_result', _onResult);
+      s?.off?.('wake_model_data', _onModel);
     };
-  }, []);
+  }, [companionId, stage]);
 
   // Android back button: confirm if mid-training
   useEffect(() => {
@@ -256,6 +283,12 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   }).current;
 
   const _onResult = useRef(async (msg: any) => {
+    if (!msg?.noResult) {
+      // v3.2.6: the desktop has no cached result for this agent.
+      // The user hasn't trained yet (or the result expired). Just
+      // stay on the idle screen and let them record fresh samples.
+      return;
+    }
     if (!msg?.ok) {
       setStage('error');
       setStatusMsg(msg?.error || 'Training failed on the desktop.');
