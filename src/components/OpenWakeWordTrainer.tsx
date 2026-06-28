@@ -149,6 +149,11 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   };
 
   // ----- recording -----
+  // Hard max duration for a single sample. The native side's silence
+  // detection is normally what stops us, but we cap as a safety net so a
+  // runaway mic can't hold the user hostage.
+  const MAX_SAMPLE_MS = 4000;
+
   const recordOne = useCallback(async (): Promise<string | null> => {
     if (isRecording) return null;
     setIsRecording(true);
@@ -161,10 +166,45 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
       const recorder = getSimpleAudioRecorder();
       const filename = `wake_sample_${Date.now()}.m4a`;
       const path = `${RNFS.CachesDirectoryPath}/${filename}`;
-      // 1500ms silence timeout: short enough for single words,
-      // long enough that the user has time to say the phrase.
+      // Start with a short silence timeout so single-word phrases stop
+      // quickly once the user is done speaking. The actual stop happens
+      // via the 'silence' event below — never immediately after start.
       await recorder.start(path, 1500);
-      const finalPath = await recorder.stop();
+
+      // v3.2.4: WAIT for the silence event before stopping. The previous
+      // code called stop() right after start(), which made
+      // MediaRecorder.stop() throw "stop failed" because no frames had
+      // been written yet. Race the silence event against a hard cap so
+      // a quiet room (or a stuck mic) can't hang us forever.
+      const stopped: { v: boolean } = { v: false };
+      const doStop = async (): Promise<string | null> => {
+        if (stopped.v) return null;
+        stopped.v = true;
+        try {
+          return await recorder.stop();
+        } catch (e: any) {
+          // MediaRecorder.stop() throws "stop failed" if the recorder
+          // was in a bad state. Try once more after a short reset
+          // window; if it still fails, surface the error.
+          await new Promise((r) => setTimeout(r, 150));
+          try {
+            return await recorder.stop();
+          } catch (_) {
+            throw e;
+          }
+        }
+      };
+
+      const finalPath: string | null = await new Promise((resolve) => {
+        const offSilence = recorder.once('silence', () => {
+          doStop().then(resolve).catch(() => resolve(null));
+        });
+        setTimeout(() => {
+          offSilence();
+          doStop().then(resolve).catch(() => resolve(null));
+        }, MAX_SAMPLE_MS);
+      });
+
       return finalPath || path;
     } catch (e: any) {
       Alert.alert('Recording failed', e?.message || 'Unknown error');
