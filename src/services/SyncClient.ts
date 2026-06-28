@@ -295,7 +295,7 @@ class SyncClient {
     this.send({ type: 'set_companion_id', companionId });
   }
 
-  // v3.2.0: kick off a custom openWakeWord training job on the
+  // v3.2.5: kick off a custom openWakeWord training job on the
   // desktop. The desktop spawns the Python training script, streams
   // progress back via 'wake_training_progress' messages, and finally
   // sends 'wake_training_result' with the trained .tflite path.
@@ -304,11 +304,12 @@ class SyncClient {
   //   syncClient.on('wake_training_progress', (msg) => ...)
   //   syncClient.on('wake_training_result', (msg) => ...)
   //
-  // The sample paths are absolute paths to WAV files the mobile has
-  // already saved to disk (e.g. via SimpleAudioRecorder). The desktop
-  // will read them as-is.
-  requestWakeTraining(agentId: string, phrase: string, samplePaths: string[]) {
-    this.send({ type: 'request_wake_training', agentId, phrase, samplePaths });
+  // `samples` is an array of {name, data} where `name` is the
+  // original .m4a filename and `data` is the base64-encoded file
+  // contents. The desktop writes them to its training dir — the
+  // mobile's filesystem is not reachable from the desktop process.
+  requestWakeTraining(agentId: string, phrase: string, samples: Array<{ name: string; data: string }>) {
+    this.send({ type: 'request_wake_training', agentId, phrase, samples });
   }
 
   // v3.2.0: fetch the bytes of a trained .tflite as base64. Used

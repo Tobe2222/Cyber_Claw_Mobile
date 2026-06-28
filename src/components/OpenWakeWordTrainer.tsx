@@ -322,7 +322,21 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
     setStatusMsg('Sending samples to desktop...');
 
     try {
-      sync.requestWakeTraining(companionId, wakePhrase.trim(), samples);
+      // v3.2.5: ship the audio bytes themselves, not the on-phone
+      // file paths. The desktop can't reach the phone's filesystem
+      // (`/data/user/0/com.cyberclawmobile/cache/...`) so it always
+      // reported "sample not found". Read each .m4a as base64 and
+      // let the desktop decode and write it to its training dir.
+      const encoded: Array<{ name: string; data: string }> = [];
+      for (let i = 0; i < samples.length; i++) {
+        const p = samples[i];
+        const name = p.split('/').pop() || `sample_${i}.m4a`;
+        // readFile with 'base64' returns the raw base64 string.
+        const data = await RNFS.readFile(p, 'base64');
+        encoded.push({ name, data });
+        setProgress(5 + Math.round(((i + 1) / samples.length) * 25));
+      }
+      sync.requestWakeTraining(companionId, wakePhrase.trim(), encoded);
     } catch (e: any) {
       setStage('error');
       setStatusMsg(`Failed to start: ${e?.message || 'unknown'}`);
