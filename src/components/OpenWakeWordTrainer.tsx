@@ -228,12 +228,30 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
       // closes (unless the user is going to WakeMode, which the
       // wake listener will start on its own).
       WakeWordModule?.startOwwListening?.().catch(() => {});
-      const s = syncClient;
-      s?.off?.('wake_training_progress', _onProgress);
-      s?.off?.('wake_training_result', _onResult);
-      s?.off?.('wake_model_data', _onModel);
     };
   }, [companionId, stage]);
+
+  // v3.2.12: attach the wake-training event listeners ONCE on
+  // mount and never re-run. Previously these were attached in
+  // startTraining() and removed by the [stage] useEffect cleanup
+  // when stage transitioned from 'idle' to 'uploading' — so the
+  // listener was attached for ~10ms (between sync.on() and the
+  // next React render) and then removed. Every wake_training_progress
+  // event broadcast by the desktop went to a removed listener.
+  // The fix: attach the listeners in a useEffect with empty deps,
+  // and never remove them (the trainer screen is single-mount).
+  useEffect(() => {
+    const s = syncClient;
+    s?.on?.('wake_training_progress', _onProgress);
+    s?.on?.('wake_training_result', _onResult);
+    s?.on?.('wake_model_data', _onModel);
+    // No cleanup — we want the listeners to stay attached for
+    // the entire lifetime of the trainer component. If we ever
+    // get a stale 'complete' result from a previous run, the
+    // stage guard inside _onResult handles it (returns early
+    // when stage is already 'complete').
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // v3.2.7: training-result watchdog. While the trainer is in any
   // non-terminal stage (uploading / generating_synthetic / augmenting
