@@ -94,10 +94,38 @@ const STAGE_LABEL: Record<Stage, string> = {
   error: '❌ Error',
 };
 
+// v3.2.9: time-formatting helpers for the logging panel.
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+function formatClock(d: Date): string {
+  const h = d.getHours().toString().padStart(2, '0');
+  const m = d.getMinutes().toString().padStart(2, '0');
+  const s = d.getSeconds().toString().padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
 export default function OpenWakeWordTrainer({ companionId, companionName, onComplete, onCancel }: Props) {
   const [wakePhrase, setWakePhrase] = useState(`hey ${companionName}`);
   const [samples, setSamples] = useState<string[]>([]);  // absolute paths
   const [stage, setStage] = useState<Stage>('idle');
+  const [progress, setProgress] = useState(0);
+  const [statusMsg, setStatusMsg] = useState('');
+  // v3.2.9: explicit logging of desktop activity on the mobile
+  // side. The bar and status text are useful but they don't show
+  // you WHEN something last happened — the bar at 30% and the
+  // bar at 95% look identical if they aren't moving. We track
+  // the timestamp of every PROGRESS:: event from the desktop
+  // and surface "last event: Ns ago" + a rolling event log so
+  // the user can see at a glance whether training is actually
+  // progressing or stuck.
+  const [lastEventAt, setLastEventAt] = useState<number>(0);
+  const [trainingStartedAt, setTrainingStartedAt] = useState<number>(0);
+  const [now, setNow] = useState<number>(Date.now());
+  const [eventLog, setEventLog] = useState<Array<{ ts: number; msg: string }>>([]);
   // v3.2.8: the wake phrase currently active on the device for
   // this companion, if any. null means no trained model is
   // installed. Surfaced as a status badge at the top of the
@@ -105,8 +133,6 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   // (or that they have to train to get a model).
   const [currentTrainedPhrase, setCurrentTrainedPhrase] = useState<string | null>(null);
   const [trainedModelPath, setTrainedModelPath] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [statusMsg, setStatusMsg] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pulseRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -361,6 +387,31 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   }, []);
 
   // ----- progress event handlers (refs so the cleanup useEffect can reach them) -----
+  // v3.2.9: 1-second tick while training is active. We use this
+  // to update the "Ns since last event" indicator without
+  // running a setInterval per render. The interval is started
+  // when training begins (stage leaves 'idle') and stopped when
+  // it reaches a terminal state.
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    const activeStages: Stage[] = ['uploading', 'generating_synthetic', 'augmenting', 'training', 'converting', 'downloading'];
+    if (activeStages.includes(stage)) {
+      if (tickRef.current) clearInterval(tickRef.current);
+      tickRef.current = setInterval(() => setNow(Date.now()), 1000);
+    } else {
+      if (tickRef.current) {
+        clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
+    }
+    return () => {
+      if (tickRef.current) {
+        clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
+    };
+  }, [stage]);
+
   const _onProgress = useRef((msg: any) => {
     if (msg?.stage) {
       const stageMap: Record<string, Stage> = {
@@ -372,13 +423,46 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
         complete: 'downloading',
       };
       const newStage = stageMap[msg.stage] || 'training';
+      const prevStage = (msg as any).__prevStage;
       setStage(newStage);
       setProgress(msg.percent || 0);
       if (msg.message) setStatusMsg(msg.message);
+      // v3.2.9: log every progress event with a timestamp so the
+      // user can see at a glance whether the desktop is actively
+      // working or stuck. Also push an entry to a rolling event
+      // log (capped at 50 entries) so they can scroll back and
+      // see what happened, even after the status text scrolls off.
+      const now = Date.now();
+      setLastEventAt(now);
+      setNow(now);
+      const logMsg = msg.message
+        ? `${Math.round(msg.percent)}% — ${msg.message}`
+        : `${Math.round(msg.percent)}% — ${msg.stage}`;
+      setEventLog((prev) => {
+        const next = [...prev, { ts: now, msg: logMsg }];
+        return next.slice(-50);
+      });
     }
   }).current;
 
   const _onResult = useRef(async (msg: any) => {
+    // v3.2.9: any wake_training_result from the desktop counts
+    // as activity — bump lastEventAt so the "Ns ago" indicator
+    // resets and doesn't show a misleadingly large number.
+    if (!msg?.noResult) {
+      const now = Date.now();
+      setLastEventAt(now);
+      setNow(now);
+      setEventLog((prev) => [
+        ...prev,
+        {
+          ts: now,
+          msg: msg?.ok
+            ? `Result: ok — model at ${msg.tflitePath?.split('/').pop()}`
+            : `Result: error — ${msg?.error || 'unknown'}`,
+        },
+      ].slice(-50));
+    }
     if (msg?.noResult) {
       // v3.2.6: the desktop has no cached result for this agent.
       // The user hasn't trained yet (or the result expired). Just
@@ -449,6 +533,15 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
     setStage('uploading');
     setProgress(5);
     setStatusMsg('Sending samples to desktop...');
+    // v3.2.9: reset the logging state for a fresh run. Clear
+    // the event log and seed lastEventAt / trainingStartedAt
+    // so the "Ns since last event" indicator starts from
+    // zero rather than showing a stale value from a
+    // previous run.
+    setEventLog([{ ts: Date.now(), msg: 'Started — sending samples to desktop...' }]);
+    setLastEventAt(Date.now());
+    setTrainingStartedAt(Date.now());
+    setNow(Date.now());
 
     // v3.2.7: poll for the cached result 10s after we fire the
     // request. If our WebSocket dies during the readFile loop or
@@ -551,6 +644,46 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
             </View>
             <Text style={styles.progressPct}>{Math.round(progress)}%</Text>
             {statusMsg ? <Text style={styles.statusMsg}>{statusMsg}</Text> : null}
+
+            {/* v3.2.9: explicit logging indicators. Three lines:
+                - Total elapsed time since training started (mm:ss)
+                - Seconds since the last desktop progress event
+                  (green if recent, yellow if aging, red if >60s)
+                - Scrolling event log of the last few progress events
+                  so the user can see exactly what happened even if
+                  the status text has scrolled away. */}
+            <View style={styles.loggingCard}>
+              <Text style={styles.loggingLine}>
+                <Text style={styles.loggingLabel}>Elapsed: </Text>
+                <Text style={styles.loggingValue}>
+                  {formatElapsed(now - trainingStartedAt)}
+                </Text>
+                <Text style={styles.loggingLabel}>   ·   Last event: </Text>
+                <Text style={[
+                  styles.loggingValue,
+                  lastEventAt === 0 ? null :
+                  now - lastEventAt < 15 ? styles.loggingFresh :
+                  now - lastEventAt < 60 ? styles.loggingAging :
+                  styles.loggingStale
+                ]}>
+                  {lastEventAt === 0 ? '—' : `${Math.round((now - lastEventAt) / 1000)}s ago`}
+                </Text>
+              </Text>
+              <Text style={styles.loggingLabel}>
+                Recent events (latest at top):
+              </Text>
+              <ScrollView style={styles.eventLog} contentContainerStyle={styles.eventLogContent}>
+                {[...eventLog].reverse().slice(0, 8).map((e, i) => (
+                  <Text key={`${e.ts}-${i}`} style={styles.eventLogEntry}>
+                    <Text style={styles.eventLogTs}>
+                      [{formatClock(new Date(e.ts))}]
+                    </Text>{' '}
+                    {e.msg}
+                  </Text>
+                ))}
+              </ScrollView>
+            </View>
+
             {stage === 'generating_synthetic' || stage === 'training' ? (
               <Text style={styles.hint}>
                 This can take 2-10 minutes depending on your desktop GPU. You can
@@ -726,6 +859,29 @@ const styles = StyleSheet.create({
   progressPct: { color: '#9ca3af', fontSize: 12, textAlign: 'right', marginTop: 6 },
   statusMsg: { color: '#6b7280', fontSize: 12, marginTop: 8, fontStyle: 'italic' },
   hint: { color: '#6b7280', fontSize: 12, marginTop: 12, lineHeight: 18 },
+  // v3.2.9: explicit logging card. Shows elapsed time + time
+  // since the last desktop event (color-coded green / yellow /
+  // red) + a scrolling event log so the user can tell at a
+  // glance whether the desktop is actively working or has
+  // gone silent.
+  loggingCard: {
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  loggingLine: { color: '#d1d5db', fontSize: 12, marginBottom: 6, fontFamily: 'monospace' },
+  loggingLabel: { color: '#9ca3af', fontSize: 11, fontFamily: 'monospace' },
+  loggingValue: { color: '#fff', fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
+  loggingFresh: { color: '#10b981' },
+  loggingAging: { color: '#fbbf24' },
+  loggingStale: { color: '#ef4444' },
+  eventLog: { maxHeight: 140, marginTop: 4 },
+  eventLogContent: { paddingBottom: 4 },
+  eventLogEntry: { color: '#9ca3af', fontSize: 11, fontFamily: 'monospace', marginBottom: 2 },
+  eventLogTs: { color: '#6b7280' },
   doneCard: {
     backgroundColor: '#141414',
     borderRadius: 14,
