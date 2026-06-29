@@ -194,13 +194,15 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // trainer sub-screen stops it again explicitly on mount (this
   // covers the case where the user is just looking at settings
   // without entering the trainer).
-  WakeWordModule?.stopOwwListening?.().catch(() => {});
-  return () => {
-    // v3.2.11: restart the wake listener when the user leaves
-    // Settings. The listener's own start() is idempotent
-    // (it short-circuits if isListening is already true).
-    WakeWordModule?.startOwwListening?.().catch(() => {});
-  };
+  useEffect(() => {
+    WakeWordModule?.stopOwwListening?.().catch(() => {});
+    return () => {
+      // v3.2.11: restart the wake listener when the user leaves
+      // Settings. The listener's own start() is idempotent
+      // (it short-circuits if isListening is already true).
+      WakeWordModule?.startOwwListening?.().catch(() => {});
+    };
+  }, []);
 
   // Clear pending debounce on unmount
   useEffect(() => () => {
