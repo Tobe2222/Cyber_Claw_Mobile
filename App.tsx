@@ -360,8 +360,19 @@ export default function App(): React.JSX.Element {
               // the active companion so the wake mode shows
               // the right one. Each companion has its own
               // wake word now.
+              // v3.2.15: also auto-switch into voice mode
+              // when the wake word matches, so the user
+              // doesn't have to manually open voice mode
+              // after saying the wake word. The greeting
+              // plays first; once it finishes, the user is
+              // already in voice mode ready to speak a
+              // command. (The previous behavior kept them
+              // in wake mode — they'd see "Listening for
+              // wake word..." indefinitely and have to back
+              // out and tap Voice Mode to actually use it.)
               onWakeMatch={(id) => {
                 if (id && id !== companionId) setCompanionId(id);
+                setScreen('voice-mode');
               }}
             />
           )}
