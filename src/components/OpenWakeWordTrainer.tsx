@@ -98,11 +98,62 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   const [wakePhrase, setWakePhrase] = useState(`hey ${companionName}`);
   const [samples, setSamples] = useState<string[]>([]);  // absolute paths
   const [stage, setStage] = useState<Stage>('idle');
+  // v3.2.8: the wake phrase currently active on the device for
+  // this companion, if any. null means no trained model is
+  // installed. Surfaced as a status badge at the top of the
+  // trainer so the user knows what they're about to overwrite
+  // (or that they have to train to get a model).
+  const [currentTrainedPhrase, setCurrentTrainedPhrase] = useState<string | null>(null);
+  const [trainedModelPath, setTrainedModelPath] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pulseRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  // v3.2.8: on mount, fetch the currently-active trained model for
+  // this companion (if any). The native side persists each trained
+  // model in filesDir/wake_models/ and exposes getSavedWakeModels()
+  // returning { agentId: { phrase, path, savedAt } }. We use this
+  // to surface a "currently listening for: <phrase>" status badge
+  // at the top of the trainer, so the user knows whether they're
+  // about to train a new model or overwrite an existing one.
+  useEffect(() => {
+    let cancelled = false;
+    WakeWordModule?.getSavedWakeModels?.()
+      .then((models: any) => {
+        if (cancelled || !models) return;
+        const entry = models[companionId];
+        if (entry?.phrase) {
+          setCurrentTrainedPhrase(entry.phrase);
+          setTrainedModelPath(entry.path || null);
+        } else {
+          setCurrentTrainedPhrase(null);
+          setTrainedModelPath(null);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [companionId]);
+
+  // v3.2.8: after a successful training, refresh the trained-phrase
+  // state so the badge updates to show what was just installed.
+  // stage 'complete' is set in _onModel after the native side has
+  // accepted the .tflite. We re-fetch from the native side because
+  // that's the single source of truth for what's actually active.
+  useEffect(() => {
+    if (stage !== 'complete') return;
+    WakeWordModule?.getSavedWakeModels?.()
+      .then((models: any) => {
+        if (!models) return;
+        const entry = models[companionId];
+        if (entry?.phrase) {
+          setCurrentTrainedPhrase(entry.phrase);
+          setTrainedModelPath(entry.path || null);
+        }
+      })
+      .catch(() => {});
+  }, [stage, companionId]);
 
   // Cleanup on unmount: stop any in-flight recorder and stop listening
   // for progress events from the sync server.
@@ -440,6 +491,35 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
     <View style={styles.root}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Train wake word for {companionName}</Text>
+
+        {/* v3.2.8: trained-model status badge. Shown above the
+            subtitle so the user immediately sees whether a model
+            is currently active, and which phrase it's listening
+            for. If there's no model, the badge says so explicitly
+            so the user doesn't wonder if "0 / 6 samples" means
+            "no model yet" or "no samples yet". */}
+        {currentTrainedPhrase ? (
+          <View style={styles.trainedBadge}>
+            <Text style={styles.trainedBadgeIcon}>✓</Text>
+            <View style={styles.trainedBadgeTextWrap}>
+              <Text style={styles.trainedBadgeText}>
+                Listening for "{currentTrainedPhrase}"
+              </Text>
+              {trainedModelPath ? (
+                <Text style={styles.trainedBadgeMeta} numberOfLines={1}>
+                  Training will overwrite this model.
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : (
+          <View style={styles.untrainedBadge}>
+            <Text style={styles.untrainedBadgeText}>
+              No trained model yet — record 6 samples and hit Train.
+            </Text>
+          </View>
+        )}
+
         <Text style={styles.subtitle}>
           Say the phrase {REQUIRED_SAMPLES} times. The desktop uses these as a seed
           to generate thousands of variants, then trains a tiny neural network that
@@ -562,6 +642,38 @@ const styles = StyleSheet.create({
   scroll: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 100 },
   title: { color: '#fff', fontSize: 22, fontWeight: '700', marginBottom: 8 },
   subtitle: { color: '#9ca3af', fontSize: 14, lineHeight: 20, marginBottom: 24 },
+  // v3.2.8: trained-model status badge. Green-tinted when there's
+  // an active model (so the user knows the wake word is currently
+  // working); gray-tinted with a hint when there isn't (so the
+  // user knows they need to train before the wake word works).
+  trainedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    borderColor: 'rgba(34, 197, 94, 0.4)',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+  },
+  trainedBadgeIcon: {
+    color: '#22c55e',
+    fontSize: 18,
+    fontWeight: '700',
+    marginRight: 10,
+  },
+  trainedBadgeTextWrap: { flex: 1 },
+  trainedBadgeText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  trainedBadgeMeta: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
+  untrainedBadge: {
+    backgroundColor: 'rgba(156, 163, 175, 0.10)',
+    borderColor: 'rgba(156, 163, 175, 0.3)',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+  },
+  untrainedBadgeText: { color: '#9ca3af', fontSize: 13 },
   phraseRow: { marginBottom: 24 },
   label: { color: '#9ca3af', fontSize: 13, marginBottom: 8, fontWeight: '600' },
   input: {
