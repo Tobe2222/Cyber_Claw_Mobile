@@ -243,6 +243,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     pollIntervalRef.current = setInterval(() => {
       const s = syncClient;
+      console.log(`[Trainer] watchdog poll (stage=${stage} connected=${s?.connected})`);
       if (s?.connected) {
         s.requestLatestWakeTrainingResult(companionId);
       }
@@ -413,6 +414,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   }, [stage]);
 
   const _onProgress = useRef((msg: any) => {
+    console.log(`[Trainer] _onProgress: stage=${msg?.stage} pct=${msg?.percent}`);
     if (msg?.stage) {
       const stageMap: Record<string, Stage> = {
         setup: 'uploading',
@@ -568,6 +570,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
         encoded.push({ name, data });
         setProgress(5 + Math.round(((i + 1) / samples.length) * 25));
       }
+      console.log(`[Trainer] sending requestWakeTraining agentId=${companionId} samples=${encoded.length}`);
       sync.requestWakeTraining(companionId, wakePhrase.trim(), encoded);
     } catch (e: any) {
       clearTimeout(earlyPoll);

@@ -447,6 +447,14 @@ class SyncClient {
         break;
 
       default:
+        // v3.2.10: log every default-case message so the Log tab
+        // shows the user what the desktop is sending. Especially
+        // useful for wake_training_progress / wake_training_result
+        // which fall through to here. With this, the Log tab
+        // becomes a visible diagnostic of the wake training
+        // data flow — if the bar isn't moving, the user can see
+        // whether the messages are arriving on the phone at all.
+        console.log(`[SyncClient] default-case msg: type=${msg.type}`, JSON.stringify(msg).slice(0, 120));
         this.emit(msg.type, msg);
     }
   }
