@@ -74,8 +74,25 @@ function startSampleMatchListener(
     const activeId = companionsTraining[0]?.companionId;
     if (activeId) onDetected(activeId);
   });
-  WakeWordModule?.initOww?.('hey_jarvis', 0.5)
-    .catch((e: any) => onLog?.(`initOww failed: ${e?.message}`))
+  // v3.2.16: init OWW with the active companion's saved wake
+  // phrase (if any), falling back to 'hey_jarvis'. Previously
+  // this hardcoded 'hey_jarvis' which meant a custom-trained
+  // wake word model was never active in the OWW detector — the
+  // trainer hot-swapped the model file in, but the detector
+  // was looking for 'hey_jarvis' activations. 'hey clawsuu'
+  // wouldn't match 'hey_jarvis' even though the trained model
+  // file was loaded.
+  const activeIdForInit = companionsTraining[0]?.companionId;
+  let wakePhrase = 'hey_jarvis';
+  if (activeIdForInit) {
+    try {
+      const models = WakeWordModule?.getSavedWakeModels?.();
+      const entry = models?.[activeIdForInit];
+      if (entry?.phrase) wakePhrase = entry.phrase;
+    } catch (_) {}
+  }
+  WakeWordModule?.initOww?.(wakePhrase, threshold ?? 0.5)
+    .catch((e: any) => onLog?.(`initOww failed for "${wakePhrase}": ${e?.message}`))
     .then(() => WakeWordModule?.startOwwListening?.())
     .catch((e: any) => onLog?.(`startOwwListening failed: ${e?.message}`));
   return () => {

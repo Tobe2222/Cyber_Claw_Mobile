@@ -371,6 +371,7 @@ export default function App(): React.JSX.Element {
               // wake word..." indefinitely and have to back
               // out and tap Voice Mode to actually use it.)
               onWakeMatch={(id) => {
+                console.log(`[App] onWakeMatch called id=${id} → setScreen(voice-mode)`);
                 if (id && id !== companionId) setCompanionId(id);
                 setScreen('voice-mode');
               }}

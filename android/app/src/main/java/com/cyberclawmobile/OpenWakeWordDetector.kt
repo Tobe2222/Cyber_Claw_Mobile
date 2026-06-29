@@ -66,7 +66,27 @@ class OpenWakeWordDetector(private val context: Context) {
             wakewordName = wakeword
             melspecInterpreter = loadInterpreter("openwakeword/melspectrogram.tflite")
             embeddingInterpreter = loadInterpreter("openwakeword/embedding_model.tflite")
-            wakewordInterpreter = loadInterpreter("openwakeword/${wakeword}_v0.1.tflite")
+            // v3.2.16: try the bundled asset first
+            // (assets/openwakeword/${wakeword}_v0.1.tflite), fall
+            // back to the wake_models dir if a custom-trained
+            // .tflite exists for this wake word. The fallback
+            // file name is <wakeword>.tflite (without the _v0.1
+            // suffix) to match what setWakeModelFromBase64
+            // writes. This way initOww('hey_clawsuu') works
+            // both for bundled pre-trained wake words and for
+            // custom-trained ones.
+            try {
+                wakewordInterpreter = loadInterpreter("openwakeword/${wakeword}_v0.1.tflite")
+            } catch (e: Exception) {
+                Log.w(tag, "No bundled model for '$wakeword', looking for custom-trained file")
+                val context = context ?: return false
+                val customFile = java.io.File(context.filesDir, "wake_models/${wakeword}.tflite")
+                if (!customFile.exists()) {
+                    Log.e(tag, "No model file found for '$wakeword' (bundled or custom)")
+                    return false
+                }
+                wakewordInterpreter = loadInterpreterFromFile(customFile.absolutePath)
+            }
             // Reset history when models reload
             melspecHistory.clear()
             Log.i(tag, "Models loaded: $wakewordName (threshold=$threshold)")
