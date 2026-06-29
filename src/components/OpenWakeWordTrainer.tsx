@@ -144,6 +144,51 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
     };
   }, [companionId, stage]);
 
+  // v3.2.7: training-result watchdog. While the trainer is in any
+  // non-terminal stage (uploading / generating_synthetic / augmenting
+  // / training / converting), poll the desktop every 20s for the
+  // cached result. This is belt + suspenders to the v3.2.6 mount-time
+  // poll — that one only fires when the user navigates into the
+  // trainer screen; this one fires even if the user just stares at
+  // the stuck progress bar.
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const terminalStages: Stage[] = ['idle', 'complete', 'error', 'recording'];
+    if (terminalStages.includes(stage)) {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      return;
+    }
+    // We're in a training-active stage. Poll every 20s.
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    pollIntervalRef.current = setInterval(() => {
+      const s = syncClient;
+      if (s?.connected) {
+        s.requestLatestWakeTrainingResult(companionId);
+      }
+    }, 20000);
+    // Also re-poll immediately on every (re)authentication. If the
+    // WebSocket dropped mid-training, the re-auth is the first
+    // chance we have to ask the desktop "did you finish?".
+    const onAuth = () => {
+      const s = syncClient;
+      if (s?.connected) {
+        s.requestLatestWakeTrainingResult(companionId);
+      }
+    };
+    syncClient?.on?.('authenticated', onAuth);
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      syncClient?.off?.('authenticated', onAuth);
+    };
+  }, [stage, companionId]);
+
   // Android back button: confirm if mid-training
   useEffect(() => {
     const handler = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -283,7 +328,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   }).current;
 
   const _onResult = useRef(async (msg: any) => {
-    if (!msg?.noResult) {
+    if (msg?.noResult) {
       // v3.2.6: the desktop has no cached result for this agent.
       // The user hasn't trained yet (or the result expired). Just
       // stay on the idle screen and let them record fresh samples.
@@ -354,6 +399,16 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
     setProgress(5);
     setStatusMsg('Sending samples to desktop...');
 
+    // v3.2.7: poll for the cached result 10s after we fire the
+    // request. If our WebSocket dies during the readFile loop or
+    // during the first second of training, this catches it without
+    // making the user wait the full 20s watchdog interval.
+    const earlyPoll = setTimeout(() => {
+      if (syncClient?.connected) {
+        syncClient.requestLatestWakeTrainingResult(companionId);
+      }
+    }, 10000);
+
     try {
       // v3.2.5: ship the audio bytes themselves, not the on-phone
       // file paths. The desktop can't reach the phone's filesystem
@@ -371,6 +426,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
       }
       sync.requestWakeTraining(companionId, wakePhrase.trim(), encoded);
     } catch (e: any) {
+      clearTimeout(earlyPoll);
       setStage('error');
       setStatusMsg(`Failed to start: ${e?.message || 'unknown'}`);
     }
