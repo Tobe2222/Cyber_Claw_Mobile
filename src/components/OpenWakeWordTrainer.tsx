@@ -211,9 +211,23 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
       }
     }
 
+    // v3.2.11: stop the bundled pre-trained wake listener while
+    // the trainer is mounted. The trainer is doing wake-word work
+    // (either recording samples, training, or running a fresh
+    // model preview) and the bundled "hey jarvis" listener from
+    // HomeScreen is still active underneath — it grabs the mic,
+    // it can fire the wake notification and interrupt the trainer,
+    // and (less obviously) it competes with the trainer's sample
+    // recorder for the audio device. Restart it on unmount.
+    WakeWordModule?.stopOwwListening?.().catch(() => {});
+
     return () => {
       try { getSimpleAudioRecorder().stop(); } catch (_) {}
       try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
+      // v3.2.11: restart the bundled wake listener when the trainer
+      // closes (unless the user is going to WakeMode, which the
+      // wake listener will start on its own).
+      WakeWordModule?.startOwwListening?.().catch(() => {});
       const s = syncClient;
       s?.off?.('wake_training_progress', _onProgress);
       s?.off?.('wake_training_result', _onResult);
