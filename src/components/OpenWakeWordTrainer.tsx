@@ -133,6 +133,14 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
   // (or that they have to train to get a model).
   const [currentTrainedPhrase, setCurrentTrainedPhrase] = useState<string | null>(null);
   const [trainedModelPath, setTrainedModelPath] = useState<string | null>(null);
+  // v3.2.14: snapshot of the trained phrase at the moment the
+  // trainer mounted, used by the cleanup useEffect to re-init
+  // the OWW listener with the right wake word when the trainer
+  // closes. Without this, the cleanup falls back to whatever
+  // was loaded on HomeScreen mount (usually 'hey_jarvis'),
+  // even if the trainer completed a fresh training and
+  // hot-swapped in a new model for the current companion.
+  const [currentTrainedPhraseOnMount, setCurrentTrainedPhraseOnMount] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pulseRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -153,6 +161,15 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
         if (entry?.phrase) {
           setCurrentTrainedPhrase(entry.phrase);
           setTrainedModelPath(entry.path || null);
+          // v3.2.14: snapshot the trained phrase on mount so the
+          // cleanup useEffect knows what wake word to re-init
+          // the OWW listener with. Only set this once, the
+          // first time we resolve the saved models for this
+          // companion — later training completions update
+          // currentTrainedPhrase but NOT this snapshot.
+          setCurrentTrainedPhraseOnMount((prev) =>
+            prev === null ? entry.phrase : prev
+          );
         } else {
           setCurrentTrainedPhrase(null);
           setTrainedModelPath(null);
@@ -224,10 +241,36 @@ export default function OpenWakeWordTrainer({ companionId, companionName, onComp
     return () => {
       try { getSimpleAudioRecorder().stop(); } catch (_) {}
       try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
-      // v3.2.11: restart the bundled wake listener when the trainer
-      // closes (unless the user is going to WakeMode, which the
-      // wake listener will start on its own).
-      WakeWordModule?.startOwwListening?.().catch(() => {});
+      // v3.2.14: re-init the OWW wake listener with the right
+      // wake phrase before starting it. Without this, the
+      // listener falls back to whatever was loaded on
+      // HomeScreen mount — usually 'hey_jarvis' from the
+      // bundled pre-trained model. After the user trains a
+      // new wake word, the trainer's setWakeModelFromBase64
+      // hot-swaps the model in the detector, but if we just
+      // call startOwwListening here, the listener uses the
+      // original 'hey_jarvis' init and ignores the hot-swap.
+      // The fix: re-init with the wake phrase that was active
+      // when the trainer mounted (which already accounts for
+      // any saved custom model for this companion). If the
+      // trainer completed a fresh training, currentTrainedPhrase
+      // is the new phrase; otherwise we re-init with whatever
+      // was loaded previously.
+      const phraseToReactivate = currentTrainedPhrase || currentTrainedPhraseOnMount;
+      if (phraseToReactivate) {
+        WakeWordModule?.initOww?.(phraseToReactivate, 0.5)
+          .catch(() => {})
+          .then(() => WakeWordModule?.startOwwListening?.())
+          .catch(() => {});
+      } else {
+        // No model for this companion — fall back to the bundled
+        // pre-trained wake word so Voice Mode at least listens
+        // for SOMETHING.
+        WakeWordModule?.initOww?.('hey_jarvis', 0.5)
+          .catch(() => {})
+          .then(() => WakeWordModule?.startOwwListening?.())
+          .catch(() => {});
+      }
     };
   }, [companionId, stage]);
 
