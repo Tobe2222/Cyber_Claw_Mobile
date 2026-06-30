@@ -445,6 +445,40 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   useEffect(() => {
     if (voiceMode) {
       (async () => {
+        addLogEntry('🎤 Voice Mode: starting', 'info');
+        // v3.2.18 — play the greeting before the first
+        // recording turn. Previously the greeting lived
+        // inside the wake-listener-start useEffect, which
+        // now early-returns for voice mode. Without this
+        // copy the user sees "Listening..." with no
+        // greeting audio (which Tobe reported on v3.2.18:
+        // "Now it skipped right to listen without
+        // greeting"). Reading the same `cyberclaw-ready-
+        // phrase` AsyncStorage key the wake-mode path
+        // used; an empty string still means "no greeting".
+        let greetingText = 'Ready to chat';
+        try {
+          const stored = await AsyncStorage.getItem('cyberclaw-ready-phrase');
+          if (stored !== null) {
+            if (stored.trim() === '') {
+              greetingText = '';
+            } else {
+              greetingText = stored;
+            }
+          }
+        } catch (_) {}
+        if (greetingText) {
+          const cachedPath = await getCachedGreetingPath(greetingText);
+          if (cachedPath) {
+            addVoiceLog(`🔊 playing cached (${cachedPath.split('/').pop()})`);
+            await playCachedGreeting(cachedPath);
+          } else {
+            addVoiceLog('🔊 no cached audio, requesting synthesis');
+            ensureGreetingCached(greetingText).catch(() => {});
+            await speak(greetingText);
+          }
+        }
+
         addLogEntry('🎤 Voice Mode: starting first recording turn', 'info');
         addVoiceLog('🎤 Listening...');
         setVoiceStatus('listening');
