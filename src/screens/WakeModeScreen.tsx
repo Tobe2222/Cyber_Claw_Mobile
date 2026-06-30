@@ -26,6 +26,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import { getVAD, resetVAD } from '../services/SileroVAD';
+import { loadVoiceSettings, DEFAULT_SILENCE_MS } from '../services/VoiceSettings';
+import { matchExitPhrase } from '../services/ExitPhraseMatcher';
 import { extractAudioFeatures, matchAgainstTraining, matchAgainstAllCompanions, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array } from '../services/AudioUtils';
 
@@ -130,6 +132,11 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   const appStateRef = useRef<string>(AppState.currentState);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
+  // v3.2.17 — ref-captured reference to the latest
+  // startRecordingTurn closure, so the onAudioResponse
+  // handler can re-enter the multi-turn loop without
+  // going through the wake-word matcher again.
+  const startRecordingTurnRef = useRef<(() => Promise<void>) | null>(null);
 
   const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'listening' : 'listening');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
@@ -404,6 +411,41 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     };
   }, []);
 
+  // v3.2.17 — voice-mode mount: skip the wake listener entirely
+  // and go straight to recording. The wake word has ALREADY
+  // fired to open this screen (App.tsx swapped to voice-mode
+  // on onWakeMatch), so waiting for ANOTHER wake match here
+  // would just leave the user staring at "Listening for wake
+  // word..." while they speak their actual command. That's the
+  // v3.2.16 B bug: the screen mounted in voice-mode and started
+  // a DTW wake listener, then waited forever for a second
+  // wake phrase that will never come. Fix: voice-mode = record
+  // immediately, then loop. The `handleWakeWordInner` path is
+  // reserved for Wake Mode only now.
+  useEffect(() => {
+    if (voiceMode) {
+      (async () => {
+        addLogEntry('🎤 Voice Mode: starting first recording turn', 'info');
+        addVoiceLog('🎤 Listening...');
+        setVoiceStatus('listening');
+        // Mark busy so onAudioResponse's afterPlayback doesn't
+        // think we're idle. startRecordingTurn sets/clears this
+        // itself on silence_event end. For the FIRST turn we
+        // also need it set here so the multi-turn loop gating
+        // in onAudioResponse treats the screen as busy until
+        // the user finishes their first utterance.
+        wakeWordBusyRef.current = true;
+        try {
+          await startRecordingTurn();
+        } catch (e: any) {
+          addLogEntry(`Voice Mode first-turn failed: ${e?.message}`, 'error');
+          wakeWordBusyRef.current = false;
+        }
+      })();
+      return;
+    }
+  }, [voiceMode]);
+
   // Start the sample-match wake listener. When matched, start recording.
   // v3.1.93: voiceMode is now IDENTICAL to wake mode — both
   // run the sample-matcher first, then on match play a short
@@ -414,7 +456,11 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // phrase to voice mode"), both modes do the same thing.
   // The `voiceMode` prop still affects UI styling but no
   // longer the wake-listener path.
+  //
+  // v3.2.17: voice mode is handled by the effect ABOVE; this
+  // wake-listener effect is now Wake Mode only (voiceMode=false).
   useEffect(() => {
+    if (voiceMode) return; // handled above
     let cleanup: (() => void) | null = null;
     let cancelled = false;
 
@@ -656,18 +702,37 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
 
+    await startRecordingTurn();
+  }, []);
+
+  // v3.2.17 — start a recording turn. Used both on wake match
+  // (first call from handleWakeWordInner) and on each
+  // multi-turn loop iteration (subsequent calls from the
+  // response handler). Reads silenceMs fresh so a Settings
+  // change takes effect on the NEXT turn without a mode
+  // restart.
+  const startRecordingTurn = useCallback(async () => {
     const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
     resetVAD();
+
+    let silenceMs = DEFAULT_SILENCE_MS;
+    try {
+      const settings = await loadVoiceSettings();
+      silenceMs = settings.silenceMs;
+    } catch (_) {}
 
     try {
       const fs = require('react-native-fs');
       const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wakemode-${Date.now()}.m4a`;
       const recorder = getSimpleAudioRecorder();
 
-      // Silence detection: 5s of silence -> 3s countdown -> auto-send
+      // v3.2.17 — silence detection. The user's configured
+      // silenceMs replaces the previous hardcoded 5000.
+      // After continuous silence, give a 3s countdown so
+      // the user can keep talking if they want; then send.
       const unsubSilence = recorder.once('silence', async () => {
-        addVoiceLog('⏳ Silence detected...');
-        addLogEntry('Wake Mode: silence detected after 5s', 'info');
+        addVoiceLog(`⏳ Silence detected (${silenceMs}ms)...`);
+        addLogEntry(`Wake/Voice Mode: silence detected after ${silenceMs}ms`, 'info');
         setVoiceStatus('silence_countdown');
         let count = 3;
         const tick = setInterval(async () => {
@@ -694,6 +759,19 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
               syncClient.sendAudioInput(base64, 'audio/m4a');
               addLogEntry('Wake Mode: audio sent for transcription', 'sent');
               addVoiceLog('📏 Sent, waiting...');
+
+              // v3.2.17 — voice-mode exit-phrase check.
+              // After sending, watch the next incoming chat
+              // message from the desktop; if its userText
+              // (the STT transcription) contains an exit
+              // phrase, close voice mode instead of looping
+              // into the next recording turn. The desktop
+              // emits a chat message containing the user's
+              // transcribed text alongside the assistant's
+              // response. We poll briefly (max 6s) for it.
+              if (voiceMode) {
+                pollForExitPhrase().catch(() => {});
+              }
             } catch (e: any) {
               addLogEntry(`Wake Mode: send error: ${e?.message}`, 'error');
               wakeWordBusyRef.current = false;
@@ -702,25 +780,76 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         }, 1000);
       });
 
-      await recorder.start(recPath, 5000);
+      await recorder.start(recPath, silenceMs);
       recorderActiveRef.current = true;
-      addLogEntry('Wake Mode: recorder started', 'info');
-
-      // 30s max duration safety
-      setTimeout(async () => {
-        if (wakeWordBusyRef.current) {
-          try { await recorder.stop(); } catch (_) {}
-          addLogEntry('Wake Mode: max duration (30s) reached, sending', 'info');
-        }
-      }, 30000);
+      addLogEntry(`Wake Mode: recorder started (silence=${silenceMs}ms)`, 'info');
     } catch (e: any) {
       addLogEntry(`Wake Mode: recorder failed: ${e?.message}`, 'error');
       wakeWordBusyRef.current = false;
     }
-  }, []);
+  }, [voiceMode]);
 
-  // Handle audio response from desktop — play it, then restart the wake
-  // listener for the next round.
+  // Keep the ref updated so the response handler can call the
+  // latest closure of startRecordingTurn.
+  useEffect(() => {
+    startRecordingTurnRef.current = startRecordingTurn;
+  }, [startRecordingTurn]);
+
+  // v3.2.17 — listen for the next userText chat from the
+  // desktop and check it against exit phrases. Resolves as
+  // soon as either an exit phrase matches OR a 6s window
+  // elapses. Resolves with the matched phrase or null.
+  const pollForExitPhrase = useCallback(async (): Promise<string | null> => {
+    try {
+      const settings = await loadVoiceSettings();
+      if (!settings.exitPhrases || settings.exitPhrases.length === 0) return null;
+    } catch (_) {
+      return null;
+    }
+    return new Promise<string | null>((resolve) => {
+      const deadline = setTimeout(() => {
+        syncClient.off?.('chat', onChat);
+        resolve(null);
+      }, 6000);
+      const onChat = (m: any) => {
+        if (!m?.isUser) return;
+        const text = m.text || '';
+        const phrases = (async () => {
+          try { return (await loadVoiceSettings()).exitPhrases; } catch (_) { return []; }
+        })();
+        phrases.then((p) => {
+          const matched = matchExitPhrase(text, p);
+          if (matched) {
+            clearTimeout(deadline);
+            syncClient.off?.('chat', onChat);
+            addLogEntry(`👋 Exit phrase matched: "${matched}"`, 'info');
+            addVoiceLog(`👋 Exit phrase "${matched}" → closing`);
+            // Voice mode only — close back to home. Wake
+            // mode stays in wake listening.
+            if (voiceMode) {
+              setVoiceStatus('listening');
+              setTimeout(() => exitRef.current(), 400);
+            }
+            resolve(matched);
+          }
+        });
+      };
+      syncClient.on('chat', onChat);
+    });
+  }, [voiceMode]);
+
+  // Handle audio response from desktop. In v3.2.17 there are
+  // two exit routes depending on `voiceMode`:
+  //   - voiceMode=false (Wake Mode):
+  //     After the response audio plays, restart the wake
+  //     listener so the user can say the wake phrase again.
+  //     Same behavior as v3.2.16.
+  //   - voiceMode=true (Voice Mode):
+  //     Stay in voice mode. After the response plays, start a
+  //     NEW recording turn so the user can talk again. The
+  //     loop continues until: (a) silence for `silenceMs`
+  //     during recording, (b) an exit phrase appears in the
+  //     transcription, or (c) the user hits X / Back.
   useEffect(() => {
     const onChat = (msg: any) => {
       if (msg.isUser) return;
@@ -732,8 +861,25 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     const onAudioResponse = (msg: any) => {
       // Desktop sends synthesized audio. Wake Mode just lets it play.
       addLogEntry('🔊 Wake Mode: audio response from desktop', 'info');
-      // Restart the sample listener after the response finishes
-      const restart = async () => {
+      const afterPlayback = async () => {
+        if (voiceMode) {
+          // Multi-turn loop: immediately start another
+          // recording window. The same handleWakeWordInner
+          // body runs (VAD + recorder + silence + send),
+          // but `wakeWordBusyRef.current` is already false
+          // since the previous turn cleared it on send.
+          // Recording continues until silence/exit-phrase
+          // triggers the next send.
+          addVoiceLog('🎤 Listening for next turn...');
+          addLogEntry('🔁 Voice Mode: starting next recording turn', 'info');
+          try {
+            await startRecordingTurnRef.current?.();
+          } catch (e: any) {
+            addLogEntry(`Voice Mode next-turn start failed: ${e?.message}`, 'error');
+          }
+          return;
+        }
+        // Wake Mode path (unchanged): restart the wake listener.
         wakeWordBusyRef.current = false;
         setVoiceStatus('listening');
         addVoiceLog('Wake listening...');
@@ -766,9 +912,9 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // Fallback: restart after estimated duration
       const wordCount = (msg.text || '').split(/\s+/).length;
       const fallbackMs = Math.max(6000, Math.ceil((wordCount / 130) * 60 * 1000) + 3000);
-      setTimeout(restart, fallbackMs);
+      setTimeout(afterPlayback, fallbackMs);
       // Also listen for audioPlayerFinished
-      wakeWordEmitter?.addListener('audioPlayerFinished', restart);
+      wakeWordEmitter?.addListener('audioPlayerFinished', afterPlayback);
     };
     syncClient.on('chat', onChat);
     syncClient.on('audio_response', onAudioResponse);
@@ -776,7 +922,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       syncClient.off?.('chat', onChat);
       syncClient.off?.('audio_response', onAudioResponse);
     };
-  }, [handleWakeWordInner]);
+  }, [handleWakeWordInner, voiceMode]);
 
   // Handle back button: exit Wake Mode
   useEffect(() => {
