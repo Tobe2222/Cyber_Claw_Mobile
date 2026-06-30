@@ -374,11 +374,28 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             mediaRecorder = recorder
 
             // Auto-stop on silence: poll amplitude every 500ms, stop after silenceMs of quiet
+            //
+            // v3.2.23 — wait-for-speech-then-silence model (Alexa-style).
+            // The previous version started the silence timer from
+            // recorder start, so if the user hadn't spoken by 3-5s,
+            // the loop closed their turn before they had time to
+            // respond. Tobe reported this exact symptom in v3.2.22.
+            //
+            // New behavior: only emit `recorderSilence` AFTER the
+            // user has actually spoken at least once. The timer
+            // measures "post-speech silence", not "total silence".
+            // `hasUserSpoken` is set true on the first non-silent
+            // amplitude reading and resets on recorder.stop().
+            // A `MAX_RECORDING_MS` hard cap still fires silence
+            // after 30s of total recording time (covers the case
+            // where the user speaks once and then stays quiet for
+            // 30+ seconds).
             var silentFor = 0L
             var recordingFor = 0L
+            var hasUserSpoken = false
             val SILENCE_THRESHOLD = 1000 // ~3% of max; filters out mic hiss but catches speaking breaks
-            val MIN_RECORDING_MS = 2000L  // always record at least 2s before silence check
-            val MAX_RECORDING_MS = 15_000L // absolute max: 15s then auto-send
+            val MIN_RECORDING_MS = 500L   // shorter warmup — 500ms before silence-check begins
+            val MAX_RECORDING_MS = 30_000L // hard cap: 30s total recording, then auto-send regardless
             val POLL_MS = 500L
             val timer = java.util.Timer()
             silenceTimer = timer
@@ -388,8 +405,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     val amp = try { rec.maxAmplitude } catch (_: Exception) { -1 }
                     if (amp < 0) return // recorder stopped externally
                     recordingFor += POLL_MS
-                    if (recordingFor < MIN_RECORDING_MS) return // don't silence-check yet
-                    if (recordingFor >= MAX_RECORDING_MS) { // hard cap: auto-send after 15s
+                    if (recordingFor >= MAX_RECORDING_MS) { // hard cap
                         cancel()
                         handler.post {
                             reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
@@ -397,18 +413,25 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                         }
                         return
                     }
-                    if (amp < SILENCE_THRESHOLD) {
-                        silentFor += POLL_MS
-                        if (silentFor >= silenceMs) {
-                            cancel()
-                            handler.post {
-                                // Emit silence event so JS can auto-stop recording
-                                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                                    .emit("recorderSilence", null)
-                            }
+                    // Speech detection: amplitude above threshold
+                    // means the user is talking. Mark `hasUserSpoken`
+                    // so future silence checks know to fire.
+                    if (amp >= SILENCE_THRESHOLD) {
+                        hasUserSpoken = true
+                        silentFor = 0L // reset silence counter on speech
+                        return
+                    }
+                    if (!hasUserSpoken) return // still waiting for first speech
+                    if (recordingFor < MIN_RECORDING_MS) return
+                    // User has spoken, now measuring post-speech silence.
+                    silentFor += POLL_MS
+                    if (silentFor >= silenceMs) {
+                        cancel()
+                        handler.post {
+                            // Emit silence event so JS can auto-stop recording
+                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                .emit("recorderSilence", null)
                         }
-                    } else {
-                        silentFor = 0L
                     }
                 }
             }, POLL_MS, POLL_MS)

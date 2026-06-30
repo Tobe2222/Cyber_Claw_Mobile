@@ -823,6 +823,14 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
               if (base64.length < 100) {
                 addLogEntry('Wake Mode: base64 too small, treating as empty', 'error');
                 wakeWordBusyRef.current = false;
+                // v3.2.23 — empty audio means the user never spoke
+                // before the silence timer fired. In voice mode,
+                // start another recording turn so we keep listening
+                // indefinitely. Wake mode just sits idle.
+                if (voiceMode) {
+                  addVoiceLog('🎤 No speech, still listening...');
+                  startRecordingTurnRef.current?.().catch(() => {});
+                }
                 return;
               }
               setVoiceStatus('transcribing');
