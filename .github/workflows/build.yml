@@ -11,6 +11,13 @@ permissions:
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    # v3.2.25: explicit job timeout (30 min). The Android build
+    # typically takes 9-12 minutes; a 30-min ceiling gives the
+    # retry wrapper + Gradle + APK + upload ample headroom while
+    # also explicitly satisfying the GitHub Actions requirement.
+    # Without this, GitHub cancels jobs after the default 6-hour
+    # ceiling (failure mode Tobe hit on the first retry).
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -57,10 +64,10 @@ jobs:
       - name: Upload to GitHub Release
         # v3.2.25 — retry on transient HttpError. The v3.2.24 build
         # failed here with "other side closed" because the GitHub
-        # Releases CDN had a hiccup. Wrap the upload step in a
-        # retry so a transient network blip doesn't fail an
-        # otherwise-successful build (the APK is already built;
-        # only the upload failed).
+        # Releases CDN had a hiccup. The retry wraps the upload so
+        # a transient network blip doesn't fail an otherwise-
+        # successful build (the APK is already built; only the
+        # upload failed).
         uses: nick-fields/retry@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -68,12 +75,25 @@ jobs:
           max_attempts: 4
           retry_on: error
           retry_wait_seconds: 15
+          # v3.2.25: nick-fields/retry requires one of these.
+          # 5 minutes is more than enough for 4 attempts of
+          # upload with 15s waits (worst case ~5 min).
+          timeout_minutes: 5
           command: |
-            gh release upload "v${{ github.ref_name }}" CyberClaw-Android-3.2.24.apk \
-              --repo ${{ github.repository }} \
-              --clobber 2>/dev/null || \
-            gh release create "v${{ github.ref_name }}" \
-              --repo ${{ github.repository }} \
-              --title "v${{ github.ref_name }}" \
-              --generate-notes \
-              CyberClaw-Android-3.2.24.apk
+            # softprops/action-gh-release handles create-or-update
+            # natively, but we invoke it via the CLI for retry
+            # compatibility (CLI failures retry; nested action
+            # failures do not).
+            set -e
+            if gh release view "v${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              # Release exists — upload (replace) the asset.
+              gh release upload "v${{ github.ref_name }}" CyberClaw-Android-3.2.24.apk \
+                --repo "${{ github.repository }}" --clobber
+            else
+              # Release doesn't exist yet — create it.
+              gh release create "v${{ github.ref_name }}" \
+                --repo "${{ github.repository }}" \
+                --title "v${{ github.ref_name }}" \
+                --generate-notes \
+                CyberClaw-Android-3.2.24.apk
+            fi
