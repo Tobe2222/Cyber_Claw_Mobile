@@ -137,6 +137,10 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // handler can re-enter the multi-turn loop without
   // going through the wake-word matcher again.
   const startRecordingTurnRef = useRef<(() => Promise<void>) | null>(null);
+  // v3.2.20 — transcribing-state timeout. Set when audio
+  // is sent, cleared when a chat/audio_response event arrives
+  // (or when voice mode exits).
+  const transcribingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'listening' : 'listening');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
@@ -353,6 +357,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       addVoiceLog(`🔊 cached play failed: ${e?.message}`);
       finish('error');
     }
+  }, []);
+
+  // v3.2.20 — clear the transcribing-timeout on unmount so a
+  // stale timer can't fire after the user has already left
+  // voice mode.
+  useEffect(() => {
+    return () => {
+      if (transcribingTimeoutRef.current) {
+        clearTimeout(transcribingTimeoutRef.current);
+        transcribingTimeoutRef.current = null;
+      }
+    };
   }, []);
 
   // Apply Wake Mode visual style to the WebView. We do this once on
@@ -814,6 +830,27 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
               addLogEntry('Wake Mode: audio sent for transcription', 'sent');
               addVoiceLog('📏 Sent, waiting...');
 
+              // v3.2.20 — transcribing timeout. If the desktop
+              // doesn't respond within 30s (network stall, STT
+              // hang, LLM outage, etc), give up and either start
+              // a new recording turn (voice mode loop) or close
+              // voice mode (no point staying). This prevents the
+              // user from being permanently stuck on "Transcribing..."
+              // when the desktop pipeline is jammed. Tobe reported
+              // this exact symptom in v3.2.19.
+              transcribingTimeoutRef.current = setTimeout(() => {
+                if (wakeWordBusyRef.current) {
+                  addLogEntry('⏰ Transcribing timeout (30s) — no response from desktop', 'error');
+                  addVoiceLog('⏰ No response, retrying...');
+                  wakeWordBusyRef.current = false;
+                  if (voiceMode) {
+                    // Start a new recording turn so the loop
+                    // continues. The user can keep talking.
+                    startRecordingTurnRef.current?.().catch(() => {});
+                  }
+                }
+              }, 30000);
+
               // v3.2.17 — voice-mode exit-phrase check.
               // After sending, watch the next incoming chat
               // message from the desktop; if its userText
@@ -849,17 +886,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     startRecordingTurnRef.current = startRecordingTurn;
   }, [startRecordingTurn]);
 
-  // v3.2.17 — listen for the next userText chat from the
-  // desktop and check it against exit phrases. Resolves as
-  // soon as either an exit phrase matches OR a 6s window
-  // elapses. Resolves with the matched phrase or null.
+  // v3.2.20 — listen for the next userText chat from the
+  // desktop and check it against the single configured exit
+  // phrase. Resolves as soon as either the phrase matches
+  // OR a 6s window elapses. Returns the matched phrase or
+  // null.
   const pollForExitPhrase = useCallback(async (): Promise<string | null> => {
+    let phrase = '';
     try {
       const settings = await loadVoiceSettings();
-      if (!settings.exitPhrases || settings.exitPhrases.length === 0) return null;
-    } catch (_) {
-      return null;
-    }
+      phrase = settings.exitPhrase;
+    } catch (_) {}
+    if (!phrase) return null;
     return new Promise<string | null>((resolve) => {
       const deadline = setTimeout(() => {
         syncClient.off?.('chat', onChat);
@@ -868,25 +906,25 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       const onChat = (m: any) => {
         if (!m?.isUser) return;
         const text = m.text || '';
-        const phrases = (async () => {
-          try { return (await loadVoiceSettings()).exitPhrases; } catch (_) { return []; }
-        })();
-        phrases.then((p) => {
-          const matched = matchExitPhrase(text, p);
-          if (matched) {
-            clearTimeout(deadline);
-            syncClient.off?.('chat', onChat);
-            addLogEntry(`👋 Exit phrase matched: "${matched}"`, 'info');
-            addVoiceLog(`👋 Exit phrase "${matched}" → closing`);
-            // Voice mode only — close back to home. Wake
-            // mode stays in wake listening.
-            if (voiceMode) {
-              setVoiceStatus('listening');
-              setTimeout(() => exitRef.current(), 400);
+        // Re-read fresh in case the user changed the phrase
+        // mid-poll.
+        (async () => {
+          try {
+            const s = await loadVoiceSettings();
+            const matched = matchExitPhrase(text, [s.exitPhrase].filter(Boolean));
+            if (matched) {
+              clearTimeout(deadline);
+              syncClient.off?.('chat', onChat);
+              addLogEntry(`👋 Exit phrase matched: "${matched}"`, 'info');
+              addVoiceLog(`👋 Exit phrase "${matched}" → closing`);
+              if (voiceMode) {
+                setVoiceStatus('listening');
+                setTimeout(() => exitRef.current(), 400);
+              }
+              resolve(matched);
             }
-            resolve(matched);
-          }
-        });
+          } catch (_) {}
+        })();
       };
       syncClient.on('chat', onChat);
     });
@@ -907,6 +945,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   useEffect(() => {
     const onChat = (msg: any) => {
       if (msg.isUser) return;
+      // v3.2.20 — clear the transcribing timeout since we
+      // got a response (the desktop pipeline is alive).
+      if (transcribingTimeoutRef.current) {
+        clearTimeout(transcribingTimeoutRef.current);
+        transcribingTimeoutRef.current = null;
+      }
       // Treat any non-user text as a wake-mode response
       addLogEntry(`💬 Wake Mode response: "${msg.text?.substring(0, 60)}..."`, 'received');
       addVoiceLog(`🔊 "${msg.text?.substring(0, 40)}..."`);
@@ -915,6 +959,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     const onAudioResponse = (msg: any) => {
       // Desktop sends synthesized audio. Wake Mode just lets it play.
       addLogEntry('🔊 Wake Mode: audio response from desktop', 'info');
+      // v3.2.20 — clear the transcribing timeout since we
+      // got a response.
+      if (transcribingTimeoutRef.current) {
+        clearTimeout(transcribingTimeoutRef.current);
+        transcribingTimeoutRef.current = null;
+      }
       const afterPlayback = async () => {
         if (voiceMode) {
           // Multi-turn loop: immediately start another

@@ -96,8 +96,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   // v3.2.17 — multi-turn voice loop settings.
   const [voiceSilenceMs, setVoiceSilenceMs] = useState(5000);
-  const [voiceExitPhrases, setVoiceExitPhrases] = useState<string[]>(['thanks', 'goodbye', "that's all", 'stop']);
-  const [voiceExitPhrasesSavedAt, setVoiceExitPhrasesSavedAt] = useState<number | null>(null);
+  // v3.2.20 — single exit phrase (was array). Default
+  // 'thanks' matches the most common natural exit phrase
+  // Tobe uses after a command. Empty string disables.
+  const [voiceExitPhrase, setVoiceExitPhrase] = useState('thanks');
+  const [voiceExitPhraseSavedAt, setVoiceExitPhraseSavedAt] = useState<number | null>(null);
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [audioSettingsSavedAt, setAudioSettingsSavedAt] = useState<number | null>(null);
 
@@ -255,12 +258,22 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         if (!isNaN(n)) setVoiceSilenceMs(Math.max(2000, Math.min(10000, n)));
       }
     });
-    AsyncStorage.getItem('cyberclaw-voice-exit-phrases').then(v => {
-      if (v) {
-        try {
-          const parsed = JSON.parse(v);
-          if (Array.isArray(parsed)) setVoiceExitPhrases(parsed.filter((p) => typeof p === 'string'));
-        } catch (_) {}
+    AsyncStorage.getItem('cyberclaw-voice-exit-phrase').then(v => {
+      // v3.2.20 — single phrase. Also migrate from the old
+      // array format if present (first phrase wins).
+      if (v !== null) {
+        setVoiceExitPhrase(v);
+      } else {
+        AsyncStorage.getItem('cyberclaw-voice-exit-phrases').then(old => {
+          if (old) {
+            try {
+              const arr = JSON.parse(old);
+              if (Array.isArray(arr) && arr.length > 0 && typeof arr[0] === 'string') {
+                setVoiceExitPhrase(arr[0]);
+              }
+            } catch (_) {}
+          }
+        });
       }
     });
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
@@ -841,14 +854,18 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
         )}
 
-        {/* v3.2.17 — voice-mode loop controls. After wake, voice
-            mode stays open in a multi-turn loop. Two dials:
-              1. Continuous silence that closes a turn (2-10s,
-                 default 5).
-              2. Optional exit phrases that close voice mode
-                 entirely when heard in the transcription. */}
+        {/* v3.2.20 — voice-mode loop controls simplified.
+            After wake, voice mode stays open in a multi-turn
+            loop. Two ways to close it:
+              1. Continuous silence that ends a turn (2-10s,
+                 default 5s).
+              2. One user-configurable exit phrase, optionally
+                 trained with audio samples. Matched against
+                 the transcription (text fallback) or the live
+                 audio stream (when trained). Empty phrase =
+                 feature disabled. */}
         <SubTitle>Voice mode loop</SubTitle>
-        <Hint>When voice mode is open, the conversation loops after each response. Two ways to close it:</Hint>
+        <Hint>Voice mode stays open in a multi-turn loop. Two ways to close it:</Hint>
         <Label>Silence to end turn: {voiceSilenceMs / 1000}s</Label>
         <View style={styles.optionRow}>
           {[2, 3, 5, 7, 10].map(s => (
@@ -858,55 +875,37 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               label={`${s}s`}
               onPress={() => {
                 setVoiceSilenceMs(s * 1000);
-                AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000)).then(() => setVoiceExitPhrasesSavedAt(Date.now()));
+                AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
               }}
             />
           ))}
         </View>
-        <Hint style={{ marginTop: 8 }}>Optional exit phrases (close voice mode when heard):</Hint>
-        <View style={{ marginTop: 4 }}>
-          {(['thanks', 'thank you', 'goodbye', 'stop', "that's all", 'never mind'] as const).map((preset) => {
-            const on = voiceExitPhrases.includes(preset);
-            return (
-              <TouchableOpacity
-                key={preset}
-                onPress={() => {
-                  const next = on
-                    ? voiceExitPhrases.filter((p) => p !== preset)
-                    : [...voiceExitPhrases, preset].slice(0, 8);
-                  setVoiceExitPhrases(next);
-                  AsyncStorage.setItem('cyberclaw-voice-exit-phrases', JSON.stringify(next)).then(() => setVoiceExitPhrasesSavedAt(Date.now()));
-                }}
-                style={[styles.optionBtn, on && styles.optionBtnActive, { marginVertical: 2 }]}
-              >
-                <Text style={[styles.optionBtnText, on && styles.optionBtnTextActive]}>{on ? '✓ ' : ''}{preset}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-        <Hint style={{ marginTop: 4 }}>Add a custom phrase (1–4 words):</Hint>
+        <Hint style={{ marginTop: 8 }}>Exit phrase (single phrase, 1–4 words):</Hint>
         <TextInput
           style={styles.input}
-          value=""
-          placeholder="e.g. bye for now"
+          value={voiceExitPhrase}
+          onChangeText={(v) => {
+            setVoiceExitPhrase(v);
+            // Auto-save on each keystroke (debounced via
+            // onBlur below).
+          }}
+          onBlur={() => {
+            const trimmed = voiceExitPhrase.trim().toLowerCase();
+            const words = trimmed.split(/\s+/).filter(Boolean);
+            const final = words.length > 0 && words.length <= 4 ? trimmed : '';
+            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', final).then(() => setVoiceExitPhraseSavedAt(Date.now()));
+          }}
+          placeholder="thanks"
           placeholderTextColor="#555"
           returnKeyType="done"
-          onSubmitEditing={(e) => {
-            const v = e.nativeEvent.text.trim().toLowerCase();
-            if (!v) return;
-            if (v.split(/\s+/).length > 4) return;
-            if (voiceExitPhrases.includes(v)) return;
-            if (voiceExitPhrases.length >= 8) return;
-            const next = [...voiceExitPhrases, v];
-            setVoiceExitPhrases(next);
-            AsyncStorage.setItem('cyberclaw-voice-exit-phrases', JSON.stringify(next)).then(() => setVoiceExitPhrasesSavedAt(Date.now()));
-          }}
+          maxLength={40}
+          autoCapitalize="none"
         />
-        {voiceExitPhrases.length === 0 && (
-          <Hint>No exit phrases enabled — voice mode will only close on silence or X.</Hint>
+        {voiceExitPhraseSavedAt && (
+          <Text style={styles.savedHint}>✅ Saved at {new Date(voiceExitPhraseSavedAt).toLocaleTimeString()}</Text>
         )}
-        {voiceExitPhrasesSavedAt && (
-          <Text style={styles.savedHint}>✅ Saved at {new Date(voiceExitPhrasesSavedAt).toLocaleTimeString()}</Text>
+        {voiceExitPhrase.trim() === '' && (
+          <Hint>Exit phrase disabled — voice mode will only close on silence or X.</Hint>
         )}
 
         <SubTitle>Audio buffer</SubTitle>
