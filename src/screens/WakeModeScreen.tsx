@@ -383,10 +383,19 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // injected on every agents_list broadcast, but the wake mode
   // WebView is a separate instance with an empty companions array.
   // Without this, the companion is missing from wake mode.
-  // We do this once on mount and once after a short delay (in case
-  // the WebView wasn't ready when the first inject fired).
+  //
+  // v3.2.18: the wake-mode WebView is now THE WebView for voice
+  // mode (Wake Mode is gone). It mounts on every voice-mode
+  // entry. agents can be empty when WakeModeScreen first mounts
+  // (App.tsx loads them async from AsyncStorage), so we retry
+  // injectAgents every 200ms for up to 5s until agents arrive.
+  // If agents never arrive (e.g. disconnected from desktop),
+  // the screen still works — it just has no companion sprite.
   useEffect(() => {
+    let cancelled = false;
     const injectAgents = () => {
+      if (cancelled) return;
+      if (agents.length === 0) return;
       try {
         const slim = agents.map((a) => ({
           id: a.id, name: a.name, sprite: a.sprite || null, scale: a.scale || null,
@@ -396,11 +405,22 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         );
       } catch (_) {}
     };
-    if (agents.length > 0) {
+    injectAgents();
+    const t1 = setTimeout(injectAgents, 200);
+    const t2 = setTimeout(injectAgents, 500);
+    const t3 = setTimeout(injectAgents, 1500);
+    // Long retry loop: every 1s for 5s, in case agents
+    // arrives late (cold launch from cold-boot).
+    let attempts = 0;
+    const retry = setInterval(() => {
+      if (cancelled || ++attempts > 5) return;
       injectAgents();
-      const t = setTimeout(injectAgents, 300);
-      return () => clearTimeout(t);
-    }
+    }, 1000);
+    return () => {
+      cancelled = true;
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
+      clearInterval(retry);
+    };
   }, [agents, webViewKey]);
 
   // Keep screen on while in Wake Mode

@@ -70,14 +70,16 @@ export default function App(): React.JSX.Element {
     return () => { cancelled = true; };
   }, []);
 
-  const [screen, setScreen] = useState<'home' | 'settings' | 'wake-mode' | 'voice-mode'>('home');
+  // v3.2.18: Wake Mode is gone. Only Home, Settings, and
+  // Voice Mode exist. The wake word opens Voice Mode directly.
+  const [screen, setScreen] = useState<'home' | 'settings' | 'voice-mode'>('home');
   // v3.1.83: ref so the AppState=active listener (re-added below)
   // can read the CURRENT screen value, not the value captured at
   // useEffect mount time. Without this, the listener would always
   // see 'home' (the initial state) and fire even when the user is
   // already in wake-mode or settings, which is what caused the
   // ping-pong in v3.1.82.
-  const screenRef = useRef<'home' | 'settings' | 'wake-mode' | 'voice-mode'>('home');
+  const screenRef = useRef<'home' | 'settings' | 'voice-mode'>('home');
   useEffect(() => { screenRef.current = screen; }, [screen]);
   const [companionId, setCompanionId] = useState('boar');
   // v3.1.59: lift agents list to App.tsx so WakeModeScreen can
@@ -104,7 +106,14 @@ export default function App(): React.JSX.Element {
       // setScreen state in flight), the next mount or AppState=active
       // transition will pick it up and switch to WakeModeScreen.
       AsyncStorage.setItem('cyberclaw-wake-pending', '1').catch(() => {});
-      setScreen('wake-mode');
+      // v3.2.18: Wake Mode is gone. The wake word now opens
+      // Voice Mode directly. Voice Mode starts a recording
+      // turn on mount (WakeModeScreen's voice-mode useEffect,
+      // v3.2.17), so the user doesn't need to say the wake
+      // word a second time to begin speaking. The two-phase
+      // wake (wake → greet → wait for second wake → record)
+      // pattern is collapsed into one phase.
+      setScreen('voice-mode');
     };
     const clearWakePending = () => {
       AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
@@ -316,7 +325,6 @@ export default function App(): React.JSX.Element {
           {screen === 'home' && (
             <HomeScreen
               onOpenSettings={() => setScreen('settings')}
-              onOpenWakeMode={() => setScreen('wake-mode')}
               onOpenVoiceMode={() => setScreen('voice-mode')}
               // v3.1.52: HomeScreen reports the currently active chat
               // companion back to App.tsx so WakeModeScreen can show
@@ -337,52 +345,16 @@ export default function App(): React.JSX.Element {
           {screen === 'settings' && (
             <SettingsScreen onBack={() => setScreen('home')} />
           )}
-          {screen === 'wake-mode' && (
-            <WakeModeScreen
-              companionId={companionId}
-              agents={agents}
-              onExit={() => {
-                AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
-                // v3.1.83: also clear the native wake-pending
-                // flag defensively. The flag is normally
-                // cleared by MainActivity.emitWakeOpenedWithRetry
-                // on success or by the wake listener path, but
-                // if the user exits Wake Mode before either
-                // path runs (e.g. tapped X during the greeting
-                // phase before the listener came up), the flag
-                // would persist. Without this clear, a future
-                // checkNativePending (on the next mount after a
-                // restart) would re-trigger Wake Mode.
-                WakeWordModule?.clearWakePending?.().catch(() => {});
-                setScreen('home');
-              }}
-              // v3.1.67: when the wake word matches, update
-              // the active companion so the wake mode shows
-              // the right one. Each companion has its own
-              // wake word now.
-              // v3.2.15: also auto-switch into voice mode
-              // when the wake word matches, so the user
-              // doesn't have to manually open voice mode
-              // after saying the wake word. The greeting
-              // plays first; once it finishes, the user is
-              // already in voice mode ready to speak a
-              // command. (The previous behavior kept them
-              // in wake mode — they'd see "Listening for
-              // wake word..." indefinitely and have to back
-              // out and tap Voice Mode to actually use it.)
-              onWakeMatch={(id) => {
-                console.log(`[App] onWakeMatch called id=${id} → setScreen(voice-mode)`);
-                if (id && id !== companionId) setCompanionId(id);
-                setScreen('voice-mode');
-              }}
-            />
-          )}
           {screen === 'voice-mode' && (
             <WakeModeScreen
               companionId={companionId}
               agents={agents}
               voiceMode
-              onExit={() => setScreen('home')}
+              onExit={() => {
+                AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
+                WakeWordModule?.clearWakePending?.().catch(() => {});
+                setScreen('home');
+              }}
             />
           )}
         </SafeAreaView>

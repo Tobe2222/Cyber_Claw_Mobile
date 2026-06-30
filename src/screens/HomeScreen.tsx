@@ -266,7 +266,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenWakeMode?: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -612,8 +612,10 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
       // both watch it).
       try { await AsyncStorage.removeItem('cyberclaw-wake-pending'); } catch (_) {}
       wakeWordBusyRef.current = false;
-      addLogEntry('🗣️ Wake Mode: handing off to dedicated WakeModeScreen', 'info');
-      onOpenWakeMode?.();
+      addLogEntry('🎙️ Voice Mode: handing off to dedicated VoiceModeScreen', 'info');
+      // v3.2.18: Wake Mode is gone. Voice Mode is the only
+      // fullscreen — it does the wake-listening + recording.
+      onOpenVoiceMode?.();
       return;
     } else {
       // Focus source (manual mic tap) — old behaviour
@@ -805,26 +807,27 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
         // functionality (VAD + recorder + auto-send). Tobe:
         // "wake mode looks good, just copy the style of wake
         // mode. It should look exactly the same."
-        if (isWakeWordModeRef.current) {
-          addLogEntry('Ignoring fullscreen msg - Wake Mode active', 'debug');
-        } else {
-          addLogEntry(`🎙️ Voice Mode: opening dedicated screen`, 'debug');
-          onOpenVoiceMode?.();
-        }
+        // v3.2.18: Wake Mode is gone. The arena's "Voice Mode" button
+        // is the only fullscreen entry point. The `wakeword`
+        // message type from the arena is also routed to voice
+        // mode (kept for backwards compatibility with any saved
+        // arena state).
+        addLogEntry(`🎙️ Voice Mode: opening dedicated screen`, 'debug');
+        onOpenVoiceMode?.();
       }
       if (msg.type === 'wakeword') {
-        // User clicked Wake Mode button in arena
-        addLogEntry(`🗣️ Wake Mode toggle from arena`, 'debug');
-        toggleWakeWordMode();
+        // v3.2.18: legacy Wake Mode arena button. Route to
+        // Voice Mode instead.
+        addLogEntry(`🗣️ Wake Mode toggle from arena → Voice Mode`, 'debug');
+        onOpenVoiceMode?.();
       }
       if (msg.type === 'exitFullscreen') {
-        if (isWakeWordModeRef.current) {
-          // X button in Wake Mode - exit Wake Mode properly
-          addLogEntry('Exiting Wake Mode via X button', 'debug');
-          toggleWakeWordMode();
-        } else {
-          closeFullscreen();
-        }
+        // X button in Voice Mode — Voice Mode owns its own
+        // onExit handler. The arena's exitFullscreen is a no-op
+        // for the dedicated screen; the wake module close button
+        // goes through WakeModeScreen.onExit directly.
+        addLogEntry('Exiting fullscreen via X button', 'debug');
+        onOpenVoiceMode && closeFullscreen();
       }
       if (msg.type === 'saveBg') {
         AsyncStorage.setItem('cyberclaw-arena-bg', msg.value);
@@ -836,21 +839,20 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
   }, [closeFullscreen]);
 
   // Handle Android back button in fullscreen mode
+  // v3.2.18: Wake Mode is gone. Back in Voice Mode goes
+  // through the WakeModeScreen's own back handler. Home
+  // Screen's fullscreen exit closes the in-home fullscreen
+  // overlay (legacy, kept for parity).
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (fullscreen) {
-        if (isWakeWordModeRef.current) {
-          // Back in Wake Mode - toggle off properly (cleans up + closes fullscreen)
-          toggleWakeWordMode();
-        } else {
-          closeFullscreen();
-        }
+        closeFullscreen();
         return true;
       }
       return false;
     });
     return () => backHandler.remove();
-  }, [fullscreen, closeFullscreen, toggleWakeWordMode]);
+  }, [fullscreen, closeFullscreen]);
 
   // Wake word → enter voice mode with lock screen
   // Wake word → hand off to the dedicated WakeModeScreen
@@ -908,12 +910,11 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
     try { await AsyncStorage.setItem('cyberclaw-wake-pending', '1'); } catch (_) {}
     setTimeout(() => { AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {}); }, 30000);
 
-    // Route to the dedicated WakeModeScreen via the App-level screen
-    // switch. No more in-home fullscreen toggle.
-    try { onOpenWakeMode?.(); } catch (_) {}
+    // Route to Voice Mode (the new single fullscreen entry).
+    try { onOpenVoiceMode?.(); } catch (_) {}
 
     // wakeWordBusyRef is cleared in WakeModeScreen's onExit handler.
-  }, [onOpenWakeMode]);
+  }, [onOpenVoiceMode]);
 
   // Check for a pending wake event from a previous mount or state wipe.
   // The wake-event handler persists a flag to AsyncStorage, and we read
@@ -930,20 +931,13 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
         if (consumed) return;
         if (pending === '1') {
           consumed = true;
-          addLogEntry('🗣️ Pending wake event found — re-entering Wake Mode', 'info');
+          addLogEntry('🎙️ Pending wake event found — entering Voice Mode', 'info');
           AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
-          // v3.1.26: route straight to the dedicated WakeModeScreen
-          // via onOpenWakeMode, instead of replaying handleWakeWord.
-          // handleWakeWord still has the in-home fullscreen path
-          // baggage (setIsWakeWordMode + setFullscreen(false) → onOpenWakeMode),
-          // and the per-render watcher used to depend on those calls
-          // to do its job. With the watcher gone, replaying
-          // handleWakeWord would briefly toggle the in-home state
-          // before the App-level screen switch could unmount this
-          // component. Skip the in-home path entirely.
-          // Small delay so any activity re-configuration settles first.
+          // v3.2.18: Wake Mode is gone. Voice Mode is the
+          // only destination. Small delay so any activity
+          // re-configuration settles first.
           setTimeout(() => {
-            try { onOpenWakeMode?.(); } catch (_) {}
+            try { onOpenVoiceMode?.(); } catch (_) {}
           }, 300);
         }
       }).catch(() => {});
@@ -2097,34 +2091,16 @@ export default function HomeScreen({ onOpenSettings, onOpenWakeMode, onOpenVoice
 
   // Toggle Wake Mode - v3.1.12: delegate to App-level navigation so the
   // wake mode UI always renders in the dedicated WakeModeScreen (not as
-  // a conditional fullscreen render of HomeScreen, which was racy).
+  // v3.2.18: Wake Mode is gone. Voice Mode is the only
+  // fullscreen. The legacy `toggleWakeWordMode` is kept as
+  // a no-op shim for any code paths that still call it,
+  // but it just routes to Voice Mode.
   const toggleWakeWordMode = useCallback(async () => {
-    if (!isWakeWordModeRef.current) {
-      addLogEntry('🗣️ Wake Mode: opening dedicated screen', 'info');
-      if (onOpenWakeMode) {
-        onOpenWakeMode();
-      } else {
-        // Fallback: keep the old behaviour in case onOpenWakeMode is
-        // missing (e.g. tests or older App.tsx).
-        setFullscreen(true);
-        fullscreenRef.current = true;
-        setVoiceStatus('listening');
-        AppControl?.keepScreenOn?.(true);
-        const js = `
-          document.getElementById('ui').classList.add('fullscreen');
-          document.getElementById('c').classList.add('fullscreen');
-          true;
-        `;
-        webViewRef.current?.injectJavaScript(js);
-        addLogEntry('🗣️ Wake Mode: ACTIVE (fallback)', 'info');
-        isWakeWordModeRef.current = true;
-        setIsWakeWordMode(true);
-      }
+    addLogEntry('🗣️ Wake Mode toggle (legacy) → Voice Mode', 'info');
+    if (onOpenVoiceMode) {
+      onOpenVoiceMode();
     }
-    // Exiting Wake Mode from HomeScreen is no longer supported — the
-    // WakeModeScreen has its own X / back handler. The exit logic in
-    // WakeModeScreen tears down the listener + recorder.
-  }, [onOpenWakeMode]);
+  }, [onOpenVoiceMode]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
@@ -2475,9 +2451,6 @@ useEffect(() => {
           <View style={styles.headerTitleContainer}>
             <Text style={styles.headerTitle}>🐾 CyberClaw</Text>
             <Text style={styles.versionTag}>v{APP_VERSION}</Text>
-            {isWakeWordMode && (
-              <Text style={styles.wakeModeBadge}>🗣️ Wake Mode</Text>
-            )}
           </View>
           <View style={styles.headerRight}>
             <View style={[styles.statusDot, isConnected ? styles.dotOnline : connState === 'lost' ? styles.dotLost : styles.dotOffline]} />
