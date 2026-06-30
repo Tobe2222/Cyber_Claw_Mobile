@@ -856,6 +856,21 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.trainBtnSub}>Record yourself 6 times — desktop trains a custom neural network wake word</Text>
         </TouchableOpacity>
 
+        {/* v3.2.25: exit-phrase trainer. Same UI shape as the
+            wake training button above (dashed-border trainer
+            card) so the two reads as a parallel pair — "wake
+            trainer" and "exit trainer" sit next to each other.
+            The TextInput for the actual phrase still lives in
+            Voice mode loop below so users can change the
+            phrase text without retraining. */}
+        <TouchableOpacity
+          style={styles.trainBtn}
+          onPress={() => setShowExitPhraseTrainer(true)}
+        >
+          <Text style={[styles.trainBtnText, { color: '#f7931a' }]}>🚪 Train exit phrase</Text>
+          <Text style={styles.trainBtnSub}>Record a short phrase 6 times — closes voice mode instantly when heard (v3.2.26 wires the runtime detector)</Text>
+        </TouchableOpacity>
+
 
         <SubTitle>Wake greeting</SubTitle>
         <Hint>Phrase spoken when the wake word is detected. Auto-saves as you type.</Hint>
@@ -925,20 +940,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         {voiceExitPhrase.trim() === '' && (
           <Hint>Exit phrase disabled — voice mode will only close on silence or X.</Hint>
         )}
-        <TouchableOpacity
-          style={[styles.optionBtn, { marginTop: 12, backgroundColor: '#1a1a22', paddingVertical: 12 }]}
-          onPress={() => setShowExitPhraseTrainer(true)}
-        >
-          <Text style={[styles.optionBtnText, { color: '#f7931a' }]}>
-            🎤 Train exit phrase (record 6 samples)
-          </Text>
-        </TouchableOpacity>
-        <Hint>
-          Records 6 samples of your chosen phrase locally so v3.2.26 can
-          detect it on the audio stream (instant exit — no STT wait).
-          Currently the text-fallback matcher uses the phrase above for
-          detection.
-        </Hint>
 
         <SubTitle>Audio buffer</SubTitle>
         <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>

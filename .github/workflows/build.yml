@@ -59,7 +59,7 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
-        run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-3.2.25.apk
+        run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-3.2.26.apk
 
       - name: Upload to GitHub Release
         # v3.2.25 — retry on transient HttpError. The v3.2.24 build
@@ -87,7 +87,7 @@ jobs:
             set -e
             if gh release view "v${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
               # Release exists — upload (replace) the asset.
-              gh release upload "v${{ github.ref_name }}" CyberClaw-Android-3.2.25.apk \
+              gh release upload "v${{ github.ref_name }}" CyberClaw-Android-3.2.26.apk \
                 --repo "${{ github.repository }}" --clobber
             else
               # Release doesn't exist yet — create it.
@@ -95,5 +95,5 @@ jobs:
                 --repo "${{ github.repository }}" \
                 --title "v${{ github.ref_name }}" \
                 --generate-notes \
-                CyberClaw-Android-3.2.25.apk
+                CyberClaw-Android-3.2.26.apk
             fi
