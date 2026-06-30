@@ -25,7 +25,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # v3.2.25: bump to Node 24. Node 20 was deprecated
+          # 2025-09-19 and runner defaults to 24 now. Stayed on
+          # 22 for compatibility with react-native 0.74 dependencies.
+          node-version: '24'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -52,7 +55,25 @@ jobs:
         run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-3.2.24.apk
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        # v3.2.25 — retry on transient HttpError. The v3.2.24 build
+        # failed here with "other side closed" because the GitHub
+        # Releases CDN had a hiccup. Wrap the upload step in a
+        # retry so a transient network blip doesn't fail an
+        # otherwise-successful build (the APK is already built;
+        # only the upload failed).
+        uses: nick-fields/retry@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: CyberClaw-Android-3.2.24.apk
-          draft: false
+          max_attempts: 4
+          retry_on: error
+          retry_wait_seconds: 15
+          command: |
+            gh release upload "v${{ github.ref_name }}" CyberClaw-Android-3.2.24.apk \
+              --repo ${{ github.repository }} \
+              --clobber 2>/dev/null || \
+            gh release create "v${{ github.ref_name }}" \
+              --repo ${{ github.repository }} \
+              --title "v${{ github.ref_name }}" \
+              --generate-notes \
+              CyberClaw-Android-3.2.24.apk
