@@ -30,6 +30,7 @@ import syncClient from '../services/SyncClient';
 import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/AudioBuffer';
 
 import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
+import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
 import {
   getPermissions,
   setPermission,
@@ -108,6 +109,10 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // wake training + tester were removed in v3.2.2 — the
   // openWakeWord pipeline supersedes them.
   const [showOwwTrainer, setShowOwwTrainer] = useState(false);
+  // v3.2.25: exit-phrase trainer modal. Recording 6 samples
+  // persists locally; the runtime DTW detector against these
+  // samples is wired in v3.2.26.
+  const [showExitPhraseTrainer, setShowExitPhraseTrainer] = useState(false);
   // v3.2.1: map of agentId -> {phrase, path, savedAt} for
   // companions that have a saved custom wake model. Used
   // to show "✓ trained" badges in the companion picker.
@@ -187,6 +192,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (showOwwTrainer) { setShowOwwTrainer(false); return true; }
+      if (showExitPhraseTrainer) { setShowExitPhraseTrainer(false); return true; }
       onBack();
       return true;
     });
@@ -600,6 +606,18 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     );
   }
 
+  // v3.2.25 — exit-phrase trainer. Saves 6 audio samples +
+  // extracted features to AsyncStorage. Runtime detector
+  // against these samples is v3.2.26.
+  if (showExitPhraseTrainer) {
+    return (
+      <ExitPhraseTrainer
+        onCancel={() => setShowExitPhraseTrainer(false)}
+        onComplete={() => setShowExitPhraseTrainer(false)}
+      />
+    );
+  }
+
   // ── Main settings render ─────────────────────────────────────
   return (
     <>
@@ -907,6 +925,20 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         {voiceExitPhrase.trim() === '' && (
           <Hint>Exit phrase disabled — voice mode will only close on silence or X.</Hint>
         )}
+        <TouchableOpacity
+          style={[styles.optionBtn, { marginTop: 12, backgroundColor: '#1a1a22', paddingVertical: 12 }]}
+          onPress={() => setShowExitPhraseTrainer(true)}
+        >
+          <Text style={[styles.optionBtnText, { color: '#f7931a' }]}>
+            🎤 Train exit phrase (record 6 samples)
+          </Text>
+        </TouchableOpacity>
+        <Hint>
+          Records 6 samples of your chosen phrase locally so v3.2.26 can
+          detect it on the audio stream (instant exit — no STT wait).
+          Currently the text-fallback matcher uses the phrase above for
+          detection.
+        </Hint>
 
         <SubTitle>Audio buffer</SubTitle>
         <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>

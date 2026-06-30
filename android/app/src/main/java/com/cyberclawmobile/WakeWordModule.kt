@@ -413,6 +413,10 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                         }
                         return
                     }
+                    // v3.2.25 — reserved for future exit-phrase
+                    // detection. The polling loop above already
+                    // captures amplitude; future work can add a
+                    // real-time envelope event here.
                     // Speech detection: amplitude above threshold
                     // means the user is talking. Mark `hasUserSpoken`
                     // so future silence checks know to fire.

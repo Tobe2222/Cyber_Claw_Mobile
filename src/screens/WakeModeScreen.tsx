@@ -982,6 +982,33 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         clearTimeout(transcribingTimeoutRef.current);
         transcribingTimeoutRef.current = null;
       }
+      // v3.2.25 — gibberish filter. If the LLM response is
+      // suspiciously short AND has no terminal punctuation,
+      // treat it as a nonsense reply and close voice mode
+      // instead of looping the user into another recording
+      // turn. Tobe's concern: an empty audio / unclear
+      // speech produces a terse LLM response, and the loop
+      // continues with no actual user input — the user
+      // gets trapped. Heuristic: <4 words AND no '?' or '.'
+      // AND no '!' → gibberish.
+      if (voiceMode && msg.text) {
+        const t = String(msg.text).trim();
+        const wordCount = t.split(/\s+/).filter(Boolean).length;
+        const hasPunctuation = /[.!?]/.test(t);
+        if (wordCount < 4 && !hasPunctuation) {
+          addLogEntry(
+            `👋 Voice Mode: response looks like gibberish ("${t.substring(0, 40)}...") — exiting`,
+            'info',
+          );
+          addVoiceLog(`👋 LLM gibberish → closing voice mode`);
+          setTimeout(() => exitRef.current?.(), 400);
+          return;
+        }
+      }
+      if (transcribingTimeoutRef.current) {
+        clearTimeout(transcribingTimeoutRef.current);
+        transcribingTimeoutRef.current = null;
+      }
       // v3.2.21 — actually PLAY the audio. v3.2.17 was setting
       // up afterPlayback listeners but never invoking
       // startPlayer. The HomeScreen onAudioResponse handler has
