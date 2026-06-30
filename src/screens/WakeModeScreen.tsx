@@ -163,8 +163,17 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // are all visible at once. Previously only the last 3 were
   // shown, which hid the Speaking call and made it impossible
   // to tell whether speak() was reached at all.
+  // v3.2.24 — dedupe consecutive identical entries. The
+  // voice log used to compound the same message every time
+  // the desktop broadcast a chat_message (Tobe saw 5 copies
+  // of the same joke in a row). Now we drop an entry if it
+  // duplicates the previous one. Also cap at 6 entries so the
+  // overlay doesn't overflow on small phones.
   const addVoiceLog = useCallback((text: string) => {
-    setVoiceLogs(prev => [...prev, text].slice(-5));
+    setVoiceLogs(prev => {
+      const next = prev.length > 0 && prev[prev.length - 1] === text ? prev : [...prev, text];
+      return next.slice(-6);
+    });
   }, []);
 
   // Speak via native TTS (works even when AudioRecord is active).
@@ -1024,6 +1033,14 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // since the previous turn cleared it on send.
           // Recording continues until silence/exit-phrase
           // triggers the next send.
+          // v3.2.24 — reset voiceStatus to 'listening' so the
+          // overlay shows YOUR TURN (green). Previously the
+          // 'responding' status from onChat would persist
+          // through the next turn, showing "Responding..." when
+          // the user had already moved on. Fix: explicitly
+          // clear to 'listening' here, before kicking off the
+          // next recording turn.
+          setVoiceStatus('listening');
           addVoiceLog('🎤 Listening for next turn...');
           addLogEntry('🔁 Voice Mode: starting next recording turn', 'info');
           try {
@@ -1261,14 +1278,25 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
       {/* Voice status overlay (top) */}
       <View style={styles.voiceStatusOverlay} pointerEvents="none">
-        <Text style={styles.voiceStatusText}>
+        <Text style={[
+          styles.voiceStatusText,
+          // v3.2.24: YOUR TURN (green, big) when waiting
+          // for the user. Responding (orange) when AI is
+          // talking. Recording (red, big) when user is
+          // actively talking. The user must instantly see
+          // whether to talk or to wait.
+          voiceStatus === 'listening' && voiceMode ? styles.voiceStatusYourTurn :
+          voiceStatus === 'recording' ? styles.voiceStatusRecording :
+          voiceStatus === 'responding' ? styles.voiceStatusResponding :
+          null,
+        ]}>
           {voiceStatus === 'greeting' ? '🔊 Greeting... (say wake word to continue)' :
-           voiceStatus === 'listening' ? (voiceMode ? '🎧 Listening...' : '🎧 Listening for wake word...') :
+           voiceStatus === 'listening' ? (voiceMode ? '🎤 YOUR TURN' : '🎧 Listening for wake word...') :
            voiceStatus === 'recording' ? '🔴 Recording...' :
            voiceStatus === 'silence_countdown' ? '⏳ Sending...' :
            voiceStatus === 'transcribing' ? '📝 Transcribing...' :
            voiceStatus === 'responding' ? '💬 Responding...' :
-           voiceMode ? '🎧 Listening...' : '🎧 Listening for wake word...'}
+           voiceMode ? '🎤 YOUR TURN' : '🎧 Listening for wake word...'}
         </Text>
       </View>
 
@@ -1304,6 +1332,32 @@ const styles = StyleSheet.create({
     textShadowColor: '#000',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
+  },
+  // v3.2.24 — color-coded state styles. The default
+  // voiceStatusText is orange (the existing color); these
+  // three overrides cover the three most-common states
+  // where the user needs to know instantly whether to
+  // talk, wait, or watch.
+  voiceStatusYourTurn: {
+    // Green, big. THIS is the most important visual —
+    // the user is waiting too long, not realizing it's
+    // their turn.
+    color: '#10b981',
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  voiceStatusRecording: {
+    // Red, big. When the user is being recorded.
+    color: '#ef4444',
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  voiceStatusResponding: {
+    // Orange/yellow, normal size. AI is talking — just wait.
+    color: '#fbbf24',
+    fontSize: 16,
+    fontWeight: '600',
   },
   voiceLogOverlay: {
     position: 'absolute',
