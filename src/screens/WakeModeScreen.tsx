@@ -956,7 +956,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       addVoiceLog(`🔊 "${msg.text?.substring(0, 40)}..."`);
       setVoiceStatus('responding');
     };
-    const onAudioResponse = (msg: any) => {
+    const onAudioResponse = async (msg: any) => {
       // Desktop sends synthesized audio. Wake Mode just lets it play.
       addLogEntry('🔊 Wake Mode: audio response from desktop', 'info');
       // v3.2.20 — clear the transcribing timeout since we
@@ -964,6 +964,28 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       if (transcribingTimeoutRef.current) {
         clearTimeout(transcribingTimeoutRef.current);
         transcribingTimeoutRef.current = null;
+      }
+      // v3.2.21 — actually PLAY the audio. v3.2.17 was setting
+      // up afterPlayback listeners but never invoking
+      // startPlayer. The HomeScreen onAudioResponse handler has
+      // had the correct decode+write+play pattern since
+      // v3.1.91 — WakeModeScreen was missing it. Copy that
+      // pattern here: write base64 to a temp file, call
+      // WakeWordModule.startPlayer with the path.
+      if (msg.audioBase64) {
+        try {
+          const fs = require('react-native-fs');
+          const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
+          const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wakemode-response-${Date.now()}.${ext}`;
+          await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
+          addLogEntry(`🔊 Wake Mode: audio written to ${tmpPath.split('/').pop()}, calling startPlayer`, 'info');
+          await WakeWordModule?.startPlayer?.(tmpPath);
+          addLogEntry('🔊 Wake Mode: startPlayer resolved', 'info');
+        } catch (e: any) {
+          addLogEntry(`🔊 Wake Mode: startPlayer failed: ${e?.message}`, 'error');
+        }
+      } else {
+        addLogEntry('🔊 Wake Mode: no audioBase64 in response', 'debug');
       }
       const afterPlayback = async () => {
         if (voiceMode) {
