@@ -59,7 +59,7 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
-        run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-3.2.26.apk
+        run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-3.2.27.apk
 
       - name: Upload to GitHub Release
         # v3.2.25 — retry on transient HttpError. The v3.2.24 build
@@ -85,15 +85,20 @@ jobs:
             # compatibility (CLI failures retry; nested action
             # failures do not).
             set -e
-            if gh release view "v${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # github.ref_name is already prefixed with "v" (e.g.
+            # "v3.2.26"). Don't prepend another v or you get
+            # "vv3.2.26" as the release name. This was the bug
+            # Tobe spotted in v3.2.24-v3.2.26.
+            REF="${{ github.ref_name }}"
+            if gh release view "$REF" --repo "${{ github.repository }}" >/dev/null 2>&1; then
               # Release exists — upload (replace) the asset.
-              gh release upload "v${{ github.ref_name }}" CyberClaw-Android-3.2.26.apk \
+              gh release upload "$REF" CyberClaw-Android-3.2.27.apk \
                 --repo "${{ github.repository }}" --clobber
             else
               # Release doesn't exist yet — create it.
-              gh release create "v${{ github.ref_name }}" \
+              gh release create "$REF" \
                 --repo "${{ github.repository }}" \
-                --title "v${{ github.ref_name }}" \
+                --title "$REF" \
                 --generate-notes \
-                CyberClaw-Android-3.2.26.apk
+                CyberClaw-Android-3.2.27.apk
             fi

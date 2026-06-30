@@ -887,16 +887,17 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
         )}
 
-        {/* v3.2.20 — voice-mode loop controls simplified.
+        {/* v3.2.27 — voice-mode loop controls.
             After wake, voice mode stays open in a multi-turn
             loop. Two ways to close it:
               1. Continuous silence that ends a turn (2-10s,
                  default 5s).
-              2. One user-configurable exit phrase, optionally
-                 trained with audio samples. Matched against
-                 the transcription (text fallback) or the live
-                 audio stream (when trained). Empty phrase =
-                 feature disabled. */}
+              2. Trained exit phrases (selectable from a list
+                 populated by the trainer above). Each entry
+                 shows ✓ trained. Tapping selects it as the
+                 active exit phrase. No TextInput here — the
+                 trainer is the single source of truth for
+                 what phrases exist. */}
         <SubTitle>Voice mode loop</SubTitle>
         <Hint>Voice mode stays open in a multi-turn loop. Two ways to close it:</Hint>
         <Label>Silence to end turn: {voiceSilenceMs / 1000}s</Label>
@@ -913,32 +914,20 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             />
           ))}
         </View>
-        <Hint style={{ marginTop: 8 }}>Exit phrase (single phrase, 1–4 words):</Hint>
-        <TextInput
-          style={styles.input}
-          value={voiceExitPhrase}
-          onChangeText={(v) => {
-            setVoiceExitPhrase(v);
-            // Auto-save on each keystroke (debounced via
-            // onBlur below).
+        <Label style={{ marginTop: 12 }}>Active exit phrase</Label>
+        <TrainedPhrasePicker
+          activePhrase={voiceExitPhrase}
+          onSelect={(p) => {
+            setVoiceExitPhrase(p);
+            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', p).then(() => setVoiceExitPhraseSavedAt(Date.now()));
           }}
-          onBlur={() => {
-            const trimmed = voiceExitPhrase.trim().toLowerCase();
-            const words = trimmed.split(/\s+/).filter(Boolean);
-            const final = words.length > 0 && words.length <= 4 ? trimmed : '';
-            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', final).then(() => setVoiceExitPhraseSavedAt(Date.now()));
+          onClear={() => {
+            setVoiceExitPhrase('');
+            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', '').then(() => setVoiceExitPhraseSavedAt(Date.now()));
           }}
-          placeholder="thanks"
-          placeholderTextColor="#555"
-          returnKeyType="done"
-          maxLength={40}
-          autoCapitalize="none"
         />
-        {voiceExitPhraseSavedAt && (
-          <Text style={styles.savedHint}>✅ Saved at {new Date(voiceExitPhraseSavedAt).toLocaleTimeString()}</Text>
-        )}
-        {voiceExitPhrase.trim() === '' && (
-          <Hint>Exit phrase disabled — voice mode will only close on silence or X.</Hint>
+        {voiceExitPhraseSavedAt && voiceExitPhrase && (
+          <Text style={styles.savedHint}>✅ Active: "{voiceExitPhrase}" saved</Text>
         )}
 
         <SubTitle>Audio buffer</SubTitle>
@@ -1168,6 +1157,75 @@ function OptionBtn({ active, label, onPress }: { active: boolean; label: string;
   );
 }
 
+/**
+ * v3.2.27 — List of trained exit phrases with radio buttons.
+ * Reads AsyncStorage for keys matching
+ * `cyberclaw-exit-samples-*`. Each entry becomes a radio
+ * button; the active one (matches `activePhrase`) is
+ * highlighted. If no phrases are trained, shows a hint
+ * pointing to the trainer card above.
+ */
+function TrainedPhrasePicker({ activePhrase, onSelect, onClear }: {
+  activePhrase: string;
+  onSelect: (p: string) => void;
+  onClear: () => void;
+}) {
+  const [phrases, setPhrases] = useState<string[]>([]);
+  const reload = useCallback(async () => {
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const exitKeys = keys.filter(k => k.startsWith('cyberclaw-exit-samples-'));
+      // Normalize key suffix back to the phrase. The trainer
+      // stores phrases as the suffix with hyphens replacing
+      // spaces; reverse that here.
+      const list = exitKeys.map(k =>
+        k.replace('cyberclaw-exit-samples-', '').replace(/-/g, ' ')
+      );
+      setPhrases(list);
+    } catch (_) {}
+  }, []);
+  useEffect(() => { reload(); }, [reload, activePhrase]);
+
+  if (phrases.length === 0) {
+    return (
+      <View style={styles.trainedPickerHint}>
+        <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
+          No trained exit phrases yet. Tap "Train exit phrase"
+          above to record 6 samples.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.trainedPicker}>
+      {phrases.map(p => {
+        const active = activePhrase === p;
+        return (
+          <TouchableOpacity
+            key={p}
+            style={[styles.trainedPickerRow, active && styles.trainedPickerRowActive]}
+            onPress={() => onSelect(p)}
+          >
+            <Text style={[styles.trainedPickerRadio, active && styles.trainedPickerRadioActive]}>
+              {active ? '◉' : '◯'}
+            </Text>
+            <Text style={[styles.trainedPickerLabel, active && styles.trainedPickerLabelActive]}>
+              {p}
+            </Text>
+            <Text style={styles.trainedPickerBadge}>✓ trained</Text>
+          </TouchableOpacity>
+        );
+      })}
+      {activePhrase && (
+        <TouchableOpacity onPress={onClear} style={styles.trainedPickerClear}>
+          <Text style={{ color: '#dc2626', fontSize: 12 }}>Disable exit phrase</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   content: { padding: 16 },
@@ -1213,6 +1271,41 @@ const styles = StyleSheet.create({
   optionActive: { backgroundColor: 'rgba(247,147,26,0.2)', borderColor: '#f7931a' },
   optionText: { color: '#888', fontSize: 13 },
   optionTextActive: { color: '#f7931a', fontWeight: 'bold' },
+  // v3.2.27 — trained-phrase picker rows
+  trainedPicker: { marginTop: 8 },
+  trainedPickerHint: { marginTop: 8, paddingVertical: 8 },
+  trainedPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#1a1a2e',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    marginBottom: 6,
+  },
+  trainedPickerRowActive: {
+    backgroundColor: 'rgba(16,185,129,0.15)',
+    borderColor: '#10b981',
+  },
+  trainedPickerRadio: { color: '#666', fontSize: 18, marginRight: 10 },
+  trainedPickerRadioActive: { color: '#10b981' },
+  trainedPickerLabel: { color: '#fff', fontSize: 14, flex: 1 },
+  trainedPickerLabelActive: { fontWeight: '700' },
+  trainedPickerBadge: {
+    color: '#10b981',
+    fontSize: 11,
+    fontWeight: '600',
+    backgroundColor: 'rgba(16,185,129,0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  trainedPickerClear: {
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
   thresholdRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   thresholdEdge: { color: '#888', fontSize: 12, width: 32, textAlign: 'center' },
   thresholdCell: { flex: 1, height: 28, justifyContent: 'center', alignItems: 'center', borderRadius: 4, marginHorizontal: 1 },
