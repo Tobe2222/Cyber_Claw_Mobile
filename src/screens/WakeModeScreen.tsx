@@ -987,7 +987,27 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       } else {
         addLogEntry('🔊 Wake Mode: no audioBase64 in response', 'debug');
       }
+      // Track playback start so afterPlayback can wait until
+      // the audio actually finishes (not just estimate).
+      // v3.2.22 — the multi-turn loop used to fire
+      // startRecordingTurn immediately when audioPlayerFinished
+      // (or the estimated-duration timer) fired. If the user
+      // took a moment to react to the response, the new
+      // recorder would start and 3s of silence would fire
+      // before they had time to speak. Fix: add a 1.5s
+      // "let the response settle" delay before starting the
+      // next recording window. The user gets a brief pause
+      // to mentally prepare, the mic has time to release
+      // from the playback's audio focus, and the silence
+      // window starts fresh from a quiet room.
+      const RESPONSE_SETTLE_DELAY_MS = 1500;
       const afterPlayback = async () => {
+        // Wait for the response to settle before starting
+        // the next recording turn. This prevents the
+        // multi-turn loop from treating the post-response
+        // silence as "user done talking".
+        await new Promise((resolve) => setTimeout(resolve, RESPONSE_SETTLE_DELAY_MS));
+
         if (voiceMode) {
           // Multi-turn loop: immediately start another
           // recording window. The same handleWakeWordInner
