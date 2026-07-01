@@ -57,11 +57,26 @@ const DEFAULT_PHRASE = 'thanks';
 
 type Stage = 'idle' | 'recording' | 'saving' | 'complete' | 'error';
 
-export default function ExitPhraseTrainer({ onCancel, onComplete }: {
+export default function ExitPhraseTrainer({ presetPhrase, onCancel, onComplete }: {
+  // v3.3.0: optional preset phrase. When set, the
+  // trainer's TextInput initializes with this string
+  // instead of the default 'thanks'. Used by the
+  // per-row "Retrain" button in the new ExitPhrasePicker
+  // to pre-fill the trainer with the existing phrase so
+  // the user can re-record samples without accidentally
+  // training a different word. If the user changes the
+  // phrase text and saves, it becomes a new entry in the
+  // pickup list (the old one stays until manually
+  // deleted) — which is the same behavior as first-time
+  // training.
+  presetPhrase?: string;
   onCancel: () => void;
   onComplete?: () => void;
 }) {
-  const [phrase, setPhrase] = useState(DEFAULT_PHRASE);
+  // v3.3.0: preset phrase overrides the default when
+  // present (retrain path). First-time training still
+  // starts from 'thanks' for backwards compatibility.
+  const [phrase, setPhrase] = useState(presetPhrase ?? DEFAULT_PHRASE);
   const [samples, setSamples] = useState<string[]>([]);  // WAV file paths
   const [stage, setStage] = useState<Stage>('idle');
   const [statusMsg, setStatusMsg] = useState('Tap "Record sample" to start. Record the same word 6 times.');

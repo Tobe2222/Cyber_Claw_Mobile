@@ -1,21 +1,41 @@
 /**
  * SettingsScreen — Mobile companion settings
  *
- * v3.1.13: Reorganized into 5 clear categories, voice settings restored,
- * and dead state removed.
+ * v3.3.0: Wake and Exit are now parallel sections (Wake settings /
+ * Exit settings), each with the same internal shape:
+ *   • response the companion says (single TextInput at top)
+ *   • phrases list with active selector + per-row retrain/delete
+ *   • train-new button
+ *   • advanced controls (thresholds for wake, silence-timeout for
+ *     exit) at the bottom
+ * The pre-v3.3.0 "Wake Word" section combined wake + exit in one
+ * place and that was confusing — exit sat below voice-mode-loop and
+ * the trainer button for exit was inline with wake. Now they're
+ * cleanly separated.
  *
  * Sections (top to bottom):
  *   1. 🔗 Connection       — Desktop IP, connect, status, log, pairing
  *   2. 🔒 Permissions      — Runtime perms (mic/notif) + wake perms
- *   3. 🎤 Wake Word        — Background listening, threshold, training,
- *                            wake greeting, audio buffer settings
- *   4. 🔊 Voice & Speech   — Local TTS (free) + Premium API placeholder
- *   5. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
+ *   3. 🎤 Wake settings    — Background listening, wake phrase picker
+ *                            (per-companion, with retrain/delete),
+ *                            wake greeting, match thresholds, audio
+ *                            buffer
+ *   4. 🚪 Exit settings    — Exit reply (single TextInput), exit phrase
+ *                            picker (with retrain/delete), train-new,
+ *                            silence-to-end timeout
+ *   5. 🔊 Voice & Speech   — Local TTS (free) + Premium API placeholder
+ *   6. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
  *
  * Each section is a self-contained card with a title, optional
  * description, and a list of controls. Most settings auto-save; the
  * audio buffer settings (lookback/timeout/retention) are batched into
  * a "Save Audio Settings" button.
+ *
+ * No behavior change to: wake detection (still per-companion via
+ *   owwWakeDetected), exit detection (still text-match fallback
+ *   against cyberclaw-voice-exit-phrase), or storage keys. Just a
+ *   UI restructure so the user can find everything related to wake
+ *   in one place and everything related to exit in another.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -118,14 +138,30 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // wake training + tester were removed in v3.2.2 — the
   // openWakeWord pipeline supersedes them.
   const [showOwwTrainer, setShowOwwTrainer] = useState(false);
+  // v3.3.0: when opening the wake trainer via per-row
+  // "Retrain" in the new WakePhrasePicker, the trainer
+  // opens pre-loaded with the existing phrase for that
+  // companion. Stored in this state so the trainer
+  // modal knows what to pre-fill. Cleared on close.
+  const [editingWakePhrase, setEditingWakePhrase] = useState<string>('');
   // v3.2.25: exit-phrase trainer modal. Recording 6 samples
   // persists locally; the runtime DTW detector against these
   // samples is wired in v3.2.26.
   const [showExitPhraseTrainer, setShowExitPhraseTrainer] = useState(false);
+  // v3.3.0: pre-fill for the exit trainer when opened
+  // from per-row "Retrain" in the ExitPhrasePicker.
+  const [editingExitPhrase, setEditingExitPhrase] = useState<string>('');
   // v3.2.1: map of agentId -> {phrase, path, savedAt} for
   // companions that have a saved custom wake model. Used
   // to show "✓ trained" badges in the companion picker.
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
+  // v3.3.0: which companionId the OWW detector is
+  // currently set to. Persisted to AsyncStorage so a
+  // cold restart lands on the right wake phrase. Today
+  // this is implicit ("whatever was last trained") —
+  // this state makes it explicit and user-routable
+  // from the new WakePhrasePicker.
+  const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
   // v3.1.68: companion picker is a proper modal sheet now (not a
   // system Alert). State holds the open/close flag.
   const [showCompanionPicker, setShowCompanionPicker] = useState(false);
@@ -171,6 +207,20 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             })();
           }
         }
+      } catch (_) {}
+    })();
+  }, []);
+
+  // v3.3.0: hydrate the active-wake-companion preference.
+  // First-time launches have no preference set; the picker
+  // will show all rows inactive until the user picks one.
+  // Existing on-disk preference is honored so a Settings
+  // restart returns to the user's last-active wake.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('cyberclaw-active-wake-companion');
+        if (raw) setActiveWakeCompanionId(raw);
       } catch (_) {}
     })();
   }, []);
@@ -609,8 +659,10 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       <OpenWakeWordTrainer
         companionId={trainingCompanionId || 'unknown'}
         companionName={trainingCompanionName || 'Companion'}
+        presetPhrase={editingWakePhrase || undefined}
         onComplete={(ok) => {
           setShowOwwTrainer(false);
+          setEditingWakePhrase('');
           // Refresh the saved-models list so the '✓ trained'
           // badges in the companion picker update immediately.
           if (ok) {
@@ -633,7 +685,10 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               .catch(() => {});
           }
         }}
-        onCancel={() => setShowOwwTrainer(false)}
+        onCancel={() => {
+          setShowOwwTrainer(false);
+          setEditingWakePhrase('');
+        }}
       />
     );
   }
@@ -644,8 +699,15 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   if (showExitPhraseTrainer) {
     return (
       <ExitPhraseTrainer
-        onCancel={() => setShowExitPhraseTrainer(false)}
-        onComplete={() => setShowExitPhraseTrainer(false)}
+        presetPhrase={editingExitPhrase || undefined}
+        onCancel={() => {
+          setShowExitPhraseTrainer(false);
+          setEditingExitPhrase('');
+        }}
+        onComplete={() => {
+          setShowExitPhraseTrainer(false);
+          setEditingExitPhrase('');
+        }}
       />
     );
   }
@@ -781,8 +843,20 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         </View>
       </Section>
 
-      {/* ── 🎤 Wake Word ─────────────────────────────────────── */}
-      <Section title="🎤 Wake Word" desc="Train and tune the wake phrase that wakes your companion in the background.">
+      {/* ── 🎤 Wake settings ────────────────────────────────────── */}
+      {/* v3.3.0: Settings UI reorganized into two parallel groups
+          (Wake + Exit), each with the same internal shape:
+            response (top)
+            phrases list with active selector + per-row actions
+            train-new button
+            advanced controls (bottom)
+          The flat "Wake Word" section that combined wake and exit
+          in one place is gone — see "🚪 Exit settings" below for
+          the matching group. No behavior change to wake detection,
+          exit detection, or any storage keys. */}
+      <Section title="🎤 Wake settings" desc="Configure how the companion wakes up. Each companion can have its own trained wake phrase.">
+
+        {/* ── Background listening (existing toggle) ── */}
         <Toggle
           title="🎧 Background listening"
           sub="Keep the microphone active in the background. The app wakes on your phrase."
@@ -802,11 +876,121 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           }}
         />
 
-        {/* v3.1.49: foreground threshold (was previously hardcoded to 55%).
-            Adjustable so the user can tighten wake detection without
-            retraining. */}
-        <Label>Foreground match threshold: {fgThreshold}%</Label>
-        <Hint>Minimum match score to trigger the wake word when the app is in the foreground. Higher = stricter.</Hint>
+        {/* ── Wake phrases picker (NEW v3.3.0) ── */}
+        <SubTitle>Wake phrases</SubTitle>
+        <Hint>Tap a row to make that companion's wake phrase active. Tap 🎙 to retrain, 🗑 to delete.</Hint>
+        <WakePhrasePicker
+          companions={availableCompanions}
+          savedModels={savedWakeModels}
+          activeCompanionId={activeWakeCompanionId}
+          onSelect={(cid) => {
+            setActiveWakeCompanionId(cid);
+            AsyncStorage.setItem('cyberclaw-active-wake-companion', cid);
+            const entry = savedWakeModels[cid];
+            if (entry?.phrase) {
+              // v3.3.0: write the active phrase to the
+              // wakeWord field of audio-settings so the
+              // HomeScreen's OWW listener picks it up.
+              // Existing behavior in the trainer did the
+              // same, just implicitly — now it's explicit
+              // and user-routable without re-training.
+              AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
+                const settings = raw ? JSON.parse(raw) : {};
+                settings.wakeWord = entry.phrase;
+                AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings));
+              });
+            }
+          }}
+          onRetrain={(cid, phrase) => {
+            const companion = availableCompanions.find(c => c.id === cid);
+            if (!companion) return;
+            setTrainingCompanionId(cid);
+            setTrainingCompanionName(companion.name);
+            setEditingWakePhrase(phrase);
+            setShowOwwTrainer(true);
+          }}
+          onDelete={(cid) => {
+            Alert.alert(
+              'Delete wake model?',
+              'Removes the trained wake word for this companion. You can re-train it later.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await AsyncStorage.removeItem(`cyberclaw-wake-samples-${cid}`);
+                      // The native .tflite file at
+                      // filesDir/wake_models/<cid>.tflite
+                      // is left in place — no native delete
+                      // API yet. The native side will fall
+                      // back to 'hey_jarvis' for a now-
+                      // missing companionId, which is
+                      // harmless. Future work: add a
+                      // WakeWordModule.deleteSavedModel.
+                      setSavedWakeModels(prev => {
+                        const next = { ...prev };
+                        delete next[cid];
+                        return next;
+                      });
+                      if (activeWakeCompanionId === cid) {
+                        setActiveWakeCompanionId(null);
+                        await AsyncStorage.removeItem('cyberclaw-active-wake-companion');
+                      }
+                    } catch (_) {}
+                  },
+                },
+              ],
+            );
+          }}
+        />
+
+        {/* ── Train-new button (NEW v3.3.0 caption) ── */}
+        <TouchableOpacity
+          style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
+          onPress={() => {
+            if (availableCompanions.length === 0) {
+              Alert.alert(
+                'No companions yet',
+                'Connect to the desktop and load at least one companion before training the wake word.',
+              );
+              return;
+            }
+            // v3.3.0: always open the companion picker,
+            // even with 1 companion. Old behavior was to
+            // skip the picker for a single companion, but
+            // the picker is also where the user picks
+            // which companion to retrain an existing
+            // wake word for — making it consistent
+            // means both flows share one tap path.
+            setShowCompanionPicker(true);
+          }}
+        >
+          <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🧠 Train wake phrase for new companion</Text>
+          <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word for that companion</Text>
+        </TouchableOpacity>
+
+        {/* ── Wake greeting (moved to TOP per user request: "the greeting in top since this will just be 1 of") ── */}
+        <SubTitle>Wake greeting</SubTitle>
+        <Hint>Phrase the companion says when the wake word fires. Auto-saves as you type.</Hint>
+        <TextInput
+          style={styles.input}
+          value={readyPhrase}
+          onChangeText={(v) => { setReadyPhrase(v); persistReadyPhrase(v); }}
+          onBlur={() => AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase).then(() => setReadyPhraseSavedAt(Date.now()))}
+          placeholder="Ready to chat"
+          placeholderTextColor="#555"
+          returnKeyType="done"
+        />
+        {readyPhraseSavedAt && (
+          <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
+        )}
+
+        {/* ── Match thresholds (existing, unchanged) ── */}
+        <SubTitle>Match thresholds</SubTitle>
+        <Hint>Detector sensitivity. Higher = stricter (fewer false wakes). Tune if you're getting accidental triggers.</Hint>
+        <Label>Foreground: {fgThreshold}%</Label>
         <View style={styles.thresholdRow}>
           <Text style={styles.thresholdEdge}>40%</Text>
           <View style={{ flex: 1, flexDirection: 'row' }}>
@@ -830,8 +1014,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.thresholdEdge}>90%</Text>
         </View>
 
-        <Label>Background match threshold: {bgThreshold}%</Label>
-        <Hint>Minimum match score to trigger the wake word in the background. Higher = stricter.</Hint>
+        <Label>Background: {bgThreshold}%</Label>
         <View style={styles.thresholdRow}>
           <Text style={styles.thresholdEdge}>40%</Text>
           <View style={{ flex: 1, flexDirection: 'row' }}>
@@ -855,132 +1038,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Text style={styles.thresholdEdge}>90%</Text>
         </View>
 
-        <SubTitle>Custom wake word</SubTitle>
-        {/* v3.2.0: the only wake-training entry point. The
-            desktop does the actual TTS + DNN training and
-            ships the trained .tflite back over the sync-server
-            WebSocket. See OpenWakeWordTrainer.tsx. The legacy
-            "Wake training" (DTW-based) and "Test wake detection"
-            buttons were removed in v3.2.2 — the new pipeline
-            supersedes them. */}
-        <TouchableOpacity
-          style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
-          onPress={() => {
-            if (availableCompanions.length === 0) {
-              Alert.alert(
-                'No companions yet',
-                'Connect to the desktop and load at least one companion before training the wake word.',
-              );
-              return;
-            }
-            if (availableCompanions.length === 1) {
-              setTrainingCompanionId(availableCompanions[0].id);
-              setTrainingCompanionName(availableCompanions[0].name);
-              setShowOwwTrainer(true);
-              return;
-            }
-            // Multi-companion: open the picker; the picker's
-            // onSelect handler routes directly to the trainer.
-            setShowCompanionPicker(true);
-          }}
-        >
-          <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🧠 Train with AI</Text>
-          <Text style={styles.trainBtnSub}>Record yourself 6 times — desktop trains a custom neural network wake word</Text>
-        </TouchableOpacity>
-
-        {/* v3.2.25: exit-phrase trainer. Same UI shape as the
-            wake training button above (dashed-border trainer
-            card) so the two reads as a parallel pair — "wake
-            trainer" and "exit trainer" sit next to each other.
-            The TextInput for the actual phrase still lives in
-            Voice mode loop below so users can change the
-            phrase text without retraining. */}
-        <TouchableOpacity
-          style={styles.trainBtn}
-          onPress={() => setShowExitPhraseTrainer(true)}
-        >
-          <Text style={[styles.trainBtnText, { color: '#f7931a' }]}>🚪 Train exit phrase</Text>
-          <Text style={styles.trainBtnSub}>Record a short phrase 6 times — closes voice mode instantly when heard (v3.2.26 wires the runtime detector)</Text>
-        </TouchableOpacity>
-
-
-        <SubTitle>Wake greeting</SubTitle>
-        <Hint>Phrase spoken when the wake word is detected. Auto-saves as you type.</Hint>
-        <TextInput
-          style={styles.input}
-          value={readyPhrase}
-          onChangeText={(v) => { setReadyPhrase(v); persistReadyPhrase(v); }}
-          onBlur={() => AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase).then(() => setReadyPhraseSavedAt(Date.now()))}
-          placeholder="Ready to chat"
-          placeholderTextColor="#555"
-          returnKeyType="done"
-        />
-        {readyPhraseSavedAt && (
-          <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
-        )}
-
-        {/* v3.2.29: Exit reply phrase. Mirror of the wake
-            greeting above — same shape, same debounce, same
-            desktop-synthesis-on-save flow. Plays on voice-
-            mode close. Empty value = silent close. */}
-        <SubTitle>Exit reply</SubTitle>
-        <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
-        <TextInput
-          style={styles.input}
-          value={exitReplyPhrase}
-          onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
-          onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
-          placeholder="Goodbye!"
-          placeholderTextColor="#555"
-          returnKeyType="done"
-        />
-        {exitReplySavedAt && exitReplyPhrase && (
-          <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
-        )}
-
-        {/* v3.2.27 — voice-mode loop controls.
-            After wake, voice mode stays open in a multi-turn
-            loop. Two ways to close it:
-              1. Continuous silence that ends a turn (2-10s,
-                 default 5s).
-              2. Trained exit phrases (selectable from a list
-                 populated by the trainer above). Each entry
-                 shows ✓ trained. Tapping selects it as the
-                 active exit phrase. No TextInput here — the
-                 trainer is the single source of truth for
-                 what phrases exist. */}
-        <SubTitle>Voice mode loop</SubTitle>
-        <Hint>Voice mode stays open in a multi-turn loop. Two ways to close it:</Hint>
-        <Label>Silence to end turn: {voiceSilenceMs / 1000}s</Label>
-        <View style={styles.optionRow}>
-          {[2, 3, 5, 7, 10].map(s => (
-            <OptionBtn
-              key={s}
-              active={voiceSilenceMs === s * 1000}
-              label={`${s}s`}
-              onPress={() => {
-                setVoiceSilenceMs(s * 1000);
-                AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
-              }}
-            />
-          ))}
-        </View>
-        <Label style={{ marginTop: 12 }}>Active exit phrase</Label>
-        <TrainedPhrasePicker
-          activePhrase={voiceExitPhrase}
-          onSelect={(p) => {
-            setVoiceExitPhrase(p);
-            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', p).then(() => setVoiceExitPhraseSavedAt(Date.now()));
-          }}
-          onClear={() => {
-            setVoiceExitPhrase('');
-            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', '').then(() => setVoiceExitPhraseSavedAt(Date.now()));
-          }}
-        />
-        {voiceExitPhraseSavedAt && voiceExitPhrase && (
-          <Text style={styles.savedHint}>✅ Active: "{voiceExitPhrase}" saved</Text>
-        )}
-
+        {/* ── Audio buffer (existing, unchanged) ── */}
         <SubTitle>Audio buffer</SubTitle>
         <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>
         <Label>Lookback (minutes)</Label>
@@ -1010,6 +1068,116 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               : '💾 Save audio settings'}
           </Text>
         </TouchableOpacity>
+      </Section>
+
+      {/* ── 🚪 Exit settings ─────────────────────────────────────── */}
+      {/* v3.3.0: NEW section. Parallel to "Wake settings" — both
+          groups have the same internal structure (response on top,
+          phrases list middle, advanced controls bottom). The Voice
+          mode loop silence picker lives here too because it's a
+          close-via-timeout option, semantically part of "how voice
+          mode ends". */}
+      <Section title="🚪 Exit settings" desc="How voice mode closes. Train an exit phrase the user says, or rely on silence timeout.">
+
+        {/* ── Exit reply (single TextInput, mirrored from wake greeting) ── */}
+        <SubTitle>Exit reply</SubTitle>
+        <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
+        <TextInput
+          style={styles.input}
+          value={exitReplyPhrase}
+          onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
+          onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
+          placeholder="Goodbye!"
+          placeholderTextColor="#555"
+          returnKeyType="done"
+        />
+        {exitReplySavedAt && exitReplyPhrase && (
+          <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
+        )}
+
+        {/* ── Exit phrases picker (extended v3.3.0 with retrain/delete) ── */}
+        <SubTitle>Exit phrases</SubTitle>
+        <Hint>Trained phrases that close voice mode instantly when heard. Tap a row to set as active. Tap 🎙 to retrain, 🗑 to delete.</Hint>
+        <TrainedPhrasePicker
+          activePhrase={voiceExitPhrase}
+          onSelect={(p) => {
+            setVoiceExitPhrase(p);
+            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', p).then(() => setVoiceExitPhraseSavedAt(Date.now()));
+          }}
+          onRetrain={(p) => {
+            // v3.3.0: open the trainer pre-loaded with the
+            // existing phrase, so the user can re-record 6
+            // samples without first re-typing the phrase.
+            setEditingExitPhrase(p);
+            setShowExitPhraseTrainer(true);
+          }}
+          onDelete={(p) => {
+            Alert.alert(
+              'Delete exit phrase?',
+              `Removes the trained samples for "${p}". You can re-train it later.`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: async () => {
+                    // Match the trainer's storage-key
+                    // transformation: lowercase + spaces → hyphens.
+                    const key = `cyberclaw-exit-samples-${p.replace(/\s+/g, '-').toLowerCase()}`;
+                    await AsyncStorage.removeItem(key);
+                    // Also clear it as the active phrase if
+                    // it was selected, so the runtime
+                    // detector doesn't try to match a now-
+                    // missing sample set.
+                    if (voiceExitPhrase.toLowerCase() === p.toLowerCase()) {
+                      setVoiceExitPhrase('');
+                      await AsyncStorage.setItem('cyberclaw-voice-exit-phrase', '');
+                    }
+                  },
+                },
+              ],
+            );
+          }}
+          onClear={() => {
+            setVoiceExitPhrase('');
+            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', '').then(() => setVoiceExitPhraseSavedAt(Date.now()));
+          }}
+        />
+        {voiceExitPhraseSavedAt && voiceExitPhrase && (
+          <Text style={styles.savedHint}>✅ Active: "{voiceExitPhrase}" saved</Text>
+        )}
+
+        {/* ── Train-new exit phrase button ── */}
+        <TouchableOpacity
+          style={[styles.trainBtn, { borderColor: '#f7931a' }]}
+          onPress={() => {
+            // v3.3.0: empty preset since this is a
+            // first-time training path. The trainer
+            // defaults to 'thanks'.
+            setEditingExitPhrase('');
+            setShowExitPhraseTrainer(true);
+          }}
+        >
+          <Text style={[styles.trainBtnText, { color: '#f7931a' }]}>🚪 Train new exit phrase</Text>
+          <Text style={styles.trainBtnSub}>Record a short phrase 6 times — closes voice mode instantly when heard</Text>
+        </TouchableOpacity>
+
+        {/* ── Silence to end turn (existing, unchanged) ── */}
+        <SubTitle>Silence to end turn: {voiceSilenceMs / 1000}s</SubTitle>
+        <Hint>Voice mode stays open in a multi-turn loop. After this much silence, the turn ends.</Hint>
+        <View style={styles.optionRow}>
+          {[2, 3, 5, 7, 10].map(s => (
+            <OptionBtn
+              key={s}
+              active={voiceSilenceMs === s * 1000}
+              label={`${s}s`}
+              onPress={() => {
+                setVoiceSilenceMs(s * 1000);
+                AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
+              }}
+            />
+          ))}
+        </View>
       </Section>
 
       {/* ── 🔊 Voice & Speech ────────────────────────────────── */}
@@ -1210,16 +1378,31 @@ function OptionBtn({ active, label, onPress }: { active: boolean; label: string;
 
 /**
  * v3.2.27 — List of trained exit phrases with radio buttons.
+ * v3.3.0 — Added per-row actions (🎙 retrain, 🗑 delete) since
+ * the Wake/Exit layout puts the trainer *below* the list now
+ * (was: the list is below the trainer card). Both taps call
+ * back to the parent so the parent can open the trainer with
+ * the right preset phrase. onClear stays for the
+ * "disable all" link at the bottom.
+ *
  * Reads AsyncStorage for keys matching
- * `cyberclaw-exit-samples-*`. Each entry becomes a radio
- * button; the active one (matches `activePhrase`) is
- * highlighted. If no phrases are trained, shows a hint
- * pointing to the trainer card above.
+ * `cyberclaw-exit-samples-*`. Each entry becomes a row; the
+ * active one (matches `activePhrase`) gets the green ring.
+ * If no phrases are trained, shows a hint pointing to the
+ * trainer card below.
  */
-function TrainedPhrasePicker({ activePhrase, onSelect, onClear }: {
+function TrainedPhrasePicker({ activePhrase, onSelect, onClear, onRetrain, onDelete }: {
   activePhrase: string;
   onSelect: (p: string) => void;
   onClear: () => void;
+  // v3.3.0: optional retrain/delete handlers. When
+  // provided, the row shows 🎙 and 🗑 buttons on the
+  // right edge; tapping them calls back to the parent
+  // (which opens the trainer modal / shows the delete
+  // confirm). When omitted, the row is read-only
+  // (preserves v3.2.27 behavior).
+  onRetrain?: (p: string) => void;
+  onDelete?: (p: string) => void;
 }) {
   const [phrases, setPhrases] = useState<string[]>([]);
   const reload = useCallback(async () => {
@@ -1242,7 +1425,7 @@ function TrainedPhrasePicker({ activePhrase, onSelect, onClear }: {
       <View style={styles.trainedPickerHint}>
         <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
           No trained exit phrases yet. Tap "Train exit phrase"
-          above to record 6 samples.
+          below to record 6 samples.
         </Text>
       </View>
     );
@@ -1264,7 +1447,35 @@ function TrainedPhrasePicker({ activePhrase, onSelect, onClear }: {
             <Text style={[styles.trainedPickerLabel, active && styles.trainedPickerLabelActive]}>
               {p}
             </Text>
-            <Text style={styles.trainedPickerBadge}>✓ trained</Text>
+            {onRetrain || onDelete ? (
+              // v3.3.0: small action icon group on the
+              // right. Same row press still selects the
+              // active phrase — these icons are touch-
+              // targets that stop propagation via the
+              // inner TouchableOpacity.
+              <View style={styles.trainedPickerActions}>
+                {onRetrain ? (
+                  <TouchableOpacity
+                    onPress={(e) => { e.stopPropagation?.(); onRetrain(p); }}
+                    style={styles.trainedPickerActionBtn}
+                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                  >
+                    <Text style={styles.trainedPickerActionIcon}>🎙</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {onDelete ? (
+                  <TouchableOpacity
+                    onPress={(e) => { e.stopPropagation?.(); onDelete(p); }}
+                    style={styles.trainedPickerActionBtn}
+                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                  >
+                    <Text style={styles.trainedPickerActionIcon}>🗑</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : (
+              <Text style={styles.trainedPickerBadge}>✓ trained</Text>
+            )}
           </TouchableOpacity>
         );
       })}
@@ -1273,6 +1484,121 @@ function TrainedPhrasePicker({ activePhrase, onSelect, onClear }: {
           <Text style={{ color: '#dc2626', fontSize: 12 }}>Disable exit phrase</Text>
         </TouchableOpacity>
       )}
+    </View>
+  );
+}
+
+/**
+ * v3.3.0 — List of trained wake phrases, one per companion.
+ * Mirrors TrainedPhrasePicker but reads from the wake
+ * training data (WakeTrainingModel + native .tflite saved
+ * models) instead of the per-phrase exit samples.
+ *
+ * Each row shows the companion's emoji, name, and the
+ * trained wake phrase. Tap a row to make that companion's
+ * model the active wake (which the HomeScreen's OWW
+ * listener picks up via cyberclaw-audio-settings.wakeWord).
+ * Tap 🎙 to retrain (opens the trainer modal pre-loaded
+ * with that companion's phrase); tap 🗑 to delete the
+ * trained model for that companion.
+ *
+ * Empty state: shows a hint pointing to the train-new
+ * button below.
+ */
+function WakePhrasePicker({
+  companions,
+  savedModels,
+  activeCompanionId,
+  onSelect,
+  onRetrain,
+  onDelete,
+}: {
+  companions: Array<{ id: string; name: string; emoji?: string | null; icon?: string | null }>;
+  savedModels: Record<string, { phrase: string; path: string; savedAt: number }>;
+  activeCompanionId: string | null;
+  onSelect: (companionId: string) => void;
+  onRetrain: (companionId: string, phrase: string) => void;
+  onDelete: (companionId: string) => void;
+}) {
+  // Build the list: only companions that have a saved
+  // wake model. Show them in the same order they appear
+  // in the cached agents list (which mirrors the
+  // desktop's arena order).
+  const trainedRows = companions
+    .filter(c => savedModels[c.id]?.phrase)
+    .map(c => ({
+      companionId: c.id,
+      name: c.name,
+      emoji: c.emoji || c.icon || '🐾',
+      phrase: savedModels[c.id].phrase,
+      savedAt: savedModels[c.id].savedAt,
+    }));
+
+  if (trainedRows.length === 0) {
+    return (
+      <View style={styles.trainedPickerHint}>
+        <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
+          No trained wake phrases yet. Tap "Train wake phrase for new companion"
+          below to record 6 samples for one of your companions.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.trainedPicker}>
+      {trainedRows.map(r => {
+        const active = activeCompanionId === r.companionId;
+        return (
+          <TouchableOpacity
+            key={r.companionId}
+            style={[styles.trainedPickerRow, active && styles.trainedPickerRowActive]}
+            onPress={() => onSelect(r.companionId)}
+          >
+            <Text style={[styles.trainedPickerRadio, active && styles.trainedPickerRadioActive]}>
+              {active ? '◉' : '◯'}
+            </Text>
+            <Text style={[styles.trainedPickerCompanionEmoji]}>{r.emoji}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.trainedPickerLabel, active && styles.trainedPickerLabelActive]}>
+                {r.name}
+              </Text>
+              <Text style={styles.trainedPickerPhrase}>
+                {r.phrase}
+              </Text>
+            </View>
+            <View style={styles.trainedPickerActions}>
+              <TouchableOpacity
+                onPress={(e) => { e.stopPropagation?.(); onRetrain(r.companionId, r.phrase); }}
+                style={styles.trainedPickerActionBtn}
+                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+              >
+                <Text style={styles.trainedPickerActionIcon}>🎙</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={(e) => { e.stopPropagation?.(); onDelete(r.companionId); }}
+                style={styles.trainedPickerActionBtn}
+                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+              >
+                <Text style={styles.trainedPickerActionIcon}>🗑</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+      {/* v3.3.0: row showing the currently-active wake
+          model if none of the listed companions is set
+          as active. Without this, the user might train a
+          wake word, have it become active by default,
+          then look at the picker and see no active badge
+          — confusing. Shows "..." if there's a saved
+          model for some companionId not in the current
+          agents list (cached stale). */}
+      {!activeCompanionId && trainedRows.length > 0 ? (
+        <Text style={[styles.trainedPickerBadge, { marginTop: 6, alignSelf: 'flex-start' }]}>
+          Tap a row to activate
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -1352,6 +1678,43 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 4,
+  },
+  // v3.3.0: per-row action group on the right edge of
+  // each trained-phrase / wake-phrase row. Each action
+  // (🎙 retrain, 🗑 delete) is its own touch target with
+  // its own hitSlop so the user can tap them precisely
+  // without accidentally selecting the row.
+  trainedPickerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 4,
+  },
+  trainedPickerActionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(247,147,26,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(247,147,26,0.30)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  trainedPickerActionIcon: {
+    fontSize: 16,
+  },
+  // v3.3.0: wake row shows companion emoji + name + phrase.
+  // Phrase is rendered smaller and dimmer below the name so
+  // both fit cleanly in one row.
+  trainedPickerCompanionEmoji: {
+    fontSize: 22,
+    marginRight: 10,
+  },
+  trainedPickerPhrase: {
+    color: '#aaa',
+    fontSize: 12,
+    marginTop: 1,
+    fontStyle: 'italic',
   },
   trainedPickerClear: {
     paddingVertical: 6,

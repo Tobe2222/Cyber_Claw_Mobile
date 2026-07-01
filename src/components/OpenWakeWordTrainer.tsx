@@ -63,6 +63,14 @@ const REQUIRED_SAMPLES = 6;  // 6 is a sweet spot for the synthetic-amplified pi
 interface Props {
   companionId: string;
   companionName: string;
+  // v3.3.0: optional preset phrase. When set, the
+  // trainer's TextInput initializes with this string
+  // instead of the default `hey ${companionName}`.
+  // Used by the per-row "Retrain" button in the new
+  // WakePhrasePicker to pre-fill the trainer with the
+  // existing phrase so the user can re-record samples
+  // without accidentally training a different word.
+  presetPhrase?: string;
   onComplete: (ok: boolean) => void;
   onCancel: () => void;
 }
@@ -108,8 +116,12 @@ function formatClock(d: Date): string {
   return `${h}:${m}:${s}`;
 }
 
-export default function OpenWakeWordTrainer({ companionId, companionName, onComplete, onCancel }: Props) {
-  const [wakePhrase, setWakePhrase] = useState(`hey ${companionName}`);
+export default function OpenWakeWordTrainer({ companionId, companionName, presetPhrase, onComplete, onCancel }: Props) {
+  // v3.3.0: if presetPhrase is provided (retrain path
+  // from the WakePhrasePicker), use it as the initial
+  // value. Otherwise default to `hey ${companionName}`
+  // — the existing behavior for first-time training.
+  const [wakePhrase, setWakePhrase] = useState(presetPhrase ?? `hey ${companionName}`);
   const [samples, setSamples] = useState<string[]>([]);  // absolute paths
   const [stage, setStage] = useState<Stage>('idle');
   const [progress, setProgress] = useState(0);
