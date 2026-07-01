@@ -853,7 +853,13 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
     let silenceMs = DEFAULT_SILENCE_MS;
     try {
-      const settings = await loadVoiceSettings();
+      // v3.4.0: load settings for THIS companion
+      // (companionId prop). silenceMs is global so
+      // we don't strictly need the companionId for it,
+      // but pass it for consistency and so future
+      // per-companion global overrides land in one
+      // place.
+      const settings = await loadVoiceSettings(companionId);
       silenceMs = settings.silenceMs;
     } catch (_) {}
 
@@ -968,7 +974,10 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   const pollForExitPhrase = useCallback(async (): Promise<string | null> => {
     let phrase = '';
     try {
-      const settings = await loadVoiceSettings();
+      // v3.4.0: exit phrase is now per-companion. The
+      // active companion's phrase is what the runtime
+      // detector runs against.
+      const settings = await loadVoiceSettings(companionId);
       phrase = settings.exitPhrase;
     } catch (_) {}
     if (!phrase) return null;
@@ -984,7 +993,10 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         // mid-poll.
         (async () => {
           try {
-            const s = await loadVoiceSettings();
+            // v3.4.0: per-companion exit phrase. The
+            // match runs against THIS companion's
+            // active phrase.
+            const s = await loadVoiceSettings(companionId);
             const matched = matchExitPhrase(text, [s.exitPhrase].filter(Boolean));
             if (matched) {
               clearTimeout(deadline);

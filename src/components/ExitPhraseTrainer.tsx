@@ -57,7 +57,12 @@ const DEFAULT_PHRASE = 'thanks';
 
 type Stage = 'idle' | 'recording' | 'saving' | 'complete' | 'error';
 
-export default function ExitPhraseTrainer({ presetPhrase, onCancel, onComplete }: {
+export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel, onComplete }: {
+  // v3.4.0: companionId is REQUIRED for per-companion
+  // storage. The trainer writes its samples to
+  // cyberclaw-exit-samples-<companionId>-<phrase>
+  // and the active phrase to
+  // cyberclaw-exit-phrase-<companionId>.
   // v3.3.0: optional preset phrase. When set, the
   // trainer's TextInput initializes with this string
   // instead of the default 'thanks'. Used by the
@@ -69,6 +74,7 @@ export default function ExitPhraseTrainer({ presetPhrase, onCancel, onComplete }
   // pickup list (the old one stays until manually
   // deleted) — which is the same behavior as first-time
   // training.
+  companionId: string;
   presetPhrase?: string;
   onCancel: () => void;
   onComplete?: () => void;
@@ -195,7 +201,7 @@ export default function ExitPhraseTrainer({ presetPhrase, onCancel, onComplete }
         // Best-effort cleanup of the temp WAV.
         RNFS.unlink(wavPath).catch(() => {});
       }
-      await saveExitSamples(trimmed, featuresList);
+      await saveExitSamples(companionId, trimmed, featuresList);
       setLastSavedAt(Date.now());
       setStage('complete');
       setStatusMsg(`✅ Saved ${featuresList.length} samples for "${trimmed}". v3.2.26 will wire this to the runtime detector.`);
@@ -213,7 +219,7 @@ export default function ExitPhraseTrainer({ presetPhrase, onCancel, onComplete }
         text: 'Remove',
         style: 'destructive',
         onPress: async () => {
-          await clearExitSamples(existingPhrase);
+          await clearExitSamples(companionId, existingPhrase);
           setStatusMsg(`Cleared training for "${existingPhrase}".`);
         },
       },

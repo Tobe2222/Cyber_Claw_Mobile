@@ -1,41 +1,52 @@
 /**
  * SettingsScreen — Mobile companion settings
  *
- * v3.3.0: Wake and Exit are now parallel sections (Wake settings /
- * Exit settings), each with the same internal shape:
- *   • response the companion says (single TextInput at top)
- *   • phrases list with active selector + per-row retrain/delete
- *   • train-new button
- *   • advanced controls (thresholds for wake, silence-timeout for
- *     exit) at the bottom
- * The pre-v3.3.0 "Wake Word" section combined wake + exit in one
- * place and that was confusing — exit sat below voice-mode-loop and
- * the trainer button for exit was inline with wake. Now they're
- * cleanly separated.
+ * v3.4.0: 3-level hierarchy replaces the v3.3.0 flat two-section
+ * (Wake + Exit) layout. Tobe complained that "Wake settings" and
+ * "Exit settings" each contained unrelated controls (audio buffer,
+ * match thresholds, silence timeout) which made both sections
+ * feel like grab-bags. The new structure is:
+ *
+ *   (1) 🎤 Voice mode (top-level)
+ *       - Background listening
+ *       - Audio buffer
+ *       - Companions list (NEW): each companion shows their
+ *         currently-active wake phrase; tap to open detail
+ *       - Train-new companion's wake button
+ *       - Silence timeout (voice mode close)
+ *       - Match thresholds (foreground / background)
+ *
+ *   (2) Per-companion detail view (tap a companion to enter)
+ *       - Back button + companion header
+ *       - Wake greeting TextInput (top, single TextInput —
+ *         global semantics but reachable from any companion
+ *         for consistent layout)
+ *       - Exit reply TextInput (same)
+ *       - Wake phrases for this companion (uses the existing
+ *         WakePhrasePicker, scoped to one companion)
+ *       - Train-new wake phrase for this companion
+ *       - Exit phrases for this companion (uses the new
+ *         PerCompanionExitPicker, scoped to one companion)
+ *       - Train-new exit phrase for this companion
+ *
+ *   (3) 🔊 Voice & Speech / 🤖 Agent Reach (unchanged)
+ *
+ * Storage model change: exit phrases are now per-companion
+ * (cyberclaw-exit-samples-<companionId>-<phrase> vs the
+ * v3.3.0 global cyberclaw-exit-samples-<phrase>). The
+ * active exit phrase is also per-companion
+ * (cyberclaw-exit-phrase-<companionId>). A one-time
+ * migration runs on first launch of v3.4.0 to copy the
+ * legacy keys under the active companion's namespace.
  *
  * Sections (top to bottom):
  *   1. 🔗 Connection       — Desktop IP, connect, status, log, pairing
  *   2. 🔒 Permissions      — Runtime perms (mic/notif) + wake perms
- *   3. 🎤 Wake settings    — Background listening, wake phrase picker
- *                            (per-companion, with retrain/delete),
- *                            wake greeting, match thresholds, audio
- *                            buffer
- *   4. 🚪 Exit settings    — Exit reply (single TextInput), exit phrase
- *                            picker (with retrain/delete), train-new,
- *                            silence-to-end timeout
- *   5. 🔊 Voice & Speech   — Local TTS (free) + Premium API placeholder
- *   6. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
- *
- * Each section is a self-contained card with a title, optional
- * description, and a list of controls. Most settings auto-save; the
- * audio buffer settings (lookback/timeout/retention) are batched into
- * a "Save Audio Settings" button.
- *
- * No behavior change to: wake detection (still per-companion via
- *   owwWakeDetected), exit detection (still text-match fallback
- *   against cyberclaw-voice-exit-phrase), or storage keys. Just a
- *   UI restructure so the user can find everything related to wake
- *   in one place and everything related to exit in another.
+ *   3. 🎤 Voice mode       — Top-level: companion list + global
+ *                            audio settings (see above)
+ *      ⟶ tap a companion → per-companion detail (see above)
+ *   4. 🔊 Voice & Speech   — Local TTS (free) + Premium API placeholder
+ *   5. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -155,6 +166,12 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // companions that have a saved custom wake model. Used
   // to show "✓ trained" badges in the companion picker.
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
+  // v3.4.0: which companion's detail screen is open.
+  // When null, the user sees the top-level Voice mode
+  // section with the companion list. When set, they see
+  // the per-companion detail view (greeting, reply, wake
+  // phrases, exit phrases, train buttons).
+  const [selectedCompanionId, setSelectedCompanionId] = useState<string | null>(null);
   // v3.3.0: which companionId the OWW detector is
   // currently set to. Persisted to AsyncStorage so a
   // cold restart lands on the right wake phrase. Today
@@ -224,6 +241,231 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
       } catch (_) {}
     })();
   }, []);
+
+  // v3.4.0: one-time migration from v3.3.0's global exit
+  // storage to per-companion. Reads the legacy keys and
+  // writes them under the FIRST known companion's
+  // namespace. Idempotent (no-op if already migrated or
+  // if no legacy keys exist). Called once when both
+  // availableCompanions and activeWakeCompanionId have
+  // been hydrated — we need at least one companionId to
+  // know where to attach the migrated samples.
+  useEffect(() => {
+    (async () => {
+      if (availableCompanions.length === 0) return;
+      try {
+        const { migrateLegacyExitSamples } = await import('../services/VoiceSettings');
+        const targetId = activeWakeCompanionId || availableCompanions[0].id;
+        await migrateLegacyExitSamples(targetId);
+      } catch (_) {}
+    })();
+  }, [availableCompanions.length, activeWakeCompanionId]);
+
+  // v3.4.0: per-companion detail view. Reached by tapping
+  // a companion in the top-level Voice mode list. Shows
+  // the companion's greeting, reply, wake phrases, exit
+  // phrases, and train buttons. Returns to the top-level
+  // list via the back button.
+  function renderCompanionDetail() {
+    const cid = selectedCompanionId;
+    if (!cid) return null;
+    const companion = availableCompanions.find(c => c.id === cid);
+    if (!companion) {
+      // Companion was deleted from the cache while we
+      // were in this view. Auto-back out.
+      setSelectedCompanionId(null);
+      return null;
+    }
+    return (
+      <>
+        {/* Per-companion header with back button */}
+        <View style={[styles.section, styles.detailHeaderRow]}>
+          <TouchableOpacity onPress={() => setSelectedCompanionId(null)} style={styles.detailBackBtn}>
+            <Text style={styles.detailBackBtnText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.detailHeader}>
+            {companion.emoji || companion.icon || '🐾'}  {companion.name}
+          </Text>
+          <View style={{ width: 60 }} />
+        </View>
+
+        <Section title={`${companion.name} settings`} desc={`Wake word, exit phrase, greeting, and reply for ${companion.name}.`}>
+          {/* Wake greeting — global semantics, but reachable
+              from any companion's detail view for consistency
+              with the per-companion wake/exit layout. */}
+          <SubTitle>Wake greeting</SubTitle>
+          <Hint>Phrase the companion says when the wake word fires. Auto-saves as you type.</Hint>
+          <TextInput
+            style={styles.input}
+            value={readyPhrase}
+            onChangeText={(v) => { setReadyPhrase(v); persistReadyPhrase(v); }}
+            onBlur={() => AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase).then(() => setReadyPhraseSavedAt(Date.now()))}
+            placeholder="Ready to chat"
+            placeholderTextColor="#555"
+            returnKeyType="done"
+          />
+          {readyPhraseSavedAt && (
+            <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
+          )}
+
+          {/* Exit reply — same global semantics, per-companion layout */}
+          <SubTitle>Exit reply</SubTitle>
+          <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
+          <TextInput
+            style={styles.input}
+            value={exitReplyPhrase}
+            onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
+            onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
+            placeholder="Goodbye!"
+            placeholderTextColor="#555"
+            returnKeyType="done"
+          />
+          {exitReplySavedAt && exitReplyPhrase && (
+            <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
+          )}
+
+          {/* Wake phrases for this companion */}
+          <SubTitle>Wake phrases</SubTitle>
+          <Hint>Trained wake words for {companion.name}. Tap 🎙 to retrain, 🗑 to delete.</Hint>
+          <WakePhrasePicker
+            companions={[companion]}
+            savedModels={savedWakeModels}
+            activeCompanionId={activeWakeCompanionId}
+            onSelect={(selectedCid) => {
+              setActiveWakeCompanionId(selectedCid);
+              AsyncStorage.setItem('cyberclaw-active-wake-companion', selectedCid);
+              const entry = savedWakeModels[selectedCid];
+              if (entry?.phrase) {
+                AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
+                  const settings = raw ? JSON.parse(raw) : {};
+                  settings.wakeWord = entry.phrase;
+                  AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings));
+                });
+              }
+            }}
+            onRetrain={(rcid, phrase) => {
+              setTrainingCompanionId(rcid);
+              setTrainingCompanionName(companion.name);
+              setEditingWakePhrase(phrase);
+              setShowOwwTrainer(true);
+            }}
+            onDelete={(rcid) => {
+              Alert.alert(
+                'Delete wake model?',
+                `Removes the trained wake word for ${companion.name}. You can re-train it later.`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                      try {
+                        await AsyncStorage.removeItem(`cyberclaw-wake-samples-${rcid}`);
+                        setSavedWakeModels(prev => {
+                          const next = { ...prev };
+                          delete next[rcid];
+                          return next;
+                        });
+                        if (activeWakeCompanionId === rcid) {
+                          setActiveWakeCompanionId(null);
+                          await AsyncStorage.removeItem('cyberclaw-active-wake-companion');
+                        }
+                      } catch (_) {}
+                    },
+                  },
+                ],
+              );
+            }}
+          />
+          <TouchableOpacity
+            style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
+            onPress={() => {
+              setTrainingCompanionId(cid);
+              setTrainingCompanionName(companion.name);
+              setEditingWakePhrase('');
+              setShowOwwTrainer(true);
+            }}
+          >
+            <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🎤 Train new wake phrase for {companion.name}</Text>
+            <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word</Text>
+          </TouchableOpacity>
+
+          {/* Exit phrases for this companion (NEW v3.4.0 per-companion) */}
+          <SubTitle>Exit phrases</SubTitle>
+          <Hint>Trained phrases that close voice mode when {companion.name} hears them. Tap 🎙 to retrain, 🗑 to delete.</Hint>
+          <PerCompanionExitPicker
+            companionId={cid}
+            activePhrase={voiceExitPhrase}
+            onSelect={async (p) => {
+              setVoiceExitPhrase(p);
+              const { saveExitPhrase } = await import('../services/VoiceSettings');
+              await saveExitPhrase(cid, p);
+              setVoiceExitPhraseSavedAt(Date.now());
+            }}
+            onRetrain={(p) => {
+              setEditingExitPhrase(p);
+              setShowExitPhraseTrainer(true);
+            }}
+            onDelete={async (p) => {
+              Alert.alert(
+                'Delete exit phrase?',
+                `Removes the trained samples for "${p}" on ${companion.name}.`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                      const { clearExitSamples, saveExitPhrase } = await import('../services/VoiceSettings');
+                      await clearExitSamples(cid, p);
+                      if (voiceExitPhrase.toLowerCase() === p.toLowerCase()) {
+                        setVoiceExitPhrase('');
+                        await saveExitPhrase(cid, '');
+                      }
+                    },
+                  },
+                ],
+              );
+            }}
+          />
+          {voiceExitPhraseSavedAt && voiceExitPhrase && (
+            <Text style={styles.savedHint}>✅ Active: "{voiceExitPhrase}" saved</Text>
+          )}
+          <TouchableOpacity
+            style={[styles.trainBtn, { borderColor: '#f7931a' }]}
+            onPress={() => {
+              setEditingExitPhrase('');
+              setShowExitPhraseTrainer(true);
+            }}
+          >
+            <Text style={[styles.trainBtnText, { color: '#f7931a' }]}>🚪 Train new exit phrase for {companion.name}</Text>
+            <Text style={styles.trainBtnSub}>Record a short phrase 6 times — closes voice mode instantly when heard</Text>
+          </TouchableOpacity>
+        </Section>
+      </>
+    );
+  }
+
+  // v3.4.0: one-time migration from v3.3.0's global exit
+  // storage to per-companion. Reads the legacy keys and
+  // writes them under the FIRST known companion's
+  // namespace. Idempotent (no-op if already migrated or
+  // if no legacy keys exist). Called once when both
+  // availableCompanions and activeWakeCompanionId have
+  // been hydrated — we need at least one companionId to
+  // know where to attach the migrated samples.
+  useEffect(() => {
+    (async () => {
+      if (availableCompanions.length === 0) return;
+      try {
+        const { migrateLegacyExitSamples } = await import('../services/VoiceSettings');
+        // Prefer the active wake companion; fall back to
+        // the first available companion.
+        const targetId = activeWakeCompanionId || availableCompanions[0].id;
+        await migrateLegacyExitSamples(targetId);
+      } catch (_) {}
+    })();
+  }, [availableCompanions.length, activeWakeCompanionId]);
 
   // ── Voice & Speech ────────────────────────────────────────────
   // v3.1.75: single engine toggle (local vs premium API) replaces
@@ -699,6 +941,15 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   if (showExitPhraseTrainer) {
     return (
       <ExitPhraseTrainer
+        // v3.4.0: trainer writes to per-companion keys.
+        // Use active companion; fall back to first
+        // available; fall back to 'default' for first-time
+        // launch with no cached companions yet.
+        companionId={
+          activeWakeCompanionId ||
+          availableCompanions[0]?.id ||
+          'default'
+        }
         presetPhrase={editingExitPhrase || undefined}
         onCancel={() => {
           setShowExitPhraseTrainer(false);
@@ -851,334 +1102,210 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             train-new button
             advanced controls (bottom)
           The flat "Wake Word" section that combined wake and exit
-          in one place is gone — see "🚪 Exit settings" below for
-          the matching group. No behavior change to wake detection,
-          exit detection, or any storage keys. */}
-      <Section title="🎤 Wake settings" desc="Configure how the companion wakes up. Each companion can have its own trained wake phrase.">
+          in one place is gone. v3.4.0 replaces the v3.3.0
+          two-section layout with a 3-level hierarchy:
+            (top) 🎤 Voice mode — companion list, audio buffer,
+                  silence timeout, match thresholds
+            (mid) tap a companion → per-companion detail view
+                  (greeting, reply, wake phrases, exit phrases,
+                  train buttons)
+          Wake/Exit are no longer top-level sections; they're
+          features of each companion, reachable via the list. */}
 
-        {/* ── Background listening (existing toggle) ── */}
-        <Toggle
-          title="🎧 Background listening"
-          sub="Keep the microphone active in the background. The app wakes on your phrase."
-          value={bgListening}
-          onValueChange={async (val) => {
-            setBgListening(val);
-            await AsyncStorage.setItem('cyberclaw-bg-listening', String(val));
-            if (val) {
-              const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-              const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
-              try { await BackgroundService?.start?.(phrase); } catch {}
-              Alert.alert('✅ Enabled', 'Background listening is on. App will wake on your phrase.');
-            } else {
-              try { await BackgroundService?.stop?.(); } catch {}
-              Alert.alert('🔕 Disabled', 'Background listening is off.');
-            }
-          }}
-        />
+      {/* v3.4.0: when a companion is selected, the entire
+          🎤 Voice mode section is replaced by a per-companion
+          detail view. The user returns to the top-level list
+          via a back button at the top of the detail view. */}
+      {selectedCompanionId ? (
+        renderCompanionDetail()
+      ) : (
+        <>
+          {/* ── 🎤 Voice mode (top-level, with companion list) ── */}
+          <Section title="🎤 Voice mode" desc="Configure how voice mode works for each companion. Tap a companion to customize their wake phrase, exit phrase, greeting, and reply.">
 
-        {/* ── Wake phrases picker (NEW v3.3.0) ── */}
-        <SubTitle>Wake phrases</SubTitle>
-        <Hint>Tap a row to make that companion's wake phrase active. Tap 🎙 to retrain, 🗑 to delete.</Hint>
-        <WakePhrasePicker
-          companions={availableCompanions}
-          savedModels={savedWakeModels}
-          activeCompanionId={activeWakeCompanionId}
-          onSelect={(cid) => {
-            setActiveWakeCompanionId(cid);
-            AsyncStorage.setItem('cyberclaw-active-wake-companion', cid);
-            const entry = savedWakeModels[cid];
-            if (entry?.phrase) {
-              // v3.3.0: write the active phrase to the
-              // wakeWord field of audio-settings so the
-              // HomeScreen's OWW listener picks it up.
-              // Existing behavior in the trainer did the
-              // same, just implicitly — now it's explicit
-              // and user-routable without re-training.
-              AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
-                const settings = raw ? JSON.parse(raw) : {};
-                settings.wakeWord = entry.phrase;
-                AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings));
-              });
-            }
-          }}
-          onRetrain={(cid, phrase) => {
-            const companion = availableCompanions.find(c => c.id === cid);
-            if (!companion) return;
-            setTrainingCompanionId(cid);
-            setTrainingCompanionName(companion.name);
-            setEditingWakePhrase(phrase);
-            setShowOwwTrainer(true);
-          }}
-          onDelete={(cid) => {
-            Alert.alert(
-              'Delete wake model?',
-              'Removes the trained wake word for this companion. You can re-train it later.',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: async () => {
-                    try {
-                      await AsyncStorage.removeItem(`cyberclaw-wake-samples-${cid}`);
-                      // The native .tflite file at
-                      // filesDir/wake_models/<cid>.tflite
-                      // is left in place — no native delete
-                      // API yet. The native side will fall
-                      // back to 'hey_jarvis' for a now-
-                      // missing companionId, which is
-                      // harmless. Future work: add a
-                      // WakeWordModule.deleteSavedModel.
-                      setSavedWakeModels(prev => {
-                        const next = { ...prev };
-                        delete next[cid];
-                        return next;
-                      });
-                      if (activeWakeCompanionId === cid) {
-                        setActiveWakeCompanionId(null);
-                        await AsyncStorage.removeItem('cyberclaw-active-wake-companion');
-                      }
-                    } catch (_) {}
-                  },
-                },
-              ],
-            );
-          }}
-        />
-
-        {/* ── Train-new button (NEW v3.3.0 caption) ── */}
-        <TouchableOpacity
-          style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
-          onPress={() => {
-            if (availableCompanions.length === 0) {
-              Alert.alert(
-                'No companions yet',
-                'Connect to the desktop and load at least one companion before training the wake word.',
-              );
-              return;
-            }
-            // v3.3.0: always open the companion picker,
-            // even with 1 companion. Old behavior was to
-            // skip the picker for a single companion, but
-            // the picker is also where the user picks
-            // which companion to retrain an existing
-            // wake word for — making it consistent
-            // means both flows share one tap path.
-            setShowCompanionPicker(true);
-          }}
-        >
-          <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🧠 Train wake phrase for new companion</Text>
-          <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word for that companion</Text>
-        </TouchableOpacity>
-
-        {/* ── Wake greeting (moved to TOP per user request: "the greeting in top since this will just be 1 of") ── */}
-        <SubTitle>Wake greeting</SubTitle>
-        <Hint>Phrase the companion says when the wake word fires. Auto-saves as you type.</Hint>
-        <TextInput
-          style={styles.input}
-          value={readyPhrase}
-          onChangeText={(v) => { setReadyPhrase(v); persistReadyPhrase(v); }}
-          onBlur={() => AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase).then(() => setReadyPhraseSavedAt(Date.now()))}
-          placeholder="Ready to chat"
-          placeholderTextColor="#555"
-          returnKeyType="done"
-        />
-        {readyPhraseSavedAt && (
-          <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
-        )}
-
-        {/* ── Match thresholds (existing, unchanged) ── */}
-        <SubTitle>Match thresholds</SubTitle>
-        <Hint>Detector sensitivity. Higher = stricter (fewer false wakes). Tune if you're getting accidental triggers.</Hint>
-        <Label>Foreground: {fgThreshold}%</Label>
-        <View style={styles.thresholdRow}>
-          <Text style={styles.thresholdEdge}>40%</Text>
-          <View style={{ flex: 1, flexDirection: 'row' }}>
-            {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
-              <TouchableOpacity
-                key={v}
-                onPress={async () => {
-                  setFgThreshold(v);
-                  await AsyncStorage.setItem('cyberclaw-wake-fg-threshold', String(v / 100));
-                }}
-                style={[
-                  styles.thresholdCell,
-                  fgThreshold === v ? styles.thresholdCellActive :
-                  fgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
-                ]}
-              >
-                <Text style={[styles.thresholdCellText, fgThreshold === v && { color: '#fff' }]}>{v}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <Text style={styles.thresholdEdge}>90%</Text>
-        </View>
-
-        <Label>Background: {bgThreshold}%</Label>
-        <View style={styles.thresholdRow}>
-          <Text style={styles.thresholdEdge}>40%</Text>
-          <View style={{ flex: 1, flexDirection: 'row' }}>
-            {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
-              <TouchableOpacity
-                key={v}
-                onPress={async () => {
-                  setBgThreshold(v);
-                  await AsyncStorage.setItem('cyberclaw-wake-bg-threshold', String(v / 100));
-                }}
-                style={[
-                  styles.thresholdCell,
-                  bgThreshold === v ? styles.thresholdCellActive :
-                  bgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
-                ]}
-              >
-                <Text style={[styles.thresholdCellText, bgThreshold === v && { color: '#fff' }]}>{v}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <Text style={styles.thresholdEdge}>90%</Text>
-        </View>
-
-        {/* ── Audio buffer (existing, unchanged) ── */}
-        <SubTitle>Audio buffer</SubTitle>
-        <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>
-        <Label>Lookback (minutes)</Label>
-        <View style={styles.optionRow}>
-          {[5, 10, 30, 60].map(m => (
-            <OptionBtn key={m} active={audioSettings.lookbackMinutes === m} label={`${m}`} onPress={() => updateAudio('lookbackMinutes', m)} />
-          ))}
-        </View>
-        <Label>Conversation timeout (minutes)</Label>
-        <Hint>After this much silence, the companion returns to passive wake word detection.</Hint>
-        <View style={styles.optionRow}>
-          {[1, 2, 5].map(m => (
-            <OptionBtn key={m} active={audioSettings.conversationTimeoutMinutes === m} label={`${m}`} onPress={() => updateAudio('conversationTimeoutMinutes', m)} />
-          ))}
-        </View>
-        <Label>Recording retention (days)</Label>
-        <Hint>Daily audio logs are kept locally for this many days, then auto-deleted.</Hint>
-        <View style={styles.optionRow}>
-          {[1, 7, 14, 30].map(d => (
-            <OptionBtn key={d} active={audioSettings.retentionDays === d} label={`${d}`} onPress={() => updateAudio('retentionDays', d)} />
-          ))}
-        </View>
-        <TouchableOpacity style={styles.saveAudioBtn} onPress={saveAudioSettings}>
-          <Text style={styles.saveAudioBtnText}>
-            {audioSettingsSavedAt
-              ? `✅ Saved at ${new Date(audioSettingsSavedAt).toLocaleTimeString()}`
-              : '💾 Save audio settings'}
-          </Text>
-        </TouchableOpacity>
-      </Section>
-
-      {/* ── 🚪 Exit settings ─────────────────────────────────────── */}
-      {/* v3.3.0: NEW section. Parallel to "Wake settings" — both
-          groups have the same internal structure (response on top,
-          phrases list middle, advanced controls bottom). The Voice
-          mode loop silence picker lives here too because it's a
-          close-via-timeout option, semantically part of "how voice
-          mode ends". */}
-      <Section title="🚪 Exit settings" desc="How voice mode closes. Train an exit phrase the user says, or rely on silence timeout.">
-
-        {/* ── Exit reply (single TextInput, mirrored from wake greeting) ── */}
-        <SubTitle>Exit reply</SubTitle>
-        <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
-        <TextInput
-          style={styles.input}
-          value={exitReplyPhrase}
-          onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
-          onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
-          placeholder="Goodbye!"
-          placeholderTextColor="#555"
-          returnKeyType="done"
-        />
-        {exitReplySavedAt && exitReplyPhrase && (
-          <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
-        )}
-
-        {/* ── Exit phrases picker (extended v3.3.0 with retrain/delete) ── */}
-        <SubTitle>Exit phrases</SubTitle>
-        <Hint>Trained phrases that close voice mode instantly when heard. Tap a row to set as active. Tap 🎙 to retrain, 🗑 to delete.</Hint>
-        <TrainedPhrasePicker
-          activePhrase={voiceExitPhrase}
-          onSelect={(p) => {
-            setVoiceExitPhrase(p);
-            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', p).then(() => setVoiceExitPhraseSavedAt(Date.now()));
-          }}
-          onRetrain={(p) => {
-            // v3.3.0: open the trainer pre-loaded with the
-            // existing phrase, so the user can re-record 6
-            // samples without first re-typing the phrase.
-            setEditingExitPhrase(p);
-            setShowExitPhraseTrainer(true);
-          }}
-          onDelete={(p) => {
-            Alert.alert(
-              'Delete exit phrase?',
-              `Removes the trained samples for "${p}". You can re-train it later.`,
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: async () => {
-                    // Match the trainer's storage-key
-                    // transformation: lowercase + spaces → hyphens.
-                    const key = `cyberclaw-exit-samples-${p.replace(/\s+/g, '-').toLowerCase()}`;
-                    await AsyncStorage.removeItem(key);
-                    // Also clear it as the active phrase if
-                    // it was selected, so the runtime
-                    // detector doesn't try to match a now-
-                    // missing sample set.
-                    if (voiceExitPhrase.toLowerCase() === p.toLowerCase()) {
-                      setVoiceExitPhrase('');
-                      await AsyncStorage.setItem('cyberclaw-voice-exit-phrase', '');
-                    }
-                  },
-                },
-              ],
-            );
-          }}
-          onClear={() => {
-            setVoiceExitPhrase('');
-            AsyncStorage.setItem('cyberclaw-voice-exit-phrase', '').then(() => setVoiceExitPhraseSavedAt(Date.now()));
-          }}
-        />
-        {voiceExitPhraseSavedAt && voiceExitPhrase && (
-          <Text style={styles.savedHint}>✅ Active: "{voiceExitPhrase}" saved</Text>
-        )}
-
-        {/* ── Train-new exit phrase button ── */}
-        <TouchableOpacity
-          style={[styles.trainBtn, { borderColor: '#f7931a' }]}
-          onPress={() => {
-            // v3.3.0: empty preset since this is a
-            // first-time training path. The trainer
-            // defaults to 'thanks'.
-            setEditingExitPhrase('');
-            setShowExitPhraseTrainer(true);
-          }}
-        >
-          <Text style={[styles.trainBtnText, { color: '#f7931a' }]}>🚪 Train new exit phrase</Text>
-          <Text style={styles.trainBtnSub}>Record a short phrase 6 times — closes voice mode instantly when heard</Text>
-        </TouchableOpacity>
-
-        {/* ── Silence to end turn (existing, unchanged) ── */}
-        <SubTitle>Silence to end turn: {voiceSilenceMs / 1000}s</SubTitle>
-        <Hint>Voice mode stays open in a multi-turn loop. After this much silence, the turn ends.</Hint>
-        <View style={styles.optionRow}>
-          {[2, 3, 5, 7, 10].map(s => (
-            <OptionBtn
-              key={s}
-              active={voiceSilenceMs === s * 1000}
-              label={`${s}s`}
-              onPress={() => {
-                setVoiceSilenceMs(s * 1000);
-                AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
+            {/* Background listening (existing toggle, unchanged) */}
+            <Toggle
+              title="🎧 Background listening"
+              sub="Keep the microphone active in the background. The app wakes on your phrase."
+              value={bgListening}
+              onValueChange={async (val) => {
+                setBgListening(val);
+                await AsyncStorage.setItem('cyberclaw-bg-listening', String(val));
+                if (val) {
+                  const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+                  const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+                  try { await BackgroundService?.start?.(phrase); } catch {}
+                  Alert.alert('✅ Enabled', 'Background listening is on. App will wake on your phrase.');
+                } else {
+                  try { await BackgroundService?.stop?.(); } catch {}
+                  Alert.alert('🔕 Disabled', 'Background listening is off.');
+                }
               }}
             />
-          ))}
-        </View>
-      </Section>
+
+            {/* ── Companions list (NEW v3.4.0) ── */}
+            <SubTitle>Companions</SubTitle>
+            <Hint>Tap a companion to configure their wake phrase, exit phrase, greeting, and reply.</Hint>
+            {availableCompanions.length === 0 ? (
+              <View style={styles.trainedPickerHint}>
+                <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
+                  No companions yet. Connect to the desktop to load your companions.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.companionList}>
+                {availableCompanions.map(c => {
+                  const isActive = activeWakeCompanionId === c.id;
+                  const savedModel = savedWakeModels[c.id];
+                  return (
+                    <TouchableOpacity
+                      key={c.id}
+                      style={[
+                        styles.companionListRow,
+                        isActive && styles.companionListRowActive,
+                      ]}
+                      onPress={() => setSelectedCompanionId(c.id)}
+                    >
+                      <Text style={styles.companionListEmoji}>{c.emoji || c.icon || '🐾'}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.companionListName, isActive && { color: '#10b981' }]}>
+                          {c.name}
+                        </Text>
+                        <Text style={styles.companionListDetail}>
+                          {savedModel?.phrase ? `wake: "${savedModel.phrase}"` : 'no wake word yet'}
+                        </Text>
+                      </View>
+                      {isActive ? (
+                        <Text style={styles.companionListActive}>◉</Text>
+                      ) : null}
+                      <Text style={styles.companionListArrow}>›</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Train-new companion button — opens the existing
+                companion picker modal which then opens the
+                trainer. Same UX as v3.3.0. */}
+            <TouchableOpacity
+              style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
+              onPress={() => {
+                if (availableCompanions.length === 0) {
+                  Alert.alert(
+                    'No companions yet',
+                    'Connect to the desktop and load at least one companion before training the wake word.',
+                  );
+                  return;
+                }
+                setShowCompanionPicker(true);
+              }}
+            >
+              <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🧠 Train wake phrase for new companion</Text>
+              <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word for that companion</Text>
+            </TouchableOpacity>
+
+            {/* Audio buffer (existing, unchanged) */}
+            <SubTitle>Audio buffer</SubTitle>
+            <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>
+            <Label>Lookback (minutes)</Label>
+            <View style={styles.optionRow}>
+              {[5, 10, 30, 60].map(m => (
+                <OptionBtn key={m} active={audioSettings.lookbackMinutes === m} label={`${m}`} onPress={() => updateAudio('lookbackMinutes', m)} />
+              ))}
+            </View>
+            <Label>Conversation timeout (minutes)</Label>
+            <Hint>After this much silence, the companion returns to passive wake word detection.</Hint>
+            <View style={styles.optionRow}>
+              {[1, 2, 5].map(m => (
+                <OptionBtn key={m} active={audioSettings.conversationTimeoutMinutes === m} label={`${m}`} onPress={() => updateAudio('conversationTimeoutMinutes', m)} />
+              ))}
+            </View>
+            <Label>Recording retention (days)</Label>
+            <Hint>Daily audio logs are kept locally for this many days, then auto-deleted.</Hint>
+            <View style={styles.optionRow}>
+              {[1, 7, 14, 30].map(d => (
+                <OptionBtn key={d} active={audioSettings.retentionDays === d} label={`${d}`} onPress={() => updateAudio('retentionDays', d)} />
+              ))}
+            </View>
+            <TouchableOpacity style={styles.saveAudioBtn} onPress={saveAudioSettings}>
+              <Text style={styles.saveAudioBtnText}>
+                {audioSettingsSavedAt
+                  ? `✅ Saved at ${new Date(audioSettingsSavedAt).toLocaleTimeString()}`
+                  : '💾 Save audio settings'}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Voice mode close — silence timeout (existing, unchanged) */}
+            <SubTitle>Silence to end turn: {voiceSilenceMs / 1000}s</SubTitle>
+            <Hint>Voice mode stays open in a multi-turn loop. After this much silence, the turn ends.</Hint>
+            <View style={styles.optionRow}>
+              {[2, 3, 5, 7, 10].map(s => (
+                <OptionBtn
+                  key={s}
+                  active={voiceSilenceMs === s * 1000}
+                  label={`${s}s`}
+                  onPress={() => {
+                    setVoiceSilenceMs(s * 1000);
+                    AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
+                  }}
+                />
+              ))}
+            </View>
+
+            {/* Match thresholds (existing, unchanged) */}
+            <SubTitle>Match thresholds</SubTitle>
+            <Hint>Detector sensitivity. Higher = stricter (fewer false wakes). Tune if you're getting accidental triggers.</Hint>
+            <Label>Foreground: {fgThreshold}%</Label>
+            <View style={styles.thresholdRow}>
+              <Text style={styles.thresholdEdge}>40%</Text>
+              <View style={{ flex: 1, flexDirection: 'row' }}>
+                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
+                  <TouchableOpacity
+                    key={v}
+                    onPress={async () => {
+                      setFgThreshold(v);
+                      await AsyncStorage.setItem('cyberclaw-wake-fg-threshold', String(v / 100));
+                    }}
+                    style={[
+                      styles.thresholdCell,
+                      fgThreshold === v ? styles.thresholdCellActive :
+                      fgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
+                    ]}
+                  >
+                    <Text style={[styles.thresholdCellText, fgThreshold === v && { color: '#fff' }]}>{v}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.thresholdEdge}>90%</Text>
+            </View>
+
+            <Label>Background: {bgThreshold}%</Label>
+            <View style={styles.thresholdRow}>
+              <Text style={styles.thresholdEdge}>40%</Text>
+              <View style={{ flex: 1, flexDirection: 'row' }}>
+                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
+                  <TouchableOpacity
+                    key={v}
+                    onPress={async () => {
+                      setBgThreshold(v);
+                      await AsyncStorage.setItem('cyberclaw-wake-bg-threshold', String(v / 100));
+                    }}
+                    style={[
+                      styles.thresholdCell,
+                      bgThreshold === v ? styles.thresholdCellActive :
+                      bgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
+                    ]}
+                  >
+                    <Text style={[styles.thresholdCellText, bgThreshold === v && { color: '#fff' }]}>{v}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.thresholdEdge}>90%</Text>
+            </View>
+          </Section>
+        </>
+      )}
 
       {/* ── 🔊 Voice & Speech ────────────────────────────────── */}
       <Section title="🔊 Voice & Speech" desc="How your companion speaks back to you.">
@@ -1603,6 +1730,92 @@ function WakePhrasePicker({
   );
 }
 
+/**
+ * v3.4.0: per-companion exit-phrase picker. Reads
+ * AsyncStorage for keys matching
+ * `cyberclaw-exit-samples-<companionId>-*` and renders
+ * each as a row with active selector + 🎙 retrain + 🗑
+ * delete. Mirrors TrainedPhrasePicker but the storage
+ * namespace is per-companion (the v3.4.0 storage model
+ * move; legacy global keys are migrated by
+ * `migrateLegacyExitSamples` on first launch of v3.4.0
+ * and then ignored).
+ */
+function PerCompanionExitPicker({ companionId, activePhrase, onSelect, onRetrain, onDelete }: {
+  companionId: string;
+  activePhrase: string;
+  onSelect: (p: string) => void;
+  onRetrain?: (p: string) => void;
+  onDelete?: (p: string) => void;
+}) {
+  const [phrases, setPhrases] = useState<string[]>([]);
+  const reload = useCallback(async () => {
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const prefix = `cyberclaw-exit-samples-${companionId}-`;
+      const exitKeys = keys.filter(k => k.startsWith(prefix));
+      const list = exitKeys.map(k =>
+        k.replace(prefix, '').replace(/-/g, ' ')
+      );
+      setPhrases(list);
+    } catch (_) {}
+  }, [companionId]);
+  useEffect(() => { reload(); }, [reload, activePhrase]);
+
+  if (phrases.length === 0) {
+    return (
+      <View style={styles.trainedPickerHint}>
+        <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
+          No trained exit phrases yet. Tap "Train new exit phrase"
+          below to record 6 samples.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.trainedPicker}>
+      {phrases.map(p => {
+        const active = activePhrase === p;
+        return (
+          <TouchableOpacity
+            key={p}
+            style={[styles.trainedPickerRow, active && styles.trainedPickerRowActive]}
+            onPress={() => onSelect(p)}
+          >
+            <Text style={[styles.trainedPickerRadio, active && styles.trainedPickerRadioActive]}>
+              {active ? '◉' : '◯'}
+            </Text>
+            <Text style={[styles.trainedPickerLabel, active && styles.trainedPickerLabelActive]}>
+              {p}
+            </Text>
+            <View style={styles.trainedPickerActions}>
+              {onRetrain ? (
+                <TouchableOpacity
+                  onPress={(e) => { e.stopPropagation?.(); onRetrain(p); }}
+                  style={styles.trainedPickerActionBtn}
+                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                >
+                  <Text style={styles.trainedPickerActionIcon}>🎙</Text>
+                </TouchableOpacity>
+              ) : null}
+              {onDelete ? (
+                <TouchableOpacity
+                  onPress={(e) => { e.stopPropagation?.(); onDelete(p); }}
+                  style={styles.trainedPickerActionBtn}
+                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                >
+                  <Text style={styles.trainedPickerActionIcon}>🗑</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   content: { padding: 16 },
@@ -1689,6 +1902,78 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     marginLeft: 4,
+  },
+  // v3.4.0: companion list rows on the top-level Voice
+  // mode section. Each row shows emoji + name + a one-line
+  // summary of the active wake phrase + a chevron indicating
+  // it's tappable. The active-wake row gets a green border
+  // to mirror the existing trainedPickerActive visual.
+  companionList: {
+    marginTop: 8,
+  },
+  companionListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#1a1a2e',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    marginBottom: 6,
+  },
+  companionListRowActive: {
+    backgroundColor: 'rgba(16,185,129,0.10)',
+    borderColor: '#10b981',
+  },
+  companionListEmoji: {
+    fontSize: 24,
+    marginRight: 12,
+  },
+  companionListName: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  companionListDetail: {
+    color: '#888',
+    fontSize: 12,
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+  companionListActive: {
+    color: '#10b981',
+    fontSize: 18,
+    marginHorizontal: 8,
+    fontWeight: 'bold',
+  },
+  companionListArrow: {
+    color: '#888',
+    fontSize: 22,
+    marginLeft: 4,
+  },
+  // v3.4.0: per-companion detail screen header. Back button
+  // on the left, companion emoji+name centered, spacer on
+  // the right so the title is centered visually.
+  detailHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  detailBackBtn: {
+    paddingVertical: 4,
+    paddingRight: 12,
+  },
+  detailBackBtnText: {
+    color: '#f7931a',
+    fontSize: 16,
+  },
+  detailHeader: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    flex: 1,
+    textAlign: 'center',
   },
   trainedPickerActionBtn: {
     width: 36,
