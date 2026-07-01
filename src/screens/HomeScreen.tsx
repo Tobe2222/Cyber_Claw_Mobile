@@ -121,7 +121,17 @@ function startSampleMatchListener(
   // Initialize OWW with the bundled pre-trained model, then start listening.
   // The init is async but the start call is fire-and-forget — if init
   // fails, the wake listener just won't fire (logged in onLog).
-  WakeWordModule?.initOww?.('hey_jarvis', 0.5)
+  // v3.2.30: thread the caller's threshold through to
+  // initOww. Previously the threshold parameter was
+  // accepted but ignored, hardcoding 0.5 (50% confidence)
+  // regardless of what the foreground/background settings
+  // said. With the fix, the caller's threshold (0.55 FG,
+  // 0.65 BG by default; user-configurable in Settings) is
+  // passed to the native detector, which the v3.2.30
+  // Kotlin-side fix now actually reads (previously the
+  // listening loop ignored the threshold field and just
+  // hardcoded 0.5f).
+  WakeWordModule?.initOww?.('hey_jarvis', threshold ?? 0.5)
     .catch((e: any) => onLog?.(`initOww failed: ${e?.message}`))
     .then(() => WakeWordModule?.startOwwListening?.())
     .catch((e: any) => onLog?.(`startOwwListening failed: ${e?.message}`));

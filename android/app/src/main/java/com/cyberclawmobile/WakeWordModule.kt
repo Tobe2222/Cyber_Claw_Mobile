@@ -880,6 +880,21 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 var chunkFill = 0
                 var highScoreFrames = 0
                 val HIGH_SCORE_RUN = 3  // 3 consecutive frames above threshold = wake word
+                // v3.2.30: cooldown after a detection. Without
+                // this, a single sustained "hey..." in the
+                // user's speech (or background conversation
+                // that happens to match the wake word) would
+                // fire owwWakeDetected repeatedly as
+                // highScoreFrames immediately counts back up
+                // to HIGH_SCORE_RUN on the next frame — the
+                // classic "wake word loop" symptom. 2000ms is
+                // long enough for a real follow-up utterance
+                // to start (which would be a separate wake
+                // event anyway) but short enough that the user
+                // can re-trigger the wake within a couple of
+                // seconds of wanting to.
+                val DETECTION_COOLDOWN_MS = 2000L
+                var lastDetectionAt = 0L
 
                 while (isOwwListening) {
                     val read = rec.read(readBuf, 0, readBuf.size)
@@ -893,18 +908,52 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                         i += toCopy
 
                         if (chunkFill == chunkSamples) {
-                            // Run inference on the chunk
+                            // v3.2.30: read the threshold from
+                            // the detector instead of the
+                            // hardcoded 0.5f that v3.1.95
+                            // shipped with. Without this fix,
+                            // setThreshold(threshold.toFloat())
+                            // in initOww is a no-op as far as
+                            // the listening loop is concerned —
+                            // the detector would still fire on
+                            // 0.5 regardless of what the JS
+                            // layer asked for. Result: user-
+                            // configured foreground/background
+                            // thresholds (Settings → 🎤 Wake
+                            // Word → Foreground match
+                            // threshold / Background match
+                            // threshold) had no effect.
                             val score = detector.predictScore(chunkBuf) ?: 0f
-                            if (score >= 0.5f) {
+                            val threshold = detector.getThreshold()
+                            if (score >= threshold) {
                                 highScoreFrames++
                                 if (highScoreFrames >= HIGH_SCORE_RUN) {
-                                    // Wake word detected!
-                                    handler.post {
-                                        val params = Arguments.createMap()
-                                        params.putDouble("score", score.toDouble())
-                                        params.putString("wakeword", owwWakeword)
-                                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                                            .emit("owwWakeDetected", params)
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastDetectionAt >= DETECTION_COOLDOWN_MS) {
+                                        lastDetectionAt = now
+                                        // Wake word detected!
+                                        handler.post {
+                                            val params = Arguments.createMap()
+                                            params.putDouble("score", score.toDouble())
+                                            params.putString("wakeword", owwWakeword)
+                                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                                .emit("owwWakeDetected", params)
+                                        }
+                                    } else {
+                                        // v3.2.30: inside the
+                                        // cooldown window.
+                                        // Don't emit a duplicate
+                                        // event (would race with
+                                        // the JS busy flag and
+                                        // could double-open
+                                        // Voice Mode if the JS
+                                        // side ever resets
+                                        // busy=true between
+                                        // events). Reset the
+                                        // high-score counter so
+                                        // we re-arm cleanly when
+                                        // the cooldown expires.
+                                        Log.w("WakeWord", "OWW detection suppressed by cooldown (${DETECTION_COOLDOWN_MS - (now - lastDetectionAt)}ms remaining)")
                                     }
                                     highScoreFrames = 0
                                 }

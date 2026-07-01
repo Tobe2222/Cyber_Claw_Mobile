@@ -133,6 +133,15 @@ class OpenWakeWordDetector(private val context: Context) {
     }
 
     /**
+     * v3.2.30: return the currently configured detection
+     * threshold. The OWW listening loop in WakeWordModule
+     * needs to read this so it can compare against the
+     * same threshold the detector uses internally (instead
+     * of the hardcoded 0.5f that v3.1.95 shipped with).
+     */
+    fun getThreshold(): Float = threshold
+
+    /**
      * Run inference on a chunk of 1280 PCM16 samples (80ms at 16kHz).
      * Returns the wake word detection score, or null if models not loaded.
      */
