@@ -368,6 +368,63 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     }
   }, []);
 
+  // v3.2.29: play the exit reply on voice-mode close.
+  // Mirror of the wake greeting flow: read the phrase
+  // from AsyncStorage, try the cached WAV first, fall
+  // back to speak() (which uses local TTS). Fire-and-
+  // forget — the close happens regardless of whether
+  // the audio actually starts. Empty phrase = silent
+  // close (no audio, no log spam).
+  //
+  // Why fire-and-forget: the user is leaving voice mode
+  // and dropping back to passive wake listening. We
+  // want the goodbye to overlap with the transition, not
+  // hold the screen open for a few seconds. The local
+  // TTS engine will start producing audio within ~50ms;
+  // the user hears the start of the phrase as the screen
+  // fades. A 250ms kick-off delay gives the audio a
+  // chance to start before the close, so the user doesn't
+  // miss the first syllable.
+  const playExitReply = useCallback(async (): Promise<void> => {
+    let phrase = '';
+    try {
+      phrase = await AsyncStorage.getItem('cyberclaw-exit-reply-phrase') || '';
+    } catch (_) {}
+    if (!phrase || !phrase.trim()) {
+      // Silent close. Don't even log — the user has
+      // explicitly cleared the field.
+      return;
+    }
+    const trimmed = phrase.trim();
+    // Try cached audio first.
+    try {
+      const { getCachedExitReplyPath } = require('../services/ExitReplyAudioCache');
+      const cached = await getCachedExitReplyPath(trimmed);
+      if (cached) {
+        addVoiceLog(`🔊 exit reply (cached): "${trimmed}"`);
+        // Fire-and-forget: kick off the play but don't
+        // block the close. The audio runs to completion
+        // in the background.
+        playCachedGreeting(cached).catch(() => {});
+        return;
+      }
+      // No cache — request a synthesis (fire-and-forget)
+      // AND speak the phrase now as a fallback so the
+      // user hears something immediately. The next
+      // close will use the warmed cache.
+      const { ensureExitReplyCached } = require('../services/ExitReplyAudioCache');
+      ensureExitReplyCached(trimmed).catch(() => {});
+      addVoiceLog(`🔊 exit reply (TTS fallback): "${trimmed}"`);
+      speak(trimmed).catch(() => {});
+    } catch (e: any) {
+      // If anything in the cache module errors out, fall
+      // back to local TTS so the user still hears
+      // something.
+      addVoiceLog(`🔊 exit reply (TTS fallback, error): "${trimmed}"`);
+      speak(trimmed).catch(() => {});
+    }
+  }, [speak]);
+
   // v3.2.20 — clear the transcribing-timeout on unmount so a
   // stale timer can't fire after the user has already left
   // voice mode.
@@ -936,6 +993,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
               addVoiceLog(`👋 Exit phrase "${matched}" → closing`);
               if (voiceMode) {
                 setVoiceStatus('listening');
+                // v3.2.29: play the exit reply (fire-and-
+                // forget) before closing. The 400ms delay
+                // gives the local TTS engine a chance to
+                // start producing audio before the screen
+                // tears down.
+                playExitReply().catch(() => {});
                 setTimeout(() => exitRef.current(), 400);
               }
               resolve(matched);
@@ -1001,6 +1064,8 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
             'info',
           );
           addVoiceLog(`👋 LLM gibberish → closing voice mode`);
+          // v3.2.29: play the exit reply before closing.
+          playExitReply().catch(() => {});
           setTimeout(() => exitRef.current?.(), 400);
           return;
         }
@@ -1334,8 +1399,11 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         </Text>
       </View>
 
-      {/* X close button (top right) */}
-      <TouchableOpacity style={styles.closeButton} onPress={onExit}>
+      {/* X close button (top right) — v3.2.29 also
+          plays the exit reply before closing. Fire-and-
+          forget: the close happens immediately, the audio
+          plays in the background. */}
+      <TouchableOpacity style={styles.closeButton} onPress={() => { playExitReply().catch(() => {}); onExit(); }}>
         <Text style={styles.closeButtonText}>✕</Text>
       </TouchableOpacity>
     </View>

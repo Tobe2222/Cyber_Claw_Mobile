@@ -291,6 +291,18 @@ class SyncClient {
     this.send({ type: 'request_greeting_audio', text });
   }
 
+  // v3.2.29: ask the desktop to synthesize the exit
+  // reply audio and stream it back. Mirror of
+  // requestGreetingAudio, but routes through a different
+  // requestId ('exit_reply' vs 'greeting') so the desktop
+  // response is written to the exit-reply cache (via
+  // ExitReplyAudioCache) instead of the greeting cache.
+  // Voice mode close plays the cached audio (or falls back
+  // to speakText() if no cache yet).
+  requestExitReplyAudio(text: string) {
+    this.send({ type: 'request_exit_reply_audio', text });
+  }
+
   setCompanionId(companionId: string) {
     this.send({ type: 'set_companion_id', companionId });
   }
@@ -425,6 +437,17 @@ class SyncClient {
         // cause duplicate playback).
         if (msg.requestId === 'greeting') {
           this.emit('greeting_audio', msg);
+          break;
+        }
+        // v3.2.29: same routing for the exit reply —
+        // re-emit on 'exit_reply_audio' so the
+        // ExitReplyAudioCache handler can write the
+        // file. The regular 'audio_response' channel
+        // would also try to play it (the AI-reply
+        // playback path), which would race with the
+        // cache write and cause duplicate playback.
+        if (msg.requestId === 'exit_reply') {
+          this.emit('exit_reply_audio', msg);
           break;
         }
         this.emit('audio_response', msg);

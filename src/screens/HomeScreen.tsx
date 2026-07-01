@@ -1840,6 +1840,29 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onActiveCo
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);
+    // v3.2.29: cache the desktop-synthesized audio for
+    // both the wake greeting AND the exit reply. These
+    // come back as `audio_response` messages with
+    // requestId='greeting' or requestId='exit_reply' on a
+    // sibling channel; SyncClient re-emits them as
+    // 'greeting_audio' and 'exit_reply_audio'. The save
+    // functions write the WAV to DocumentDirectoryPath so
+    // the next wake/close can play from cache without
+    // waiting for a fresh synthesis round-trip.
+    const onGreetingAudio = (msg: any) => {
+      if (msg?.text && msg?.audio) {
+        const { saveGreetingAudio } = require('../services/GreetingAudioCache');
+        saveGreetingAudio(msg.text, msg.audio).catch(() => {});
+      }
+    };
+    syncClient.on('greeting_audio', onGreetingAudio);
+    const onExitReplyAudio = (msg: any) => {
+      if (msg?.text && msg?.audio) {
+        const { saveExitReplyAudio } = require('../services/ExitReplyAudioCache');
+        saveExitReplyAudio(msg.text, msg.audio).catch(() => {});
+      }
+    };
+    syncClient.on('exit_reply_audio', onExitReplyAudio);
     const onVoiceTranscriptResult = (msg: any) => {
       if (!msg.transcript) {
         setChatVoiceStatus(null);
@@ -2049,6 +2072,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onActiveCo
       try { syncClient?.off?.('chat_history', onChatHistory); } catch {}
       try { syncClient?.off?.('arena', onArena); } catch {}
       try { syncClient?.off?.('audio_response', onAudioResponse); } catch {}
+      // v3.2.29: also tear down the cache listeners.
+      try { syncClient?.off?.('greeting_audio', onGreetingAudio); } catch {}
+      try { syncClient?.off?.('exit_reply_audio', onExitReplyAudio); } catch {}
       try { syncClient?.off?.('voice_transcript_result', onVoiceTranscriptResult); } catch {}
       try { syncClient?.off?.('voice_received', onVoiceReceived); } catch {}
       try { syncClient?.off?.('agents_list', onAgentsList); } catch {}

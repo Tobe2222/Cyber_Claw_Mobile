@@ -94,6 +94,15 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [readyPhrase, setReadyPhrase] = useState('Ready to chat');
   const [readyPhraseSavedAt, setReadyPhraseSavedAt] = useState<number | null>(null);
   const readyPhraseSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // v3.2.29: exit reply phrase — mirror of the wake
+  // greeting. The companion speaks this on voice-mode
+  // close (silence timeout, exit phrase match, or
+  // trainer-cancel). Same flow: type → save → desktop
+  // synthesizes via piper TTS → cache WAV → play on
+  // close. Empty = silent close (no audio, no log spam).
+  const [exitReplyPhrase, setExitReplyPhrase] = useState('Goodbye!');
+  const [exitReplySavedAt, setExitReplySavedAt] = useState<number | null>(null);
+  const exitReplySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // v3.2.17 — multi-turn voice loop settings.
   const [voiceSilenceMs, setVoiceSilenceMs] = useState(5000);
@@ -257,6 +266,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     AsyncStorage.getItem('cyberclaw-wake-bg-threshold').then(v => { if (v) setBgThreshold(Math.round(parseFloat(v) * 100)); });
     AsyncStorage.getItem('cyberclaw-wake-fg-threshold').then(v => { if (v) setFgThreshold(Math.round(parseFloat(v) * 100)); });
     AsyncStorage.getItem('cyberclaw-ready-phrase').then(v => { if (v) setReadyPhrase(v); });
+    // v3.2.29: hydrate the exit reply phrase (mirror of
+    // the wake greeting hydration above). Empty string
+    // means "silent close" — no audio played, no log
+    // spam, just drop back to passive wake listening.
+    AsyncStorage.getItem('cyberclaw-exit-reply-phrase').then(v => { if (v != null) setExitReplyPhrase(v); });
     // v3.2.17 — hydrate voice-mode loop settings.
     AsyncStorage.getItem('cyberclaw-voice-silence-ms').then(v => {
       if (v) {
@@ -457,6 +471,24 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         try {
           const { ensureGreetingCached } = require('../services/GreetingAudioCache');
           ensureGreetingCached(v.trim());
+        } catch (_) {}
+      }
+    }, 600);
+  };
+
+  // v3.2.29: persist the exit reply phrase. Mirror of
+  // persistReadyPhrase — debounced 600ms, then save
+  // + kick off desktop synthesis. Empty string = silent
+  // close (no synthesis, no audio).
+  const persistExitReplyPhrase = (v: string) => {
+    if (exitReplySaveTimer.current) clearTimeout(exitReplySaveTimer.current);
+    exitReplySaveTimer.current = setTimeout(async () => {
+      await AsyncStorage.setItem('cyberclaw-exit-reply-phrase', v);
+      setExitReplySavedAt(Date.now());
+      if (v && v.trim()) {
+        try {
+          const { ensureExitReplyCached } = require('../services/ExitReplyAudioCache');
+          ensureExitReplyCached(v.trim());
         } catch (_) {}
       }
     }, 600);
@@ -885,6 +917,25 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         />
         {readyPhraseSavedAt && (
           <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
+        )}
+
+        {/* v3.2.29: Exit reply phrase. Mirror of the wake
+            greeting above — same shape, same debounce, same
+            desktop-synthesis-on-save flow. Plays on voice-
+            mode close. Empty value = silent close. */}
+        <SubTitle>Exit reply</SubTitle>
+        <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
+        <TextInput
+          style={styles.input}
+          value={exitReplyPhrase}
+          onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
+          onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
+          placeholder="Goodbye!"
+          placeholderTextColor="#555"
+          returnKeyType="done"
+        />
+        {exitReplySavedAt && exitReplyPhrase && (
+          <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
         )}
 
         {/* v3.2.27 — voice-mode loop controls.
