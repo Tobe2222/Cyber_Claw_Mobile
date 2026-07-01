@@ -18,7 +18,7 @@
  * a "Save Audio Settings" button.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
   Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules, BackHandler,
