@@ -8,26 +8,36 @@
  * feel like grab-bags. The new structure is:
  *
  *   (1) 🎤 Voice mode (top-level)
- *       - Background listening
- *       - Audio buffer
- *       - Companions list (NEW): each companion shows their
+ *       - Background listening toggle (master on/off)
+ *       - 🎧 Background listening — details (SubTitle):
+ *           * Audio buffer (lookback + conversation timeout + retention)
+ *           * Silence timeout (voice mode close)
+ *           * Match thresholds (foreground / background)
+ *       - Companions list: each companion shows their
  *         currently-active wake phrase; tap to open detail
  *       - Train-new companion's wake button
- *       - Silence timeout (voice mode close)
- *       - Match thresholds (foreground / background)
+
+ *       v3.4.1 layout: the three "details" controls were
+ *       physically moved up to sit immediately under the
+ *       master toggle, so they read as one block. Previously
+ *       they were loose siblings separated by the Companions
+ *       list + train-new button, which felt like a grab-bag.
  *
  *   (2) Per-companion detail view (tap a companion to enter)
  *       - Back button + companion header
- *       - Wake greeting TextInput (top, single TextInput —
- *         global semantics but reachable from any companion
- *         for consistent layout)
- *       - Exit reply TextInput (same)
- *       - Wake phrases for this companion (uses the existing
- *         WakePhrasePicker, scoped to one companion)
+ *       - Wake greeting TextInput
+ *       - Wake phrases for this companion (WakePhrasePicker,
+ *         scoped to one companion)
  *       - Train-new wake phrase for this companion
- *       - Exit phrases for this companion (uses the new
- *         PerCompanionExitPicker, scoped to one companion)
+ *       - Exit reply TextInput
+ *       - Exit phrases for this companion (PerCompanionExitPicker,
+ *         scoped to one companion)
  *       - Train-new exit phrase for this companion
+ *
+ *       Order rule: all wake-related controls on top, all
+ *       exit-related controls on the bottom. v3.4.1 feedback
+ *       from Tobe — the v3.4.0 interleaving of wake/exit
+ *       blocks read as disorderly.
  *
  *   (3) 🔊 Voice & Speech / 🤖 Agent Reach (unchanged)
  *
@@ -308,21 +318,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
           )}
 
-          {/* Exit reply — same global semantics, per-companion layout */}
-          <SubTitle>Exit reply</SubTitle>
-          <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
-          <TextInput
-            style={styles.input}
-            value={exitReplyPhrase}
-            onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
-            onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
-            placeholder="Goodbye!"
-            placeholderTextColor="#555"
-            returnKeyType="done"
-          />
-          {exitReplySavedAt && exitReplyPhrase && (
-            <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
-          )}
+          {/* v3.4.1 reorder: wake-related controls on top,
+              exit-related on the bottom. The exit reply
+              TextInput that used to live right after the
+              wake greeting now lives AFTER the wake phrases
+              block (just above the exit phrases block). */}
 
           {/* Wake phrases for this companion */}
           <SubTitle>Wake phrases</SubTitle>
@@ -389,6 +389,26 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🎤 Train new wake phrase for {companion.name}</Text>
             <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word</Text>
           </TouchableOpacity>
+
+          {/* Exit reply — same global semantics, per-companion layout.
+              v3.4.1: moved here from above the Wake phrases block
+              so all wake-related controls group together at the
+              top and all exit-related controls group together at
+              the bottom. */}
+          <SubTitle>Exit reply</SubTitle>
+          <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
+          <TextInput
+            style={styles.input}
+            value={exitReplyPhrase}
+            onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
+            onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
+            placeholder="Goodbye!"
+            placeholderTextColor="#555"
+            returnKeyType="done"
+          />
+          {exitReplySavedAt && exitReplyPhrase && (
+            <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
+          )}
 
           {/* Exit phrases for this companion (NEW v3.4.0 per-companion) */}
           <SubTitle>Exit phrases</SubTitle>
@@ -1123,7 +1143,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           {/* ── 🎤 Voice mode (top-level, with companion list) ── */}
           <Section title="🎤 Voice mode" desc="Configure how voice mode works for each companion. Tap a companion to customize their wake phrase, exit phrase, greeting, and reply.">
 
-            {/* Background listening (existing toggle, unchanged) */}
+            {/* Master Background listening toggle. The
+                grouped sub-controls below (audio buffer,
+                silence timeout, match thresholds) only do
+                anything when this is on; they configure
+                HOW background listening works. */}
             <Toggle
               title="🎧 Background listening"
               sub="Keep the microphone active in the background. The app wakes on your phrase."
@@ -1142,6 +1166,125 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
                 }
               }}
             />
+
+            {/* v3.4.1: group audio buffer + silence timeout +
+                match thresholds under one "Background listening"
+                sub-heading. These three were v3.4.0 loose
+                siblings at the same level as the master toggle,
+                which read as a grab-bag. Grouping them makes
+                the mental model: "master toggle above decides
+                whether; these below decide how". */}
+            <SubTitle>🎧 Background listening — details</SubTitle>
+            <Hint>Fine-tune how background listening behaves. These only matter when the master toggle above is on.</Hint>
+
+            {/* Audio buffer (existing, unchanged; inside
+                Background listening group as of v3.4.1).
+                v3.4.1: physically moved up here from after
+                the Companions list so the three "details"
+                controls (audio buffer / silence / match
+                thresholds) sit together as one block right
+                under the master toggle. */}
+            <Label>Audio buffer</Label>
+            <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>
+            <Label>Lookback (minutes)</Label>
+            <View style={styles.optionRow}>
+              {[5, 10, 30, 60].map(m => (
+                <OptionBtn key={m} active={audioSettings.lookbackMinutes === m} label={`${m}`} onPress={() => updateAudio('lookbackMinutes', m)} />
+              ))}
+            </View>
+            <Label>Conversation timeout (minutes)</Label>
+            <Hint>After this much silence, the companion returns to passive wake word detection.</Hint>
+            <View style={styles.optionRow}>
+              {[1, 2, 5].map(m => (
+                <OptionBtn key={m} active={audioSettings.conversationTimeoutMinutes === m} label={`${m}`} onPress={() => updateAudio('conversationTimeoutMinutes', m)} />
+              ))}
+            </View>
+            <Label>Recording retention (days)</Label>
+            <Hint>Daily audio logs are kept locally for this many days, then auto-deleted.</Hint>
+            <View style={styles.optionRow}>
+              {[1, 7, 14, 30].map(d => (
+                <OptionBtn key={d} active={audioSettings.retentionDays === d} label={`${d}`} onPress={() => updateAudio('retentionDays', d)} />
+              ))}
+            </View>
+            <TouchableOpacity style={styles.saveAudioBtn} onPress={saveAudioSettings}>
+              <Text style={styles.saveAudioBtnText}>
+                {audioSettingsSavedAt
+                  ? `✅ Saved at ${new Date(audioSettingsSavedAt).toLocaleTimeString()}`
+                  : '💾 Save audio settings'}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Voice mode close — silence timeout (existing,
+                unchanged; inside Background listening group
+                as of v3.4.1). v3.4.1: moved up here. */}
+            <Label>Silence to end turn: {voiceSilenceMs / 1000}s</Label>
+            <Hint>Voice mode stays open in a multi-turn loop. After this much silence, the turn ends.</Hint>
+            <View style={styles.optionRow}>
+              {[2, 3, 5, 7, 10].map(s => (
+                <OptionBtn
+                  key={s}
+                  active={voiceSilenceMs === s * 1000}
+                  label={`${s}s`}
+                  onPress={() => {
+                    setVoiceSilenceMs(s * 1000);
+                    AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
+                  }}
+                />
+              ))}
+            </View>
+
+            {/* Match thresholds (existing, unchanged;
+                inside Background listening group as of
+                v3.4.1). v3.4.1: moved up here. */}
+            <Label>Match thresholds</Label>
+            <Hint>Detector sensitivity. Higher = stricter (fewer false wakes). Tune if you're getting accidental triggers.</Hint>
+            <Label>Foreground: {fgThreshold}%</Label>
+            <View style={styles.thresholdRow}>
+              <Text style={styles.thresholdEdge}>40%</Text>
+              <View style={{ flex: 1, flexDirection: 'row' }}>
+                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
+                  <TouchableOpacity
+                    key={v}
+                    onPress={async () => {
+                      setFgThreshold(v);
+                      await AsyncStorage.setItem('cyberclaw-wake-fg-threshold', String(v / 100));
+                    }}
+                    style={[
+                      styles.thresholdCell,
+                      fgThreshold === v ? styles.thresholdCellActive :
+                      fgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
+                    ]}
+                  >
+                    <Text style={[styles.thresholdCellText, fgThreshold === v && { color: '#fff' }]}>{v}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.thresholdEdge}>90%</Text>
+            </View>
+
+            <Label>Background: {bgThreshold}%</Label>
+            <View style={styles.thresholdRow}>
+              <Text style={styles.thresholdEdge}>40%</Text>
+              <View style={{ flex: 1, flexDirection: 'row' }}>
+                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
+                  <TouchableOpacity
+                    key={v}
+                    onPress={async () => {
+                      setBgThreshold(v);
+                      await AsyncStorage.setItem('cyberclaw-wake-bg-threshold', String(v / 100));
+                    }}
+                    style={[
+                      styles.thresholdCell,
+                      bgThreshold === v ? styles.thresholdCellActive :
+                      bgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
+                    ]}
+                  >
+                    <Text style={[styles.thresholdCellText, bgThreshold === v && { color: '#fff' }]}>{v}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.thresholdEdge}>90%</Text>
+            </View>
 
             {/* ── Companions list (NEW v3.4.0) ── */}
             <SubTitle>Companions</SubTitle>
@@ -1205,104 +1348,14 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word for that companion</Text>
             </TouchableOpacity>
 
-            {/* Audio buffer (existing, unchanged) */}
-            <SubTitle>Audio buffer</SubTitle>
-            <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>
-            <Label>Lookback (minutes)</Label>
-            <View style={styles.optionRow}>
-              {[5, 10, 30, 60].map(m => (
-                <OptionBtn key={m} active={audioSettings.lookbackMinutes === m} label={`${m}`} onPress={() => updateAudio('lookbackMinutes', m)} />
-              ))}
-            </View>
-            <Label>Conversation timeout (minutes)</Label>
-            <Hint>After this much silence, the companion returns to passive wake word detection.</Hint>
-            <View style={styles.optionRow}>
-              {[1, 2, 5].map(m => (
-                <OptionBtn key={m} active={audioSettings.conversationTimeoutMinutes === m} label={`${m}`} onPress={() => updateAudio('conversationTimeoutMinutes', m)} />
-              ))}
-            </View>
-            <Label>Recording retention (days)</Label>
-            <Hint>Daily audio logs are kept locally for this many days, then auto-deleted.</Hint>
-            <View style={styles.optionRow}>
-              {[1, 7, 14, 30].map(d => (
-                <OptionBtn key={d} active={audioSettings.retentionDays === d} label={`${d}`} onPress={() => updateAudio('retentionDays', d)} />
-              ))}
-            </View>
-            <TouchableOpacity style={styles.saveAudioBtn} onPress={saveAudioSettings}>
-              <Text style={styles.saveAudioBtnText}>
-                {audioSettingsSavedAt
-                  ? `✅ Saved at ${new Date(audioSettingsSavedAt).toLocaleTimeString()}`
-                  : '💾 Save audio settings'}
-              </Text>
-            </TouchableOpacity>
-
-            {/* Voice mode close — silence timeout (existing, unchanged) */}
-            <SubTitle>Silence to end turn: {voiceSilenceMs / 1000}s</SubTitle>
-            <Hint>Voice mode stays open in a multi-turn loop. After this much silence, the turn ends.</Hint>
-            <View style={styles.optionRow}>
-              {[2, 3, 5, 7, 10].map(s => (
-                <OptionBtn
-                  key={s}
-                  active={voiceSilenceMs === s * 1000}
-                  label={`${s}s`}
-                  onPress={() => {
-                    setVoiceSilenceMs(s * 1000);
-                    AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
-                  }}
-                />
-              ))}
-            </View>
-
-            {/* Match thresholds (existing, unchanged) */}
-            <SubTitle>Match thresholds</SubTitle>
-            <Hint>Detector sensitivity. Higher = stricter (fewer false wakes). Tune if you're getting accidental triggers.</Hint>
-            <Label>Foreground: {fgThreshold}%</Label>
-            <View style={styles.thresholdRow}>
-              <Text style={styles.thresholdEdge}>40%</Text>
-              <View style={{ flex: 1, flexDirection: 'row' }}>
-                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
-                  <TouchableOpacity
-                    key={v}
-                    onPress={async () => {
-                      setFgThreshold(v);
-                      await AsyncStorage.setItem('cyberclaw-wake-fg-threshold', String(v / 100));
-                    }}
-                    style={[
-                      styles.thresholdCell,
-                      fgThreshold === v ? styles.thresholdCellActive :
-                      fgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
-                    ]}
-                  >
-                    <Text style={[styles.thresholdCellText, fgThreshold === v && { color: '#fff' }]}>{v}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.thresholdEdge}>90%</Text>
-            </View>
-
-            <Label>Background: {bgThreshold}%</Label>
-            <View style={styles.thresholdRow}>
-              <Text style={styles.thresholdEdge}>40%</Text>
-              <View style={{ flex: 1, flexDirection: 'row' }}>
-                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
-                  <TouchableOpacity
-                    key={v}
-                    onPress={async () => {
-                      setBgThreshold(v);
-                      await AsyncStorage.setItem('cyberclaw-wake-bg-threshold', String(v / 100));
-                    }}
-                    style={[
-                      styles.thresholdCell,
-                      bgThreshold === v ? styles.thresholdCellActive :
-                      bgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
-                    ]}
-                  >
-                    <Text style={[styles.thresholdCellText, bgThreshold === v && { color: '#fff' }]}>{v}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.thresholdEdge}>90%</Text>
-            </View>
+            {/* Audio buffer / silence timeout / match
+                thresholds used to live here in v3.4.0 but
+                v3.4.1 physically moves them up to sit under
+                the "Background listening — details"
+                SubTitle. They now form a single grouped
+                block with the master Background listening
+                toggle above. See that section for the
+                moved content. */}
           </Section>
         </>
       )}
