@@ -132,6 +132,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   const appStateRef = useRef<string>(AppState.currentState);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
+  // v3.5.0 — ref-mirrored callbacks so the exit listener
+  // effect doesn't have to add them as deps (which would
+  // cause the listener to tear down + rebuild on every
+  // callback identity change).
+  const playExitReplyRef = useRef<(() => Promise<void>) | null>(null);
+  const addVoiceLogRef = useRef<((s: string) => void) | null>(null);
   // v3.2.17 — ref-captured reference to the latest
   // startRecordingTurn closure, so the onAudioResponse
   // handler can re-enter the multi-turn loop without
@@ -175,6 +181,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       return next.slice(-6);
     });
   }, []);
+  addVoiceLogRef.current = addVoiceLog;
 
   // Speak via native TTS (works even when AudioRecord is active).
   //
@@ -424,6 +431,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       speak(trimmed).catch(() => {});
     }
   }, [speak]);
+  playExitReplyRef.current = playExitReply;
 
   // v3.2.20 — clear the transcribing-timeout on unmount so a
   // stale timer can't fire after the user has already left
@@ -1207,6 +1215,63 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     });
     return () => handler.remove();
   }, []);
+
+  // v3.5.0 — listen for the ML exit-phrase detection. The
+  // native OWW detector now runs a second classifier
+  // (exitInterpreter) in parallel with the wake classifier
+  // and emits 'owwExitDetected' when the active exit
+  // phrase is heard. We mirror the text-fallback exit
+  // behavior: play the exit reply, then close.
+  //
+  // The listener stays mounted for the lifetime of the
+  // screen (not gated on voiceMode) because a custom-trained
+  // exit model is also useful in plain wake mode if the
+  // user wants to dismiss the wake mode without saying the
+  // wake phrase first. The behavior matches the existing
+  // pollForExitPhrase path (text fallback).
+  //
+  // The exitFiredRef guards against double-triggering:
+  // both the ML detector AND the STT-text fallback can
+  // fire on the same utterance (exit is 6+ frames above
+  // threshold = "thanks" = 6+ frames of similar score;
+  // the transcription of "thanks" hits right around the
+  // same time). We want the FIRST one to win.
+  const exitFiredRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (!wakeWordEmitter) return;
+    const emitter = getWakeWordEmitter();
+    if (!emitter) return;
+    const sub = emitter.addListener('owwExitDetected', (e: { score: number }) => {
+      if (exitFiredRef.current) return;
+      exitFiredRef.current = true;
+      addLogEntry(`👋 Exit ML detected (${(e.score * 100).toFixed(0)}%)`, 'info');
+      addVoiceLogRef.current?.(`👋 Exit ML (${(e.score * 100).toFixed(0)}%) → closing`);
+      if (voiceMode) {
+        playExitReplyRef.current?.().catch(() => {});
+        setTimeout(() => exitRef.current(), 400);
+      } else {
+        // Plain wake mode + exit phrase = dismiss the wake
+        // mode overlay. Same as a single close-button tap.
+        exitRef.current();
+      }
+    });
+    return () => {
+      sub?.remove?.();
+      // Allow another exit (different session) to fire
+      // after this screen unmounts.
+      exitFiredRef.current = false;
+    };
+  }, [voiceMode]);
+
+  // v3.5.0 — also reset the exit guard on voiceMode
+  // toggle. When voiceMode flips off (the user exited
+  // voice mode via close button / auto-close / back),
+  // re-arm so a subsequent voiceMode on can fire a fresh
+  // exit. Without this, the first exit-detect within the
+  // screen's lifetime would lock out all subsequent ones.
+  useEffect(() => {
+    exitFiredRef.current = false;
+  }, [voiceMode]);
 
   // v3.1.79: auto-close + false-open detection.
   //

@@ -342,6 +342,23 @@ class SyncClient {
     this.send({ type: 'read_wake_model', tflitePath });
   }
 
+  // v3.5.0: parallel exit-phrase training pipeline. Mirrors
+  // requestWakeTraining + readWakeModel but for the exit
+  // classifier. The desktop spawns the same training script
+  // (openWakeWord doesn't care about the semantic phrase —
+  // it's a binary classifier either way). The reply chain is
+  // exit_training_progress / exit_training_result /
+  // exit_model_data.
+  requestExitTraining(phrase: string, samples: Array<{ name: string; data: string }>) {
+    this.send({ type: 'request_exit_training', phrase, samples });
+  }
+  requestLatestExitTrainingResult() {
+    this.send({ type: 'get_latest_exit_training_result' });
+  }
+  readExitModel(tflitePath: string) {
+    this.send({ type: 'read_exit_model', tflitePath });
+  }
+
   get state(): ConnectionState { return this._state; }
   get connected(): boolean { return this._state === 'connected' || this._state === 'reconnecting'; }
   get authenticated(): boolean { return this._authenticated; }

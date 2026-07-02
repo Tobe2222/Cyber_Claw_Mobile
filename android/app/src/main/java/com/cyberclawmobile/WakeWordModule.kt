@@ -769,6 +769,100 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // v3.5.0: hot-swap the exit-phrase model. Parallel to
+    // setWakeModelFromBase64 but for the exit classifier.
+    // Persists to filesDir/exit_models/<phrase>.tflite and a
+    // SharedPreferences binding (exit_phrase_<phrase>_path).
+    //
+    // The exit model is identified by phrase (not agentId) because
+    // exit phrases are user-level (one active phrase), not
+    // per-companion. We persist by phrase so a re-train replaces
+    // the same file.
+    @ReactMethod fun setExitModelFromBase64(phrase: String, base64: String, promise: Promise) {
+        try {
+            if (phrase.isBlank() || base64.isBlank()) {
+                promise.reject("ARG", "phrase and base64 required")
+                return
+            }
+            val dir = File(reactContext.filesDir, "exit_models")
+            if (!dir.exists()) dir.mkdirs()
+            val safeName = phrase.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+            val tflite = File(dir, "${safeName}.tflite")
+            tflite.writeBytes(Base64.decode(base64, Base64.DEFAULT))
+            emitDebug("info", "Wrote exit model: ${tflite.absolutePath} (${tflite.length()} bytes)")
+
+            // Persist the binding so we can re-apply on app restart.
+            val prefs = reactContext.getSharedPreferences("exit_models", android.content.Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("active_phrase", phrase)
+                .putString("active_path", tflite.absolutePath)
+                .putLong("active_savedAt", System.currentTimeMillis())
+                .apply()
+
+            // Hot-swap into the running detector (if any).
+            val detector = owwDetector
+            if (detector != null) {
+                val ok = detector.setExitModelFromFile(phrase, tflite.absolutePath)
+                if (ok) {
+                    emitDebug("info", "Hot-swapped exit model: '$phrase'")
+                } else {
+                    emitDebug("warn", "Exit hot-swap failed; will retry on next initOww")
+                }
+            }
+            promise.resolve(tflite.absolutePath)
+        } catch (e: Exception) {
+            promise.reject("EXIT_MODEL_SAVE", e.message)
+        }
+    }
+
+    // v3.5.0: set the exit-phrase detection threshold. Default
+    // 0.5 to match the wake default. The JS layer reads it from
+    // AsyncStorage ('cyberclaw-exit-threshold') and passes it
+    // through here (similar to the wake threshold).
+    @ReactMethod fun setExitThreshold(threshold: Double, promise: Promise) {
+        try {
+            owwDetector?.setExitThreshold(threshold.toFloat())
+            emitDebug("info", "Exit threshold set: $threshold")
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("EXIT_THRESHOLD", e.message)
+        }
+    }
+
+    // v3.5.0: load a saved exit-phrase model on app boot, if
+    // one exists. Parallel to loadOwwSavedModel. Reads the
+    // 'exit_models' SharedPreferences for the most recent
+    // active phrase. Returns the phrase string or null.
+    @ReactMethod fun loadOwwSavedExitModel(promise: Promise) {
+        try {
+            val prefs = reactContext.getSharedPreferences("exit_models", android.content.Context.MODE_PRIVATE)
+            val path = prefs.getString("active_path", null)
+            val phrase = prefs.getString("active_phrase", null)
+            if (path == null || phrase == null) {
+                promise.resolve(null)
+                return
+            }
+            if (!File(path).exists()) {
+                prefs.edit().remove("active_phrase").remove("active_path").remove("active_savedAt").apply()
+                promise.resolve(null)
+                return
+            }
+            val detector = owwDetector
+            if (detector == null) {
+                // Detector not yet initialized — return the
+                // phrase so the JS side can defer the load
+                // until after initOww.
+                promise.resolve(phrase)
+                return
+            }
+            val ok = detector.setExitModelFromFile(phrase, path)
+            promise.resolve(if (ok) phrase else null)
+        } catch (e: Exception) {
+            Log.w("WakeWord", "Failed to load saved exit model: ${e.message}")
+            promise.resolve(null)
+        }
+    }
+
     // v3.2.0: look up the saved wake model for an agent (if any)
     // and apply it. Called from initOww so a freshly-trained
     // custom wake word auto-loads on every app launch.
@@ -879,7 +973,9 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 val chunkBuf = ShortArray(chunkSamples)
                 var chunkFill = 0
                 var highScoreFrames = 0
+                var exitHighScoreFrames = 0
                 val HIGH_SCORE_RUN = 3  // 3 consecutive frames above threshold = wake word
+                val EXIT_HIGH_SCORE_RUN = 3  // 3 consecutive frames above exit threshold = exit phrase
                 // v3.2.30: cooldown after a detection. Without
                 // this, a single sustained "hey..." in the
                 // user's speech (or background conversation
@@ -894,7 +990,8 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 // can re-trigger the wake within a couple of
                 // seconds of wanting to.
                 val DETECTION_COOLDOWN_MS = 2000L
-                var lastDetectionAt = 0L
+                var lastWakeAt = 0L
+                var lastExitAt = 0L
 
                 while (isOwwListening) {
                     val read = rec.read(readBuf, 0, readBuf.size)
@@ -923,18 +1020,31 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                             // Word → Foreground match
                             // threshold / Background match
                             // threshold) had no effect.
-                            val score = detector.predictScore(chunkBuf) ?: 0f
+                            //
+                            // v3.5.0: dual classifier. The
+                            // detector now returns BOTH wake and
+                            // exit scores from the same
+                            // melspec+embedding pass. Each has
+                            // its own threshold and its own
+                            // HIGH_SCORE_RUN counter so they
+                            // can fire independently.
+                            val pair = detector.predictScore(chunkBuf)
+                            val wakeScore = pair.wake
+                            val exitScore = pair.exit
                             val threshold = detector.getThreshold()
-                            if (score >= threshold) {
+                            val exitThreshold = detector.getExitThreshold()
+
+                            // Wake word check
+                            if (wakeScore != null && wakeScore >= threshold) {
                                 highScoreFrames++
                                 if (highScoreFrames >= HIGH_SCORE_RUN) {
                                     val now = System.currentTimeMillis()
-                                    if (now - lastDetectionAt >= DETECTION_COOLDOWN_MS) {
-                                        lastDetectionAt = now
+                                    if (now - lastWakeAt >= DETECTION_COOLDOWN_MS) {
+                                        lastWakeAt = now
                                         // Wake word detected!
                                         handler.post {
                                             val params = Arguments.createMap()
-                                            params.putDouble("score", score.toDouble())
+                                            params.putDouble("score", wakeScore.toDouble())
                                             params.putString("wakeword", owwWakeword)
                                             reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                                                 .emit("owwWakeDetected", params)
@@ -953,13 +1063,37 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                                         // high-score counter so
                                         // we re-arm cleanly when
                                         // the cooldown expires.
-                                        Log.w("WakeWord", "OWW detection suppressed by cooldown (${DETECTION_COOLDOWN_MS - (now - lastDetectionAt)}ms remaining)")
+                                        Log.w("WakeWord", "OWW detection suppressed by cooldown (${DETECTION_COOLDOWN_MS - (now - lastWakeAt)}ms remaining)")
                                     }
                                     highScoreFrames = 0
                                 }
                             } else {
                                 highScoreFrames = 0
                             }
+
+                            // Exit phrase check (v3.5.0)
+                            if (exitScore != null && exitScore >= exitThreshold) {
+                                exitHighScoreFrames++
+                                if (exitHighScoreFrames >= EXIT_HIGH_SCORE_RUN) {
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastExitAt >= DETECTION_COOLDOWN_MS) {
+                                        lastExitAt = now
+                                        // Exit phrase detected!
+                                        handler.post {
+                                            val params = Arguments.createMap()
+                                            params.putDouble("score", exitScore.toDouble())
+                                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                                .emit("owwExitDetected", params)
+                                        }
+                                    } else {
+                                        Log.w("WakeWord", "Exit detection suppressed by cooldown (${DETECTION_COOLDOWN_MS - (now - lastExitAt)}ms remaining)")
+                                    }
+                                    exitHighScoreFrames = 0
+                                }
+                            } else {
+                                exitHighScoreFrames = 0
+                            }
+
                             chunkFill = 0
                         }
                     }

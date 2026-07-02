@@ -1,24 +1,22 @@
 /*
- * OpenWakeWordDetector — TFLite-based wake word detection.
+ * OpenWakeWordDetector — TFLite-based wake word + exit phrase detection.
  *
  * v3.1.95: Replaces the DTW-based sample matcher that was
  * triggering on any consonant-vowel speech pattern. Uses
  * openWakeWord's TFLite models (melspectrogram + embedding +
- * wake-word classifier) for proper ML-based detection.
+ * classifier) for proper ML-based detection.
  *
- * Why openWakeWord: it's open source (Apache 2.0), runs fully
- * on-device, supports custom-trained wake words via the
- * openWakeWord training pipeline. Pre-trained models for
- * "hey jarvis", "alexa", "hey mycroft", "hey rhasspy" ship
- * in the APK assets so the app works out of the box with
- * a fallback wake phrase.
+ * v3.5.0: Dual classifier support — runs BOTH a wake-word
+ * classifier AND an exit-phrase classifier on the same
+ * melspec+embedding output. Both models are hot-swappable
+ * from desktop-trained .tflite files (no app restart).
  *
  * Pipeline (per 80ms audio frame at 16kHz = 1280 samples):
  * 1. Feed 1280-sample PCM16 buffer to melspectrogram model
  * 2. Combine with previous frames (model expects 5-frame history)
  * 3. Pass melspec features through embedding model
- * 4. Pass embeddings through wake-word classifier
- * 5. Threshold the classifier output (>0.5 = detected)
+ * 4. Run BOTH classifiers (wake + exit) on the embedding
+ * 5. Return (wakeScore, exitScore)
  *
  * The classifier expects 96 frames of embeddings (from 5+80
  * frames of melspec). So we accumulate audio until we have
@@ -40,23 +38,49 @@ import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 
 /**
- * Wraps the three openWakeWord TFLite models. Lazy-loads on
- * first use to keep app startup fast.
+ * Wraps the openWakeWord TFLite models (melspectrogram +
+ * embedding) + N binary classifier interpreters (wake word,
+ * exit phrase, future phrases). Lazy-loads on first use to
+ * keep app startup fast.
+ *
+ * v3.5.0: refactored from single-classifier to multi-classifier.
+ * The predict method now returns a `PairScores` data class with
+ * optional wake + exit scores, so callers can fire whichever
+ * events apply.
  */
 class OpenWakeWordDetector(private val context: Context) {
     private val tag = "OpenWakeWord"
     private var melspecInterpreter: Interpreter? = null
     private var embeddingInterpreter: Interpreter? = null
+    // v3.5.0: was a single wakewordInterpreter. Now we have
+    // two slots: one for the wake word, one for the exit
+    // phrase. Both are optional (either can be null if not
+    // trained yet) and both share the same melspec+embedding.
     private var wakewordInterpreter: Interpreter? = null
+    private var exitInterpreter: Interpreter? = null
     private var wakewordName: String = "hey_jarvis"
+    private var exitName: String? = null  // null until the user trains an exit phrase
     private var threshold: Float = 0.5f
+    private var exitThreshold: Float = 0.5f
 
     // History buffers for the streaming pipeline
     private val melspecHistory = ArrayDeque<FloatArray>()
     private val maxHistory = 5  // melspec model expects 5-frame history
 
     /**
-     * Load all three models from assets. Looks for:
+     * v3.5.0: scores from a single inference pass. Either
+     * field can be null if the corresponding classifier
+     * isn't loaded (e.g. user hasn't trained an exit phrase
+     * yet — only wake score is populated).
+     */
+    data class PairScores(
+        val wake: Float?,
+        val exit: Float?,
+    )
+
+    /**
+     * Load all three base models from assets, plus the wake
+     * classifier. Looks for:
      *   assets/openwakeword/melspectrogram.tflite
      *   assets/openwakeword/embedding_model.tflite
      *   assets/openwakeword/<wakewordName>.tflite (e.g. hey_jarvis_v0.1.tflite)
@@ -87,9 +111,14 @@ class OpenWakeWordDetector(private val context: Context) {
                 }
                 wakewordInterpreter = loadInterpreterFromFile(customFile.absolutePath)
             }
+            // v3.5.0: exitInterpreter is NOT loaded here — it's
+            // hot-swapped later when the user trains an exit
+            // phrase via setExitModelFromFile. Until then, the
+            // exit score stays null.
+            //
             // Reset history when models reload
             melspecHistory.clear()
-            Log.i(tag, "Models loaded: $wakewordName (threshold=$threshold)")
+            Log.i(tag, "Models loaded: wake=$wakewordName exit=${exitName ?: "(none)"} (threshold=$threshold)")
             true
         } catch (e: Exception) {
             Log.e(tag, "Failed to load models: ${e.message}", e)
@@ -120,20 +149,56 @@ class OpenWakeWordDetector(private val context: Context) {
             true
         } catch (e: Exception) {
             Log.e(tag, "Failed to load wake model from $tflitePath: ${e.message}", e)
-            false
+            return false
         }
     }
 
     /**
-     * Set detection threshold. 0.5 is the openWakeWord default.
-     * Higher = stricter (fewer false positives, more false negatives).
+     * v3.5.0: hot-swap the exit-phrase classifier interpreter.
+     * Parallel to setWakewordModelFromFile. Same clearing
+     * behavior (melspec history is biased toward the previous
+     * model's expected input distribution).
+     *
+     * @param phrase the user's exit phrase text (stored as
+     *               `exitName` for logging/debug only — the
+     *               model itself is opaque).
+     */
+    fun setExitModelFromFile(phrase: String, tflitePath: String): Boolean {
+        return try {
+            val newInterp = loadInterpreterFromFile(tflitePath)
+            exitInterpreter?.close()
+            exitInterpreter = newInterp
+            exitName = phrase
+            melspecHistory.clear()
+            Log.i(tag, "Exit-phrase model swapped: '$phrase' from $tflitePath (history cleared)")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to load exit model from $tflitePath: ${e.message}", e)
+            return false
+        }
+    }
+
+    /**
+     * Set wake detection threshold. 0.5 is the openWakeWord
+     * default. Higher = stricter (fewer false positives, more
+     * false negatives).
      */
     fun setThreshold(t: Float) {
         threshold = t.coerceIn(0.0f, 1.0f)
     }
 
     /**
-     * v3.2.30: return the currently configured detection
+     * v3.5.0: set the exit-phrase detection threshold separately
+     * from the wake threshold. They serve different purposes
+     * (wake = first detection, exit = ends conversation) so
+     * they're tuned independently. Default 0.5 to match wake.
+     */
+    fun setExitThreshold(t: Float) {
+        exitThreshold = t.coerceIn(0.0f, 1.0f)
+    }
+
+    /**
+     * v3.2.30: return the currently configured wake detection
      * threshold. The OWW listening loop in WakeWordModule
      * needs to read this so it can compare against the
      * same threshold the detector uses internally (instead
@@ -142,17 +207,30 @@ class OpenWakeWordDetector(private val context: Context) {
     fun getThreshold(): Float = threshold
 
     /**
-     * Run inference on a chunk of 1280 PCM16 samples (80ms at 16kHz).
-     * Returns the wake word detection score, or null if models not loaded.
+     * v3.5.0: return the exit-phrase detection threshold.
      */
-    fun predictScore(pcm16: ShortArray): Float? {
+    fun getExitThreshold(): Float = exitThreshold
+
+    /**
+     * Run inference on a chunk of 1280 PCM16 samples (80ms at 16kHz).
+     * Returns a PairScores with optional wake score and optional
+     * exit score. Either can be null if the corresponding classifier
+     * isn't loaded.
+     */
+    fun predictScore(pcm16: ShortArray): PairScores {
         if (pcm16.size != 1280) {
             Log.w(tag, "Expected 1280 samples, got ${pcm16.size}")
-            return null
+            return PairScores(null, null)
         }
-        val mel = melspecInterpreter ?: return null
-        val emb = embeddingInterpreter ?: return null
-        val ww = wakewordInterpreter ?: return null
+        val mel = melspecInterpreter
+        val emb = embeddingInterpreter
+        val ww = wakewordInterpreter
+        val exit = exitInterpreter
+
+        if (mel == null || emb == null || (ww == null && exit == null)) {
+            // Need at least one classifier loaded to do anything useful.
+            return PairScores(null, null)
+        }
 
         try {
             // Step 1: convert PCM16 to normalized float [-1, 1]
@@ -202,28 +280,44 @@ class OpenWakeWordDetector(private val context: Context) {
 
             val embedding = embOutput[0][0]
 
-            // Step 4: run wake word classifier
-            // Classifier expects [1, N, 96] (N frames of history embeddings).
-            // For streaming, we feed a sliding window of embeddings.
-            val wwInput = Array(1) { Array(1) { FloatArray(96) } }
-            System.arraycopy(embedding, 0, wwInput[0][0], 0, 96)
+            // Step 4: run both classifiers (wake + exit) on the
+            // same embedding. Both expect [1, 1, 96] (single
+            // embedding frame) and output [1, 1] (binary score).
+            val classInput = Array(1) { Array(1) { FloatArray(96) } }
+            System.arraycopy(embedding, 0, classInput[0][0], 0, 96)
 
-            val wwOutput = Array(1) { FloatArray(1) }
-            ww.run(wwInput, wwOutput)
+            var wakeScore: Float? = null
+            var exitScore: Float? = null
 
-            return wwOutput[0][0]
+            if (ww != null) {
+                val wwOutput = Array(1) { FloatArray(1) }
+                ww.run(classInput, wwOutput)
+                wakeScore = wwOutput[0][0]
+            }
+
+            if (exit != null) {
+                val exitOutput = Array(1) { FloatArray(1) }
+                exit.run(classInput, exitOutput)
+                exitScore = exitOutput[0][0]
+            }
+
+            return PairScores(wakeScore, exitScore)
         } catch (e: Exception) {
             Log.e(tag, "Inference failed: ${e.message}", e)
-            return null
+            return PairScores(null, null)
         }
     }
 
     /**
-     * Run inference and return true if score >= threshold.
+     * Run inference. Returns true if wake score >= wake
+     * threshold OR exit score >= exit threshold. Either
+     * classifier can fire independently.
      */
     fun predict(pcm16: ShortArray): Boolean {
-        val score = predictScore(pcm16) ?: return false
-        return score >= threshold
+        val (wakeScore, exitScore) = predictScore(pcm16)
+        val wakeHit = wakeScore != null && wakeScore >= threshold
+        val exitHit = exitScore != null && exitScore >= exitThreshold
+        return wakeHit || exitHit
     }
 
     /**
@@ -233,9 +327,11 @@ class OpenWakeWordDetector(private val context: Context) {
         melspecInterpreter?.close()
         embeddingInterpreter?.close()
         wakewordInterpreter?.close()
+        exitInterpreter?.close()
         melspecInterpreter = null
         embeddingInterpreter = null
         wakewordInterpreter = null
+        exitInterpreter = null
         melspecHistory.clear()
     }
 

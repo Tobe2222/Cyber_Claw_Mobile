@@ -264,6 +264,30 @@ export default function App(): React.JSX.Element {
     WakeWordModule.initOww('hey_jarvis', 0.5).catch((err: any) => {
       console.warn('[OWW] prewarm initOww failed:', err?.message || err);
     });
+    // v3.5.0: restore any previously-trained exit-phrase
+    // model so the user doesn't have to retrain across
+    // every app restart. The native side reads the
+    // SharedPreferences binding set by setExitModelFromBase64
+    // and re-applies it to the running detector.
+    //
+    // No-op if no exit model has been trained yet (returns
+    // null). Errors are logged but non-fatal — voice mode
+    // still works via the existing text-fallback exit
+    // matcher if the restore fails.
+    const wakeMod = WakeWordModule as any;
+    if (typeof wakeMod?.loadOwwSavedExitModel === 'function') {
+      wakeMod.loadOwwSavedExitModel()
+        .then((phrase: string | null) => {
+          if (phrase) {
+            console.log(`[OWW] Restored exit model for phrase: "${phrase}"`);
+          } else {
+            console.log('[OWW] No saved exit model — using text-fallback matcher');
+          }
+        })
+        .catch((err: any) => {
+          console.warn('[OWW] loadOwwSavedExitModel failed:', err?.message || err);
+        });
+    }
   }, []);
 
   // v3.1.91: listen for desktop-synthesized greeting

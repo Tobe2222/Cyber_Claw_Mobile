@@ -1,32 +1,29 @@
 /**
- * ExitPhraseTrainer — Record user samples for the exit phrase.
- * v3.2.25 (refined in v3.4.9).
+ * ExitPhraseTrainer — Record user samples + train an exit-phrase model.
+ * v3.2.25 (refined in v3.4.9, retargeted in v3.5.0).
  *
  * Records 6 audio samples of the user's chosen exit phrase
  * (e.g. "thanks", "goodbye", "stop"). Each sample is captured
- * as raw PCM16 mono 16kHz WAV via WakeWordModule.startSampleRecord,
- * the WAV header is stripped on the JS side, and audio features
- * are extracted via extractAudioFeatures(). The features are
- * saved to AsyncStorage under the key `cyberclaw-exit-samples-
- * <phrase>`.
+ * as raw PCM16 mono 16kHz WAV via WakeWordModule.startSampleRecord.
  *
- * IMPORTANT (v3.4.9): The runtime DTW detector that was
- * originally promised for v3.2.26 was NEVER wired. The
- * saved samples are NOT read by voice mode at runtime.
- * Exit detection today still uses the text-fallback
- * (ExitPhraseMatcher on the STT transcription).
+ * v3.5.0: ships the samples to the desktop for openWakeWord
+ * training (mirror of OpenWakeWordTrainer), receives the
+ * trained .tflite back, hot-swaps it into the running exit
+ * classifier via WakeWordModule.setExitModelFromBase64.
  *
- * The trainer still has value: the saved features are the
- * foundation for the future runtime DTW work (just needs the
- * chat-recorder to write WAV alongside the existing m4a so
- * JS can decode it at silence-fire time), and recording UX
- * is iterated in isolation here.
+ * The result: "thanks" spoken in voice mode instantly exits,
+ * even when STT transcription hasn't fired yet. The
+ * text-fallback (ExitPhraseMatcher) is kept as a safety net
+ * during the training window and for the (rare) cases where
+ * the ML classifier gives a softer score.
  *
- * v3.4.9: Updated the in-trainer status + description strings
- * to reflect the current behavior (no more "v3.2.26 will wire
- * this" promise — that release shipped months ago without
- * the runtime wiring). The text-fallback continues to do the
- * actual exit detection.
+ * Legacy (pre-v3.5.0): The samples used to be locally
+ * extracted into AudioFeatures and saved to AsyncStorage
+ * for a DTW runtime detector that was promised but never
+ * shipped (v3.2.26). The v3.4.9 honest message flagged this.
+ * v3.5.0 replaces that path entirely — the samples now go
+ * straight to the desktop for ML training instead of into
+ * a dead-end feature cache.
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
@@ -43,22 +40,37 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import RNFS from 'react-native-fs';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules } from 'react-native';
-import { AudioFeatures, extractAudioFeatures } from '../services/AudioSampleMatcher';
-import { base64ToInt16Array } from '../services/AudioUtils';
+// v3.5.0: extractAudioFeatures + base64ToInt16Array were used by
+// the pre-v3.5.0 feature-extraction save path. The trainer now
+// ships raw WAVs to the desktop for ML training instead, so these
+// are no longer needed. Kept the comment so a future feature
+// (e.g. on-device DTW fallback during offline mode) doesn't get
+// forgotten.
+import syncClient from '../services/SyncClient';
 import {
   getExitSamplesKey,
-  saveExitSamples,
   clearExitSamples,
-  loadExitSamples,
 } from '../services/VoiceSettings';
 
 const { WakeWordModule } = NativeModules;
 
 const REQUIRED_SAMPLES = 6;
 const DEFAULT_PHRASE = 'thanks';
-
-type Stage = 'idle' | 'recording' | 'saving' | 'complete' | 'error';
+// v3.5.0: stage covers the full ML training flow, not
+// just local save. Mirror of OpenWakeWordTrainer so the
+// UX feels consistent.
+type Stage =
+  | 'idle'
+  | 'recording'
+  | 'saving'        // extracting features (kept for compat with existing UI references)
+  | 'uploading'     // samples -> desktop
+  | 'training'      // desktop is running OWW
+  | 'downloading'   // receiving the .tflite
+  | 'activating'    // hot-swap into the exit classifier
+  | 'complete'
+  | 'error';
 
 export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel, onComplete }: {
   // v3.4.0: companionId is REQUIRED for per-companion
@@ -186,40 +198,104 @@ export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel,
       return;
     }
     const trimmed = phrase.trim().toLowerCase();
-    setStage('saving');
-    setStatusMsg('Extracting features...');
+    if (!trimmed) {
+      setStage('error');
+      setStatusMsg('Phrase cannot be empty.');
+      return;
+    }
+    const sync = syncClient;
+    if (!sync?.connected) {
+      setStage('error');
+      setStatusMsg('Not connected to the desktop. Connect first, then train.');
+      return;
+    }
+    // v3.5.0: pre-build the sample list and ref the
+    // callback set so the listeners see fresh closures
+    // even if the user backgrounds the app mid-training.
+    const wavPaths = [...samples];
+    const _onProgress = (msg: any) => {
+      if (!msg) return;
+      if (msg.stage) setStage(msg.stage as Stage);
+      const pct = typeof msg.percent === 'number' ? Math.round(msg.percent) : null;
+      if (msg.message) setStatusMsg(msg.message);
+      else if (pct != null) setStatusMsg(`Training… ${pct}%`);
+    };
+    const _onResult = (msg: any) => {
+      if (msg?.noResult) return; // Stale poll during a previous run.
+      if (!msg?.ok || !msg?.tflitePath) {
+        setStage('error');
+        setStatusMsg(msg?.error || 'Training failed on the desktop.');
+        return;
+      }
+      setStage('downloading');
+      setStatusMsg('Downloading trained exit model…');
+      sync.readExitModel(msg.tflitePath);
+    };
+    const _onModel = async (msg: any) => {
+      if (!msg?.ok || !msg?.base64) {
+        setStage('error');
+        setStatusMsg(msg?.error || 'Could not fetch the trained exit model.');
+        return;
+      }
+      setStage('activating');
+      setStatusMsg('Activating on this device…');
+      try {
+        const savedPath: string = await WakeWordModule.setExitModelFromBase64(
+          trimmed,
+          msg.base64,
+        );
+        // v3.5.0: write a small AsyncStorage marker so the
+        // "Currently trained" picker list knows about this
+        // phrase even though we no longer store features
+        // locally. The marker is just enough metadata to
+        // render the row + know when it was trained.
+        try {
+          await AsyncStorage.setItem(
+            getExitSamplesKey(companionId, trimmed),
+            JSON.stringify({ trainedAt: Date.now(), modelPath: savedPath.split('/').pop() }),
+          );
+        } catch (_) {}
+        setStage('complete');
+        setLastSavedAt(Date.now());
+        // v3.5.0: this is real now, not a promise. The
+        // exit model is hot-swapped into the running
+        // OWW detector, so saying "thanks" exits voice
+        // mode immediately. The text-fallback still
+        // works as a safety net.
+        setStatusMsg(`✅ Exit phrase ready. Model saved to ${savedPath.split('/').pop()}. Try saying "${trimmed}" in voice mode.`);
+        // Best-effort cleanup of the temp WAVs — the
+        // model is now the artifact, the WAVs are gone.
+        for (const wav of wavPaths) RNFS.unlink(wav).catch(() => {});
+        setSamples([]);
+        onComplete?.();
+      } catch (e: any) {
+        setStage('error');
+        setStatusMsg(`Activation failed: ${e?.message || 'unknown'}`);
+      }
+    };
+
+    sync.on('exit_training_progress', _onProgress);
+    sync.on('exit_training_result', _onResult);
+    sync.on('exit_model_data', _onModel);
+
+    setStage('uploading');
+    setStatusMsg(`Sending ${samples.length} samples to desktop…`);
     try {
-      // Read each WAV, strip header, extract features.
-      const featuresList: AudioFeatures[] = [];
+      const encoded: Array<{ name: string; data: string }> = [];
       for (let i = 0; i < samples.length; i++) {
         const wavPath = samples[i];
-        setStatusMsg(`Extracting features from sample ${i + 1}/${REQUIRED_SAMPLES}...`);
-        const base64 = await RNFS.readFile(wavPath, 'base64');
-        const pcm = base64ToInt16Array(base64);
-        if (pcm.length < 1600) {  // < 100ms at 16kHz
-          throw new Error(`Sample ${i + 1} too short: ${pcm.length / 16000}s`);
-        }
-        const features = extractAudioFeatures(pcm, 16000, 512);
-        featuresList.push(features);
-        // Best-effort cleanup of the temp WAV.
-        RNFS.unlink(wavPath).catch(() => {});
+        const name = wavPath.split('/').pop() || `sample_${i}.wav`;
+        const data = await RNFS.readFile(wavPath, 'base64');
+        encoded.push({ name, data });
       }
-      await saveExitSamples(companionId, trimmed, featuresList);
-      setLastSavedAt(Date.now());
-      setStage('complete');
-      // v3.4.9: was "v3.2.26 will wire this to the runtime
-      // detector". That promise was never delivered — the
-      // runtime DTW was never implemented. Exit detection
-      // today still uses the text-fallback (ExitPhraseMatcher
-      // on the STT transcription). Be honest with the user:
-      // the saved samples are persisted for the future
-      // runtime DTW work, but aren't currently used at
-      // runtime.
-      setStatusMsg(`✅ Saved ${featuresList.length} samples for "${trimmed}". Saved for the future runtime audio-DTW detector; today's exit detection still uses the text-fallback (matches your STT transcription).`);
-      onComplete?.();
+      console.log(`[ExitTrainer] sending requestExitTraining phrase="${trimmed}" samples=${encoded.length}`);
+      sync.requestExitTraining(trimmed, encoded);
     } catch (e: any) {
       setStage('error');
-      setStatusMsg(`Save failed: ${e?.message || 'unknown'}`);
+      setStatusMsg(`Failed to ship samples: ${e?.message || 'unknown'}`);
+      sync.off?.('exit_training_progress', _onProgress);
+      sync.off?.('exit_training_result', _onResult);
+      sync.off?.('exit_model_data', _onModel);
     }
   }, [samples, phrase, onComplete]);
 
@@ -242,19 +318,18 @@ export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel,
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Train exit phrase</Text>
         <Text style={styles.subtitle}>
-          {/* v3.4.9: was "Once v3.2.26 ships, voice mode will
-              detect this phrase on the audio stream and exit
-              immediately when it hears it — no need to wait
-              for the LLM to transcribe." That release shipped
-              months ago without wiring the runtime DTW.
-              Current behavior: exit detection still uses the
-              text-fallback on the STT transcription. The
-              trained samples are saved for the future runtime
-              DTW work but aren't read at runtime today. */}
-          Say the same short word or phrase 6 times. Today's exit
-          detection still uses the text-fallback (matches your STT
-          transcription). The samples you record here are saved for
-          the future runtime audio-DTW detector.
+          {/* v3.5.0: was "samples you record here are saved
+              for the future runtime audio-DTW detector" (the
+              promised DTW runtime never shipped). Now: the
+              samples train a real openWakeWord exit model on
+              the desktop. After training, voice mode exits
+              immediately when it hears your phrase. The text
+              fallback still works as a safety net. */}
+          Say the same short word or phrase 6 times. After
+          training, voice mode exits instantly when it hears
+          your phrase (openWakeWord ML, mirroring the wake-
+          word flow). The text fallback remains as a safety
+          net.
         </Text>
 
         <Text style={styles.label}>Phrase</Text>
