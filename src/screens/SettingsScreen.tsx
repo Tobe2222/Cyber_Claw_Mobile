@@ -1,22 +1,32 @@
 /**
  * SettingsScreen — Mobile companion settings
  *
+ * v3.4.7: split "🎤 Voice mode" into two separate Section
+ * blocks, each with its own orange border:
+ *   - 🎧 Listening settings (global mic behavior)
+ *       * Background listening toggle (master on/off)
+ *       * Audio buffer (lookback + conversation timeout + retention)
+ *       * Silence timeout (voice mode close)
+ *   - 🐾 Companions (per-companion list; tap → CompanionSettingsScreen)
+ *       * Companion rows: each shows their trained wake phrase
+ *
+ * Previously these were one Section with an in-section divider
+ * (v3.4.5 GroupTitle + GroupDivider). Tobe's v3.4.6 feedback:
+ * the divider still didn't read as "these are two different
+ * concepts" — a separate Section block is the right grouping.
+ *
+ * v3.4.7: also removed the Match Thresholds UI (foreground /
+ * background % sensitivity). The thresholds are still respected
+ * by the wake detector (HomeScreen/WakeModeScreen read them
+ * from AsyncStorage) but the UI control was redundant — the
+ * v3.1.95 openWakeWord TFLite ML detector is ~95% accurate out
+ * of the box and rarely needs tuning.
+ *
  * v3.4.0: 3-level hierarchy replaces the v3.3.0 flat two-section
  * (Wake + Exit) layout. Tobe complained that "Wake settings" and
  * "Exit settings" each contained unrelated controls (audio buffer,
  * match thresholds, silence timeout) which made both sections
- * feel like grab-bags. The new structure is:
- *
- *   (1) 🎤 Voice mode (top-level)
- *       - Background listening toggle (master on/off)
- *       - 🎧 Background listening — details (SubTitle):
- *           * Audio buffer (lookback + conversation timeout + retention)
- *           * Silence timeout (voice mode close)
- *           * Match thresholds (foreground / background)
- *       - Companions list: each companion shows their
- *         currently-active wake phrase; tap to open detail
- *       - (no per-companion actions on the top-level screen;
- *         tap a companion to train / configure)
+ * feel like grab-bags.
 
  *       v3.4.1 layout: the three "details" controls were
  *       physically moved up to sit immediately under the
@@ -161,14 +171,16 @@ export default function SettingsScreen({
 
   // ── Wake Word ─────────────────────────────────────────────────
   const [bgListening, setBgListening] = useState(true);
-  // v3.1.49: foreground threshold (separate from background). The
-  // user was getting accidental wake matches — both background
-  // audio (TV, podcast, other voices) AND foreground false-positives.
-  // Making both thresholds adjustable gives the user a way to tune
-  // wake detection without retraining. Default FG: 55% (matches
-  // SAMPLE_MATCH_THRESHOLD_FG in HomeScreen/WakeModeScreen).
-  const [fgThreshold, setFgThreshold] = useState(55);
-  const [bgThreshold, setBgThreshold] = useState(65);
+  // v3.4.7: fgThreshold/bgThreshold state + UI removed.
+  // The Match Thresholds UI control was a low-level knob for
+  // the v3.1 sample-matching wake detector. Since v3.1.95 we
+  // use the openWakeWord TFLite ML detector, which is ~95%
+  // accurate out of the box and rarely needs tuning. Tobe
+  // asked to drop the UI; existing user-tuned thresholds in
+  // AsyncStorage ('cyberclaw-wake-fg-threshold' / '-bg-')
+  // are still read by HomeScreen/WakeModeScreen with sane
+  // defaults (0.55 FG / 0.65 BG) when missing, so no
+  // regression for users who never touched the threshold.
   const [readyPhrase, setReadyPhrase] = useState('Ready to chat');
   const [readyPhraseSavedAt, setReadyPhraseSavedAt] = useState<number | null>(null);
   const readyPhraseSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -423,8 +435,9 @@ export default function SettingsScreen({
   useEffect(() => {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
-    AsyncStorage.getItem('cyberclaw-wake-bg-threshold').then(v => { if (v) setBgThreshold(Math.round(parseFloat(v) * 100)); });
-    AsyncStorage.getItem('cyberclaw-wake-fg-threshold').then(v => { if (v) setFgThreshold(Math.round(parseFloat(v) * 100)); });
+    // v3.4.7: removed fgThreshold/bgThreshold hydration.
+    // Their UI was removed; AsyncStorage keys are still
+    // read by HomeScreen/WakeModeScreen with sane defaults.
     AsyncStorage.getItem('cyberclaw-ready-phrase').then(v => { if (v) setReadyPhrase(v); });
     // v3.2.29: hydrate the exit reply phrase (mirror of
     // the wake greeting hydration above). Empty string
@@ -987,26 +1000,16 @@ export default function SettingsScreen({
           CompanionSettingsScreen). SettingsScreen now just
           shows the top-level Voice mode section always. */}
       <>
-          {/* ── 🎤 Voice mode (top-level, with companion list) ── */}
-          <Section title="🎤 Voice mode" desc="Configure how voice mode works for each companion. Tap a companion to customize their wake phrase, exit phrase, greeting, and reply.">
-
-            {/* v3.4.5: "Listening settings" is now a labeled
-                group containing the master Background listening
-                toggle + all the "how background listening
-                behaves" controls (audio buffer / silence timeout
-                / match thresholds). Previously these were a flat
-                list under "🎤 Voice mode"; Tobe asked for a
-                visible group boundary so the user can tell at a
-                glance which controls belong to the listening
-                pipeline vs. which belong to per-companion
-                customization. */}
-            <GroupTitle>🎧 Listening settings</GroupTitle>
+          {/* ── 🎧 Listening settings (own Section, orange border) ── */}
+          <Section title="🎧 Listening settings" desc="Global microphone behavior: when the app listens, how much audio to keep, and how long voice mode stays open.">
 
             {/* Master Background listening toggle. The
                 grouped sub-controls below (audio buffer,
-                silence timeout, match thresholds) only do
-                anything when this is on; they configure
-                HOW background listening works. */}
+                silence timeout) only do anything when this
+                is on; they configure HOW background
+                listening works. v3.4.7: match thresholds
+                UI removed (the TFLite ML detector doesn't
+                need user tuning). */}
             <Toggle
               title="🎧 Background listening"
               sub="Keep the microphone active in the background. The app wakes on your phrase."
@@ -1090,70 +1093,31 @@ export default function SettingsScreen({
               ))}
             </View>
 
-            {/* Match thresholds (existing, unchanged;
-                inside Background listening group as of
-                v3.4.1). v3.4.1: moved up here. */}
-            <Label>Match thresholds</Label>
-            <Hint>Detector sensitivity. Higher = stricter (fewer false wakes). Tune if you're getting accidental triggers.</Hint>
-            <Label>Foreground: {fgThreshold}%</Label>
-            <View style={styles.thresholdRow}>
-              <Text style={styles.thresholdEdge}>40%</Text>
-              <View style={{ flex: 1, flexDirection: 'row' }}>
-                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
-                  <TouchableOpacity
-                    key={v}
-                    onPress={async () => {
-                      setFgThreshold(v);
-                      await AsyncStorage.setItem('cyberclaw-wake-fg-threshold', String(v / 100));
-                    }}
-                    style={[
-                      styles.thresholdCell,
-                      fgThreshold === v ? styles.thresholdCellActive :
-                      fgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
-                    ]}
-                  >
-                    <Text style={[styles.thresholdCellText, fgThreshold === v && { color: '#fff' }]}>{v}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.thresholdEdge}>90%</Text>
-            </View>
+            {/* v3.4.7: removed the Match Thresholds UI.
+                The fgThreshold/bgThreshold sliders were a
+                v3.1 sample-matching detector knob. Since
+                v3.1.95 we use the openWakeWord TFLite ML
+                detector (~95% accurate out of the box);
+                Tobe confirmed the threshold UI is no longer
+                needed. Existing user-tuned values in
+                AsyncStorage are still respected by the
+                detector (HomeScreen/WakeModeScreen read
+                them directly). New users get the defaults
+                (0.55 FG / 0.65 BG). */}
+          </Section>
 
-            <Label>Background: {bgThreshold}%</Label>
-            <View style={styles.thresholdRow}>
-              <Text style={styles.thresholdEdge}>40%</Text>
-              <View style={{ flex: 1, flexDirection: 'row' }}>
-                {[40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90].map(v => (
-                  <TouchableOpacity
-                    key={v}
-                    onPress={async () => {
-                      setBgThreshold(v);
-                      await AsyncStorage.setItem('cyberclaw-wake-bg-threshold', String(v / 100));
-                    }}
-                    style={[
-                      styles.thresholdCell,
-                      bgThreshold === v ? styles.thresholdCellActive :
-                      bgThreshold > v ? styles.thresholdCellPast : styles.thresholdCellFuture,
-                    ]}
-                  >
-                    <Text style={[styles.thresholdCellText, bgThreshold === v && { color: '#fff' }]}>{v}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.thresholdEdge}>90%</Text>
-            </View>
-
-            {/* v3.4.5: thicker visual separator before
-                Companions. The previous SubTitle-only divider
-                was too subtle — Tobe asked for a bigger visual
-                break so the per-companion section reads as a
-                separate concept from the global listening
-                controls above. GroupTitle makes the new group
-                distinct from the small SubTitles within the
-                Listening settings group. */}
-            <GroupDivider />
-            <GroupTitle>🐾 Companions</GroupTitle>
-            <Hint>Tap a companion to configure their wake phrase, exit phrase, greeting, and reply.</Hint>
+          {/* v3.4.7: split "Voice mode" into TWO separate
+              Sections, each with its own orange border.
+              Listening settings (global mic behavior) and
+              Companions (per-companion wake/exit training)
+              are conceptually different things — keeping
+              them in one Section with a divider read as
+              "these are sub-parts of one thing" which they
+              aren't. Two distinct Section blocks makes the
+              visual grouping match the conceptual grouping.
+              Tobe's feedback after v3.4.6: the divider was
+              still too subtle. */}
+          <Section title="🐾 Companions" desc="Tap a companion to configure their wake phrase, exit phrase, greeting, and reply.">
             {availableCompanions.length === 0 ? (
               <View style={styles.trainedPickerHint}>
                 <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
@@ -1192,29 +1156,6 @@ export default function SettingsScreen({
                 })}
               </View>
             )}
-
-            {/* Top-level Voice mode ends at the Companions
-                list. v3.4.2 removed the "Train wake phrase for
-                new companion" button that used to live here:
-                Tobe's feedback was that the top-level screen
-                is for the master toggle + grouped details +
-                the companion list, with NO per-companion
-                actions on it. To train a new wake phrase,
-                tap the companion → detail view → Train button
-                inside that companion's detail. Companion
-                picker modal + its state (`showCompanionPicker`)
-                are kept around as dead code for now (will
-                be removed in v3.4.3 cleanup if the picker
-                truly goes unused). */}
-
-            {/* Audio buffer / silence timeout / match
-                thresholds used to live here in v3.4.0 but
-                v3.4.1 physically moves them up to sit under
-                the "Background listening — details"
-                SubTitle. They now form a single grouped
-                block with the master Background listening
-                toggle above. See that section for the
-                moved content. */}
           </Section>
       </>
 
@@ -1345,15 +1286,11 @@ function SubTitle({ children }: { children: React.ReactNode }) {
 // v3.4.5: bigger title for major groups within a
 // Section block. Used for "Listening settings" and
 // "Companions" inside the Voice mode Section.
-function GroupTitle({ children }: { children: React.ReactNode }) {
-  return <Text style={styles.groupTitle}>{children}</Text>;
-}
-
-// v3.4.5: thicker visual separator between major
-// groups within a Section.
-function GroupDivider() {
-  return <View style={styles.groupDivider} />;
-}
+// v3.4.7: GroupTitle + GroupDivider helpers + their
+// styles REMOVED. Listening settings and Companions are
+// now separate Section blocks (each with its own orange
+// border), so the in-Section group divider is no longer
+// needed.
 
 function Label({ children }: { children: React.ReactNode }) {
   return <Text style={styles.label}>{children}</Text>;
@@ -1726,28 +1663,9 @@ const styles = StyleSheet.create({
   sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
   sectionDesc: { color: '#888', fontSize: 13, marginBottom: 16, lineHeight: 18 },
   subGroupTitle: { color: '#aaa', fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12, letterSpacing: 0.5 },
-  // v3.4.5: group title for major sections within a
-  // Section block. Bigger than subGroupTitle, more
-  // visually distinct. Used for "Listening settings" and
-  // "Companions" inside the Voice mode Section.
-  groupTitle: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 4,
-    marginBottom: 8,
-    letterSpacing: 0.3,
-  },
-  // v3.4.5: thicker visual separator between major
-  // groups within a Section. Used between "Listening
-  // settings" and "Companions" inside the Voice mode
-  // Section so the user can tell at a glance that those
-  // are two different concepts.
-  groupDivider: {
-    height: 1,
-    backgroundColor: '#222',
-    marginVertical: 20,
-  },
+  // v3.4.7: groupTitle + groupDivider styles REMOVED.
+  // Listening settings and Companions are now separate
+  // Section blocks (each with its own orange border).
   label: { color: '#ccc', fontSize: 14, marginBottom: 6, marginTop: 8 },
   hint: { color: '#666', fontSize: 12, marginTop: 4, marginBottom: 8, lineHeight: 16 },
   savedHint: { color: '#4caf50', fontSize: 12, marginTop: 6 },
