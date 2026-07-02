@@ -1,6 +1,6 @@
 /**
  * ExitPhraseTrainer — Record user samples for the exit phrase.
- * v3.2.25.
+ * v3.2.25 (refined in v3.4.9).
  *
  * Records 6 audio samples of the user's chosen exit phrase
  * (e.g. "thanks", "goodbye", "stop"). Each sample is captured
@@ -10,20 +10,23 @@
  * saved to AsyncStorage under the key `cyberclaw-exit-samples-
  * <phrase>`.
  *
- * Scope of v3.2.25:
- *   - Trainer UI + persistence: SHIPS
- *   - Runtime DTW detector against the trained samples:
- *     DEFERRED to v3.2.26 (requires the chat-recorder to write
- *     WAV alongside the existing m4a, so JS can decode it for
- *     comparison at silence-fire time).
+ * IMPORTANT (v3.4.9): The runtime DTW detector that was
+ * originally promised for v3.2.26 was NEVER wired. The
+ * saved samples are NOT read by voice mode at runtime.
+ * Exit detection today still uses the text-fallback
+ * (ExitPhraseMatcher on the STT transcription).
  *
- * Until v3.2.26 wires the runtime detector, the exit phrase
- * matches via the text-fallback (ExitPhraseMatcher on the STT
- * transcription — same as v3.2.20). Training here gives the
- * user a way to record their phrase now so they're ready when
- * the runtime DTW lands, and so we can iterate on the trainer
- * UX (recording quality, phrase normalization, etc.) in
- * isolation.
+ * The trainer still has value: the saved features are the
+ * foundation for the future runtime DTW work (just needs the
+ * chat-recorder to write WAV alongside the existing m4a so
+ * JS can decode it at silence-fire time), and recording UX
+ * is iterated in isolation here.
+ *
+ * v3.4.9: Updated the in-trainer status + description strings
+ * to reflect the current behavior (no more "v3.2.26 will wire
+ * this" promise — that release shipped months ago without
+ * the runtime wiring). The text-fallback continues to do the
+ * actual exit detection.
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
@@ -204,7 +207,15 @@ export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel,
       await saveExitSamples(companionId, trimmed, featuresList);
       setLastSavedAt(Date.now());
       setStage('complete');
-      setStatusMsg(`✅ Saved ${featuresList.length} samples for "${trimmed}". v3.2.26 will wire this to the runtime detector.`);
+      // v3.4.9: was "v3.2.26 will wire this to the runtime
+      // detector". That promise was never delivered — the
+      // runtime DTW was never implemented. Exit detection
+      // today still uses the text-fallback (ExitPhraseMatcher
+      // on the STT transcription). Be honest with the user:
+      // the saved samples are persisted for the future
+      // runtime DTW work, but aren't currently used at
+      // runtime.
+      setStatusMsg(`✅ Saved ${featuresList.length} samples for "${trimmed}". Saved for the future runtime audio-DTW detector; today's exit detection still uses the text-fallback (matches your STT transcription).`);
       onComplete?.();
     } catch (e: any) {
       setStage('error');
@@ -231,10 +242,19 @@ export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel,
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Train exit phrase</Text>
         <Text style={styles.subtitle}>
-          Say the same short word or phrase 6 times. Once v3.2.26 ships,
-          voice mode will detect this phrase on the audio stream and
-          exit immediately when it hears it — no need to wait for the
-          LLM to transcribe.
+          {/* v3.4.9: was "Once v3.2.26 ships, voice mode will
+              detect this phrase on the audio stream and exit
+              immediately when it hears it — no need to wait
+              for the LLM to transcribe." That release shipped
+              months ago without wiring the runtime DTW.
+              Current behavior: exit detection still uses the
+              text-fallback on the STT transcription. The
+              trained samples are saved for the future runtime
+              DTW work but aren't read at runtime today. */}
+          Say the same short word or phrase 6 times. Today's exit
+          detection still uses the text-fallback (matches your STT
+          transcription). The samples you record here are saved for
+          the future runtime audio-DTW detector.
         </Text>
 
         <Text style={styles.label}>Phrase</Text>
