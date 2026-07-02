@@ -2725,19 +2725,29 @@ useEffect(() => {
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
         {activeTab === 'chat' && (
           <>
-            {chatUnreadCount > 0 && !chatAtBottom && (
-              <TouchableOpacity
-                style={styles.chatScrollToBottomBtn}
-                onPress={() => {
-                  chatRef.current?.scrollToEnd({ animated: true });
-                  setChatUnreadCount(0);
-                }}
-              >
-                <Text style={styles.chatScrollToBottomText}>
-                  ↓ {chatUnreadCount} new message{chatUnreadCount !== 1 ? 's' : ''}
-                </Text>
-              </TouchableOpacity>
-            )}
+            {/* v3.4.8: wrapped FlatList in a flex:1 View so
+                the "↓ N new messages" floating badge can sit
+                at the bottom of THIS container (i.e. above
+                the input row) instead of at the bottom of
+                the whole chat tab (which put it overlapping
+                the input field). Previously the badge's
+                `bottom: 8` was relative to the entire
+                KeyboardAvoidingView tabContent, putting it
+                inside the inputContainer area. */}
+            <View style={styles.chatScrollContainer}>
+              {chatUnreadCount > 0 && !chatAtBottom && (
+                <TouchableOpacity
+                  style={styles.chatScrollToBottomBtn}
+                  onPress={() => {
+                    chatRef.current?.scrollToEnd({ animated: true });
+                    setChatUnreadCount(0);
+                  }}
+                >
+                  <Text style={styles.chatScrollToBottomText}>
+                    ↓ {chatUnreadCount} new message{chatUnreadCount !== 1 ? 's' : ''}
+                  </Text>
+                </TouchableOpacity>
+              )}
             <FlatList
               ref={chatRef}
               data={messages}
@@ -2789,6 +2799,7 @@ useEffect(() => {
                 </View>
               }
             />
+            </View>
             {chatVoiceStatus && (
               <View style={styles.chatStatusBar}>
                 <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
@@ -3121,6 +3132,13 @@ const styles = StyleSheet.create({
   chatStatusText: {
     color: 'rgba(247,147,26,0.85)', fontSize: 12, fontStyle: 'italic',
   },
+  // v3.4.8: wrapper View for the chat FlatList. flex:1 so it
+  // fills all space above the input row, with `position: relative`
+  // so the absolutely-positioned chatScrollToBottomBtn below
+  // sits at the bottom of THIS container (above the input) rather
+  // than the bottom of the whole chat tab (which put it inside
+  // the input row). Replaces the previous direct FlatList render.
+  chatScrollContainer: { flex: 1, position: 'relative' },
   // v3.1.14: "↓ N new messages" floating badge shown above the chat
   // when the user has scrolled up to read history and incoming
   // messages arrive.
