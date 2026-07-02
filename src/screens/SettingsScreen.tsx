@@ -28,21 +28,33 @@
  *       exclusively inside each companion's detail view —
  *       tap companion → detail → Train button there.
  *
- *   (2) Per-companion detail view (tap a companion to enter)
- *       - Back button + companion header
- *       - Wake greeting TextInput
- *       - Wake phrases for this companion (WakePhrasePicker,
- *         scoped to one companion)
- *       - Train-new wake phrase for this companion
- *       - Exit reply TextInput
- *       - Exit phrases for this companion (PerCompanionExitPicker,
- *         scoped to one companion)
- *       - Train-new exit phrase for this companion
+ *   (2) Per-companion detail view (tap a companion to enter).
+ *       v3.4.3: 5-level hierarchy. The detail view is now
+ *       two levels, not one flat page.
  *
- *       Order rule: all wake-related controls on top, all
- *       exit-related controls on the bottom. v3.4.1 feedback
- *       from Tobe — the v3.4.0 interleaving of wake/exit
- *       blocks read as disorderly.
+ *       (2a) <Companion> settings (overview page)
+ *            - Back button + companion header
+ *            - 🎤 Wake settings card  → tap → (2b) wake sub-page
+ *            - 🚪 Exit settings card  → tap → (2c) exit sub-page
+ *
+ *       (2b) Wake settings (sub-page for one companion)
+ *            - Back button → returns to (2a) overview
+ *            - Wake greeting TextInput
+ *            - Wake phrases for this companion (WakePhrasePicker)
+ *            - Train-new wake phrase for this companion
+ *
+ *       (2c) Exit settings (sub-page for one companion)
+ *            - Back button → returns to (2a) overview
+ *            - Exit reply TextInput
+ *            - Exit phrases for this companion (PerCompanionExitPicker)
+ *            - Train-new exit phrase for this companion
+ *
+ *       v3.4.3 rationale: v3.4.2 put all per-companion
+ *       controls on one scroll page; Tobe said it was
+ *       confusing and asked for a dedicated detail page
+ *       that drills into wake / exit sub-pages. The
+ *       detail view became a navigation surface, not a
+ *       control dump.
  *
  *   (3) 🔊 Voice & Speech / 🤖 Agent Reach (unchanged)
  *
@@ -187,6 +199,12 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // the per-companion detail view (greeting, reply, wake
   // phrases, exit phrases, train buttons).
   const [selectedCompanionId, setSelectedCompanionId] = useState<string | null>(null);
+  // v3.4.3: drill-down phase inside the companion
+  // detail view. null = overview page (the two Wake /
+  // Exit cards). 'wake' / 'exit' = the sub-page for that
+  // one phase. Replaces the v3.4.2 single-page layout
+  // that interleaved everything on one long screen.
+  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | null>(null);
   // v3.3.0: which companionId the OWW detector is
   // currently set to. Persisted to AsyncStorage so a
   // cold restart lands on the right wake phrase. Today
@@ -279,25 +297,57 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   }, [availableCompanions.length, activeWakeCompanionId]);
 
   // v3.4.0: per-companion detail view. Reached by tapping
-  // a companion in the top-level Voice mode list. Shows
-  // the companion's greeting, reply, wake phrases, exit
-  // phrases, and train buttons. Returns to the top-level
-  // list via the back button.
+  // a companion in the top-level Voice mode list. v3.4.3:
+  // this is now a 2-level navigation inside the detail
+  // view — the overview page (Wake card + Exit card) and
+  // drill-down sub-pages (Wake settings, Exit settings).
+  // Replaces the v3.4.2 single-page layout that mixed
+  // everything on one screen.
   function renderCompanionDetail() {
     const cid = selectedCompanionId;
     if (!cid) return null;
     const companion = availableCompanions.find(c => c.id === cid);
     if (!companion) {
       // Companion was deleted from the cache while we
-      // were in this view. Auto-back out.
+      // were in this view. Auto-back out and reset the
+      // drill-down phase too so the next companion's
+      // detail doesn't open straight into a stale
+      // wake/exit sub-page.
       setSelectedCompanionId(null);
+      setCompanionViewPhase(null);
       return null;
     }
+    // v3.4.3: drill-down routing. When a sub-page is
+    // active, render that page directly (skip the
+    // overview). The sub-page has its own back button
+    // that returns to the overview.
+    if (companionViewPhase === 'wake') {
+      return renderCompanionWakePage(companion, cid);
+    }
+    if (companionViewPhase === 'exit') {
+      return renderCompanionExitPage(companion, cid);
+    }
+    // Default: the overview page (two cards).
+    return renderCompanionOverview(companion, cid);
+  }
+
+  // v3.4.3: the overview card-page inside a companion
+  // detail view. Just two big tappable cards: Wake and
+  // Exit. Tap one to drill into that sub-page.
+  function renderCompanionOverview(companion: { id: string; name: string; emoji?: string | null; icon?: string | null }, cid: string) {
     return (
       <>
-        {/* Per-companion header with back button */}
+        {/* Per-companion header with back button.
+            Back returns to the top-level Voice mode list
+            and resets companionViewPhase. */}
         <View style={[styles.section, styles.detailHeaderRow]}>
-          <TouchableOpacity onPress={() => setSelectedCompanionId(null)} style={styles.detailBackBtn}>
+          <TouchableOpacity
+            onPress={() => {
+              setCompanionViewPhase(null);
+              setSelectedCompanionId(null);
+            }}
+            style={styles.detailBackBtn}
+          >
             <Text style={styles.detailBackBtnText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.detailHeader}>
@@ -307,9 +357,61 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         </View>
 
         <Section title={`${companion.name} settings`} desc={`Wake word, exit phrase, greeting, and reply for ${companion.name}.`}>
-          {/* Wake greeting — global semantics, but reachable
-              from any companion's detail view for consistency
-              with the per-companion wake/exit layout. */}
+          <Hint>Tap a card to open its settings.</Hint>
+
+          {/* Wake card → tap → wake sub-page */}
+          <TouchableOpacity
+            style={[styles.phaseCard, { borderColor: '#3b82f6' }]}
+            onPress={() => setCompanionViewPhase('wake')}
+          >
+            <Text style={styles.phaseCardEmoji}>🎤</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.phaseCardTitle}>Wake settings</Text>
+              <Text style={styles.phaseCardSub}>
+                Greeting, trained wake words, train a new wake phrase
+              </Text>
+            </View>
+            <Text style={styles.phaseCardArrow}>›</Text>
+          </TouchableOpacity>
+
+          {/* Exit card → tap → exit sub-page */}
+          <TouchableOpacity
+            style={[styles.phaseCard, { borderColor: '#f7931a' }]}
+            onPress={() => setCompanionViewPhase('exit')}
+          >
+            <Text style={styles.phaseCardEmoji}>🚪</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.phaseCardTitle}>Exit settings</Text>
+              <Text style={styles.phaseCardSub}>
+                Exit reply, trained exit phrases, train a new exit phrase
+              </Text>
+            </View>
+            <Text style={styles.phaseCardArrow}>›</Text>
+          </TouchableOpacity>
+        </Section>
+      </>
+    );
+  }
+
+  // v3.4.3: per-companion Wake sub-page. Back button
+  // returns to the overview (companionViewPhase → null).
+  function renderCompanionWakePage(companion: { id: string; name: string; emoji?: string | null; icon?: string | null }, cid: string) {
+    return (
+      <>
+        <View style={[styles.section, styles.detailHeaderRow]}>
+          <TouchableOpacity
+            onPress={() => setCompanionViewPhase(null)}
+            style={styles.detailBackBtn}
+          >
+            <Text style={styles.detailBackBtnText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.detailHeader}>
+            🎤  {companion.name} — Wake
+          </Text>
+          <View style={{ width: 60 }} />
+        </View>
+
+        <Section title="Wake settings" desc={`Greeting and trained wake words for ${companion.name}.`}>
           <SubTitle>Wake greeting</SubTitle>
           <Hint>Phrase the companion says when the wake word fires. Auto-saves as you type.</Hint>
           <TextInput
@@ -325,13 +427,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
           )}
 
-          {/* v3.4.1 reorder: wake-related controls on top,
-              exit-related on the bottom. The exit reply
-              TextInput that used to live right after the
-              wake greeting now lives AFTER the wake phrases
-              block (just above the exit phrases block). */}
-
-          {/* Wake phrases for this companion */}
           <SubTitle>Wake phrases</SubTitle>
           <Hint>Trained wake words for {companion.name}. Tap 🎙 to retrain, 🗑 to delete.</Hint>
           <WakePhrasePicker
@@ -396,12 +491,30 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🎤 Train new wake phrase for {companion.name}</Text>
             <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word</Text>
           </TouchableOpacity>
+        </Section>
+      </>
+    );
+  }
 
-          {/* Exit reply — same global semantics, per-companion layout.
-              v3.4.1: moved here from above the Wake phrases block
-              so all wake-related controls group together at the
-              top and all exit-related controls group together at
-              the bottom. */}
+  // v3.4.3: per-companion Exit sub-page. Back button
+  // returns to the overview (companionViewPhase → null).
+  function renderCompanionExitPage(companion: { id: string; name: string; emoji?: string | null; icon?: string | null }, cid: string) {
+    return (
+      <>
+        <View style={[styles.section, styles.detailHeaderRow]}>
+          <TouchableOpacity
+            onPress={() => setCompanionViewPhase(null)}
+            style={styles.detailBackBtn}
+          >
+            <Text style={styles.detailBackBtnText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.detailHeader}>
+            🚪  {companion.name} — Exit
+          </Text>
+          <View style={{ width: 60 }} />
+        </View>
+
+        <Section title="Exit settings" desc={`Exit reply and trained exit phrases for ${companion.name}.`}>
           <SubTitle>Exit reply</SubTitle>
           <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
           <TextInput
@@ -417,7 +530,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
             <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
           )}
 
-          {/* Exit phrases for this companion (NEW v3.4.0 per-companion) */}
           <SubTitle>Exit phrases</SubTitle>
           <Hint>Trained phrases that close voice mode when {companion.name} hears them. Tap 🎙 to retrain, 🗑 to delete.</Hint>
           <PerCompanionExitPicker
@@ -517,15 +629,22 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   });
 
   // ── Back button: navigate sub-screens first, then exit ───────
+  // Priority (deepest first):
+  //   1. open trainer modal (open wake-word or exit-phrase trainer)
+  //   2. companion drill-down sub-page (wake / exit) → back to overview
+  //   3. companion detail overview → back to top-level Voice mode list
+  //   4. top-level Voice mode → back to chat (exit Settings)
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (showOwwTrainer) { setShowOwwTrainer(false); return true; }
       if (showExitPhraseTrainer) { setShowExitPhraseTrainer(false); return true; }
+      if (companionViewPhase) { setCompanionViewPhase(null); return true; }
+      if (selectedCompanionId) { setSelectedCompanionId(null); return true; }
       onBack();
       return true;
     });
     return () => backHandler.remove();
-  }, [onBack, showOwwTrainer]);
+  }, [onBack, showOwwTrainer, companionViewPhase, selectedCompanionId]);
 
   // v3.2.11: stop the bundled pre-trained wake listener while
   // SettingsScreen is mounted. Settings includes a "Train wake
@@ -1969,6 +2088,39 @@ const styles = StyleSheet.create({
   companionListArrow: {
     color: '#888',
     fontSize: 22,
+    marginLeft: 4,
+  },
+  // v3.4.3: drill-down card inside the companion
+  // overview. Two cards (Wake / Exit), tap to drill in.
+  // Mirrors the companionListRow styling but is a card,
+  // not a list row (more vertical padding, border).
+  phaseCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f1626',
+    borderRadius: 12,
+    borderWidth: 2,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    marginVertical: 6,
+    gap: 12,
+  },
+  phaseCardEmoji: {
+    fontSize: 28,
+  },
+  phaseCardTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  phaseCardSub: {
+    color: '#9aa0b4',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  phaseCardArrow: {
+    color: '#888',
+    fontSize: 24,
     marginLeft: 4,
   },
   // v3.4.0: per-companion detail screen header. Back button
