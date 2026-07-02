@@ -990,6 +990,18 @@ export default function SettingsScreen({
           {/* ── 🎤 Voice mode (top-level, with companion list) ── */}
           <Section title="🎤 Voice mode" desc="Configure how voice mode works for each companion. Tap a companion to customize their wake phrase, exit phrase, greeting, and reply.">
 
+            {/* v3.4.5: "Listening settings" is now a labeled
+                group containing the master Background listening
+                toggle + all the "how background listening
+                behaves" controls (audio buffer / silence timeout
+                / match thresholds). Previously these were a flat
+                list under "🎤 Voice mode"; Tobe asked for a
+                visible group boundary so the user can tell at a
+                glance which controls belong to the listening
+                pipeline vs. which belong to per-companion
+                customization. */}
+            <GroupTitle>🎧 Listening settings</GroupTitle>
+
             {/* Master Background listening toggle. The
                 grouped sub-controls below (audio buffer,
                 silence timeout, match thresholds) only do
@@ -1014,14 +1026,12 @@ export default function SettingsScreen({
               }}
             />
 
-            {/* v3.4.1: group audio buffer + silence timeout +
-                match thresholds under one "Background listening"
-                sub-heading. These three were v3.4.0 loose
-                siblings at the same level as the master toggle,
-                which read as a grab-bag. Grouping them makes
-                the mental model: "master toggle above decides
-                whether; these below decide how". */}
-            <SubTitle>🎧 Background listening — details</SubTitle>
+            {/* v3.4.5: the redundant "Background listening —
+                details" SubTitle was removed. Now that the
+                group has its own "🎧 Listening settings"
+                GroupTitle above, the controls below read as
+                naturally belonging to the same group without
+                needing a second header. Kept the Hint. */}
             <Hint>Fine-tune how background listening behaves. These only matter when the master toggle above is on.</Hint>
 
             {/* Audio buffer (existing, unchanged; inside
@@ -1133,8 +1143,16 @@ export default function SettingsScreen({
               <Text style={styles.thresholdEdge}>90%</Text>
             </View>
 
-            {/* ── Companions list (NEW v3.4.0) ── */}
-            <SubTitle>Companions</SubTitle>
+            {/* v3.4.5: thicker visual separator before
+                Companions. The previous SubTitle-only divider
+                was too subtle — Tobe asked for a bigger visual
+                break so the per-companion section reads as a
+                separate concept from the global listening
+                controls above. GroupTitle makes the new group
+                distinct from the small SubTitles within the
+                Listening settings group. */}
+            <GroupDivider />
+            <GroupTitle>🐾 Companions</GroupTitle>
             <Hint>Tap a companion to configure their wake phrase, exit phrase, greeting, and reply.</Hint>
             {availableCompanions.length === 0 ? (
               <View style={styles.trainedPickerHint}>
@@ -1322,6 +1340,19 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
 
 function SubTitle({ children }: { children: React.ReactNode }) {
   return <Text style={styles.subGroupTitle}>{children}</Text>;
+}
+
+// v3.4.5: bigger title for major groups within a
+// Section block. Used for "Listening settings" and
+// "Companions" inside the Voice mode Section.
+function GroupTitle({ children }: { children: React.ReactNode }) {
+  return <Text style={styles.groupTitle}>{children}</Text>;
+}
+
+// v3.4.5: thicker visual separator between major
+// groups within a Section.
+function GroupDivider() {
+  return <View style={styles.groupDivider} />;
 }
 
 function Label({ children }: { children: React.ReactNode }) {
@@ -1685,6 +1716,28 @@ const styles = StyleSheet.create({
   sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
   sectionDesc: { color: '#888', fontSize: 13, marginBottom: 16, lineHeight: 18 },
   subGroupTitle: { color: '#aaa', fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12, letterSpacing: 0.5 },
+  // v3.4.5: group title for major sections within a
+  // Section block. Bigger than subGroupTitle, more
+  // visually distinct. Used for "Listening settings" and
+  // "Companions" inside the Voice mode Section.
+  groupTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 4,
+    marginBottom: 8,
+    letterSpacing: 0.3,
+  },
+  // v3.4.5: thicker visual separator between major
+  // groups within a Section. Used between "Listening
+  // settings" and "Companions" inside the Voice mode
+  // Section so the user can tell at a glance that those
+  // are two different concepts.
+  groupDivider: {
+    height: 1,
+    backgroundColor: '#222',
+    marginVertical: 20,
+  },
   label: { color: '#ccc', fontSize: 14, marginBottom: 6, marginTop: 8 },
   hint: { color: '#666', fontSize: 12, marginTop: 4, marginBottom: 8, lineHeight: 16 },
   savedHint: { color: '#4caf50', fontSize: 12, marginTop: 6 },

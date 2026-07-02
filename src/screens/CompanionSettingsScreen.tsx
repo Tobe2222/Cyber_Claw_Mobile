@@ -731,7 +731,13 @@ function PerCompanionExitPicker({ companionId, activePhrase, onSelect, onRetrain
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
-  scroll: { padding: 16, paddingBottom: 60 },
+  // v3.4.5: bumped paddingTop from 16 → 50 on Android so
+  // the section header clears the status bar. Previously
+  // the section sat flush against the system status bar
+  // which looked cramped (Tobe's screenshot feedback). On
+  // iOS 10 is enough (no status-bar overlap when wrapped
+  // in a SafeAreaView in App.tsx).
+  scroll: { padding: 16, paddingTop: Platform.OS === 'android' ? 50 : 10, paddingBottom: 60 },
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingTop: Platform.OS === 'android' ? 34 : 10 },
   backBtn: { paddingVertical: 4, paddingRight: 12 },
   backBtnText: { color: '#f7931a', fontSize: 16 },
