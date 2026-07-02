@@ -1703,7 +1703,17 @@ function PerCompanionExitPicker({ companionId, activePhrase, onSelect, onRetrain
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
-  content: { padding: 16 },
+  // v3.4.5: bumped paddingTop from 16 → 50 on BOTH Android
+  // and iOS. Tobe's screenshot showed the section still
+  // flush against the status bar even after the first
+  // bump — the device was actually an iPhone (Dynamic
+  // Island in the status bar) so the iOS=10 path was
+  // insufficient. 50pt clears both Android status bars
+  // (~30-40dp) and iOS Dynamic Island (~30pt + safe area).
+  // The old v3.1.91 header block had paddingTop:34 on
+  // Android but that header was removed in v3.4.x and the
+  // padding was lost on the new section-based layout.
+  content: { padding: 16, paddingTop: 50 },
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingTop: Platform.OS === 'android' ? 34 : 10 },
   backBtn: { color: '#f7931a', fontSize: 16 },
   title: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginLeft: 16 },
