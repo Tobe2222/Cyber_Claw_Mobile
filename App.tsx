@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import HomeScreen from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import WakeModeScreen from './src/screens/WakeModeScreen';
+import CompanionSettingsScreen from './src/screens/CompanionSettingsScreen';
 import syncClient from './src/services/SyncClient';
 import { saveGreetingAudio } from './src/services/GreetingAudioCache';
 
@@ -72,7 +73,11 @@ export default function App(): React.JSX.Element {
 
   // v3.2.18: Wake Mode is gone. Only Home, Settings, and
   // Voice Mode exist. The wake word opens Voice Mode directly.
-  const [screen, setScreen] = useState<'home' | 'settings' | 'voice-mode'>('home');
+  const [screen, setScreen] = useState<'home' | 'settings' | 'voice-mode' | 'companion'>('home');
+  // v3.4.4: id of the companion whose settings are open
+  // when screen === 'companion'. Set by SettingsScreen via
+  // onOpenCompanion(id).
+  const [companionScreenId, setCompanionScreenId] = useState<string | null>(null);
   // v3.1.83: ref so the AppState=active listener (re-added below)
   // can read the CURRENT screen value, not the value captured at
   // useEffect mount time. Without this, the listener would always
@@ -343,7 +348,22 @@ export default function App(): React.JSX.Element {
             />
           )}
           {screen === 'settings' && (
-            <SettingsScreen onBack={() => setScreen('home')} />
+            <SettingsScreen
+              onBack={() => setScreen('home')}
+              onOpenCompanion={(id) => {
+                setCompanionScreenId(id);
+                setScreen('companion');
+              }}
+            />
+          )}
+          {screen === 'companion' && companionScreenId && (
+            <CompanionSettingsScreen
+              companionId={companionScreenId}
+              onBack={() => {
+                setCompanionScreenId(null);
+                setScreen('settings');
+              }}
+            />
           )}
           {screen === 'voice-mode' && (
             <WakeModeScreen

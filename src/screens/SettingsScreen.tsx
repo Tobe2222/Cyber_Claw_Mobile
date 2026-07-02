@@ -127,7 +127,18 @@ const PREMIUM_PROVIDERS = [
   ]},
 ];
 
-export default function SettingsScreen({ onBack }: { onBack: () => void }) {
+export default function SettingsScreen({
+  onBack,
+  // v3.4.4: when the user taps a companion row in the Voice
+  // mode list, the detail view is no longer inline — it gets
+  // promoted to its own screen via App.tsx. App.tsx listens
+  // for this callback, sets the route to 'companion', and
+  // mounts <CompanionSettingsScreen companionId={id} />.
+  onOpenCompanion,
+}: {
+  onBack: () => void;
+  onOpenCompanion: (companionId: string) => void;
+}) {
   // ── Connection ────────────────────────────────────────────────
   const [hostIp, setHostIp] = useState('');
   const [pairingCode, setPairingCode] = useState('');
@@ -193,24 +204,13 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // companions that have a saved custom wake model. Used
   // to show "✓ trained" badges in the companion picker.
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
-  // v3.4.0: which companion's detail screen is open.
-  // When null, the user sees the top-level Voice mode
-  // section with the companion list. When set, they see
-  // the per-companion detail view (greeting, reply, wake
-  // phrases, exit phrases, train buttons).
-  const [selectedCompanionId, setSelectedCompanionId] = useState<string | null>(null);
-  // v3.4.3: drill-down phase inside the companion
-  // detail view. null = overview page (the two Wake /
-  // Exit cards). 'wake' / 'exit' = the sub-page for that
-  // one phase. Replaces the v3.4.2 single-page layout
-  // that interleaved everything on one long screen.
-  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | null>(null);
-  // v3.3.0: which companionId the OWW detector is
-  // currently set to. Persisted to AsyncStorage so a
-  // cold restart lands on the right wake phrase. Today
-  // this is implicit ("whatever was last trained") —
-  // this state makes it explicit and user-routable
-  // from the new WakePhrasePicker.
+  // v3.4.4: selectedCompanionId / companionViewPhase
+  // REMOVED — companion detail view now lives in its own
+  // screen (CompanionSettingsScreen) reached via App.tsx's
+  // 'companion' route. SettingsScreen keeps the wake
+  // picker UI (selecting which companion's trained wake
+  // word is active) but no longer renders the detail
+  // view inline.
   const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
 
   // v3.4.2: `showCompanionPicker` state + the companion
@@ -296,295 +296,6 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     })();
   }, [availableCompanions.length, activeWakeCompanionId]);
 
-  // v3.4.0: per-companion detail view. Reached by tapping
-  // a companion in the top-level Voice mode list. v3.4.3:
-  // this is now a 2-level navigation inside the detail
-  // view — the overview page (Wake card + Exit card) and
-  // drill-down sub-pages (Wake settings, Exit settings).
-  // Replaces the v3.4.2 single-page layout that mixed
-  // everything on one screen.
-  function renderCompanionDetail() {
-    const cid = selectedCompanionId;
-    if (!cid) return null;
-    const companion = availableCompanions.find(c => c.id === cid);
-    if (!companion) {
-      // Companion was deleted from the cache while we
-      // were in this view. Auto-back out and reset the
-      // drill-down phase too so the next companion's
-      // detail doesn't open straight into a stale
-      // wake/exit sub-page.
-      setSelectedCompanionId(null);
-      setCompanionViewPhase(null);
-      return null;
-    }
-    // v3.4.3: drill-down routing. When a sub-page is
-    // active, render that page directly (skip the
-    // overview). The sub-page has its own back button
-    // that returns to the overview.
-    if (companionViewPhase === 'wake') {
-      return renderCompanionWakePage(companion, cid);
-    }
-    if (companionViewPhase === 'exit') {
-      return renderCompanionExitPage(companion, cid);
-    }
-    // Default: the overview page (two cards).
-    return renderCompanionOverview(companion, cid);
-  }
-
-  // v3.4.3: the overview card-page inside a companion
-  // detail view. Just two big tappable cards: Wake and
-  // Exit. Tap one to drill into that sub-page.
-  function renderCompanionOverview(companion: { id: string; name: string; emoji?: string | null; icon?: string | null }, cid: string) {
-    return (
-      <>
-        {/* Per-companion header with back button.
-            Back returns to the top-level Voice mode list
-            and resets companionViewPhase. */}
-        <View style={[styles.section, styles.detailHeaderRow]}>
-          <TouchableOpacity
-            onPress={() => {
-              setCompanionViewPhase(null);
-              setSelectedCompanionId(null);
-            }}
-            style={styles.detailBackBtn}
-          >
-            <Text style={styles.detailBackBtnText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.detailHeader}>
-            {companion.emoji || companion.icon || '🐾'}  {companion.name}
-          </Text>
-          <View style={{ width: 60 }} />
-        </View>
-
-        <Section title={`${companion.name} settings`} desc={`Wake word, exit phrase, greeting, and reply for ${companion.name}.`}>
-          <Hint>Tap a card to open its settings.</Hint>
-
-          {/* Wake card → tap → wake sub-page */}
-          <TouchableOpacity
-            style={[styles.phaseCard, { borderColor: '#3b82f6' }]}
-            onPress={() => setCompanionViewPhase('wake')}
-          >
-            <Text style={styles.phaseCardEmoji}>🎤</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.phaseCardTitle}>Wake settings</Text>
-              <Text style={styles.phaseCardSub}>
-                Greeting, trained wake words, train a new wake phrase
-              </Text>
-            </View>
-            <Text style={styles.phaseCardArrow}>›</Text>
-          </TouchableOpacity>
-
-          {/* Exit card → tap → exit sub-page */}
-          <TouchableOpacity
-            style={[styles.phaseCard, { borderColor: '#f7931a' }]}
-            onPress={() => setCompanionViewPhase('exit')}
-          >
-            <Text style={styles.phaseCardEmoji}>🚪</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.phaseCardTitle}>Exit settings</Text>
-              <Text style={styles.phaseCardSub}>
-                Exit reply, trained exit phrases, train a new exit phrase
-              </Text>
-            </View>
-            <Text style={styles.phaseCardArrow}>›</Text>
-          </TouchableOpacity>
-        </Section>
-      </>
-    );
-  }
-
-  // v3.4.3: per-companion Wake sub-page. Back button
-  // returns to the overview (companionViewPhase → null).
-  function renderCompanionWakePage(companion: { id: string; name: string; emoji?: string | null; icon?: string | null }, cid: string) {
-    return (
-      <>
-        <View style={[styles.section, styles.detailHeaderRow]}>
-          <TouchableOpacity
-            onPress={() => setCompanionViewPhase(null)}
-            style={styles.detailBackBtn}
-          >
-            <Text style={styles.detailBackBtnText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.detailHeader}>
-            🎤  {companion.name} — Wake
-          </Text>
-          <View style={{ width: 60 }} />
-        </View>
-
-        <Section title="Wake settings" desc={`Greeting and trained wake words for ${companion.name}.`}>
-          <SubTitle>Wake greeting</SubTitle>
-          <Hint>Phrase the companion says when the wake word fires. Auto-saves as you type.</Hint>
-          <TextInput
-            style={styles.input}
-            value={readyPhrase}
-            onChangeText={(v) => { setReadyPhrase(v); persistReadyPhrase(v); }}
-            onBlur={() => AsyncStorage.setItem('cyberclaw-ready-phrase', readyPhrase).then(() => setReadyPhraseSavedAt(Date.now()))}
-            placeholder="Ready to chat"
-            placeholderTextColor="#555"
-            returnKeyType="done"
-          />
-          {readyPhraseSavedAt && (
-            <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
-          )}
-
-          <SubTitle>Wake phrases</SubTitle>
-          <Hint>Trained wake words for {companion.name}. Tap 🎙 to retrain, 🗑 to delete.</Hint>
-          <WakePhrasePicker
-            companions={[companion]}
-            savedModels={savedWakeModels}
-            activeCompanionId={activeWakeCompanionId}
-            onSelect={(selectedCid) => {
-              setActiveWakeCompanionId(selectedCid);
-              AsyncStorage.setItem('cyberclaw-active-wake-companion', selectedCid);
-              const entry = savedWakeModels[selectedCid];
-              if (entry?.phrase) {
-                AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
-                  const settings = raw ? JSON.parse(raw) : {};
-                  settings.wakeWord = entry.phrase;
-                  AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings));
-                });
-              }
-            }}
-            onRetrain={(rcid, phrase) => {
-              setTrainingCompanionId(rcid);
-              setTrainingCompanionName(companion.name);
-              setEditingWakePhrase(phrase);
-              setShowOwwTrainer(true);
-            }}
-            onDelete={(rcid) => {
-              Alert.alert(
-                'Delete wake model?',
-                `Removes the trained wake word for ${companion.name}. You can re-train it later.`,
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Delete',
-                    style: 'destructive',
-                    onPress: async () => {
-                      try {
-                        await AsyncStorage.removeItem(`cyberclaw-wake-samples-${rcid}`);
-                        setSavedWakeModels(prev => {
-                          const next = { ...prev };
-                          delete next[rcid];
-                          return next;
-                        });
-                        if (activeWakeCompanionId === rcid) {
-                          setActiveWakeCompanionId(null);
-                          await AsyncStorage.removeItem('cyberclaw-active-wake-companion');
-                        }
-                      } catch (_) {}
-                    },
-                  },
-                ],
-              );
-            }}
-          />
-          <TouchableOpacity
-            style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
-            onPress={() => {
-              setTrainingCompanionId(cid);
-              setTrainingCompanionName(companion.name);
-              setEditingWakePhrase('');
-              setShowOwwTrainer(true);
-            }}
-          >
-            <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🎤 Train new wake phrase for {companion.name}</Text>
-            <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word</Text>
-          </TouchableOpacity>
-        </Section>
-      </>
-    );
-  }
-
-  // v3.4.3: per-companion Exit sub-page. Back button
-  // returns to the overview (companionViewPhase → null).
-  function renderCompanionExitPage(companion: { id: string; name: string; emoji?: string | null; icon?: string | null }, cid: string) {
-    return (
-      <>
-        <View style={[styles.section, styles.detailHeaderRow]}>
-          <TouchableOpacity
-            onPress={() => setCompanionViewPhase(null)}
-            style={styles.detailBackBtn}
-          >
-            <Text style={styles.detailBackBtnText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.detailHeader}>
-            🚪  {companion.name} — Exit
-          </Text>
-          <View style={{ width: 60 }} />
-        </View>
-
-        <Section title="Exit settings" desc={`Exit reply and trained exit phrases for ${companion.name}.`}>
-          <SubTitle>Exit reply</SubTitle>
-          <Hint>Phrase the companion says when voice mode closes. Empty for silent close.</Hint>
-          <TextInput
-            style={styles.input}
-            value={exitReplyPhrase}
-            onChangeText={(v) => { setExitReplyPhrase(v); persistExitReplyPhrase(v); }}
-            onBlur={() => AsyncStorage.setItem('cyberclaw-exit-reply-phrase', exitReplyPhrase).then(() => setExitReplySavedAt(Date.now()))}
-            placeholder="Goodbye!"
-            placeholderTextColor="#555"
-            returnKeyType="done"
-          />
-          {exitReplySavedAt && exitReplyPhrase && (
-            <Text style={styles.savedHint}>✅ Saved at {new Date(exitReplySavedAt).toLocaleTimeString()}</Text>
-          )}
-
-          <SubTitle>Exit phrases</SubTitle>
-          <Hint>Trained phrases that close voice mode when {companion.name} hears them. Tap 🎙 to retrain, 🗑 to delete.</Hint>
-          <PerCompanionExitPicker
-            companionId={cid}
-            activePhrase={voiceExitPhrase}
-            onSelect={async (p) => {
-              setVoiceExitPhrase(p);
-              const { saveExitPhrase } = await import('../services/VoiceSettings');
-              await saveExitPhrase(cid, p);
-              setVoiceExitPhraseSavedAt(Date.now());
-            }}
-            onRetrain={(p) => {
-              setEditingExitPhrase(p);
-              setShowExitPhraseTrainer(true);
-            }}
-            onDelete={async (p) => {
-              Alert.alert(
-                'Delete exit phrase?',
-                `Removes the trained samples for "${p}" on ${companion.name}.`,
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Delete',
-                    style: 'destructive',
-                    onPress: async () => {
-                      const { clearExitSamples, saveExitPhrase } = await import('../services/VoiceSettings');
-                      await clearExitSamples(cid, p);
-                      if (voiceExitPhrase.toLowerCase() === p.toLowerCase()) {
-                        setVoiceExitPhrase('');
-                        await saveExitPhrase(cid, '');
-                      }
-                    },
-                  },
-                ],
-              );
-            }}
-          />
-          {voiceExitPhraseSavedAt && voiceExitPhrase && (
-            <Text style={styles.savedHint}>✅ Active: "{voiceExitPhrase}" saved</Text>
-          )}
-          <TouchableOpacity
-            style={[styles.trainBtn, { borderColor: '#f7931a' }]}
-            onPress={() => {
-              setEditingExitPhrase('');
-              setShowExitPhraseTrainer(true);
-            }}
-          >
-            <Text style={[styles.trainBtnText, { color: '#f7931a' }]}>🚪 Train new exit phrase for {companion.name}</Text>
-            <Text style={styles.trainBtnSub}>Record a short phrase 6 times — closes voice mode instantly when heard</Text>
-          </TouchableOpacity>
-        </Section>
-      </>
-    );
-  }
-
   // v3.4.0: one-time migration from v3.3.0's global exit
   // storage to per-companion. Reads the legacy keys and
   // writes them under the FIRST known companion's
@@ -638,13 +349,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (showOwwTrainer) { setShowOwwTrainer(false); return true; }
       if (showExitPhraseTrainer) { setShowExitPhraseTrainer(false); return true; }
-      if (companionViewPhase) { setCompanionViewPhase(null); return true; }
-      if (selectedCompanionId) { setSelectedCompanionId(null); return true; }
       onBack();
       return true;
     });
     return () => backHandler.remove();
-  }, [onBack, showOwwTrainer, companionViewPhase, selectedCompanionId]);
+  }, [onBack, showOwwTrainer, showExitPhraseTrainer]);
 
   // v3.2.11: stop the bundled pre-trained wake listener while
   // SettingsScreen is mounted. Settings includes a "Train wake
@@ -677,8 +386,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // (single SharedPreferences read) so it's safe to fire on
   // every detail-view open.
   // v3.4.2: previously gated on companion-picker open. The
-  // picker is gone; the trigger is now selectedCompanionId
-  // changing (handled by renderCompanionDetail), so we just
+  // picker is gone; the trigger is now onOpenCompanion(id)
+  // from the list row (handled by App.tsx route swap), so we just
   // refresh on mount + whenever availableCompanions grows.
   useEffect(() => {
     WakeWordModule?.getSavedWakeModels?.()
@@ -1262,14 +971,13 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           Wake/Exit are no longer top-level sections; they're
           features of each companion, reachable via the list. */}
 
-      {/* v3.4.0: when a companion is selected, the entire
-          🎤 Voice mode section is replaced by a per-companion
-          detail view. The user returns to the top-level list
-          via a back button at the top of the detail view. */}
-      {selectedCompanionId ? (
-        renderCompanionDetail()
-      ) : (
-        <>
+      {/* v3.4.4: the per-companion detail view is NO LONGER
+          rendered inline here. Tapping a companion in the
+          top-level Voice mode list opens it as its own full
+          screen via App.tsx (route 'companion' →
+          CompanionSettingsScreen). SettingsScreen now just
+          shows the top-level Voice mode section always. */}
+      <>
           {/* ── 🎤 Voice mode (top-level, with companion list) ── */}
           <Section title="🎤 Voice mode" desc="Configure how voice mode works for each companion. Tap a companion to customize their wake phrase, exit phrase, greeting, and reply.">
 
@@ -1437,7 +1145,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
                         styles.companionListRow,
                         isActive && styles.companionListRowActive,
                       ]}
-                      onPress={() => setSelectedCompanionId(c.id)}
+                      onPress={() => onOpenCompanion(c.id)}
                     >
                       <Text style={styles.companionListEmoji}>{c.emoji || c.icon || '🐾'}</Text>
                       <View style={{ flex: 1 }}>
@@ -1481,8 +1189,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
                 toggle above. See that section for the
                 moved content. */}
           </Section>
-        </>
-      )}
+      </>
 
       {/* ── 🔊 Voice & Speech ────────────────────────────────── */}
       <Section title="🔊 Voice & Speech" desc="How your companion speaks back to you.">
