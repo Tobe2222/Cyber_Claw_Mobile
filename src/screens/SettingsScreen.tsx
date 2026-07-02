@@ -27,6 +27,15 @@
  *       companion picker modal) was removed. Training lives
  *       exclusively inside each companion's detail view —
  *       tap companion → detail → Train button there.
+ *       v3.4.4: companion detail view is NO LONGER rendered
+ *       inline in this file. It's been extracted to its own
+ *       screen (CompanionSettingsScreen.tsx) reached via
+ *       App.tsx's 'companion' route. Tap companion →
+ *       App.tsx swaps to CompanionSettingsScreen → back
+ *       returns to SettingsScreen. SettingsScreen now just
+ *       owns the top-level Voice mode list and the rest of
+ *       the settings sections (Voice & Speech, Agent Reach,
+ *       Connection, About).
  *
  *   (2) Per-companion detail view (tap a companion to enter).
  *       v3.4.3: 5-level hierarchy. The detail view is now
