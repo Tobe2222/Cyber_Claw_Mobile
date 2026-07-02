@@ -15,13 +15,18 @@
  *           * Match thresholds (foreground / background)
  *       - Companions list: each companion shows their
  *         currently-active wake phrase; tap to open detail
- *       - Train-new companion's wake button
+ *       - (no per-companion actions on the top-level screen;
+ *         tap a companion to train / configure)
 
  *       v3.4.1 layout: the three "details" controls were
  *       physically moved up to sit immediately under the
  *       master toggle, so they read as one block. Previously
  *       they were loose siblings separated by the Companions
  *       list + train-new button, which felt like a grab-bag.
+ *       v3.4.2: the top-level train-new-wake button (and its
+ *       companion picker modal) was removed. Training lives
+ *       exclusively inside each companion's detail view —
+ *       tap companion → detail → Train button there.
  *
  *   (2) Per-companion detail view (tap a companion to enter)
  *       - Back button + companion header
@@ -189,9 +194,11 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   // this state makes it explicit and user-routable
   // from the new WakePhrasePicker.
   const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
-  // v3.1.68: companion picker is a proper modal sheet now (not a
-  // system Alert). State holds the open/close flag.
-  const [showCompanionPicker, setShowCompanionPicker] = useState(false);
+
+  // v3.4.2: `showCompanionPicker` state + the companion
+  // picker Modal are REMOVED. Training lives exclusively
+  // inside each companion's detail view now — no global
+  // "pick which companion to train" step.
 
   // v3.1.67: per-companion wake training. Each companion has
   // its own wake word. The trainer takes a companionId +
@@ -545,12 +552,16 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   }, []);
 
   // v3.2.0: refresh the saved-wake-models map whenever the
-  // companion picker opens or a training completes. The
-  // Kotlin side keeps this in SharedPreferences — the query
-  // is sync-ish (single SharedPreferences read) so it's safe
-  // to fire on every picker open.
+  // user opens a companion's detail view (so the Wake phrases
+  // list reflects just-completed training). The Kotlin side
+  // keeps this in SharedPreferences — the query is sync-ish
+  // (single SharedPreferences read) so it's safe to fire on
+  // every detail-view open.
+  // v3.4.2: previously gated on companion-picker open. The
+  // picker is gone; the trigger is now selectedCompanionId
+  // changing (handled by renderCompanionDetail), so we just
+  // refresh on mount + whenever availableCompanions grows.
   useEffect(() => {
-    if (!showCompanionPicker) return;
     WakeWordModule?.getSavedWakeModels?.()
       .then((models: any) => {
         if (!models) return;
@@ -569,7 +580,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
         setSavedWakeModels(out);
       })
       .catch(() => {});
-  }, [showCompanionPicker]);
+  }, [availableCompanions.length]);
 
   // ── Initial load ──────────────────────────────────────────────
   useEffect(() => {
@@ -1328,25 +1339,19 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
               </View>
             )}
 
-            {/* Train-new companion button — opens the existing
-                companion picker modal which then opens the
-                trainer. Same UX as v3.3.0. */}
-            <TouchableOpacity
-              style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
-              onPress={() => {
-                if (availableCompanions.length === 0) {
-                  Alert.alert(
-                    'No companions yet',
-                    'Connect to the desktop and load at least one companion before training the wake word.',
-                  );
-                  return;
-                }
-                setShowCompanionPicker(true);
-              }}
-            >
-              <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🧠 Train wake phrase for new companion</Text>
-              <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word for that companion</Text>
-            </TouchableOpacity>
+            {/* Top-level Voice mode ends at the Companions
+                list. v3.4.2 removed the "Train wake phrase for
+                new companion" button that used to live here:
+                Tobe's feedback was that the top-level screen
+                is for the master toggle + grouped details +
+                the companion list, with NO per-companion
+                actions on it. To train a new wake phrase,
+                tap the companion → detail view → Train button
+                inside that companion's detail. Companion
+                picker modal + its state (`showCompanionPicker`)
+                are kept around as dead code for now (will
+                be removed in v3.4.3 cleanup if the picker
+                truly goes unused). */}
 
             {/* Audio buffer / silence timeout / match
                 thresholds used to live here in v3.4.0 but
@@ -1457,53 +1462,14 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     {/* v3.1.68: companion picker modal (replaces the native
         Alert.alert that was here). Each row shows the
         companion's sprite icon next to its name so the user
-        can pick the right one to train the wake word for. */}
-    <Modal
-      visible={showCompanionPicker}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setShowCompanionPicker(false)}
-    >
-      <Pressable
-        style={styles.pickerOverlay}
-        onPress={() => setShowCompanionPicker(false)}
-      >
-        <Pressable style={styles.pickerSheet} onPress={() => { /* swallow */ }}>
-          <Text style={styles.pickerTitle}>Train wake word for…</Text>
-          <Text style={styles.pickerSub}>Each companion has its own wake word.</Text>
-          <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
-            {availableCompanions.map((c) => (
-              <TouchableOpacity
-                key={c.id}
-                style={styles.pickerRow}
-                onPress={() => {
-                  setTrainingCompanionId(c.id);
-                  setTrainingCompanionName(c.name);
-                  setShowCompanionPicker(false);
-                  // v3.2.2: the picker is now only used for the
-                  // openWakeWord trainer. The legacy DTW-based
-                  // Wake Phrases menu is gone.
-                  setShowOwwTrainer(true);
-                }}
-              >
-                <Text style={styles.pickerRowIcon}>{c.emoji || c.icon || '🐾'}</Text>
-                <Text style={styles.pickerRowName} numberOfLines={1}>{c.name}</Text>
-                {savedWakeModels[c.id] ? (
-                  <Text style={styles.pickerRowBadge}>✓ trained</Text>
-                ) : null}
-                <Text style={styles.pickerRowHint}>train →</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-          <TouchableOpacity
-            style={styles.pickerCancel}
-            onPress={() => setShowCompanionPicker(false)}
-          >
-            <Text style={styles.pickerCancelText}>Cancel</Text>
-          </TouchableOpacity>
-        </Pressable>
-      </Pressable>
-    </Modal>
+        can pick the right one to train the wake word for.
+        v3.4.2: ENTIRE PICKER MODAL REMOVED. Its sole caller
+        (the top-level "Train wake phrase for new companion"
+        button) was removed because Tobe wants training to
+        happen exclusively inside each companion's detail
+        view. Tap companion → detail → Train button there.
+        No more "pick which companion to train" step from
+        the top level. */}
   </>
   );
 }
