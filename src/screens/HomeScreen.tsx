@@ -45,8 +45,17 @@ let moduleLevelWakePendingAt = 0;
 // process but is intentionally NOT persisted — the
 // AsyncStorage flag is still the source of truth for the
 // "activity-torn-down" case where the JS process was killed.
+//
+// v3.5.2: bumped default window 3s → 5s. Tobe reported
+// v3.5.1 still re-opened voice mode twice after exit,
+// suggesting the OWW detector (still running across the
+// screen change) emits a queued owwWakeDetected within
+// ~2-4s of the close. 5s gives ample headroom for the
+// detector to settle past its 2s cooldown and the JS
+// event queue to drain, without keeping the user locked
+// out of a re-trigger for an unreasonably long time.
 let _wakeJustExitedUntil = 0;
-export const markWakeJustExited = (windowMs: number = 3000) => {
+export const markWakeJustExited = (windowMs: number = 5000) => {
   _wakeJustExitedUntil = Date.now() + windowMs;
 };
 export const isWakeJustExited = () => Date.now() < _wakeJustExitedUntil;
@@ -909,6 +918,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onActiveCo
   // wake-pending check both watch it as a fallback for the
   // activity-torn-down case.
   const handleWakeWord = useCallback(async (matchedCompanionId?: string) => {
+    // v3.5.2: also respect the just-exited guard at the
+    // listener level, not just in checkPending. v3.5.1's
+    // fix only short-circuited the AsyncStorage-flag
+    // path; if the OWW detector itself fires
+    // owwWakeDetected shortly after voice mode closes
+    // (the detector was running through voice mode and
+    // may have audio frames already classified), this
+    // listener would still trigger a re-open. The
+    // checkPending guard alone is not enough.
+    if (isWakeJustExited()) {
+      addLogEntry('🎤 Wake detected but just exited — ignoring', 'debug');
+      return;
+    }
     try { NativeModules.NativeBackground?.showToast?.('🎤 Wake word detected!'); } catch (_) {}
     addLogEntry(`🎤 Wake word detected (matched: ${matchedCompanionId || 'unknown'}) - handing off to WakeModeScreen`, 'info');
     // v3.1.67: switch to the matched companion so the
