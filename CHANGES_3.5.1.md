@@ -126,7 +126,7 @@ the race without losing the recovery semantics.
   `markWakeJustExited` / `isWakeJustExited` exports;
   `checkPending` short-circuits while the guard is active).
 - Edited: `package.json` (3.5.0 → 3.5.1).
-- Edited: `android/app/build.gradle` (versionCode 188 → 189,
+- Edited: `android/app/build.gradle` (versionCode 188 → 190,
   versionName 3.5.0 → 3.5.1).
 
 ## Verification
