@@ -35,6 +35,22 @@ let _wakeWordEmitter: NativeEventEmitter | null = null;
 // the useEffect above.
 let moduleLevelWakePending = false;
 let moduleLevelWakePendingAt = 0;
+
+// v3.5.1: in-memory guard so HomeScreen's checkPending
+// effect cannot immediately re-trigger voice mode after
+// the user just exited it. The AsyncStorage-based check
+// is racy (removeItem in App.tsx's onExit is async; HomeScreen's
+// mount runs getItem in parallel and can see the still-set
+// flag). This guard survives re-mounts within the same JS
+// process but is intentionally NOT persisted — the
+// AsyncStorage flag is still the source of truth for the
+// "activity-torn-down" case where the JS process was killed.
+let _wakeJustExitedUntil = 0;
+export const markWakeJustExited = (windowMs: number = 3000) => {
+  _wakeJustExitedUntil = Date.now() + windowMs;
+};
+export const isWakeJustExited = () => Date.now() < _wakeJustExitedUntil;
+
 const getWakeWordEmitter = () => {
   if (!_wakeWordEmitter && WakeWordModule) {
     _wakeWordEmitter = new NativeEventEmitter(WakeWordModule);
@@ -937,6 +953,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onActiveCo
     let consumed = false;
     const checkPending = () => {
       if (consumed) return;
+      // v3.5.1: skip the check entirely if we just exited
+      // voice mode within the last few seconds. The
+      // AsyncStorage clear in App.tsx's onExit is async and
+      // can race the getItem here; this guard closes that
+      // race without needing to make the storage layer
+      // synchronous. Without it, HomeScreen's first mount
+      // after exit can re-open voice mode within ~300ms.
+      if (isWakeJustExited()) return;
       AsyncStorage.getItem('cyberclaw-wake-pending').then(pending => {
         if (consumed) return;
         if (pending === '1') {

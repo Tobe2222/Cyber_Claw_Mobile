@@ -10,7 +10,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import HomeScreen from './src/screens/HomeScreen';
+import HomeScreen, { markWakeJustExited } from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import WakeModeScreen from './src/screens/WakeModeScreen';
 import CompanionSettingsScreen from './src/screens/CompanionSettingsScreen';
@@ -394,9 +394,28 @@ export default function App(): React.JSX.Element {
               companionId={companionId}
               agents={agents}
               voiceMode
-              onExit={() => {
-                AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {});
-                WakeWordModule?.clearWakePending?.().catch(() => {});
+              onExit={async () => {
+                // v3.5.1: await the pending-flag clearing
+                // BEFORE switching screens. The previous
+                // version removed the flag fire-and-forget
+                // and immediately called setScreen('home'),
+                // which mounted HomeScreen. HomeScreen's
+                // checkPending effect ran getItem in parallel
+                // with the still-in-flight removeItem, and on
+                // the next 2s tick the flag was still '1' —
+                // voice mode re-opened itself within ~300ms
+                // of the user clicking X.
+                //
+                // Awaiting both clears is enough on its own,
+                // but we ALSO bump a module-level guard in
+                // HomeScreen (see checkPending there) as
+                // belt-and-suspenders for any future code
+                // path that re-reads the flag.
+                markWakeJustExited();
+                await Promise.all([
+                  AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {}),
+                  (WakeWordModule?.clearWakePending?.() ?? Promise.resolve()).catch(() => {}),
+                ]);
                 setScreen('home');
               }}
             />
