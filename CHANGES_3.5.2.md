@@ -70,7 +70,7 @@ Three changes, all in `src/screens/HomeScreen.tsx`:
   `handleWakeWord`; window bumped 3000 → 5000 in
   `markWakeJustExited`).
 - Edited: `package.json` (3.5.1 → 3.5.2).
-- Edited: `android/app/build.gradle` (versionCode 190 → 191,
+- Edited: `android/app/build.gradle` (versionCode 190 → 192,
   versionName 3.5.1 → 3.5.2).
 
 ## Verification
