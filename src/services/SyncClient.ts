@@ -359,6 +359,30 @@ class SyncClient {
     this.send({ type: 'read_exit_model', tflitePath });
   }
 
+  // v3.6.0: send-word training pipeline. Mirror of the
+  // exit-phrase pipeline above but trains the send-word
+  // classifier. The desktop spawns the same openWakeWord
+  // training script; the resulting .tflite lands at the
+  // path the desktop picks and is downloaded via
+  // readSendModel. Reply chain: send_training_progress /
+  // send_training_result / send_model_data.
+  //
+  // Why a separate pipeline (vs reusing exit): the desktop
+  // routing distinguishes by message type, and using
+  // distinct types keeps the wake/exit/send models from
+  // colliding when the user has multiple trainings queued
+  // (e.g. they kick off a retrain of exit while a send
+  // training is still in flight).
+  requestSendTraining(phrase: string, samples: Array<{ name: string; data: string }>) {
+    this.send({ type: 'request_send_training', phrase, samples });
+  }
+  requestLatestSendTrainingResult() {
+    this.send({ type: 'get_latest_send_training_result' });
+  }
+  readSendModel(tflitePath: string) {
+    this.send({ type: 'read_send_model', tflitePath });
+  }
+
   get state(): ConnectionState { return this._state; }
   get connected(): boolean { return this._state === 'connected' || this._state === 'reconnecting'; }
   get authenticated(): boolean { return this._authenticated; }

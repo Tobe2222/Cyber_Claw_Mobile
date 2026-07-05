@@ -1,5 +1,5 @@
 /**
- * VOICE SETTINGS — v3.2.20 / v3.4.0
+ * VOICE SETTINGS — v3.2.20 / v3.4.0 / v3.6.0
  *
  * AsyncStorage-backed settings for the multi-turn voice-mode loop.
  *
@@ -20,6 +20,18 @@
  *                                         training samples, stored
  *                                         as JSON AudioFeatures.
  *
+ * Keys (v3.6.0 — global send word):
+ *   - cyberclaw-send-phrase                String, the user's active
+ *                                          send word (e.g. 'send').
+ *                                          Empty disables. Global,
+ *                                          NOT per-companion — the
+ *                                          send word is a single user
+ *                                          habit, not a per-companion
+ *                                          convention.
+ *   - cyberclaw-send-samples-<phrase>     Training samples for the
+ *                                          send word, stored as JSON
+ *                                          AudioFeatures. Global.
+ *
  * Voice mode reads these fresh on every recording start so that a
  * Settings change takes effect immediately for the next turn (no
  * mode restart needed).
@@ -38,6 +50,11 @@
  * old training. A separate migration on first launch of v3.4.0
  * reads the legacy keys and writes them under the active
  * companion's namespace so the user doesn't lose data on upgrade.
+ *
+ * v3.6.0: added the send word (explicit end-of-utterance cue)
+ * to the same architecture. Like exit, single word, with 6-sample
+ * trainer. Unlike exit, it's global — one send word across all
+ * companions, like the wake word itself.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -51,6 +68,12 @@ export const MAX_SILENCE_MS = 10000;
 export const DEFAULT_EXIT_PHRASE = 'thanks';
 export const MAX_PHRASE_WORDS = 4;
 export const MAX_PHRASE_LENGTH = 40;
+
+/** v3.6.0: send word. Global, single word, default 'send'. */
+export const SEND_PHRASE_KEY = 'cyberclaw-send-phrase';
+export const DEFAULT_SEND_PHRASE = 'send';
+export const getSendSamplesKey = (phrase: string) =>
+  `cyberclaw-send-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 
 /** v3.4.0: per-companion keys (replaces the v3.3.0 global keys). */
 export const getExitPhraseKey = (companionId: string) =>
@@ -71,21 +94,27 @@ export const getLegacyExitSamplesKey = (phrase: string) =>
 export type VoiceSettings = {
   silenceMs: number;
   exitPhrase: string;
+  sendPhrase: string;
 };
 
 /**
- * Read settings fresh from storage. Returns defaults if either
- * key is missing or corrupt. silenceMs is clamped to
+ * Read settings fresh from storage. Returns defaults if any key
+ * is missing or corrupt. silenceMs is clamped to
  * [MIN_SILENCE_MS, MAX_SILENCE_MS] so a bad stored value (e.g.
  * from an older build) can never break the recording loop.
  *
  * v3.4.0: takes companionId — exit phrase is now per-companion.
  * Voice mode passes the active companionId here so the right
  * exit phrase is loaded for the active companion.
+ *
+ * v3.6.0: also loads the global send word. The send word is the
+ * same regardless of companionId — it's a single user habit, not
+ * a per-companion convention.
  */
 export async function loadVoiceSettings(companionId?: string): Promise<VoiceSettings> {
   let silenceMs = DEFAULT_SILENCE_MS;
   let exitPhrase = DEFAULT_EXIT_PHRASE;
+  let sendPhrase = DEFAULT_SEND_PHRASE;
   try {
     const rawSilence = await AsyncStorage.getItem(SILENCE_MS_KEY);
     if (rawSilence !== null) {
@@ -103,7 +132,14 @@ export async function loadVoiceSettings(companionId?: string): Promise<VoiceSett
       }
     } catch (_) {}
   }
-  return { silenceMs, exitPhrase };
+  try {
+    const rawSend = await AsyncStorage.getItem(SEND_PHRASE_KEY);
+    if (rawSend !== null) {
+      const trimmed = rawSend.trim().toLowerCase();
+      if (trimmed) sendPhrase = trimmed;
+    }
+  } catch (_) {}
+  return { silenceMs, exitPhrase, sendPhrase };
 }
 
 export async function saveSilenceMs(ms: number): Promise<void> {
@@ -117,6 +153,46 @@ export async function saveExitPhrase(companionId: string, phrase: string): Promi
   const finalPhrase = wordCount <= MAX_PHRASE_WORDS ? sanitized : '';
   await AsyncStorage.setItem(getExitPhraseKey(companionId), finalPhrase);
   return finalPhrase;
+}
+
+/**
+ * v3.6.0: persist the send word. Single word, lowercase, trimmed.
+ * Unlike exit phrase, no companionId — it's a global setting.
+ * Empty string clears the send word (disable the feature).
+ */
+export async function saveSendPhrase(phrase: string): Promise<string> {
+  const sanitized = phrase.trim().toLowerCase().slice(0, MAX_PHRASE_LENGTH);
+  await AsyncStorage.setItem(SEND_PHRASE_KEY, sanitized);
+  return sanitized;
+}
+
+/**
+ * v3.6.0: read the trained samples for the active send word.
+ * Returns null if no training exists. Used by the native OWW
+ * bridge (setSendModelFromBase64) to install a freshly-trained
+ * classifier.
+ */
+export async function loadSendSamples(phrase: string): Promise<any[] | null> {
+  try {
+    const raw = await AsyncStorage.getItem(getSendSamplesKey(phrase));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.features?.length) return parsed.features;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export async function saveSendSamples(phrase: string, features: any[]): Promise<void> {
+  await AsyncStorage.setItem(
+    getSendSamplesKey(phrase),
+    JSON.stringify({ phrase, features, savedAt: Date.now() }),
+  );
+}
+
+export async function clearSendSamples(phrase: string): Promise<void> {
+  await AsyncStorage.removeItem(getSendSamplesKey(phrase));
 }
 
 /**

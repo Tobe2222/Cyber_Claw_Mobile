@@ -108,6 +108,8 @@ import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/
 
 import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
+import SendPhraseTrainer from '../components/SendPhraseTrainer';
+import { saveSendPhrase } from '../services/VoiceSettings';
 import {
   getPermissions,
   setPermission,
@@ -201,6 +203,15 @@ export default function SettingsScreen({
   // Tobe uses after a command. Empty string disables.
   const [voiceExitPhrase, setVoiceExitPhrase] = useState('thanks');
   const [voiceExitPhraseSavedAt, setVoiceExitPhraseSavedAt] = useState<number | null>(null);
+  // v3.6.0: send word (global, single word). Default
+  // 'send'. The send word is the explicit end-of-utterance
+  // cue — saying it during a recording turn commits the
+  // turn immediately. Empty string disables the feature.
+  const [voiceSendPhrase, setVoiceSendPhrase] = useState('send');
+  const [voiceSendPhraseSavedAt, setVoiceSendPhraseSavedAt] = useState<number | null>(null);
+  // v3.6.0: send-phrase trainer modal. Mirror of
+  // showExitPhraseTrainer but for the send word.
+  const [showSendPhraseTrainer, setShowSendPhraseTrainer] = useState(false);
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [audioSettingsSavedAt, setAudioSettingsSavedAt] = useState<number | null>(null);
 
@@ -467,6 +478,14 @@ export default function SettingsScreen({
             } catch (_) {}
           }
         });
+      }
+    });
+    // v3.6.0: hydrate the global send word. Default 'send'
+    // if no value stored yet (first-time setup).
+    AsyncStorage.getItem('cyberclaw-send-phrase').then(v => {
+      if (v !== null) {
+        const trimmed = v.trim().toLowerCase();
+        if (trimmed) setVoiceSendPhrase(trimmed);
       }
     });
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
@@ -844,6 +863,20 @@ export default function SettingsScreen({
     );
   }
 
+  // v3.6.0: send-phrase trainer. Mirror of the exit
+  // trainer but for the global send word. No companionId
+  // needed — the send word is shared across all
+  // companions.
+  if (showSendPhraseTrainer) {
+    return (
+      <SendPhraseTrainer
+        presetPhrase={voiceSendPhrase || undefined}
+        onCancel={() => setShowSendPhraseTrainer(false)}
+        onComplete={() => setShowSendPhraseTrainer(false)}
+      />
+    );
+  }
+
   // ── Main settings render ─────────────────────────────────────
   return (
     <>
@@ -1092,6 +1125,66 @@ export default function SettingsScreen({
                 />
               ))}
             </View>
+
+            {/* v3.6.0: send word — explicit end-of-utterance
+                cue the user says to commit the current turn
+                to the LLM. Distinct from the exit phrase
+                (which closes voice mode entirely). The send
+                word just stops recording and sends; the
+                conversation continues with the assistant's
+                response.
+
+                Useful in noisy environments where silence
+                detection can't reliably tell "user paused"
+                from "ambient table talk" — saying "send"
+                cleanly commits the turn.
+
+                Unlike exit (per-companion), the send word
+                is GLOBAL — one word across all companions,
+                like the wake word itself. It's a single user
+                habit, not a per-companion convention. */}
+            <Label>Send word</Label>
+            <Hint>The word you say to commit a turn (e.g. "send", "go"). Independent of the exit phrase — send keeps the conversation going, exit closes voice mode.</Hint>
+            <View style={styles.optionRow}>
+              <TextInput
+                value={voiceSendPhrase}
+                onChangeText={setVoiceSendPhrase}
+                editable={true}
+                style={[styles.input, { flex: 1 }]}
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={40}
+                placeholder="send"
+                placeholderTextColor="#666"
+              />
+              <TouchableOpacity
+                style={[styles.saveAudioBtn, { marginLeft: 8 }]}
+                onPress={async () => {
+                  const trimmed = voiceSendPhrase.trim().toLowerCase();
+                  if (!trimmed) {
+                    Alert.alert('Invalid', 'Send word cannot be empty. Clear it via "Clear" to disable.');
+                    return;
+                  }
+                  await saveSendPhrase(trimmed);
+                  setVoiceSendPhrase(trimmed);
+                  setVoiceSendPhraseSavedAt(Date.now());
+                }}
+              >
+                <Text style={styles.saveAudioBtnText}>
+                  {voiceSendPhraseSavedAt
+                    ? `✅ Saved`
+                    : '💾 Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[styles.saveAudioBtn, { marginTop: 8 }]}
+              onPress={() => {
+                setShowSendPhraseTrainer(true);
+              }}
+            >
+              <Text style={styles.saveAudioBtnText}>🎙️ Train send word (6 samples)</Text>
+            </TouchableOpacity>
 
             {/* v3.4.7: removed the Match Thresholds UI.
                 The fgThreshold/bgThreshold sliders were a

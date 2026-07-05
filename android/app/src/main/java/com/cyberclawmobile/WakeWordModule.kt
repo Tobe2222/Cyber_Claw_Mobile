@@ -863,6 +863,105 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // v3.6.0: hot-swap the send-word model. Parallel to
+    // setExitModelFromBase64 but for the send classifier.
+    // Persists to filesDir/send_models/<phrase>.tflite and a
+    // SharedPreferences binding (send_word_<phrase>_path).
+    //
+    // The send model is identified by phrase (not agentId)
+    // because send words are user-level (one active word per
+    // device), not per-companion. We persist by phrase so a
+    // re-train replaces the same file.
+    //
+    // Send word differs from exit phrase in two ways:
+    //  - exit closes voice mode, send just commits the
+    //    current utterance
+    //  - exit is per-companion, send is global
+    @ReactMethod fun setSendModelFromBase64(phrase: String, base64: String, promise: Promise) {
+        try {
+            if (phrase.isBlank() || base64.isBlank()) {
+                promise.reject("ARG", "phrase and base64 required")
+                return
+            }
+            val dir = File(reactContext.filesDir, "send_models")
+            if (!dir.exists()) dir.mkdirs()
+            val safeName = phrase.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+            val tflite = File(dir, "${safeName}.tflite")
+            tflite.writeBytes(Base64.decode(base64, Base64.DEFAULT))
+            emitDebug("info", "Wrote send model: ${tflite.absolutePath} (${tflite.length()} bytes)")
+
+            // Persist the binding so we can re-apply on app restart.
+            val prefs = reactContext.getSharedPreferences("send_models", android.content.Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("active_phrase", phrase)
+                .putString("active_path", tflite.absolutePath)
+                .putLong("active_savedAt", System.currentTimeMillis())
+                .apply()
+
+            // Hot-swap into the running detector (if any).
+            val detector = owwDetector
+            if (detector != null) {
+                val ok = detector.setSendModelFromFile(phrase, tflite.absolutePath)
+                if (ok) {
+                    emitDebug("info", "Hot-swapped send model: '$phrase'")
+                } else {
+                    emitDebug("warn", "Send hot-swap failed; will retry on next initOww")
+                }
+            }
+            promise.resolve(tflite.absolutePath)
+        } catch (e: Exception) {
+            promise.reject("SEND_MODEL_SAVE", e.message)
+        }
+    }
+
+    // v3.6.0: set the send-word detection threshold. Default
+    // 0.5 to match wake and exit. The JS layer reads it from
+    // AsyncStorage ('cyberclaw-send-threshold') and passes it
+    // through here.
+    @ReactMethod fun setSendThreshold(threshold: Double, promise: Promise) {
+        try {
+            owwDetector?.setSendThreshold(threshold.toFloat())
+            emitDebug("info", "Send threshold set: $threshold")
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("SEND_THRESHOLD", e.message)
+        }
+    }
+
+    // v3.6.0: load a saved send-word model on app boot, if one
+    // exists. Parallel to loadOwwSavedExitModel. Reads the
+    // 'send_models' SharedPreferences for the most recent
+    // active phrase. Returns the phrase string or null.
+    @ReactMethod fun loadOwwSavedSendModel(promise: Promise) {
+        try {
+            val prefs = reactContext.getSharedPreferences("send_models", android.content.Context.MODE_PRIVATE)
+            val path = prefs.getString("active_path", null)
+            val phrase = prefs.getString("active_phrase", null)
+            if (path == null || phrase == null) {
+                promise.resolve(null)
+                return
+            }
+            if (!File(path).exists()) {
+                prefs.edit().remove("active_phrase").remove("active_path").remove("active_savedAt").apply()
+                promise.resolve(null)
+                return
+            }
+            val detector = owwDetector
+            if (detector == null) {
+                // Detector not yet initialized — return the
+                // phrase so the JS side can defer the load
+                // until after initOww.
+                promise.resolve(phrase)
+                return
+            }
+            val ok = detector.setSendModelFromFile(phrase, path)
+            promise.resolve(if (ok) phrase else null)
+        } catch (e: Exception) {
+            Log.w("WakeWord", "Failed to load saved send model: ${e.message}")
+            promise.resolve(null)
+        }
+    }
+
     // v3.2.0: look up the saved wake model for an agent (if any)
     // and apply it. Called from initOww so a freshly-trained
     // custom wake word auto-loads on every app launch.
@@ -974,8 +1073,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 var chunkFill = 0
                 var highScoreFrames = 0
                 var exitHighScoreFrames = 0
+                var sendHighScoreFrames = 0
                 val HIGH_SCORE_RUN = 3  // 3 consecutive frames above threshold = wake word
                 val EXIT_HIGH_SCORE_RUN = 3  // 3 consecutive frames above exit threshold = exit phrase
+                // v3.6.0: send classifier runs alongside exit
+                // and wake. SEND_HIGH_SCORE_RUN is the number
+                // of consecutive 80ms frames above the send
+                // threshold before the event fires. The send
+                // word is short (e.g. "send") so 3 frames
+                // (~240ms) is a reasonable confirm window.
+                val SEND_HIGH_SCORE_RUN = 3
                 // v3.2.30: cooldown after a detection. Without
                 // this, a single sustained "hey..." in the
                 // user's speech (or background conversation
@@ -992,6 +1099,21 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 val DETECTION_COOLDOWN_MS = 2000L
                 var lastWakeAt = 0L
                 var lastExitAt = 0L
+                var lastSendAt = 0L
+                // v3.6.0: counter for emitting periodic VAD
+                // events. The JS layer uses these to mark
+                // speech activity in the active recording turn
+                // (drives the gibberish gate — drop the
+                // recording if VAD never crossed the speech
+                // threshold during the turn). Emitting on
+                // every chunk would flood the JS bridge
+                // (12.5Hz × ~50 bytes per event = 625 B/s of
+                // bridge traffic just for VAD), so we emit at
+                // ~5Hz: every 2-3 chunks. VAD_ENERGY_SEND_EVERY.
+                var chunkCount = 0
+                val VAD_ENERGY_SEND_EVERY = 3
+                var lastVadAt = 0L
+                val VAD_ENERGY_MIN_GAP_MS = 200L  // ~5Hz cap
 
                 while (isOwwListening) {
                     val read = rec.read(readBuf, 0, readBuf.size)
@@ -1031,8 +1153,10 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                             val pair = detector.predictScore(chunkBuf)
                             val wakeScore = pair.wake
                             val exitScore = pair.exit
+                            val sendScore = pair.send
                             val threshold = detector.getThreshold()
                             val exitThreshold = detector.getExitThreshold()
+                            val sendThreshold = detector.getSendThreshold()
 
                             // Wake word check
                             if (wakeScore != null && wakeScore >= threshold) {
@@ -1094,6 +1218,66 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                                 exitHighScoreFrames = 0
                             }
 
+                            // Send word check (v3.6.0). The send
+                            // word is the explicit "I'm done with
+                            // my turn" cue the user says to commit
+                            // the current utterance to the LLM.
+                            // It is independent of exit (which
+                            // closes voice mode) — both can be
+                            // trained, both have their own cooldown.
+                            if (sendScore != null && sendScore >= sendThreshold) {
+                                sendHighScoreFrames++
+                                if (sendHighScoreFrames >= SEND_HIGH_SCORE_RUN) {
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastSendAt >= DETECTION_COOLDOWN_MS) {
+                                        lastSendAt = now
+                                        // Send word detected!
+                                        handler.post {
+                                            val params = Arguments.createMap()
+                                            params.putDouble("score", sendScore.toDouble())
+                                            // Echo the send word text
+                                            // so the JS layer can
+                                            // log/display what fired.
+                                            params.putString("sendword", detector.sendNameOrEmpty())
+                                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                                .emit("owwSendDetected", params)
+                                        }
+                                    } else {
+                                        Log.w("WakeWord", "Send detection suppressed by cooldown (${DETECTION_COOLDOWN_MS - (now - lastSendAt)}ms remaining)")
+                                    }
+                                    sendHighScoreFrames = 0
+                                }
+                            } else {
+                                sendHighScoreFrames = 0
+                            }
+
+                            // v3.6.0: periodic VAD event for the
+                            // JS gibberish gate. Emits the current
+                            // chunk's RMS energy + zero-crossing
+                            // rate. JS uses these to mark whether
+                            // the active recording turn has seen
+                            // any speech-like audio at all. If
+                            // not, stopAndSendRecording drops the
+                            // recording instead of sending it to
+                            // STT. Emitted at ~5Hz to keep bridge
+                            // traffic bounded.
+                            chunkCount++
+                            if (chunkCount >= VAD_ENERGY_SEND_EVERY) {
+                                chunkCount = 0
+                                val (rms, zcr) = computeEnergyAndZcr(chunkBuf)
+                                val now = System.currentTimeMillis()
+                                if (now - lastVadAt >= VAD_ENERGY_MIN_GAP_MS) {
+                                    lastVadAt = now
+                                    handler.post {
+                                        val params = Arguments.createMap()
+                                        params.putDouble("rms", rms)
+                                        params.putDouble("zcr", zcr)
+                                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                            .emit("owwVad", params)
+                                    }
+                                }
+                            }
+
                             chunkFill = 0
                         }
                     }
@@ -1116,6 +1300,46 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         try { owwThread?.join(2000) } catch (_: Exception) {}
         owwThread = null
         promise.resolve(null)
+    }
+
+    // v3.6.0: compute RMS energy and zero-crossing rate of a
+    // PCM16 audio chunk. Used by the periodic owwVad event so
+    // the JS layer can decide whether the active recording
+    // turn has seen any speech-like audio (drives the
+    // gibberish gate — drop recordings where VAD never
+    // crossed the speech threshold).
+    //
+    // Returns Pair(RMS, ZCR), both in [0, 1].
+    //
+    // RMS: sqrt(mean(s^2)) where s = sample/32768. A silent
+    //   chunk has RMS near 0; sustained speech is around
+    //   0.05-0.2; loud speech/laughs can hit 0.5+.
+    //
+    // ZCR: zero-crossings / sample_count. Speech has moderate
+    //   ZCR (~0.05-0.15). Pure white noise is much higher
+    //   (~0.3-0.5). A DC offset (clipping) is 0.
+    //
+    // We keep this in the wake-word module rather than the
+    // detector because it's a tiny per-chunk computation
+    // that doesn't need the melspec pipeline.
+    private fun computeEnergyAndZcr(pcm16: ShortArray): Pair<Float, Float> {
+        if (pcm16.isEmpty()) return Pair(0f, 0f)
+        var sumSquares = 0.0
+        var crossings = 0
+        var prev = 0
+        for (i in pcm16.indices) {
+            val s = pcm16[i].toInt()
+            sumSquares += (s * s).toDouble()
+            if (i > 0) {
+                // sign comparison: any sign change (incl. zero crossings)
+                // counts as a zero crossing.
+                if ((s >= 0) != (prev >= 0)) crossings++
+            }
+            prev = s
+        }
+        val rms = Math.sqrt(sumSquares / pcm16.size / (32768.0 * 32768.0)).toFloat()
+        val zcr = crossings.toFloat() / pcm16.size
+        return Pair(rms.coerceIn(0f, 1f), zcr.coerceIn(0f, 1f))
     }
 
     // ── Audio Playback ─────────────────────────────────────────────────────

@@ -11,6 +11,12 @@
  * melspec+embedding output. Both models are hot-swappable
  * from desktop-trained .tflite files (no app restart).
  *
+ * v3.6.0: Triple classifier support — adds a "send" classifier
+ * (the explicit end-of-utterance word, e.g. "send" or "go").
+ * Runs alongside wake and exit on the same embedding. All
+ * three fire independently with their own thresholds and
+ * high-score counters.
+ *
  * Pipeline (per 80ms audio frame at 16kHz = 1280 samples):
  * 1. Feed 1280-sample PCM16 buffer to melspectrogram model
  * 2. Combine with previous frames (model expects 5-frame history)
@@ -47,6 +53,9 @@ import java.nio.channels.FileChannel
  * The predict method now returns a `PairScores` data class with
  * optional wake + exit scores, so callers can fire whichever
  * events apply.
+ *
+ * v3.6.0: extended to TripleScores with optional wake + exit
+ * + send scores. Send runs alongside, separate threshold.
  */
 class OpenWakeWordDetector(private val context: Context) {
     private val tag = "OpenWakeWord"
@@ -56,27 +65,41 @@ class OpenWakeWordDetector(private val context: Context) {
     // two slots: one for the wake word, one for the exit
     // phrase. Both are optional (either can be null if not
     // trained yet) and both share the same melspec+embedding.
+    //
+    // v3.6.0: third slot for the send classifier (explicit
+    // end-of-utterance word). Same hot-swap, same threshold
+    // mechanism. Independent of exit — they serve different
+    // purposes (send finishes a turn, exit closes voice mode).
     private var wakewordInterpreter: Interpreter? = null
     private var exitInterpreter: Interpreter? = null
+    private var sendInterpreter: Interpreter? = null
     private var wakewordName: String = "hey_jarvis"
     private var exitName: String? = null  // null until the user trains an exit phrase
+    private var sendName: String? = null  // null until the user trains a send word
     private var threshold: Float = 0.5f
     private var exitThreshold: Float = 0.5f
+    private var sendThreshold: Float = 0.5f
 
     // History buffers for the streaming pipeline
     private val melspecHistory = ArrayDeque<FloatArray>()
     private val maxHistory = 5  // melspec model expects 5-frame history
 
     /**
-     * v3.5.0: scores from a single inference pass. Either
+     * v3.6.0: scores from a single inference pass. Any
      * field can be null if the corresponding classifier
      * isn't loaded (e.g. user hasn't trained an exit phrase
-     * yet — only wake score is populated).
+     * or send word yet — only wake score is populated).
      */
-    data class PairScores(
+    data class TripleScores(
         val wake: Float?,
         val exit: Float?,
+        val send: Float?,
     )
+
+    // v3.5.0: kept as an alias so older callers that
+    // imported PairScores still compile. The new send slot
+    // is always null when constructed from the v3.5.0 path.
+    typealias PairScores = TripleScores
 
     /**
      * Load all three base models from assets, plus the wake
@@ -116,9 +139,13 @@ class OpenWakeWordDetector(private val context: Context) {
             // phrase via setExitModelFromFile. Until then, the
             // exit score stays null.
             //
+            // v3.6.0: same applies to sendInterpreter. Hot-
+            // swapped via setSendModelFromFile when the user
+            // trains a send word.
+            //
             // Reset history when models reload
             melspecHistory.clear()
-            Log.i(tag, "Models loaded: wake=$wakewordName exit=${exitName ?: "(none)"} (threshold=$threshold)")
+            Log.i(tag, "Models loaded: wake=$wakewordName exit=${exitName ?: "(none)"} send=${sendName ?: "(none)"} (threshold=$threshold)")
             true
         } catch (e: Exception) {
             Log.e(tag, "Failed to load models: ${e.message}", e)
@@ -179,6 +206,32 @@ class OpenWakeWordDetector(private val context: Context) {
     }
 
     /**
+     * v3.6.0: hot-swap the send-word classifier interpreter.
+     * Identical structure to setExitModelFromFile. The send
+     * word is the explicit "I'm done with my turn" cue the
+     * user says to commit the current utterance to the LLM
+     * (alternative to silence-detection auto-send).
+     *
+     * @param phrase the user's send word text (e.g. "send",
+     *               "go", "done") — used as `sendName` for
+     *               logging/debug only; the model is opaque.
+     */
+    fun setSendModelFromFile(phrase: String, tflitePath: String): Boolean {
+        return try {
+            val newInterp = loadInterpreterFromFile(tflitePath)
+            sendInterpreter?.close()
+            sendInterpreter = newInterp
+            sendName = phrase
+            melspecHistory.clear()
+            Log.i(tag, "Send-word model swapped: '$phrase' from $tflitePath (history cleared)")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to load send model from $tflitePath: ${e.message}", e)
+            return false
+        }
+    }
+
+    /**
      * Set wake detection threshold. 0.5 is the openWakeWord
      * default. Higher = stricter (fewer false positives, more
      * false negatives).
@@ -198,6 +251,16 @@ class OpenWakeWordDetector(private val context: Context) {
     }
 
     /**
+     * v3.6.0: set the send-word detection threshold. Same
+     * reasoning as setExitThreshold — the send word serves a
+     * different purpose (commit utterance) than wake or exit,
+     * so it's tuned independently. Default 0.5 to match.
+     */
+    fun setSendThreshold(t: Float) {
+        sendThreshold = t.coerceIn(0.0f, 1.0f)
+    }
+
+    /**
      * v3.2.30: return the currently configured wake detection
      * threshold. The OWW listening loop in WakeWordModule
      * needs to read this so it can compare against the
@@ -212,24 +275,41 @@ class OpenWakeWordDetector(private val context: Context) {
     fun getExitThreshold(): Float = exitThreshold
 
     /**
-     * Run inference on a chunk of 1280 PCM16 samples (80ms at 16kHz).
-     * Returns a PairScores with optional wake score and optional
-     * exit score. Either can be null if the corresponding classifier
-     * isn't loaded.
+     * v3.6.0: return the send-word detection threshold.
      */
-    fun predictScore(pcm16: ShortArray): PairScores {
+    fun getSendThreshold(): Float = sendThreshold
+
+    /**
+     * v3.6.0: helper for the listening-loop log/event payload.
+     * Returns the configured send word text (e.g. "send") or an
+     * empty string if no send word is loaded. The WakeWordModule
+     * uses this to populate the `sendword` field on the
+     * `owwSendDetected` event so the JS layer can log/display
+     * what actually fired. Mirrors how `wakeword` is exposed on
+     * the wake event.
+     */
+    fun sendNameOrEmpty(): String = sendName ?: ""
+
+    /**
+     * Run inference on a chunk of 1280 PCM16 samples (80ms at 16kHz).
+     * Returns a TripleScores with optional wake / exit / send scores.
+     * Any field can be null if the corresponding classifier isn't
+     * loaded.
+     */
+    fun predictScore(pcm16: ShortArray): TripleScores {
         if (pcm16.size != 1280) {
             Log.w(tag, "Expected 1280 samples, got ${pcm16.size}")
-            return PairScores(null, null)
+            return TripleScores(null, null, null)
         }
         val mel = melspecInterpreter
         val emb = embeddingInterpreter
         val ww = wakewordInterpreter
         val exit = exitInterpreter
+        val send = sendInterpreter
 
-        if (mel == null || emb == null || (ww == null && exit == null)) {
+        if (mel == null || emb == null || (ww == null && exit == null && send == null)) {
             // Need at least one classifier loaded to do anything useful.
-            return PairScores(null, null)
+            return TripleScores(null, null, null)
         }
 
         try {
@@ -280,14 +360,17 @@ class OpenWakeWordDetector(private val context: Context) {
 
             val embedding = embOutput[0][0]
 
-            // Step 4: run both classifiers (wake + exit) on the
-            // same embedding. Both expect [1, 1, 96] (single
-            // embedding frame) and output [1, 1] (binary score).
+            // Step 4: run all classifiers (wake + exit + send)
+            // on the same embedding. Each expects [1, 1, 96]
+            // (single embedding frame) and outputs [1, 1]
+            // (binary score). v3.6.0 added send alongside exit;
+            // both are independent and may be null if not trained.
             val classInput = Array(1) { Array(1) { FloatArray(96) } }
             System.arraycopy(embedding, 0, classInput[0][0], 0, 96)
 
             var wakeScore: Float? = null
             var exitScore: Float? = null
+            var sendScore: Float? = null
 
             if (ww != null) {
                 val wwOutput = Array(1) { FloatArray(1) }
@@ -301,23 +384,31 @@ class OpenWakeWordDetector(private val context: Context) {
                 exitScore = exitOutput[0][0]
             }
 
-            return PairScores(wakeScore, exitScore)
+            if (send != null) {
+                val sendOutput = Array(1) { FloatArray(1) }
+                send.run(classInput, sendOutput)
+                sendScore = sendOutput[0][0]
+            }
+
+            return TripleScores(wakeScore, exitScore, sendScore)
         } catch (e: Exception) {
             Log.e(tag, "Inference failed: ${e.message}", e)
-            return PairScores(null, null)
+            return TripleScores(null, null, null)
         }
     }
 
     /**
      * Run inference. Returns true if wake score >= wake
-     * threshold OR exit score >= exit threshold. Either
-     * classifier can fire independently.
+     * threshold OR exit score >= exit threshold OR send
+     * score >= send threshold. Any classifier can fire
+     * independently.
      */
     fun predict(pcm16: ShortArray): Boolean {
-        val (wakeScore, exitScore) = predictScore(pcm16)
+        val (wakeScore, exitScore, sendScore) = predictScore(pcm16)
         val wakeHit = wakeScore != null && wakeScore >= threshold
         val exitHit = exitScore != null && exitScore >= exitThreshold
-        return wakeHit || exitHit
+        val sendHit = sendScore != null && sendScore >= sendThreshold
+        return wakeHit || exitHit || sendHit
     }
 
     /**
@@ -328,10 +419,12 @@ class OpenWakeWordDetector(private val context: Context) {
         embeddingInterpreter?.close()
         wakewordInterpreter?.close()
         exitInterpreter?.close()
+        sendInterpreter?.close()
         melspecInterpreter = null
         embeddingInterpreter = null
         wakewordInterpreter = null
         exitInterpreter = null
+        sendInterpreter = null
         melspecHistory.clear()
     }
 

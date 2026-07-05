@@ -143,10 +143,29 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // handler can re-enter the multi-turn loop without
   // going through the wake-word matcher again.
   const startRecordingTurnRef = useRef<(() => Promise<void>) | null>(null);
+  // v3.6.0 — ref-captured reference to the latest
+  // stopAndSendRecording closure, so the owwSendDetected
+  // listener can call it without needing to track the
+  // callback identity as a useEffect dep.
+  const stopAndSendRecordingRef = useRef<((trigger: 'silence' | 'send') => Promise<void>) | null>(null);
   // v3.2.20 — transcribing-state timeout. Set when audio
   // is sent, cleared when a chat/audio_response event arrives
   // (or when voice mode exits).
   const transcribingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // v3.6.0 — flag tracking whether the active recording
+  // turn has crossed the speech-activity threshold at least
+  // once. Used by stopAndSendRecording to drop "gibberish"
+  // recordings (pure background noise, table conversation
+  // not aimed at the assistant, etc) before they reach the
+  // STT pipeline. Reset to false at the start of each
+  // recording turn.
+  const speechDetectedDuringRecordingRef = useRef<boolean>(false);
+  // v3.6.0 — guards against double-fire when two end-of-
+  // turn triggers (silence timer + send word) race for the
+  // same recording. Set true the moment stopAndSendRecording
+  // begins; subsequent calls bail. Reset at the start of
+  // each recording turn.
+  const stopInFlightRef = useRef<boolean>(false);
 
   const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'listening' : 'listening');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
@@ -849,15 +868,147 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     await startRecordingTurn();
   }, []);
 
+  // v3.6.0 — shared stop-and-send path. Both the silence
+  // timer (auto-send after `silenceMs` of quiet) and the
+  // send-word detector (explicit "I'm done with my turn"
+  // cue) call into this. triggerReason is one of
+  // 'silence' | 'send' — used only for logging.
+  //
+  // The function is idempotent within a recording turn:
+  // the stopInFlightRef guard rejects concurrent calls so a
+  // send-word match can't fire while the silence timer is
+  // mid-countdown (or vice versa). The first caller wins.
+  //
+  // Empty-recording handling covers two cases:
+  //   1. The recorder produced a tiny file (base64 < 100
+  //      chars) — the native recorder was probably still
+  //      warming up. Treat as no-op.
+  //   2. The recording was long enough but VAD never crossed
+  //      the speech threshold during the turn (speechDetected-
+  //      DuringRecordingRef stayed false) — this is the
+  //      "gibberish" case Tobe reported: app kept recording
+  //      table conversation and sent garbage to the LLM.
+  //      Now we drop it and loop the recording turn in
+  //      voice mode (or sit idle in wake mode).
+  const stopAndSendRecording = useCallback(async (triggerReason: 'silence' | 'send') => {
+    if (stopInFlightRef.current) return;
+    stopInFlightRef.current = true;
+    const recorder = getSimpleAudioRecorder();
+    try {
+      let resultPath: string;
+      try {
+        resultPath = await recorder.stop();
+      } catch (e: any) {
+        addLogEntry(`Wake Mode: stop() failed (${triggerReason}): ${e?.message}`, 'error');
+        wakeWordBusyRef.current = false;
+        stopInFlightRef.current = false;
+        return;
+      }
+      if (!resultPath) {
+        addLogEntry('Wake Mode: no recording path', 'error');
+        wakeWordBusyRef.current = false;
+        stopInFlightRef.current = false;
+        return;
+      }
+      const fs = require('react-native-fs');
+      const stats = await fs.stat(resultPath);
+      addLogEntry(`Wake Mode: audio file ${stats.size} bytes`, 'info');
+      const base64 = await fs.readFile(resultPath, 'base64');
+      addLogEntry(`Wake Mode: base64 ${base64.length} chars`, 'info');
+      // Tiny file = recorder didn't actually capture anything.
+      if (base64.length < 100) {
+        addLogEntry('Wake Mode: base64 too small, treating as empty', 'error');
+        wakeWordBusyRef.current = false;
+        stopInFlightRef.current = false;
+        if (voiceMode) {
+          addVoiceLog('🎤 No speech, still listening...');
+          startRecordingTurnRef.current?.().catch(() => {});
+        }
+        return;
+      }
+      // v3.6.0 — gibberish gate. If VAD never saw speech in
+      // this turn, the recording is just background noise /
+      // ambient table talk. Don't send it to STT. This is
+      // the v3.5.2 fix for Tobe's "talk around the table"
+      // bug: the app used to keep recording indefinitely
+      // and ship silence to the desktop which then got
+      // hallucinated into a response.
+      if (!speechDetectedDuringRecordingRef.current) {
+        addLogEntry(`Wake Mode: no speech detected (${triggerReason}), dropping`, 'info');
+        addVoiceLog('🔇 No speech detected, skipping…');
+        wakeWordBusyRef.current = false;
+        stopInFlightRef.current = false;
+        if (voiceMode) {
+          addVoiceLog('🎤 Still listening...');
+          startRecordingTurnRef.current?.().catch(() => {});
+        }
+        return;
+      }
+      setVoiceStatus('transcribing');
+      syncClient.sendAudioInput(base64, 'audio/m4a');
+      addLogEntry(`Wake Mode: audio sent for transcription (trigger=${triggerReason})`, 'sent');
+      addVoiceLog(triggerReason === 'send' ? '📤 Send word → sent' : '📏 Sent, waiting...');
+
+      // v3.2.20 — transcribing timeout. If the desktop
+      // doesn't respond within 30s (network stall, STT
+      // hang, LLM outage, etc), give up and either start
+      // a new recording turn (voice mode loop) or close
+      // voice mode (no point staying). This prevents the
+      // user from being permanently stuck on "Transcribing..."
+      // when the desktop pipeline is jammed. Tobe reported
+      // this exact symptom in v3.2.19.
+      transcribingTimeoutRef.current = setTimeout(() => {
+        if (wakeWordBusyRef.current) {
+          addLogEntry('⏰ Transcribing timeout (30s) — no response from desktop', 'error');
+          addVoiceLog('⏰ No response, retrying...');
+          wakeWordBusyRef.current = false;
+          if (voiceMode) {
+            // Start a new recording turn so the loop
+            // continues. The user can keep talking.
+            startRecordingTurnRef.current?.().catch(() => {});
+          }
+        }
+      }, 30000);
+
+      // v3.2.17 — voice-mode exit-phrase check.
+      // After sending, watch the next incoming chat
+      // message from the desktop; if its userText
+      // (the STT transcription) contains an exit
+      // phrase, close voice mode instead of looping
+      // into the next recording turn. The desktop
+      // emits a chat message containing the user's
+      // transcribed text alongside the assistant's
+      // response. We poll briefly (max 6s) for it.
+      if (voiceMode) {
+        pollForExitPhrase().catch(() => {});
+      }
+    } catch (e: any) {
+      addLogEntry(`Wake Mode: send error (${triggerReason}): ${e?.message}`, 'error');
+      wakeWordBusyRef.current = false;
+    } finally {
+      // The stop-and-send attempt is over. Do NOT clear
+      // stopInFlightRef here if we successfully sent —
+      // the next recording turn (started by the response
+      // handler or the multi-turn loop) resets it.
+      // The next-turn reset happens in startRecordingTurn.
+    }
+  }, [voiceMode]);
+
   // v3.2.17 — start a recording turn. Used both on wake match
   // (first call from handleWakeWordInner) and on each
   // multi-turn loop iteration (subsequent calls from the
   // response handler). Reads silenceMs fresh so a Settings
   // change takes effect on the NEXT turn without a mode
   // restart.
+  //
+  // v3.6.0: also resets speechDetectedDuringRecordingRef and
+  // stopInFlightRef so the gibberish gate and the
+  // double-fire guard are fresh for each turn.
   const startRecordingTurn = useCallback(async () => {
     const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
     resetVAD();
+    speechDetectedDuringRecordingRef.current = false;
+    stopInFlightRef.current = false;
 
     let silenceMs = DEFAULT_SILENCE_MS;
     try {
@@ -889,72 +1040,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           count--;
           if (count <= 0) {
             clearInterval(tick);
-            try {
-              const resultPath = await recorder.stop();
-              if (!resultPath) {
-                addLogEntry('Wake Mode: no recording path', 'error');
-                wakeWordBusyRef.current = false;
-                return;
-              }
-              const stats = await fs.stat(resultPath);
-              addLogEntry(`Wake Mode: audio file ${stats.size} bytes`, 'info');
-              const base64 = await fs.readFile(resultPath, 'base64');
-              addLogEntry(`Wake Mode: base64 ${base64.length} chars`, 'info');
-              if (base64.length < 100) {
-                addLogEntry('Wake Mode: base64 too small, treating as empty', 'error');
-                wakeWordBusyRef.current = false;
-                // v3.2.23 — empty audio means the user never spoke
-                // before the silence timer fired. In voice mode,
-                // start another recording turn so we keep listening
-                // indefinitely. Wake mode just sits idle.
-                if (voiceMode) {
-                  addVoiceLog('🎤 No speech, still listening...');
-                  startRecordingTurnRef.current?.().catch(() => {});
-                }
-                return;
-              }
-              setVoiceStatus('transcribing');
-              syncClient.sendAudioInput(base64, 'audio/m4a');
-              addLogEntry('Wake Mode: audio sent for transcription', 'sent');
-              addVoiceLog('📏 Sent, waiting...');
-
-              // v3.2.20 — transcribing timeout. If the desktop
-              // doesn't respond within 30s (network stall, STT
-              // hang, LLM outage, etc), give up and either start
-              // a new recording turn (voice mode loop) or close
-              // voice mode (no point staying). This prevents the
-              // user from being permanently stuck on "Transcribing..."
-              // when the desktop pipeline is jammed. Tobe reported
-              // this exact symptom in v3.2.19.
-              transcribingTimeoutRef.current = setTimeout(() => {
-                if (wakeWordBusyRef.current) {
-                  addLogEntry('⏰ Transcribing timeout (30s) — no response from desktop', 'error');
-                  addVoiceLog('⏰ No response, retrying...');
-                  wakeWordBusyRef.current = false;
-                  if (voiceMode) {
-                    // Start a new recording turn so the loop
-                    // continues. The user can keep talking.
-                    startRecordingTurnRef.current?.().catch(() => {});
-                  }
-                }
-              }, 30000);
-
-              // v3.2.17 — voice-mode exit-phrase check.
-              // After sending, watch the next incoming chat
-              // message from the desktop; if its userText
-              // (the STT transcription) contains an exit
-              // phrase, close voice mode instead of looping
-              // into the next recording turn. The desktop
-              // emits a chat message containing the user's
-              // transcribed text alongside the assistant's
-              // response. We poll briefly (max 6s) for it.
-              if (voiceMode) {
-                pollForExitPhrase().catch(() => {});
-              }
-            } catch (e: any) {
-              addLogEntry(`Wake Mode: send error: ${e?.message}`, 'error');
-              wakeWordBusyRef.current = false;
-            }
+            await stopAndSendRecording('silence');
           }
         }, 1000);
       });
@@ -966,13 +1052,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       addLogEntry(`Wake Mode: recorder failed: ${e?.message}`, 'error');
       wakeWordBusyRef.current = false;
     }
-  }, [voiceMode]);
+  }, [voiceMode, stopAndSendRecording]);
 
   // Keep the ref updated so the response handler can call the
   // latest closure of startRecordingTurn.
   useEffect(() => {
     startRecordingTurnRef.current = startRecordingTurn;
   }, [startRecordingTurn]);
+  // v3.6.0 — keep stopAndSendRecordingRef in sync so the
+  // owwSendDetected listener can call the latest closure.
+  useEffect(() => {
+    stopAndSendRecordingRef.current = stopAndSendRecording;
+  }, [stopAndSendRecording]);
 
   // v3.2.20 — listen for the next userText chat from the
   // desktop and check it against the single configured exit
@@ -1272,6 +1363,83 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   useEffect(() => {
     exitFiredRef.current = false;
   }, [voiceMode]);
+
+  // v3.6.0 — listen for the ML send-word detection. The
+  // native OWW detector runs a third classifier
+  // (sendInterpreter) in parallel with wake + exit. When
+  // it fires, we stop the recorder immediately and send
+  // the current utterance. Unlike exit (which closes
+  // voice mode entirely), send just commits one turn
+  // — the conversation continues with the assistant's
+  // response.
+  //
+  // This is the explicit end-of-utterance cue Tobe asked
+  // for: in noisy environments where silence detection
+  // can't reliably distinguish "user paused" from
+  // "ambient table talk", saying "send" cleanly commits
+  // the turn. Works alongside (not instead of) the
+  // silence timer.
+  //
+  // The stopInFlightRef inside stopAndSendRecording
+  // guarantees the send-word match and the silence-timer
+  // countdown can't both trigger stop() concurrently.
+  const sendFiredRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (!wakeWordEmitter) return;
+    const emitter = getWakeWordEmitter();
+    if (!emitter) return;
+    const sub = emitter.addListener('owwSendDetected', async (e: { score: number; sendword?: string }) => {
+      if (sendFiredRef.current) return;
+      sendFiredRef.current = true;
+      const label = e.sendword || 'send';
+      addLogEntry(`📤 Send ML detected: "${label}" (${(e.score * 100).toFixed(0)}%)`, 'info');
+      addVoiceLogRef.current?.(`📤 Send word "${label}" → sending`);
+      await stopAndSendRecordingRef.current?.('send');
+      // Re-arm so the next turn can fire a fresh send.
+      // (stopAndSendRecording is one-shot per turn.)
+      setTimeout(() => { sendFiredRef.current = false; }, 0);
+    });
+    return () => {
+      sub?.remove?.();
+    };
+  }, []);
+
+  // v3.6.0 — listen for the periodic owwVad event. The
+  // native OWW listening thread emits RMS energy + zero-
+  // crossing rate for each ~200ms chunk. We use these to
+  // mark whether the active recording turn has seen any
+  // speech-like audio at all. If not (silence the entire
+  // turn, or just background noise), stopAndSendRecording
+  // drops the recording instead of sending it to STT.
+  //
+  // Speech thresholds are intentionally conservative:
+  //   RMS > 0.01  → not pure silence (this filters out the
+  //                 far-field case where the mic recorded
+  //                 nothing)
+  //   ZCR > 0.02  → not pure DC / clipping (this filters
+  //                 out the case where the mic saturated)
+  //   RMS > 0.03  → plausible speech level (this is the
+  //                 main gate — sustained ambient noise
+  //                 like HVAC / fan noise sits around
+  //                 0.005-0.015 RMS)
+  //
+  // Once the flag is set, it sticks for the turn — even
+  // if the user goes quiet afterwards, we already know
+  // they spoke at some point.
+  useEffect(() => {
+    if (!wakeWordEmitter) return;
+    const emitter = getWakeWordEmitter();
+    if (!emitter) return;
+    const sub = emitter.addListener('owwVad', (e: { rms: number; zcr: number }) => {
+      if (speechDetectedDuringRecordingRef.current) return;  // already marked
+      if (e.rms > 0.03 && e.zcr > 0.02) {
+        speechDetectedDuringRecordingRef.current = true;
+      }
+    });
+    return () => {
+      sub?.remove?.();
+    };
+  }, []);
 
   // v3.1.79: auto-close + false-open detection.
   //
