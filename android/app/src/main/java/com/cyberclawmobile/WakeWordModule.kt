@@ -1270,8 +1270,8 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                                     lastVadAt = now
                                     handler.post {
                                         val params = Arguments.createMap()
-                                        params.putDouble("rms", rms)
-                                        params.putDouble("zcr", zcr)
+                                        params.putDouble("rms", rms.toDouble())
+                                        params.putDouble("zcr", zcr.toDouble())
                                         reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                                             .emit("owwVad", params)
                                     }
