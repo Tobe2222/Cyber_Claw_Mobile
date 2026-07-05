@@ -96,10 +96,15 @@ class OpenWakeWordDetector(private val context: Context) {
         val send: Float?,
     )
 
-    // v3.5.0: kept as an alias so older callers that
-    // imported PairScores still compile. The new send slot
-    // is always null when constructed from the v3.5.0 path.
-    typealias PairScores = TripleScores
+    // v3.6.0: PairScores was renamed to TripleScores (added
+    // the send slot). The Kotlin compiler does not support
+    // nested typealiases as of 2.1.21 (verified: emits
+    // "nested and local type aliases are not supported"
+    // on the typealias line itself). PairScores was only
+    // referenced inside this file (no external imports),
+    // so the rename is safe. If external callers ever
+    // need the old name, add a top-level typealias in a
+    // separate .kt file.
 
     /**
      * Load all three base models from assets, plus the wake
