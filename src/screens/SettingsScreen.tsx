@@ -136,31 +136,10 @@ const SETTINGS_KEY = 'cyberclaw-mobile-settings';
 
 type PermStatus = 'granted' | 'denied' | 'never_ask_again' | 'unknown';
 
-// Android on-device TTS voices. These are device-language aliases — the
-// actual voice comes from the user's installed TTS engine.
-const LOCAL_VOICES = [
-  { id: 'default', label: '🎙️ System Default' },
-  { id: 'male', label: '👨 Male' },
-  { id: 'female', label: '👩 Female' },
-];
-
-// Premium API providers (placeholder — the desktop doesn't consume
-// these yet, so the section is read-only-ish until the bridge is wired)
-const PREMIUM_PROVIDERS = [
-  { id: 'elevenlabs', label: 'ElevenLabs', voices: [
-    { id: 'nova', label: '✨ Nova (Female — bright)' },
-    { id: 'alloy', label: '🎙️ Alloy (Male — friendly)' },
-    { id: 'echo', label: '🌊 Echo (Male — deep)' },
-    { id: 'fable', label: '📖 Fable (Female — storyteller)' },
-    { id: 'onyx', label: '⚫ Onyx (Male — smooth)' },
-    { id: 'shimmer', label: '✨ Shimmer (Female — warm)' },
-  ]},
-  { id: 'google', label: 'Google Cloud TTS', voices: [
-    { id: 'en-US-Neural2-A', label: '🗣️ A (Female)' },
-    { id: 'en-US-Neural2-C', label: '🗣️ C (Female)' },
-    { id: 'en-US-Neural2-E', label: '🗣️ E (Male)' },
-  ]},
-];
+// v3.7.0: voice catalog is now in src/services/VoiceCatalog.ts
+// so the per-companion voice picker in CompanionSettingsScreen.tsx
+// can reuse it. This screen imports the same list.
+import { LOCAL_VOICES, PREMIUM_PROVIDERS } from '../services/VoiceCatalog';
 
 export default function SettingsScreen({
   onBack,

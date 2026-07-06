@@ -33,6 +33,16 @@ const { WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
+// v3.7.0: per-companion voice settings (engine + voice id,
+// both Local and Premium API paths). The catalog of available
+// voices is shared with the global Settings screen via
+// VoiceCatalog.ts.
+import { loadVoiceFor, saveVoiceFor, clearVoiceFor } from '../services/VoiceSettings';
+import {
+  LOCAL_VOICES,
+  PREMIUM_PROVIDERS,
+  VoiceEngine,
+} from '../services/VoiceCatalog';
 
 type Companion = {
   id: string;
@@ -51,7 +61,9 @@ export default function CompanionSettingsScreen({
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
   // = sub-page for that phase.
-  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | null>(null);
+  // v3.7.0: 'voice' added — per-companion voice engine +
+  // voice picker (Local / Premium API / Use global default).
+  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | null>(null);
 
   // Companion list — owned here (not lifted to App.tsx)
   // because this screen needs it to resolve companionId
@@ -281,6 +293,9 @@ export default function CompanionSettingsScreen({
   if (companionViewPhase === 'exit') {
     return renderCompanionExitPage(companion);
   }
+  if (companionViewPhase === 'voice') {
+    return renderCompanionVoicePage(companion);
+  }
   return renderCompanionOverview(companion);
 
   // Overview (cards)
@@ -328,6 +343,25 @@ export default function CompanionSettingsScreen({
                 <Text style={styles.phaseCardTitle}>Exit settings</Text>
                 <Text style={styles.phaseCardSub}>
                   Exit reply, trained exit phrases, train a new exit phrase
+                </Text>
+              </View>
+              <Text style={styles.phaseCardArrow}>›</Text>
+            </TouchableOpacity>
+
+            {/* v3.7.0: per-companion Voice settings. Engine +
+                voice picker. Gated on the global "✨ Enable API
+                speech" master toggle when Premium API is
+                selected (falls back to Local). API keys are
+                global, shared across all companions. */}
+            <TouchableOpacity
+              style={[styles.phaseCard, { borderColor: '#10b981' }]}
+              onPress={() => setCompanionViewPhase('voice')}
+            >
+              <Text style={styles.phaseCardEmoji}>🔊</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.phaseCardTitle}>Voice settings</Text>
+                <Text style={styles.phaseCardSub}>
+                  Engine (Local / Premium API) and voice for {companion.name}
                 </Text>
               </View>
               <Text style={styles.phaseCardArrow}>›</Text>
@@ -553,6 +587,228 @@ export default function CompanionSettingsScreen({
               onClose={() => setShowExitPhraseTrainer(false)}
             />
           ) : null}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // v3.7.0: per-companion voice settings sub-page. Engine
+  // selector + voice picker. API keys are global (set in the
+  // Settings screen 🔑 API keys section); this page only
+  // chooses which engine and which voice each companion uses.
+  //
+  // Premium API option is gated on the global "✨ Enable API
+  // speech" master toggle (stored in the global voiceEngine
+  // AsyncStorage key by SettingsScreen). If the toggle is off,
+  // the API radio is disabled and a hint explains why.
+  function renderCompanionVoicePage(companion: Companion) {
+    const [vcEngine, setVcEngine] = useState<VoiceEngine>('default');
+    const [vcLocalId, setVcLocalId] = useState<string>('default');
+    const [vcApiProvider, setVcApiProvider] = useState<string>('elevenlabs');
+    const [vcApiVoice, setVcApiVoice] = useState<string>('nova');
+    const [vcGlobalApiEnabled, setVcGlobalApiEnabled] = useState<boolean>(false);
+    const [vcSavedAt, setVcSavedAt] = useState<number | null>(null);
+    const vcLoadedRef = useRef(false);
+
+    useEffect(() => {
+      let cancelled = false;
+      (async () => {
+        const cfg = await loadVoiceFor(companion.id);
+        // Determine stored engine: 'default' if no per-companion
+        // override was written, else the explicit value.
+        let storedEngine: VoiceEngine = 'default';
+        try {
+          const raw = await AsyncStorage.getItem(`cyberclaw-voice-engine-${companion.id}`);
+          if (raw === 'local' || raw === 'api' || raw === 'default') {
+            storedEngine = raw;
+          }
+        } catch (_) {}
+        const globalEngine = await AsyncStorage.getItem('cyberclaw-voice-engine').catch(() => null);
+        const apiGloballyEnabled = globalEngine === 'api';
+        if (cancelled) return;
+        setVcEngine(storedEngine);
+        setVcLocalId(cfg.localId);
+        setVcApiProvider(cfg.apiProvider);
+        setVcApiVoice(cfg.apiVoice);
+        setVcGlobalApiEnabled(apiGloballyEnabled);
+        vcLoadedRef.current = true;
+      })();
+      return () => { cancelled = true; };
+    }, [companion.id]);
+
+    const saveVoice = useCallback(async () => {
+      if (!vcLoadedRef.current) return;
+      await saveVoiceFor(companion.id, {
+        engine: vcEngine,
+        localId: vcLocalId,
+        apiProvider: vcApiProvider,
+        apiVoice: vcApiVoice,
+      });
+      setVcSavedAt(Date.now());
+    }, [companion.id, vcEngine, vcLocalId, vcApiProvider, vcApiVoice]);
+
+    const resetToGlobal = useCallback(async () => {
+      await clearVoiceFor(companion.id);
+      setVcEngine('default');
+      // Reload effective values from globals.
+      const cfg = await loadVoiceFor(companion.id);
+      setVcLocalId(cfg.localId);
+      setVcApiProvider(cfg.apiProvider);
+      setVcApiVoice(cfg.apiVoice);
+      setVcSavedAt(Date.now());
+    }, [companion.id]);
+
+    // Resolve the effective engine for the "what would actually
+    // be used right now?" status row.
+    const effectiveEngine: 'local' | 'api' =
+      vcEngine === 'default'
+        ? (vcGlobalApiEnabled ? 'api' : 'local')
+        : vcEngine;
+
+    return (
+      <View style={styles.container}>
+        <ScrollView contentContainerStyle={styles.scroll}>
+          <View style={styles.detailHeaderRow}>
+            <TouchableOpacity
+              onPress={() => setCompanionViewPhase(null)}
+              style={styles.detailBackBtn}
+            >
+              <Text style={styles.detailBackBtnText}>← Back</Text>
+            </TouchableOpacity>
+            <Text style={styles.detailHeader}>
+              🔊  {companion.name} — Voice
+            </Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Voice settings</Text>
+            <Text style={styles.sectionDesc}>
+              How {companion.name} speaks back to you. Per-companion override
+              of the global voice engine and voice choice.
+            </Text>
+
+            <SubTitle>Engine</SubTitle>
+            <Hint>📱 Local uses the device's Android TTS engine (free, offline). ✨ Premium API uses cloud voices (ElevenLabs / Google Cloud TTS) — requires the global 🔑 API keys setup and the ✨ API speech master toggle to be on.</Hint>
+            <View style={{ marginVertical: 6 }}>
+              <TouchableOpacity
+                onPress={() => setVcEngine('default')}
+                style={[styles.radioRow, vcEngine === 'default' && styles.radioRowActive]}
+              >
+                <Text style={styles.radioBullet}>{vcEngine === 'default' ? '◉' : '○'}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.radioTitle}>🌐 Use global default</Text>
+                  <Text style={styles.radioSub}>Inherit whatever the global master is set to right now.</Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setVcEngine('local')}
+                style={[styles.radioRow, vcEngine === 'local' && styles.radioRowActive]}
+              >
+                <Text style={styles.radioBullet}>{vcEngine === 'local' ? '◉' : '○'}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.radioTitle}>📱 Local (free)</Text>
+                  <Text style={styles.radioSub}>Android TTS, always available.</Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => vcGlobalApiEnabled && setVcEngine('api')}
+                disabled={!vcGlobalApiEnabled}
+                style={[
+                  styles.radioRow,
+                  vcEngine === 'api' && styles.radioRowActive,
+                  !vcGlobalApiEnabled && { opacity: 0.4 },
+                ]}
+              >
+                <Text style={styles.radioBullet}>{vcEngine === 'api' ? '◉' : '○'}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.radioTitle}>✨ Premium API</Text>
+                  <Text style={styles.radioSub}>
+                    {vcGlobalApiEnabled
+                      ? 'Cloud TTS (ElevenLabs / Google). Uses the global API key.'
+                      : 'Disabled — turn on ✨ API speech in the global 🔑 API keys section first.'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {effectiveEngine === 'local' ? (
+              <>
+                <SubTitle>Local voice</SubTitle>
+                <View style={{ marginVertical: 6 }}>
+                  {LOCAL_VOICES.map(v => (
+                    <TouchableOpacity
+                      key={v.id}
+                      onPress={() => setVcLocalId(v.id)}
+                      style={[styles.radioRow, vcLocalId === v.id && styles.radioRowActive]}
+                    >
+                      <Text style={styles.radioBullet}>{vcLocalId === v.id ? '◉' : '○'}</Text>
+                      <Text style={[styles.radioTitle, { flex: 1 }]}>{v.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            ) : (
+              <>
+                <SubTitle>Premium API voice</SubTitle>
+                <Hint>Provider and voice for {companion.name}.</Hint>
+                <View style={{ marginVertical: 6 }}>
+                  {PREMIUM_PROVIDERS.map(p => (
+                    <TouchableOpacity
+                      key={p.id}
+                      onPress={() => setVcApiProvider(p.id)}
+                      style={[styles.radioRow, vcApiProvider === p.id && styles.radioRowActive]}
+                    >
+                      <Text style={styles.radioBullet}>{vcApiProvider === p.id ? '◉' : '○'}</Text>
+                      <Text style={[styles.radioTitle, { flex: 1 }]}>{p.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <SubTitle>Voice</SubTitle>
+                <View style={{ marginVertical: 6 }}>
+                  {PREMIUM_PROVIDERS.find(p => p.id === vcApiProvider)?.voices.map(v => (
+                    <TouchableOpacity
+                      key={v.id}
+                      onPress={() => setVcApiVoice(v.id)}
+                      style={[styles.radioRow, vcApiVoice === v.id && styles.radioRowActive]}
+                    >
+                      <Text style={styles.radioBullet}>{vcApiVoice === v.id ? '◉' : '○'}</Text>
+                      <Text style={[styles.radioTitle, { flex: 1 }]}>{v.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
+
+            <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+            <Hint>
+              Currently: <Text style={{ color: '#10b981', fontWeight: '600' }}>{effectiveEngine === 'api' ? 'Premium API' : 'Local'}</Text>
+              {effectiveEngine === 'local' && ` — ${LOCAL_VOICES.find(v => v.id === vcLocalId)?.label || vcLocalId}`}
+              {effectiveEngine === 'api' && ` — ${vcApiProvider} / ${vcApiVoice}`}
+            </Hint>
+
+            <TouchableOpacity
+              style={[styles.trainBtn, { borderColor: '#10b981', marginTop: 12 }]}
+              onPress={saveVoice}
+            >
+              <Text style={[styles.trainBtnText, { color: '#10b981' }]}>
+                {vcSavedAt
+                  ? `✅ Saved at ${new Date(vcSavedAt).toLocaleTimeString()}`
+                  : '💾 Save voice settings'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.trainBtn, { borderColor: '#666', marginTop: 6 }]}
+              onPress={resetToGlobal}
+            >
+              <Text style={[styles.trainBtnText, { color: '#888' }]}>
+                🔄 Reset to global default
+              </Text>
+              <Text style={styles.trainBtnSub}>
+                Clears the per-companion override for {companion.name}.
+              </Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       </View>
     );
@@ -845,4 +1101,23 @@ const styles = StyleSheet.create({
   },
   trainBtnText: { fontSize: 15, fontWeight: '600' },
   trainBtnSub: { color: '#888', fontSize: 11, marginTop: 4 },
+  // v3.7.0: radio-style row for the per-companion voice picker.
+  // Reused for engine (Use global default / Local / Premium API)
+  // and for the voice lists under each engine.
+  radioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f1626',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#222',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginVertical: 3,
+    gap: 10,
+  },
+  radioRowActive: { borderColor: '#10b981', backgroundColor: '#102a22' },
+  radioBullet: { color: '#10b981', fontSize: 18, width: 18, textAlign: 'center' },
+  radioTitle: { color: '#fff', fontSize: 15, fontWeight: '500' },
+  radioSub: { color: '#9aa0b4', fontSize: 12, marginTop: 2 },
 });
