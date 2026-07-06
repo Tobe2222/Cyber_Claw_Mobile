@@ -43,6 +43,8 @@ import {
   PREMIUM_PROVIDERS,
   VoiceEngine,
 } from '../services/VoiceCatalog';
+// v3.7.1: syncClient for the desktop "Test voice" button.
+import syncClient from '../services/SyncClient';
 
 type Companion = {
   id: string;
@@ -82,6 +84,29 @@ export default function CompanionSettingsScreen({
 
   const [voiceExitPhrase, setVoiceExitPhrase] = useState('thanks');
   const [voiceExitPhraseSavedAt, setVoiceExitPhraseSavedAt] = useState<number | null>(null);
+
+  // v3.7.1: per-companion voice picker state. v3.7.0 put
+  // these inside renderCompanionVoicePage, which crashed
+  // with "Rendered more hooks than during the previous
+  // render" because the dispatch returns one of four
+  // render-functions per render, and only one of them
+  // had hooks (6 of them). When the user backed out, the
+  // next render called a different render-function with 0
+  // hooks, breaking React's hook bookkeeping.
+  //
+  // Fix: lift all voice state to the screen level, next
+  // to the wake/exit state. The render-function becomes
+  // pure, matching the existing renderCompanionWakePage /
+  // renderCompanionExitPage pattern. Hydration re-runs
+  // when the active companionId changes, mirroring the
+  // voiceExitPhrase rehydration below.
+  const [vcEngine, setVcEngine] = useState<VoiceEngine>('default');
+  const [vcLocalId, setVcLocalId] = useState<string>('default');
+  const [vcApiProvider, setVcApiProvider] = useState<string>('elevenlabs');
+  const [vcApiVoice, setVcApiVoice] = useState<string>('nova');
+  const [vcGlobalApiEnabled, setVcGlobalApiEnabled] = useState<boolean>(false);
+  const [vcSavedAt, setVcSavedAt] = useState<number | null>(null);
+  const vcLoadedRef = useRef(false);
 
   const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
 
@@ -158,6 +183,39 @@ export default function CompanionSettingsScreen({
         }
       } catch (_) {}
     })();
+  }, [companionId]);
+
+  // v3.7.1: hydrate the per-companion voice picker state.
+  // Re-runs when the active companionId changes so the
+  // picker shows the right voice for the right companion.
+  // Mirrors the pattern of the wake-greeting and exit-phrase
+  // rehydrations above.
+  useEffect(() => {
+    let cancelled = false;
+    vcLoadedRef.current = false;
+    setVcSavedAt(null);
+    (async () => {
+      const cfg = await loadVoiceFor(companionId);
+      // Determine stored engine: 'default' if no per-companion
+      // override was written, else the explicit value.
+      let storedEngine: VoiceEngine = 'default';
+      try {
+        const raw = await AsyncStorage.getItem(`cyberclaw-voice-engine-${companionId}`);
+        if (raw === 'local' || raw === 'api' || raw === 'default') {
+          storedEngine = raw;
+        }
+      } catch (_) {}
+      const globalEngine = await AsyncStorage.getItem('cyberclaw-voice-engine').catch(() => null);
+      const apiGloballyEnabled = globalEngine === 'api';
+      if (cancelled) return;
+      setVcEngine(storedEngine);
+      setVcLocalId(cfg.localId);
+      setVcApiProvider(cfg.apiProvider);
+      setVcApiVoice(cfg.apiVoice);
+      setVcGlobalApiEnabled(apiGloballyEnabled);
+      vcLoadedRef.current = true;
+    })();
+    return () => { cancelled = true; };
   }, [companionId]);
 
   // Hydrate active-wake-companion preference
@@ -240,6 +298,33 @@ export default function CompanionSettingsScreen({
       }
     }, 600);
   };
+
+  // v3.7.1: per-companion voice picker callbacks. Lifted
+  // from the renderCompanionVoicePage helper along with the
+  // state (see the comment on vcEngine above for the full
+  // reason). Both are useCallback so the Save / Reset buttons
+  // don't recreate the handler on every render.
+  const saveVoice = useCallback(async () => {
+    if (!vcLoadedRef.current) return;
+    await saveVoiceFor(companionId, {
+      engine: vcEngine,
+      localId: vcLocalId,
+      apiProvider: vcApiProvider,
+      apiVoice: vcApiVoice,
+    });
+    setVcSavedAt(Date.now());
+  }, [companionId, vcEngine, vcLocalId, vcApiProvider, vcApiVoice]);
+
+  const resetToGlobal = useCallback(async () => {
+    await clearVoiceFor(companionId);
+    setVcEngine('default');
+    // Reload effective values from globals.
+    const cfg = await loadVoiceFor(companionId);
+    setVcLocalId(cfg.localId);
+    setVcApiProvider(cfg.apiProvider);
+    setVcApiVoice(cfg.apiVoice);
+    setVcSavedAt(Date.now());
+  }, [companionId]);
 
   // Hardware back handler — chain through phases
   useEffect(() => {
@@ -592,72 +677,14 @@ export default function CompanionSettingsScreen({
     );
   }
 
-  // v3.7.0: per-companion voice settings sub-page. Engine
-  // selector + voice picker. API keys are global (set in the
-  // Settings screen 🔑 API keys section); this page only
-  // chooses which engine and which voice each companion uses.
-  //
-  // Premium API option is gated on the global "✨ Enable API
-  // speech" master toggle (stored in the global voiceEngine
-  // AsyncStorage key by SettingsScreen). If the toggle is off,
-  // the API radio is disabled and a hint explains why.
+  // v3.7.0: per-companion voice settings sub-page. v3.7.1:
+  // this is now a pure render function — all state lives at
+  // the screen level (next to the wake/exit state). The
+  // dispatch at the top of the screen picks one of the four
+  // render-functions per render; previously only this one
+  // had hooks, which broke React's hook accounting when the
+  // user navigated away.
   function renderCompanionVoicePage(companion: Companion) {
-    const [vcEngine, setVcEngine] = useState<VoiceEngine>('default');
-    const [vcLocalId, setVcLocalId] = useState<string>('default');
-    const [vcApiProvider, setVcApiProvider] = useState<string>('elevenlabs');
-    const [vcApiVoice, setVcApiVoice] = useState<string>('nova');
-    const [vcGlobalApiEnabled, setVcGlobalApiEnabled] = useState<boolean>(false);
-    const [vcSavedAt, setVcSavedAt] = useState<number | null>(null);
-    const vcLoadedRef = useRef(false);
-
-    useEffect(() => {
-      let cancelled = false;
-      (async () => {
-        const cfg = await loadVoiceFor(companion.id);
-        // Determine stored engine: 'default' if no per-companion
-        // override was written, else the explicit value.
-        let storedEngine: VoiceEngine = 'default';
-        try {
-          const raw = await AsyncStorage.getItem(`cyberclaw-voice-engine-${companion.id}`);
-          if (raw === 'local' || raw === 'api' || raw === 'default') {
-            storedEngine = raw;
-          }
-        } catch (_) {}
-        const globalEngine = await AsyncStorage.getItem('cyberclaw-voice-engine').catch(() => null);
-        const apiGloballyEnabled = globalEngine === 'api';
-        if (cancelled) return;
-        setVcEngine(storedEngine);
-        setVcLocalId(cfg.localId);
-        setVcApiProvider(cfg.apiProvider);
-        setVcApiVoice(cfg.apiVoice);
-        setVcGlobalApiEnabled(apiGloballyEnabled);
-        vcLoadedRef.current = true;
-      })();
-      return () => { cancelled = true; };
-    }, [companion.id]);
-
-    const saveVoice = useCallback(async () => {
-      if (!vcLoadedRef.current) return;
-      await saveVoiceFor(companion.id, {
-        engine: vcEngine,
-        localId: vcLocalId,
-        apiProvider: vcApiProvider,
-        apiVoice: vcApiVoice,
-      });
-      setVcSavedAt(Date.now());
-    }, [companion.id, vcEngine, vcLocalId, vcApiProvider, vcApiVoice]);
-
-    const resetToGlobal = useCallback(async () => {
-      await clearVoiceFor(companion.id);
-      setVcEngine('default');
-      // Reload effective values from globals.
-      const cfg = await loadVoiceFor(companion.id);
-      setVcLocalId(cfg.localId);
-      setVcApiProvider(cfg.apiProvider);
-      setVcApiVoice(cfg.apiVoice);
-      setVcSavedAt(Date.now());
-    }, [companion.id]);
-
     // Resolve the effective engine for the "what would actually
     // be used right now?" status row.
     const effectiveEngine: 'local' | 'api' =
@@ -806,6 +833,34 @@ export default function CompanionSettingsScreen({
               </Text>
               <Text style={styles.trainBtnSub}>
                 Clears the per-companion override for {companion.name}.
+              </Text>
+            </TouchableOpacity>
+
+            {/* v3.7.1: Test buttons. Moved from the global
+                Settings screen (whose Voice & Speech section
+                is gone) so the user can test a companion's
+                voice after picking it. "Test local voice on
+                phone" plays through the device's Android TTS
+                engine. "Test voice on desktop" sends a
+                speak action via the SyncClient to the
+                companion's desktop. */}
+            <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+            <SubTitle>Test</SubTitle>
+            <Hint>Try the picked voice out before saving. The desktop test uses the companion's currently-active voice on the desktop side.</Hint>
+            <TouchableOpacity
+              style={[styles.trainBtn, { borderColor: '#3b82f6', marginTop: 8 }]}
+              onPress={testLocalVoice}
+            >
+              <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>
+                🔊 Test local voice on phone
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.trainBtn, { borderColor: '#3b82f6', marginTop: 6 }]}
+              onPress={testDesktopVoice}
+            >
+              <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>
+                🖥️ Test voice on desktop
               </Text>
             </TouchableOpacity>
           </View>
@@ -983,6 +1038,88 @@ function PerCompanionExitPicker({ companionId, activePhrase, onSelect, onRetrain
       })}
     </View>
   );
+}
+
+// v3.7.1: Test voice helpers, moved here from SettingsScreen
+// (the global Voice & Speech section is gone). The Test
+// buttons in the per-companion Voice sub-page call these.
+// Both are module-level so they aren't recreated on every
+// render and don't take any state — they just trigger TTS
+// on the Android engine (local) or via the WebView's
+// speechSynthesis (desktop).
+
+/** Test the local Android TTS engine with a fixed phrase.
+ *  Doesn't read the per-companion voice id — the Android
+ *  TTS engine picks the voice from the system default
+ *  (the per-companion "local voice" choice is forward-
+ *  looking; the TTS layer doesn't read it yet). The test
+ *  still confirms the engine is installed and working.
+ *
+ *  v3.1.90: probes for a TTS engine before speaking so
+ *  we can offer to install Google TTS / eSpeak NG if
+ *  missing. */
+function testLocalVoice() {
+  const phrase = 'Ready to chat. The boar is happy.';
+  const wm = (NativeModules as any).WakeWordModule;
+  if (!wm?.speakText) {
+    Alert.alert('TTS unavailable', 'WakeWordModule not available.');
+    return;
+  }
+  const tryInstall = () => {
+    if (wm?.installTtsData) {
+      wm.installTtsData().catch(() => {});
+    }
+  };
+  if (wm?.hasTtsEngine) {
+    wm.hasTtsEngine()
+      .then((hasEngine: boolean) => {
+        if (!hasEngine) {
+          Alert.alert(
+            'No TTS engine installed',
+            'CyberClaw needs a Text-to-Speech engine for voice greetings. Install Google TTS or eSpeak NG?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Install', onPress: tryInstall },
+            ],
+          );
+          return;
+        }
+        wm.speakText(phrase).catch(() => {
+          Alert.alert('TTS init failed', 'Engine is installed but failed to initialise. Try installing voice data in Android Settings → Accessibility → Text-to-speech output.');
+        });
+      })
+      .catch(() => {
+        wm.speakText(phrase).catch(() => {
+          Alert.alert('TTS unavailable', 'Your device has no Text-to-Speech engine installed.');
+        });
+      });
+  } else {
+    wm.speakText(phrase).catch(() => {
+      Alert.alert('TTS unavailable', 'Your device has no Text-to-Speech engine installed.');
+    });
+  }
+}
+
+/** Test the desktop's WebView speechSynthesis with a
+ *  fixed phrase. Sends an eval_js action via the
+ *  SyncClient to the desktop, which then speaks the
+ *  phrase in the active companion's voice. */
+function testDesktopVoice() {
+  const phrase = 'Tobe is the coolest and most handsome man on the planet';
+  const escaped = phrase.replace(/'/g, "\\'");
+  syncClient.sendCompanionAction({
+    type: 'eval_js',
+    script: `
+      if ('speechSynthesis' in window) {
+        const u = new SpeechSynthesisUtterance('${escaped}');
+        u.rate = 0.95; u.pitch = 1.0;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+      }
+      true;
+    `,
+  });
+  Alert.alert('🔊 Sent to desktop', 'The desktop should speak the test phrase.');
 }
 
 const styles = StyleSheet.create({
