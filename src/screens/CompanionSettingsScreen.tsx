@@ -37,7 +37,10 @@ import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
 // both Local and Premium API paths). The catalog of available
 // voices is shared with the global Settings screen via
 // VoiceCatalog.ts.
-import { loadVoiceFor, saveVoiceFor, clearVoiceFor } from '../services/VoiceSettings';
+import {
+  loadVoiceFor, saveVoiceFor, clearVoiceFor,
+  loadVoiceSettings, saveSilenceMs,
+} from '../services/VoiceSettings';
 import {
   LOCAL_VOICES,
   PREMIUM_PROVIDERS,
@@ -107,6 +110,14 @@ export default function CompanionSettingsScreen({
   const [vcGlobalApiEnabled, setVcGlobalApiEnabled] = useState<boolean>(false);
   const [vcSavedAt, setVcSavedAt] = useState<number | null>(null);
   const vcLoadedRef = useRef(false);
+
+  // v3.7.2: per-companion silence timeout. Re-runs the
+  // rehydration below on companion switch (mirrors the
+  // voice config rehydration). The silence picker in the
+  // voice sub-page consumes this state.
+  const [vcSilenceMs, setVcSilenceMs] = useState<number>(5000);
+  const [vcSilenceSavedAt, setVcSilenceSavedAt] = useState<number | null>(null);
+  const vcSilenceLoadedRef = useRef(false);
 
   const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
 
@@ -218,6 +229,24 @@ export default function CompanionSettingsScreen({
     return () => { cancelled = true; };
   }, [companionId]);
 
+  // v3.7.2: hydrate the per-companion silence timeout.
+  // loadVoiceSettings reads the per-companion key first
+  // (cyberclaw-voice-silence-ms-<companionId>) and falls
+  // back to the v3.7.1 global key, so users keep their
+  // existing silence setting.
+  useEffect(() => {
+    let cancelled = false;
+    vcSilenceLoadedRef.current = false;
+    setVcSilenceSavedAt(null);
+    (async () => {
+      const settings = await loadVoiceSettings(companionId);
+      if (cancelled) return;
+      setVcSilenceMs(settings.silenceMs);
+      vcSilenceLoadedRef.current = true;
+    })();
+    return () => { cancelled = true; };
+  }, [companionId]);
+
   // Hydrate active-wake-companion preference
   useEffect(() => {
     (async () => {
@@ -325,6 +354,16 @@ export default function CompanionSettingsScreen({
     setVcApiVoice(cfg.apiVoice);
     setVcSavedAt(Date.now());
   }, [companionId]);
+
+  // v3.7.2: save the per-companion silence timeout.
+  // Writes the per-companion key via saveSilenceMs in
+  // VoiceSettings (the v3.7.1 global key is read-only
+  // fallback, not written here).
+  const saveSilence = useCallback(async () => {
+    if (!vcSilenceLoadedRef.current) return;
+    await saveSilenceMs(companionId, vcSilenceMs);
+    setVcSilenceSavedAt(Date.now());
+  }, [companionId, vcSilenceMs]);
 
   // Hardware back handler — chain through phases
   useEffect(() => {
@@ -806,6 +845,42 @@ export default function CompanionSettingsScreen({
                 </View>
               </>
             )}
+
+            {/* v3.7.2: silence-to-end-turn picker. Moved here
+                from the global Wake listening section. Per-
+                companion: a chatty companion can have a
+                longer silence window than a terse one.
+                Default 5s; clamped to [2,10]s by
+                saveSilenceMs. The "Save silence" button is
+                separate from the voice Save button so the
+                user can change one without committing the
+                other (matches the existing wake/exit
+                pattern). */}
+            <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+            <SubTitle>Silence to end turn: {vcSilenceMs / 1000}s</SubTitle>
+            <Hint>Voice mode stays open in a multi-turn loop. After this much silence, the turn ends and the companion returns to passive wake-word listening.</Hint>
+            <View style={{ marginVertical: 6 }}>
+              {[2, 3, 5, 7, 10].map(s => (
+                <TouchableOpacity
+                  key={s}
+                  onPress={() => setVcSilenceMs(s * 1000)}
+                  style={[styles.radioRow, vcSilenceMs === s * 1000 && styles.radioRowActive]}
+                >
+                  <Text style={styles.radioBullet}>{vcSilenceMs === s * 1000 ? '◉' : '○'}</Text>
+                  <Text style={[styles.radioTitle, { flex: 1 }]}>{s}s</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={[styles.trainBtn, { borderColor: '#10b981', marginTop: 6 }]}
+              onPress={saveSilence}
+            >
+              <Text style={[styles.trainBtnText, { color: '#10b981' }]}>
+                {vcSilenceSavedAt
+                  ? `✅ Silence saved at ${new Date(vcSilenceSavedAt).toLocaleTimeString()}`
+                  : '💾 Save silence setting'}
+              </Text>
+            </TouchableOpacity>
 
             <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
             <Hint>

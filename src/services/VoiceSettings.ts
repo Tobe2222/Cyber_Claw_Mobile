@@ -3,14 +3,21 @@
  *
  * AsyncStorage-backed settings for the multi-turn voice-mode loop.
  *
- * Keys (v3.4.0 — per-companion):
- *   - cyberclaw-voice-silence-ms           Number (2000..10000),
+ * Keys (v3.7.2 — per-companion silence):
+ *   - cyberclaw-voice-silence-ms-<companionId>  Number (2000..10000),
  *                                          continuous silence in ms
  *                                          that closes a recording
- *                                          turn. Default 5000.
- *                                          Global — applies to
- *                                          voice mode regardless of
- *                                          which companion is active.
+ *                                          turn. Default 5000. Per-
+ *                                          companion so chatty vs
+ *                                          terse companions can have
+ *                                          different silence.
+ *   - cyberclaw-voice-silence-ms          Legacy v3.7.1 global key,
+ *                                          read as a fallback for
+ *                                          companions without a
+ *                                          per-companion override.
+ *                                          Not written by v3.7.2+.
+ *
+ * Keys (v3.4.0 — per-companion exit phrase):
  *   - cyberclaw-exit-phrase-<companionId>  String, the user's active
  *                                          exit phrase per companion
  *                                          (default 'thanks'). Empty
@@ -59,11 +66,25 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// v3.7.2: SILENCE_MS_KEY is now the *fallback* key. The
+// per-companion key (getSilenceMsKey(companionId)) is
+// consulted first; if missing, we fall back to the global
+// value stored under SILENCE_MS_KEY. v3.7.1 users have a
+// value in SILENCE_MS_KEY (their existing global silence
+// setting); that value becomes the default for any
+// companion without a per-companion override, so they
+// don't lose their setting on upgrade. The first time
+// they touch the silence slider in a companion's voice
+// sub-page, that companion gets its own per-companion value.
 export const SILENCE_MS_KEY = 'cyberclaw-voice-silence-ms';
 
 export const DEFAULT_SILENCE_MS = 5000;
 export const MIN_SILENCE_MS = 2000;
 export const MAX_SILENCE_MS = 10000;
+
+/** v3.7.2: per-companion silence key builder. */
+export const getSilenceMsKey = (companionId: string) =>
+  `cyberclaw-voice-silence-ms-${companionId}`;
 
 export const DEFAULT_EXIT_PHRASE = 'thanks';
 export const MAX_PHRASE_WORDS = 4;
@@ -165,15 +186,29 @@ export async function loadVoiceSettings(companionId?: string): Promise<VoiceSett
   let silenceMs = DEFAULT_SILENCE_MS;
   let exitPhrase = DEFAULT_EXIT_PHRASE;
   let sendPhrase = DEFAULT_SEND_PHRASE;
-  try {
-    const rawSilence = await AsyncStorage.getItem(SILENCE_MS_KEY);
-    if (rawSilence !== null) {
-      const parsed = parseInt(rawSilence, 10);
-      if (!isNaN(parsed)) {
-        silenceMs = Math.max(MIN_SILENCE_MS, Math.min(MAX_SILENCE_MS, parsed));
-      }
+  // v3.7.2: silence is now per-companion. Read the
+  // per-companion key first; fall back to the global
+  // key (v3.7.1 value) if missing, then to the default.
+  // This way v3.7.1 users keep their existing silence
+  // setting for any companion that hasn't been
+  // overridden.
+  let rawSilence: string | null = null;
+  if (companionId) {
+    try {
+      rawSilence = await AsyncStorage.getItem(getSilenceMsKey(companionId));
+    } catch (_) {}
+  }
+  if (rawSilence === null) {
+    try {
+      rawSilence = await AsyncStorage.getItem(SILENCE_MS_KEY);
+    } catch (_) {}
+  }
+  if (rawSilence !== null) {
+    const parsed = parseInt(rawSilence, 10);
+    if (!isNaN(parsed)) {
+      silenceMs = Math.max(MIN_SILENCE_MS, Math.min(MAX_SILENCE_MS, parsed));
     }
-  } catch (_) {}
+  }
   if (companionId) {
     try {
       const rawPhrase = await AsyncStorage.getItem(getExitPhraseKey(companionId));
@@ -192,9 +227,13 @@ export async function loadVoiceSettings(companionId?: string): Promise<VoiceSett
   return { silenceMs, exitPhrase, sendPhrase };
 }
 
-export async function saveSilenceMs(ms: number): Promise<void> {
+export async function saveSilenceMs(companionId: string, ms: number): Promise<void> {
+  // v3.7.2: silence is per-companion. The save always
+  // writes to the per-companion key; the global key
+  // (SILENCE_MS_KEY) is read-only fallback, not written
+  // by this function.
   const clamped = Math.max(MIN_SILENCE_MS, Math.min(MAX_SILENCE_MS, Math.round(ms)));
-  await AsyncStorage.setItem(SILENCE_MS_KEY, String(clamped));
+  await AsyncStorage.setItem(getSilenceMsKey(companionId), String(clamped));
 }
 
 export async function saveExitPhrase(companionId: string, phrase: string): Promise<string> {

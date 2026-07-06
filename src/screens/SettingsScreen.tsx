@@ -3,7 +3,7 @@
  *
  * v3.4.7: split "🎤 Voice mode" into two separate Section
  * blocks, each with its own orange border:
- *   - 🎧 Companion listening (global mic behavior)
+ *   - 🎧 Wake listening (global mic behavior)
  *       * Background listening toggle (master on/off)
  *       * Audio buffer (lookback)
  *       * Silence timeout (voice mode close)
@@ -88,8 +88,9 @@
  * Sections (top to bottom):
  *   1. 🔗 Connection       — Desktop IP, connect, status, log, pairing
  *   2. 🔒 Permissions      — Runtime perms (mic/notif) + wake perms
- *   3. 🎧 Companion listening — Master background-listening toggle +
- *                            voice-mode silence timeout
+ *   3. 🎧 Wake listening    — Master background-listening toggle
+ *                            (per-companion silence timeout lives in
+ *                            each companion's Voice sub-page)
  *   4. 🐾 Companions       — Per-companion list (tap → detail). Also
  *                            hosts the global "send word" trainer at
  *                            the bottom (shared across companions).
@@ -192,8 +193,15 @@ export default function SettingsScreen({
   const [exitReplySavedAt, setExitReplySavedAt] = useState<number | null>(null);
   const exitReplySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // v3.2.17 — multi-turn voice loop settings.
-  const [voiceSilenceMs, setVoiceSilenceMs] = useState(5000);
+  // v3.7.2: voiceSilenceMs state removed. The silence
+  // timeout is now per-companion, owned by each companion's
+  // Voice sub-page in CompanionSettingsScreen. The
+  // 'cyberclaw-voice-silence-ms' AsyncStorage key is
+  // read-only fallback for v3.7.1 users (their global
+  // setting becomes the default for any companion that
+  // hasn't been overridden). saveSilenceMs(companionId, ms)
+  // in VoiceSettings.ts writes the per-companion key.
+  //
   // v3.2.20 — single exit phrase (was array). Default
   // 'thanks' matches the most common natural exit phrase
   // Tobe uses after a command. Empty string disables.
@@ -460,13 +468,12 @@ export default function SettingsScreen({
     // means "silent close" — no audio played, no log
     // spam, just drop back to passive wake listening.
     AsyncStorage.getItem('cyberclaw-exit-reply-phrase').then(v => { if (v != null) setExitReplyPhrase(v); });
-    // v3.2.17 — hydrate voice-mode loop settings.
-    AsyncStorage.getItem('cyberclaw-voice-silence-ms').then(v => {
-      if (v) {
-        const n = parseInt(v, 10);
-        if (!isNaN(n)) setVoiceSilenceMs(Math.max(2000, Math.min(10000, n)));
-      }
-    });
+    // v3.7.2: voice-silence-ms hydration removed. Silence
+    // is per-companion now; CompanionSettingsScreen handles
+    // per-companion hydration. The global
+    // 'cyberclaw-voice-silence-ms' key is still read by
+    // VoiceSettings.loadVoiceSettings() as a fallback for
+    // companions without a per-companion override.
     AsyncStorage.getItem('cyberclaw-voice-exit-phrase').then(v => {
       // v3.2.20 — single phrase. Also migrate from the old
       // array format if present (first phrase wins).
@@ -981,15 +988,17 @@ export default function SettingsScreen({
           CompanionSettingsScreen). SettingsScreen now just
           shows the top-level Voice mode section always. */}
       <>
-          {/* ── 🎧 Companion listening (own Section, orange border) ──
-              v3.7.1: renamed from "Listening settings" to
-              "Companion listening" — the section governs
-              companion behaviour (master wake-word listening
-              toggle, voice-mode silence timeout), not the
-              device's microphone in general. "Companion
-              listening" matches the 🐾 Companions section
-              naming and makes the scope explicit. */}
-          <Section title="🎧 Companion listening" desc="How your companions listen for the wake word and how long voice mode stays open.">
+          {/* ── 🎧 Wake listening (own Section, orange border) ──
+              v3.7.2: renamed from "Companion listening" to
+              "Wake listening" — the section now only governs
+              the wake-word pipeline (master background-
+              listening toggle). The voice-mode silence
+              timeout moved to each companion's Voice sub-page
+              (it's a per-companion setting: chatty vs terse
+              companions can have different silence). "Wake
+              listening" makes the section's scope clear and
+              is shorter than "Companion listening". */}
+          <Section title="🎧 Wake listening" desc="The master background-listening toggle for the wake word. Per-companion voice settings (engine, voice, silence) live in each companion's detail page.">
 
             {/* Master Background listening toggle. The
                 grouped sub-controls below (audio buffer,
@@ -1019,36 +1028,17 @@ export default function SettingsScreen({
 
             {/* v3.4.5: the redundant "Background listening —
                 details" SubTitle was removed. Now that the
-                group has its own "🎧 Companion listening"
+                group has its own "🎧 Wake listening"
                 GroupTitle above, the controls below read as
                 naturally belonging to the same group without
                 needing a second header. Kept the Hint.
 
-                v3.6.2: the Audio buffer / Lookback / Save
-                audio settings controls were lifted out into
-                a new "🎙️ Background recording" Section below.
-                This section now contains only the master
-                toggle and the voice-mode silence timeout. */}
-            <Hint>Fine-tune how background listening behaves. These only matter when the master toggle above is on.</Hint>
-
-            {/* Voice mode close — silence timeout (existing,
-                unchanged; inside Background listening group
-                as of v3.4.1). v3.4.1: moved up here. */}
-            <Label>Silence to end turn: {voiceSilenceMs / 1000}s</Label>
-            <Hint>Voice mode stays open in a multi-turn loop. After this much silence, the turn ends.</Hint>
-            <View style={styles.optionRow}>
-              {[2, 3, 5, 7, 10].map(s => (
-                <OptionBtn
-                  key={s}
-                  active={voiceSilenceMs === s * 1000}
-                  label={`${s}s`}
-                  onPress={() => {
-                    setVoiceSilenceMs(s * 1000);
-                    AsyncStorage.setItem('cyberclaw-voice-silence-ms', String(s * 1000));
-                  }}
-                />
-              ))}
-            </View>
+                v3.7.2: the silence timeout was removed from
+                this section. It's now per-companion, in
+                each companion's Voice sub-page
+                (CompanionSettingsScreen). This section is
+                now just the master toggle. */}
+            <Hint>When on, the app keeps the microphone active in the background and wakes on your phrase. Per-companion voice settings (engine, voice, silence) live in each companion's detail page.</Hint>
 
             {/* v3.6.0: send word was added here, and v3.6.2
                 moved it to the bottom of the 🐾 Companions
@@ -1076,7 +1066,7 @@ export default function SettingsScreen({
 
           {/* v3.4.7: split "Voice mode" into TWO separate
               Sections, each with its own orange border.
-              Companion listening (global mic behavior) and
+              Wake listening (global mic behavior) and
               Companions (per-companion wake/exit training)
               are conceptually different things — keeping
               them in one Section with a divider read as
