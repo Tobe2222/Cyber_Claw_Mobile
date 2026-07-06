@@ -116,37 +116,69 @@ export default function SendPhraseTrainer({ presetPhrase, onCancel, onComplete }
     pulse.setValue(0);
   }, [pulse]);
 
+  // Listen for the native 'sampleRecordDone' event. The native
+  // side fires this when stopSampleRecord() flips
+  // isRawRecording = false and the WAV has been fully written.
+  // We use it to advance sample count + status — same pattern
+  // as ExitPhraseTrainer.
+  useEffect(() => {
+    const { DeviceEventEmitter } = require('react-native');
+    const onSampleDone = (params: { path: string; bytes: number }) => {
+      isRecordingRef.current = false;
+      setStage('idle');
+      setSamples(prev => [...prev, params.path]);
+      const nextCount = samples.length + 1;
+      if (nextCount >= REQUIRED_SAMPLES) {
+        setStatusMsg(`Sample ${nextCount}/${REQUIRED_SAMPLES} captured (${(params.bytes / 1024).toFixed(1)} KB). All samples captured. Tap "Train model" to continue.`);
+      } else {
+        setStatusMsg(`Sample ${nextCount}/${REQUIRED_SAMPLES} captured (${(params.bytes / 1024).toFixed(1)} KB).`);
+      }
+      stopPulse();
+    };
+    const sub = DeviceEventEmitter.addListener('sampleRecordDone', onSampleDone);
+    return () => sub.remove();
+  }, [samples.length, stopPulse]);
+
   const recordSample = useCallback(async () => {
     if (isRecordingRef.current) return;
     isRecordingRef.current = true;
     setStage('recording');
-    setStatusMsg('Recording… say the word');
+    setStatusMsg('🔴 Recording… say the word');
     startPulse();
 
     const wavPath = `${RNFS.TemporaryDirectoryPath}/send-sample-${Date.now()}.wav`;
     try {
-      await WakeWordModule.startSampleRecord(wavPath, 2000);  // 2s max per sample
-      // startSampleRecord stops automatically after the
-      // duration elapses; we just wait it out. The native
-      // side fires 'sampleRecordDone' on completion but
-      // this function returns the same promise when done.
-      await new Promise<void>((resolve) => setTimeout(resolve, 2100));
-      setSamples(prev => [...prev, wavPath]);
-      setStatusMsg(`Sample ${samples.length + 1}/${REQUIRED_SAMPLES} captured.`);
-      if (samples.length + 1 >= REQUIRED_SAMPLES) {
-        setStage('idle');
-        setStatusMsg('All samples captured. Tap "Train model" to continue.');
-      } else {
-        setStage('idle');
-      }
+      // startSampleRecord does NOT auto-stop — it records until
+      // stopSampleRecord() is called. It resolves the JS promise
+      // the moment AudioRecord.startRecording() succeeds, not
+      // when the WAV is written. The actual sample is delivered
+      // via the 'sampleRecordDone' event (subscribed above).
+      await WakeWordModule.startSampleRecord(wavPath);
+      // Safety cap: if the user forgets to tap Stop (or never
+      // gets a chance because the button hides when
+      // stage === 'recording'), force-stop after 4 s.
+      setTimeout(() => {
+        if (isRecordingRef.current) {
+          WakeWordModule.stopSampleRecord().catch(() => {});
+        }
+      }, 4000);
     } catch (e: any) {
+      isRecordingRef.current = false;
       setStage('error');
       setStatusMsg(`Recording failed: ${e?.message ?? e}`);
-    } finally {
-      isRecordingRef.current = false;
       stopPulse();
     }
-  }, [samples.length, startPulse, stopPulse]);
+  }, [startPulse, stopPulse]);
+
+  const stopRecording = useCallback(async () => {
+    if (stage !== 'recording') return;
+    try {
+      await WakeWordModule.stopSampleRecord();
+    } catch (e: any) {
+      setStage('error');
+      setStatusMsg(`Stop failed: ${e?.message ?? e}`);
+    }
+  }, [stage]);
 
   const trainModel = useCallback(async () => {
     const trimmed = phrase.trim().toLowerCase();
@@ -271,12 +303,16 @@ export default function SendPhraseTrainer({ presetPhrase, onCancel, onComplete }
       <Text style={styles.label}>Samples ({samples.length}/{REQUIRED_SAMPLES})</Text>
       <Animated.View style={{ transform: [{ scale: stage === 'recording' ? pulseScale : 1 }] }}>
         <TouchableOpacity
-          onPress={recordSample}
-          disabled={stage === 'recording' || stage === 'training' || stage === 'uploading' || stage === 'downloading' || stage === 'activating' || samples.length >= REQUIRED_SAMPLES}
+          onPress={stage === 'recording' ? stopRecording : recordSample}
+          disabled={(stage !== 'recording' && (stage === 'training' || stage === 'uploading' || stage === 'downloading' || stage === 'activating' || samples.length >= REQUIRED_SAMPLES))}
           style={[styles.button, (stage === 'recording' ? styles.buttonRecording : null)]}
         >
           <Text style={styles.buttonText}>
-            {samples.length >= REQUIRED_SAMPLES ? 'All samples captured' : 'Record sample'}
+            {stage === 'recording'
+              ? 'Stop recording'
+              : samples.length >= REQUIRED_SAMPLES
+                ? 'All samples captured'
+                : `Record sample ${samples.length + 1}/${REQUIRED_SAMPLES}`}
           </Text>
         </TouchableOpacity>
       </Animated.View>

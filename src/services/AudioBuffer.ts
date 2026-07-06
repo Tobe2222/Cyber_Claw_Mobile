@@ -20,16 +20,17 @@ export interface AudioChunk {
 export interface AudioBufferSettings {
   enabled: boolean;
   lookbackMinutes: number;      // 5, 10, 30, 60
-  retentionDays: number;        // 1-30, how long to keep daily recordings
-  conversationTimeoutMinutes: number;  // 1, 2, 5 — silence before stopping active listening
   wakeWord: string;             // "Hey CyberClaw"
+  // v3.6.1: removed retentionDays and conversationTimeoutMinutes.
+  // Both were write-only — saved to AsyncStorage and surfaced in
+  // the UI but never read. Daily recording + log rotation is
+  // not implemented; the rolling audio buffer is bounded solely
+  // by lookbackMinutes × CHUNK_DURATION_MS below.
 }
 
 export const DEFAULT_SETTINGS: AudioBufferSettings = {
   enabled: false,
   lookbackMinutes: 10,
-  retentionDays: 7,
-  conversationTimeoutMinutes: 2,
   wakeWord: 'Hey CyberClaw',
 };
 
