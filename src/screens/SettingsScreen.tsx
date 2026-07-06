@@ -5,7 +5,7 @@
  * blocks, each with its own orange border:
  *   - 🎧 Listening settings (global mic behavior)
  *       * Background listening toggle (master on/off)
- *       * Audio buffer (lookback + conversation timeout + retention)
+ *       * Audio buffer (lookback)
  *       * Silence timeout (voice mode close)
  *   - 🐾 Companions (per-companion list; tap → CompanionSettingsScreen)
  *       * Companion rows: each shows their trained wake phrase
@@ -1085,20 +1085,16 @@ export default function SettingsScreen({
                 <OptionBtn key={m} active={audioSettings.lookbackMinutes === m} label={`${m}`} onPress={() => updateAudio('lookbackMinutes', m)} />
               ))}
             </View>
-            <Label>Conversation timeout (minutes)</Label>
-            <Hint>After this much silence, the companion returns to passive wake word detection.</Hint>
-            <View style={styles.optionRow}>
-              {[1, 2, 5].map(m => (
-                <OptionBtn key={m} active={audioSettings.conversationTimeoutMinutes === m} label={`${m}`} onPress={() => updateAudio('conversationTimeoutMinutes', m)} />
-              ))}
-            </View>
-            <Label>Recording retention (days)</Label>
-            <Hint>Daily audio logs are kept locally for this many days, then auto-deleted.</Hint>
-            <View style={styles.optionRow}>
-              {[1, 7, 14, 30].map(d => (
-                <OptionBtn key={d} active={audioSettings.retentionDays === d} label={`${d}`} onPress={() => updateAudio('retentionDays', d)} />
-              ))}
-            </View>
+            {/*
+              v3.6.1: removed "Conversation timeout" and "Recording
+              retention" controls. Both were write-only — the
+              values were saved to AsyncStorage and shown back in
+              the UI but no code path actually read them. The
+              "Daily audio logs are kept locally…" hint was
+              documenting a feature (background daily recording
+              + retention) that is not implemented. The audio
+              buffer is governed solely by lookbackMinutes.
+            */}
             <TouchableOpacity style={styles.saveAudioBtn} onPress={saveAudioSettings}>
               <Text style={styles.saveAudioBtnText}>
                 {audioSettingsSavedAt
