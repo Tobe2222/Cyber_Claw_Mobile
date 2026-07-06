@@ -83,6 +83,56 @@ export const getExitSamplesKey = (companionId: string, phrase: string) =>
   `cyberclaw-exit-samples-${companionId}-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 
 /**
+ * v3.7.0: per-companion voice settings (engine + voice id,
+ * for both Local and Premium API paths). Companion-specific
+ * overrides let the user pick a different voice per
+ * companion (e.g. Lamasuu = Male, Clawsuu = Female) without
+ * changing the global default.
+ *
+ * Each per-companion key is independent. A missing key means
+ * "use the global default" — see loadVoiceFor() below.
+ *
+ * Keys:
+ *   - cyberclaw-voice-engine-<companionId>       'local' | 'api' | 'default'
+ *   - cyberclaw-voice-local-id-<companionId>     voice id (e.g. 'male', 'female')
+ *   - cyberclaw-voice-api-provider-<companionId> provider id (e.g. 'elevenlabs')
+ *   - cyberclaw-voice-api-voice-<companionId>    voice id (e.g. 'nova')
+ */
+export const getVoiceEngineKey = (companionId: string) =>
+  `cyberclaw-voice-engine-${companionId}`;
+
+export const getVoiceLocalIdKey = (companionId: string) =>
+  `cyberclaw-voice-local-id-${companionId}`;
+
+export const getVoiceApiProviderKey = (companionId: string) =>
+  `cyberclaw-voice-api-provider-${companionId}`;
+
+export const getVoiceApiVoiceKey = (companionId: string) =>
+  `cyberclaw-voice-api-voice-${companionId}`;
+
+/**
+ * v3.7.0: a resolved voice config for one companion, with
+ * every field guaranteed non-null. If the per-companion
+ * override is missing, the corresponding global default is
+ * used instead.
+ *
+ *   engine:    'local' | 'api'
+ *   localId:   one of LOCAL_VOICES[].id
+ *   apiProvider: one of PREMIUM_PROVIDERS[].id
+ *   apiVoice:  one of PREMIUM_PROVIDERS[].voices[].id
+ *
+ * The 'default' engine value (stored when the user picks
+ * "Use global default") is resolved here to the effective
+ * engine, so consumers don't have to special-case it.
+ */
+export type ResolvedVoiceConfig = {
+  engine: 'local' | 'api';
+  localId: string;
+  apiProvider: string;
+  apiVoice: string;
+};
+
+/**
  * Legacy v3.3.0 keys (no companionId prefix). Read by the v3.4.0
  * migration on first launch to seed per-companion data, but no
  * longer read or written by this module after migration.
@@ -221,6 +271,109 @@ export async function saveExitSamples(companionId: string, phrase: string, featu
 
 export async function clearExitSamples(companionId: string, phrase: string): Promise<void> {
   await AsyncStorage.removeItem(getExitSamplesKey(companionId, phrase));
+}
+
+/**
+ * v3.7.0: load the resolved voice config for a companion.
+ *
+ * Reads the four per-companion keys. For each field, if the
+ * per-companion key is missing, falls back to the global
+ * default (the keys the v3.6.2 API keys section writes:
+ * voiceEngine, voiceLocalId, voiceApiProvider, voiceApiVoice).
+ *
+ * The 'default' engine value is resolved to the effective
+ * engine so the consumer doesn't have to special-case it.
+ * If the global engine is also 'default' (legacy v3.6.2 user
+ * who never picked one), we fall back to 'local' so the
+ * resolved config is always usable.
+ */
+export async function loadVoiceFor(companionId: string): Promise<ResolvedVoiceConfig> {
+  let rawEngine: string | null = null;
+  let rawLocalId: string | null = null;
+  let rawApiProvider: string | null = null;
+  let rawApiVoice: string | null = null;
+  let globalEngine: string | null = null;
+  let globalLocalId: string | null = null;
+  let globalApiProvider: string | null = null;
+  let globalApiVoice: string | null = null;
+  try {
+    [rawEngine, rawLocalId, rawApiProvider, rawApiVoice] = await Promise.all([
+      AsyncStorage.getItem(getVoiceEngineKey(companionId)),
+      AsyncStorage.getItem(getVoiceLocalIdKey(companionId)),
+      AsyncStorage.getItem(getVoiceApiProviderKey(companionId)),
+      AsyncStorage.getItem(getVoiceApiVoiceKey(companionId)),
+    ]);
+  } catch (_) {}
+  try {
+    [globalEngine, globalLocalId, globalApiProvider, globalApiVoice] = await Promise.all([
+      AsyncStorage.getItem('cyberclaw-voice-engine'),
+      AsyncStorage.getItem('cyberclaw-voice-local'),
+      AsyncStorage.getItem('cyberclaw-voice-api-provider'),
+      AsyncStorage.getItem('cyberclaw-voice-api-voice'),
+    ]);
+  } catch (_) {}
+
+  // Resolve engine: per-companion 'default' falls back to global.
+  let effectiveEngine: 'local' | 'api';
+  if (rawEngine === 'local' || rawEngine === 'api') {
+    effectiveEngine = rawEngine;
+  } else if (globalEngine === 'local' || globalEngine === 'api') {
+    effectiveEngine = globalEngine;
+  } else {
+    effectiveEngine = 'local';
+  }
+
+  return {
+    engine: effectiveEngine,
+    localId: rawLocalId || globalLocalId || 'default',
+    apiProvider: rawApiProvider || globalApiProvider || 'elevenlabs',
+    apiVoice: rawApiVoice || globalApiVoice || 'nova',
+  };
+}
+
+/**
+ * v3.7.0: persist a companion's voice config. Pass any field
+ * as undefined to leave it unchanged; pass an explicit value
+ * to set it (including the empty string to clear a per-
+ * companion override, reverting to the global default).
+ */
+export async function saveVoiceFor(
+  companionId: string,
+  patch: {
+    engine?: 'local' | 'api' | 'default';
+    localId?: string;
+    apiProvider?: string;
+    apiVoice?: string;
+  },
+): Promise<void> {
+  const ops: Array<Promise<void>> = [];
+  if (patch.engine !== undefined) {
+    ops.push(AsyncStorage.setItem(getVoiceEngineKey(companionId), patch.engine));
+  }
+  if (patch.localId !== undefined) {
+    ops.push(AsyncStorage.setItem(getVoiceLocalIdKey(companionId), patch.localId));
+  }
+  if (patch.apiProvider !== undefined) {
+    ops.push(AsyncStorage.setItem(getVoiceApiProviderKey(companionId), patch.apiProvider));
+  }
+  if (patch.apiVoice !== undefined) {
+    ops.push(AsyncStorage.setItem(getVoiceApiVoiceKey(companionId), patch.apiVoice));
+  }
+  await Promise.all(ops);
+}
+
+/**
+ * v3.7.0: clear the per-companion voice overrides for one
+ * companion, reverting to the global defaults. The TTS layer
+ * will pick up the global values again.
+ */
+export async function clearVoiceFor(companionId: string): Promise<void> {
+  await Promise.all([
+    AsyncStorage.removeItem(getVoiceEngineKey(companionId)),
+    AsyncStorage.removeItem(getVoiceLocalIdKey(companionId)),
+    AsyncStorage.removeItem(getVoiceApiProviderKey(companionId)),
+    AsyncStorage.removeItem(getVoiceApiVoiceKey(companionId)),
+  ]);
 }
 
 /**
