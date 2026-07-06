@@ -307,6 +307,22 @@ class SyncClient {
     this.send({ type: 'set_companion_id', companionId });
   }
 
+  // v3.7.3: push a per-companion silence value to the desktop
+  // for persistence. The phone is the source of truth for
+  // voice-loop timing (it runs the actual voice-mode
+  // recording); the desktop persists and replays the value
+  // to other connected phones via companion_settings_sync.
+  //
+  // We also save locally (saveSilenceMs in VoiceSettings.ts)
+  // so the value is usable even when offline. The phone
+  // pushes every time the user taps "Save silence setting"
+  // in the per-companion voice sub-page; a phone reinstall
+  // recovers the value via the desktop's companion_settings_sync
+  // replay on auth (handled in CompanionSettingsScreen).
+  setCompanionSilence(agentId: string, silenceMs: number) {
+    this.send({ type: 'set_companion_silence', agentId, silenceMs });
+  }
+
   // v3.2.5: kick off a custom openWakeWord training job on the
   // desktop. The desktop spawns the Python training script, streams
   // progress back via 'wake_training_progress' messages, and finally
@@ -508,6 +524,19 @@ class SyncClient {
 
       case 'companion_id':
         this.emit('companion_id', msg);
+        break;
+
+      case 'companion_settings_sync':
+        // v3.7.3: per-companion settings pushed by the desktop
+        // (or replayed on auth from companion-settings.json).
+        // Shape: { type, settings: { [agentId]: { silenceMs, ... } }, ts }
+        // Re-emit as a local event so the per-companion voice
+        // sub-page can update its displayed value if the
+        // active companion's settings changed remotely (e.g.
+        // another phone saved a new value, or the user
+        // reinstalled and is recovering state).
+        console.log('[SyncClient] Received companion_settings_sync:', Object.keys(msg.settings || {}).length, 'companions');
+        this.emit('companion_settings_sync', msg);
         break;
 
       default:

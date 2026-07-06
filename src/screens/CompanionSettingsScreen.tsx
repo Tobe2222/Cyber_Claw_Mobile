@@ -247,6 +247,36 @@ export default function CompanionSettingsScreen({
     return () => { cancelled = true; };
   }, [companionId]);
 
+  // v3.7.3: listen for the desktop's companion_settings_sync
+  // broadcast. If the desktop has a per-companion silence
+  // value for the active companion and we don't have one
+  // locally (e.g. fresh install, AsyncStorage wiped), use
+  // the desktop's value. We don't overwrite a local value
+  // — local is source of truth for the phone's runtime;
+  // the desktop's value is the cross-device persistence
+  // layer. The user can always tap Save to push their
+  // local value back to the desktop.
+  useEffect(() => {
+    const handler = (msg: any) => {
+      if (!msg?.settings) return;
+      const remote = msg.settings[companionId];
+      if (!remote || typeof remote.silenceMs !== 'number') return;
+      // Only adopt the remote value if our local store has
+      // nothing for this companion. AsyncStorage.getItem
+      // is async; we just optimistically check via the
+      // vcSilenceLoadedRef — if we already loaded a local
+      // value (vcSilenceMs is non-default or we set it
+      // earlier in the session), don't clobber.
+      AsyncStorage.getItem(`cyberclaw-voice-silence-ms-${companionId}`).then(local => {
+        if (local === null) {
+          setVcSilenceMs(remote.silenceMs);
+        }
+      }).catch(() => {});
+    };
+    syncClient.on('companion_settings_sync', handler);
+    return () => { syncClient.off?.('companion_settings_sync', handler); };
+  }, [companionId]);
+
   // Hydrate active-wake-companion preference
   useEffect(() => {
     (async () => {
@@ -359,9 +389,26 @@ export default function CompanionSettingsScreen({
   // Writes the per-companion key via saveSilenceMs in
   // VoiceSettings (the v3.7.1 global key is read-only
   // fallback, not written here).
+  // v3.7.3: also push the silence value to the desktop on
+  // every save, so the per-companion value lives in
+  // companion-settings.json on the desktop side too. A phone
+  // reinstall recovers the value from the desktop on auth
+  // (companion_settings_sync replay). The local AsyncStorage
+  // write is still the source of truth on the phone (it runs
+  // the voice-mode loop); the push is for cross-device
+  // consistency, not for the phone's runtime behaviour.
   const saveSilence = useCallback(async () => {
     if (!vcSilenceLoadedRef.current) return;
     await saveSilenceMs(companionId, vcSilenceMs);
+    // Push to desktop if connected. Best-effort — if the
+    // desktop is offline, the local save still works and
+    // the value will sync on next connect (the desktop
+    // doesn't yet send the value back to a phone that
+    // missed a push, so the phone will keep its local
+    // value as truth until the user changes it again).
+    if (syncClient?.connected) {
+      syncClient.setCompanionSilence(companionId, vcSilenceMs);
+    }
     setVcSilenceSavedAt(Date.now());
   }, [companionId, vcSilenceMs]);
 
