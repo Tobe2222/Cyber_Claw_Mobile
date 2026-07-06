@@ -88,11 +88,25 @@
  * Sections (top to bottom):
  *   1. 🔗 Connection       — Desktop IP, connect, status, log, pairing
  *   2. 🔒 Permissions      — Runtime perms (mic/notif) + wake perms
- *   3. 🎤 Voice mode       — Top-level: companion list + global
- *                            audio settings (see above)
- *      ⟶ tap a companion → per-companion detail (see above)
- *   4. 🔊 Voice & Speech   — Local TTS (free) + Premium API placeholder
- *   5. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
+ *   3. 🎧 Listening settings — Master background-listening toggle +
+ *                            voice-mode silence timeout
+ *   4. 🐾 Companions       — Per-companion list (tap → detail). Also
+ *                            hosts the global "send word" trainer at
+ *                            the bottom (shared across companions).
+ *   5. 🎙️ Background recording — Rolling audio buffer (lookback
+ *                            minutes). Powers the wake-word context
+ *                            today; ambient daily recording in a
+ *                            future release.
+ *   6. 🔊 Voice & Speech   — Local TTS (free). Per-companion voice
+ *                            + Premium API engine picker arrive in
+ *                            v3.7.0; the API key + provider default
+ *                            are pre-wired in the 🔑 API keys
+ *                            section below.
+ *   7. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
+ *   8. 🔑 API keys         — Global API keys (ElevenLabs) + the
+ *                            master "✨ API speech" toggle that
+ *                            gates per-companion engine selection
+ *                            in v3.7.0.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -1067,41 +1081,14 @@ export default function SettingsScreen({
                 group has its own "🎧 Listening settings"
                 GroupTitle above, the controls below read as
                 naturally belonging to the same group without
-                needing a second header. Kept the Hint. */}
-            <Hint>Fine-tune how background listening behaves. These only matter when the master toggle above is on.</Hint>
+                needing a second header. Kept the Hint.
 
-            {/* Audio buffer (existing, unchanged; inside
-                Background listening group as of v3.4.1).
-                v3.4.1: physically moved up here from after
-                the Companions list so the three "details"
-                controls (audio buffer / silence / match
-                thresholds) sit together as one block right
-                under the master toggle. */}
-            <Label>Audio buffer</Label>
-            <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>
-            <Label>Lookback (minutes)</Label>
-            <View style={styles.optionRow}>
-              {[5, 10, 30, 60].map(m => (
-                <OptionBtn key={m} active={audioSettings.lookbackMinutes === m} label={`${m}`} onPress={() => updateAudio('lookbackMinutes', m)} />
-              ))}
-            </View>
-            {/*
-              v3.6.1: removed "Conversation timeout" and "Recording
-              retention" controls. Both were write-only — the
-              values were saved to AsyncStorage and shown back in
-              the UI but no code path actually read them. The
-              "Daily audio logs are kept locally…" hint was
-              documenting a feature (background daily recording
-              + retention) that is not implemented. The audio
-              buffer is governed solely by lookbackMinutes.
-            */}
-            <TouchableOpacity style={styles.saveAudioBtn} onPress={saveAudioSettings}>
-              <Text style={styles.saveAudioBtnText}>
-                {audioSettingsSavedAt
-                  ? `✅ Saved at ${new Date(audioSettingsSavedAt).toLocaleTimeString()}`
-                  : '💾 Save audio settings'}
-              </Text>
-            </TouchableOpacity>
+                v3.6.2: the Audio buffer / Lookback / Save
+                audio settings controls were lifted out into
+                a new "🎙️ Background recording" Section below.
+                This section now contains only the master
+                toggle and the voice-mode silence timeout. */}
+            <Hint>Fine-tune how background listening behaves. These only matter when the master toggle above is on.</Hint>
 
             {/* Voice mode close — silence timeout (existing,
                 unchanged; inside Background listening group
@@ -1122,67 +1109,18 @@ export default function SettingsScreen({
               ))}
             </View>
 
-            {/* v3.6.0: send word — explicit end-of-utterance
-                cue the user says to commit the current turn
-                to the LLM. Distinct from the exit phrase
-                (which closes voice mode entirely). The send
-                word just stops recording and sends; the
-                conversation continues with the assistant's
-                response.
+            {/* v3.6.0: send word was added here, and v3.6.2
+                moved it to the bottom of the 🐾 Companions
+                section. Send is per-user (one send word
+                across all companions, like the wake word),
+                not per-companion — but it conceptually
+                belongs with the other "voice mode send
+                behaviour" controls in the Companions group
+                rather than with the microphone listening
+                group. See the new "Send word" block inside
+                the 🐾 Companions Section.
 
-                Useful in noisy environments where silence
-                detection can't reliably tell "user paused"
-                from "ambient table talk" — saying "send"
-                cleanly commits the turn.
-
-                Unlike exit (per-companion), the send word
-                is GLOBAL — one word across all companions,
-                like the wake word itself. It's a single user
-                habit, not a per-companion convention. */}
-            <Label>Send word</Label>
-            <Hint>The word you say to commit a turn (e.g. "send", "go"). Independent of the exit phrase — send keeps the conversation going, exit closes voice mode.</Hint>
-            <View style={styles.optionRow}>
-              <TextInput
-                value={voiceSendPhrase}
-                onChangeText={setVoiceSendPhrase}
-                editable={true}
-                style={[styles.input, { flex: 1 }]}
-                autoCapitalize="none"
-                autoCorrect={false}
-                maxLength={40}
-                placeholder="send"
-                placeholderTextColor="#666"
-              />
-              <TouchableOpacity
-                style={[styles.saveAudioBtn, { marginLeft: 8 }]}
-                onPress={async () => {
-                  const trimmed = voiceSendPhrase.trim().toLowerCase();
-                  if (!trimmed) {
-                    Alert.alert('Invalid', 'Send word cannot be empty. Clear it via "Clear" to disable.');
-                    return;
-                  }
-                  await saveSendPhrase(trimmed);
-                  setVoiceSendPhrase(trimmed);
-                  setVoiceSendPhraseSavedAt(Date.now());
-                }}
-              >
-                <Text style={styles.saveAudioBtnText}>
-                  {voiceSendPhraseSavedAt
-                    ? `✅ Saved`
-                    : '💾 Save'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              style={[styles.saveAudioBtn, { marginTop: 8 }]}
-              onPress={() => {
-                setShowSendPhraseTrainer(true);
-              }}
-            >
-              <Text style={styles.saveAudioBtnText}>🎙️ Train send word (6 samples)</Text>
-            </TouchableOpacity>
-
-            {/* v3.4.7: removed the Match Thresholds UI.
+                v3.4.7: removed the Match Thresholds UI.
                 The fgThreshold/bgThreshold sliders were a
                 v3.1 sample-matching detector knob. Since
                 v3.1.95 we use the openWakeWord TFLite ML
@@ -1245,67 +1183,129 @@ export default function SettingsScreen({
                 })}
               </View>
             )}
+
+            {/* v3.6.2: moved here from the Listening settings
+                section. The send word is a per-user habit, not
+                a per-companion setting (one send word across
+                all companions, like the wake word itself), but
+                it conceptually belongs with the other "voice
+                mode send behaviour" controls that already
+                live near the Companion group. Per-companion
+                voice settings (engine / voice picker) are
+                coming in v3.7.0 — see the 🔊 Voice & Speech
+                section below. */}
+            <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+            <SubTitle>✉️ Manual send voice message</SubTitle>
+            <Hint>The word you say during a voice-mode turn to commit the turn to the LLM (e.g. "send", "go"). Independent of the exit phrase — send keeps the conversation going, exit closes voice mode. Shared across all companions.</Hint>
+            <Label>Send word</Label>
+            <View style={styles.optionRow}>
+              <TextInput
+                value={voiceSendPhrase}
+                onChangeText={setVoiceSendPhrase}
+                editable={true}
+                style={[styles.input, { flex: 1 }]}
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={40}
+                placeholder="send"
+                placeholderTextColor="#666"
+              />
+              <TouchableOpacity
+                style={[styles.saveAudioBtn, { marginLeft: 8 }]}
+                onPress={async () => {
+                  const trimmed = voiceSendPhrase.trim().toLowerCase();
+                  if (!trimmed) {
+                    Alert.alert('Invalid', 'Send word cannot be empty. Clear it via "Clear" to disable.');
+                    return;
+                  }
+                  await saveSendPhrase(trimmed);
+                  setVoiceSendPhrase(trimmed);
+                  setVoiceSendPhraseSavedAt(Date.now());
+                }}
+              >
+                <Text style={styles.saveAudioBtnText}>
+                  {voiceSendPhraseSavedAt
+                    ? `✅ Saved`
+                    : '💾 Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[styles.saveAudioBtn, { marginTop: 8 }]}
+              onPress={() => {
+                setShowSendPhraseTrainer(true);
+              }}
+            >
+              <Text style={styles.saveAudioBtnText}>🎙️ Train send word (6 samples)</Text>
+            </TouchableOpacity>
           </Section>
       </>
 
-      {/* ── 🔊 Voice & Speech ────────────────────────────────── */}
-      <Section title="🔊 Voice & Speech" desc="How your companion speaks back to you.">
-        {/* v3.1.75: single engine toggle (local vs premium API) at
-            the top, settings below swap based on which is selected.
-            Replaces the v3.1.13 layout that always showed both
-            Local and Premium sub-sections in sequence — too noisy. */}
-        <Label>Engine</Label>
+      {/* ── 🎙️ Background recording ─────────────────────────────
+          v3.6.2: lifted out of the Listening settings section.
+          The "Lookback" setting configures how the rolling audio
+          buffer behaves, and that buffer is what the future
+          ambient-recording / daily-log feature will use to keep
+          a persistent record you can ask the companion to
+          analyze. So the setting gets its own Section (with
+          a Section border) so it reads as a distinct
+          concept — "this is the recording knob" — rather than
+          a sub-detail of the microphone toggle. */}
+      <Section title="🎙️ Background recording" desc="How much audio the rolling buffer keeps. The companion uses this to hear what you said just before the wake word, and (in a future update) for ambient daily recording.">
+        <Label>Audio buffer</Label>
+        <Hint>How much audio context to keep so the companion can hear what you said just before the wake word.</Hint>
+        <Label>Lookback (minutes)</Label>
         <View style={styles.optionRow}>
-          <OptionBtn active={voiceEngine === 'local'} label="📱 Local (free)" onPress={() => setVoiceEngineAndSave('local')} />
-          <OptionBtn active={voiceEngine === 'api'} label="✨ Premium API" onPress={() => setVoiceEngineAndSave('api')} />
+          {[5, 10, 30, 60].map(m => (
+            <OptionBtn key={m} active={audioSettings.lookbackMinutes === m} label={`${m}`} onPress={() => updateAudio('lookbackMinutes', m)} />
+          ))}
         </View>
+        {/*
+          v3.6.1: removed "Conversation timeout" and "Recording
+          retention" controls. Both were write-only — the
+          values were saved to AsyncStorage and shown back in
+          the UI but no code path actually read them. The
+          "Daily audio logs are kept locally…" hint was
+          documenting a feature (background daily recording
+          + retention) that is not implemented. The audio
+          buffer is governed solely by lookbackMinutes.
+        */}
+        <TouchableOpacity style={styles.saveAudioBtn} onPress={saveAudioSettings}>
+          <Text style={styles.saveAudioBtnText}>
+            {audioSettingsSavedAt
+              ? `✅ Saved at ${new Date(audioSettingsSavedAt).toLocaleTimeString()}`
+              : '💾 Save audio settings'}
+          </Text>
+        </TouchableOpacity>
+      </Section>
 
-        {voiceEngine === 'local' ? (
-          <>
-            <SubTitle>Local voice (free)</SubTitle>
-            <Hint>Uses your Android device's built-in Text-to-Speech engine. Works offline.</Hint>
-            <Label>Voice</Label>
-            <View style={styles.optionRow}>
-              {LOCAL_VOICES.map(v => (
-                <OptionBtn key={v.id} active={voiceLocalId === v.id} label={v.label} onPress={() => setVoiceLocalIdAndSave(v.id)} />
-              ))}
-            </View>
-            <TouchableOpacity style={styles.testBtn} onPress={testLocalVoice}>
-              <Text style={styles.testBtnText}>🔊 Test local voice on phone</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.testBtn, { marginTop: 8 }]} onPress={testDesktopVoice}>
-              <Text style={styles.testBtnText}>🖥️ Test voice on desktop</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <>
-            <SubTitle>Premium voice API (coming soon)</SubTitle>
-            <Hint>Cloud voices with higher quality. The desktop bridge to use these for synthesis is planned — the key is stored locally so it'll be picked up when the bridge lands.</Hint>
-            <Label>Provider</Label>
-            <View style={styles.optionRow}>
-              {PREMIUM_PROVIDERS.map(p => (
-                <OptionBtn key={p.id} active={voiceApiProvider === p.id} label={p.label} onPress={() => setVoiceApiProviderAndSave(p.id)} />
-              ))}
-            </View>
-            <Label>API key</Label>
-            <TextInput
-              style={styles.input}
-              value={voiceApiKey}
-              onChangeText={setVoiceApiKeyAndSave}
-              placeholder="Paste your API key"
-              placeholderTextColor="#555"
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <Label>Voice</Label>
-            <View style={styles.optionRow}>
-              {PREMIUM_PROVIDERS.find(p => p.id === voiceApiProvider)?.voices.map(v => (
-                <OptionBtn key={v.id} active={voiceApiVoice === v.id} label={v.label} onPress={() => setVoiceApiVoiceAndSave(v.id)} />
-              ))}
-            </View>
-          </>
-        )}
+      {/* ── 🔊 Voice & Speech ──────────────────────────────────
+          v3.6.2: trimmed. The Local (Android TTS) engine
+          and its test buttons stay here — that's the path
+          that works today. The premium API picker and the
+          per-companion voice selection are deferred to
+          v3.7.0 (see the 🔑 API keys section at the bottom
+          for the key storage; per-companion engine/voice
+          pickers will live inside each companion's
+          settings page once that lands). */}
+      <Section title="🔊 Voice & Speech" desc="How your companion speaks back to you.">
+        <SubTitle>Local voice (free)</SubTitle>
+        <Hint>Uses your Android device's built-in Text-to-Speech engine. Works offline.</Hint>
+        <Label>Voice</Label>
+        <View style={styles.optionRow}>
+          {LOCAL_VOICES.map(v => (
+            <OptionBtn key={v.id} active={voiceLocalId === v.id} label={v.label} onPress={() => setVoiceLocalIdAndSave(v.id)} />
+          ))}
+        </View>
+        <TouchableOpacity style={styles.testBtn} onPress={testLocalVoice}>
+          <Text style={styles.testBtnText}>🔊 Test local voice on phone</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.testBtn, { marginTop: 8 }]} onPress={testDesktopVoice}>
+          <Text style={styles.testBtnText}>🖥️ Test voice on desktop</Text>
+        </TouchableOpacity>
+        <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+        <SubTitle>✨ Premium API voice</SubTitle>
+        <Hint>Cloud voices (ElevenLabs, Google Cloud TTS). Per-companion selection and a global on/off toggle live in v3.7.0 — for now, paste your key in the 🔑 API keys section below so it's ready when the desktop bridge lands.</Hint>
       </Section>
 
       {/* ── 🤖 Agent Reach ───────────────────────────────────── */}
@@ -1330,6 +1330,55 @@ export default function SettingsScreen({
             <Text style={styles.toggleSub}>Not yet supported</Text>
           </View>
           <Switch value={false} disabled trackColor={{ false: '#333', true: '#f7931a' }} thumbColor={'#666'} />
+        </View>
+      </Section>
+
+      {/* ── 🔑 API keys ─────────────────────────────────────────
+          v3.6.2: lifted out of the Voice & Speech section.
+          API keys are GLOBAL — one key covers the device,
+          and any companion that has API voice selected
+          (v3.7.0) uses the same key. The "✨ API speech"
+          master toggle below gates whether the v3.7.0
+          per-companion engine picker will even offer the
+          "Premium API" option. Today the toggle is
+          informational — the bridge that consumes the key
+          on the desktop side is still pending — but the
+          key is stored locally so it'll be picked up the
+          moment the bridge lands. */}
+      <Section title="🔑 API keys" desc="Global keys. One key covers all companions that use the matching service.">
+        <SubTitle>ElevenLabs (premium TTS)</SubTitle>
+        <Hint>Used for cloud TTS when a companion has Premium API voice selected. Stored locally in AsyncStorage; never leaves the device except as a request to ElevenLabs.</Hint>
+        <Label>ElevenLabs API key</Label>
+        <TextInput
+          style={styles.input}
+          value={voiceApiKey}
+          onChangeText={setVoiceApiKeyAndSave}
+          placeholder="Paste your API key"
+          placeholderTextColor="#555"
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <SubTitle>✨ API speech (master toggle)</SubTitle>
+        <Toggle
+          title="Enable API speech"
+          sub="When on, companions can be configured to use premium API voices (v3.7.0). When off, all companions are restricted to the local Android TTS engine."
+          value={voiceEngine === 'api'}
+          onValueChange={(v) => setVoiceEngineAndSave(v ? 'api' : 'local')}
+        />
+        <SubTitle>Provider</SubTitle>
+        <Hint>Which cloud TTS provider the API key above is for. (Selection is persisted today; the desktop bridge that consumes it ships with v3.7.0.)</Hint>
+        <View style={styles.optionRow}>
+          {PREMIUM_PROVIDERS.map(p => (
+            <OptionBtn key={p.id} active={voiceApiProvider === p.id} label={p.label} onPress={() => setVoiceApiProviderAndSave(p.id)} />
+          ))}
+        </View>
+        <Label>Default API voice</Label>
+        <Hint>Used as the default voice for new companions that pick Premium API. Each companion can override this in their settings page (v3.7.0).</Hint>
+        <View style={styles.optionRow}>
+          {PREMIUM_PROVIDERS.find(p => p.id === voiceApiProvider)?.voices.map(v => (
+            <OptionBtn key={v.id} active={voiceApiVoice === v.id} label={v.label} onPress={() => setVoiceApiVoiceAndSave(v.id)} />
+          ))}
         </View>
       </Section>
 
