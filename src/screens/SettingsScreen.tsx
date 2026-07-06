@@ -3,7 +3,7 @@
  *
  * v3.4.7: split "🎤 Voice mode" into two separate Section
  * blocks, each with its own orange border:
- *   - 🎧 Listening settings (global mic behavior)
+ *   - 🎧 Companion listening (global mic behavior)
  *       * Background listening toggle (master on/off)
  *       * Audio buffer (lookback)
  *       * Silence timeout (voice mode close)
@@ -88,21 +88,18 @@
  * Sections (top to bottom):
  *   1. 🔗 Connection       — Desktop IP, connect, status, log, pairing
  *   2. 🔒 Permissions      — Runtime perms (mic/notif) + wake perms
- *   3. 🎧 Listening settings — Master background-listening toggle +
+ *   3. 🎧 Companion listening — Master background-listening toggle +
  *                            voice-mode silence timeout
  *   4. 🐾 Companions       — Per-companion list (tap → detail). Also
  *                            hosts the global "send word" trainer at
  *                            the bottom (shared across companions).
+ *                            Each companion's detail page (v3.7.0) has
+ *                            Wake / Exit / Voice sub-pages.
  *   5. 🎙️ Background recording — Rolling audio buffer (lookback
  *                            minutes). Powers the wake-word context
  *                            today; ambient daily recording in a
  *                            future release.
- *   6. 🔊 Voice & Speech   — Local TTS (free). Per-companion voice
- *                            + Premium API engine picker arrive in
- *                            v3.7.0; the API key + provider default
- *                            are pre-wired in the 🔑 API keys
- *                            section below.
- *   7. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
+ *   6. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
  *   8. 🔑 API keys         — Global API keys (ElevenLabs) + the
  *                            master "✨ API speech" toggle that
  *                            gates per-companion engine selection
@@ -139,7 +136,13 @@ type PermStatus = 'granted' | 'denied' | 'never_ask_again' | 'unknown';
 // v3.7.0: voice catalog is now in src/services/VoiceCatalog.ts
 // so the per-companion voice picker in CompanionSettingsScreen.tsx
 // can reuse it. This screen imports the same list.
-import { LOCAL_VOICES, PREMIUM_PROVIDERS } from '../services/VoiceCatalog';
+// v3.7.1: LOCAL_VOICES removed from this import. The local
+// voice picker now lives in CompanionSettingsScreen (per-
+// companion). This screen keeps PREMIUM_PROVIDERS because
+// the 🔑 API keys section still has the global provider +
+// default-voice pickers (used as fallbacks for companions
+// that have no per-companion override).
+import { PREMIUM_PROVIDERS } from '../services/VoiceCatalog';
 
 export default function SettingsScreen({
   onBack,
@@ -345,10 +348,19 @@ export default function SettingsScreen({
   // ── Voice & Speech ────────────────────────────────────────────
   // v3.1.75: single engine toggle (local vs premium API) replaces
   // the two-always-visible sub-sections. Local TTS uses Android's
-  // built-in Text-to-Speech engine (free, works offline). Premium
-  // API is a placeholder for the upcoming desktop bridge.
+  // v3.7.1: voiceLocalId state removed. With per-companion
+  // voice pickers in CompanionSettingsScreen, the local-voice
+  // choice lives per-companion (vcLocalId in the voice sub-page).
+  // The global 'cyberclaw-voice-local' AsyncStorage key is still
+  // read by loadVoiceFor() as a fallback when a companion has no
+  // per-companion override — we just don't surface it in this
+  // screen's UI anymore.
+  //
+  // Premium API settings below remain global (one key, one
+  // provider default, one default API voice — see the 🔑 API
+  // keys section). They serve as fallbacks for per-companion
+  // overrides.
   const [voiceEngine, setVoiceEngine] = useState<'local' | 'api'>('local');
-  const [voiceLocalId, setVoiceLocalId] = useState('default');
   // Premium API settings (placeholder — not yet wired to the desktop)
   const [voiceApiProvider, setVoiceApiProvider] = useState('elevenlabs');
   const [voiceApiKey, setVoiceApiKey] = useState('');
@@ -689,10 +701,12 @@ export default function SettingsScreen({
     setVoiceEngine(v);
     await AsyncStorage.setItem('cyberclaw-voice-engine', v);
   };
-  const setVoiceLocalIdAndSave = async (v: string) => {
-    setVoiceLocalId(v);
-    await AsyncStorage.setItem('cyberclaw-voice-local-id', v);
-  };
+  // v3.7.1: setVoiceLocalIdAndSave removed. Local-voice
+  // choice is now per-companion (handled in CompanionSettingsScreen
+  // via saveVoiceFor). The global 'cyberclaw-voice-local'
+  // AsyncStorage key is still read by loadVoiceFor() as a
+  // fallback for companions with no per-companion override,
+  // but we no longer write it from this screen.
   const setVoiceApiProviderAndSave = async (v: string) => {
     setVoiceApiProvider(v);
     await AsyncStorage.setItem('cyberclaw-voice-api-provider', v);
@@ -712,71 +726,12 @@ export default function SettingsScreen({
     await AsyncStorage.setItem('cyberclaw-voice-api-voice', v);
   };
 
-  // Test voice on mobile (local Android TTS)
-  const testLocalVoice = () => {
-    const phrase = 'Ready to chat. The boar is happy.';
-    if (!WakeWordModule?.speakText) {
-      Alert.alert('TTS unavailable', 'WakeWordModule not available.');
-      return;
-    }
-    // v3.1.90: probe whether the device has any TTS engine
-    // installed before attempting to speak. If not, offer
-    // to launch the system install dialog so the user can
-    // install Google TTS / eSpeak NG.
-    const tryInstall = () => {
-      if (WakeWordModule?.installTtsData) {
-        WakeWordModule.installTtsData().catch(() => {});
-      }
-    };
-    if (WakeWordModule?.hasTtsEngine) {
-      WakeWordModule.hasTtsEngine()
-        .then((hasEngine: boolean) => {
-          if (!hasEngine) {
-            Alert.alert(
-              'No TTS engine installed',
-              'CyberClaw needs a Text-to-Speech engine for voice greetings. Install Google TTS or eSpeak NG?',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Install', onPress: tryInstall },
-              ],
-            );
-            return;
-          }
-          WakeWordModule.speakText(phrase).catch(() => {
-            Alert.alert('TTS init failed', 'Engine is installed but failed to initialise. Try installing voice data in Android Settings → Accessibility → Text-to-speech output.');
-          });
-        })
-        .catch(() => {
-          // hasTtsEngine probe failed; just try speak anyway.
-          WakeWordModule.speakText(phrase).catch(() => {
-            Alert.alert('TTS unavailable', 'Your device has no Text-to-Speech engine installed.');
-          });
-        });
-    } else {
-      WakeWordModule.speakText(phrase).catch(() => {
-        Alert.alert('TTS unavailable', 'Your device has no Text-to-Speech engine installed.');
-      });
-    }
-  };
-
-  // Test voice on desktop (sends a speak action via the WebView)
-  const testDesktopVoice = () => {
-    const phrase = 'Tobe is the coolest and most handsome man on the planet';
-    const escaped = phrase.replace(/'/g, "\\'");
-    syncClient.sendCompanionAction({
-      type: 'eval_js',
-      script: `
-        if ('speechSynthesis' in window) {
-          const u = new SpeechSynthesisUtterance('${escaped}');
-          u.rate = 0.95; u.pitch = 1.0;
-          window.speechSynthesis.cancel();
-          window.speechSynthesis.speak(u);
-        }
-        true;
-      `,
-    });
-    Alert.alert('🔊 Sent to desktop', 'The desktop should speak the test phrase.');
-  };
+  // v3.7.1: testLocalVoice + testDesktopVoice moved out of
+  // this screen. The global Voice & Speech section is gone
+  // (per-companion voice pickers in CompanionSettingsScreen
+  // are now the UI for choosing voices); the Test buttons
+  // live alongside those per-companion pickers. See the
+  // helpers in CompanionSettingsScreen.tsx.
 
   // v3.2.2: removed the legacy DTW-based wake training
   // (WakePhraseMenu / TrainingDetailScreen / WakeWordTester).
@@ -1026,8 +981,15 @@ export default function SettingsScreen({
           CompanionSettingsScreen). SettingsScreen now just
           shows the top-level Voice mode section always. */}
       <>
-          {/* ── 🎧 Listening settings (own Section, orange border) ── */}
-          <Section title="🎧 Listening settings" desc="Global microphone behavior: when the app listens, how much audio to keep, and how long voice mode stays open.">
+          {/* ── 🎧 Companion listening (own Section, orange border) ──
+              v3.7.1: renamed from "Listening settings" to
+              "Companion listening" — the section governs
+              companion behaviour (master wake-word listening
+              toggle, voice-mode silence timeout), not the
+              device's microphone in general. "Companion
+              listening" matches the 🐾 Companions section
+              naming and makes the scope explicit. */}
+          <Section title="🎧 Companion listening" desc="How your companions listen for the wake word and how long voice mode stays open.">
 
             {/* Master Background listening toggle. The
                 grouped sub-controls below (audio buffer,
@@ -1057,7 +1019,7 @@ export default function SettingsScreen({
 
             {/* v3.4.5: the redundant "Background listening —
                 details" SubTitle was removed. Now that the
-                group has its own "🎧 Listening settings"
+                group has its own "🎧 Companion listening"
                 GroupTitle above, the controls below read as
                 naturally belonging to the same group without
                 needing a second header. Kept the Hint.
@@ -1114,7 +1076,7 @@ export default function SettingsScreen({
 
           {/* v3.4.7: split "Voice mode" into TWO separate
               Sections, each with its own orange border.
-              Listening settings (global mic behavior) and
+              Companion listening (global mic behavior) and
               Companions (per-companion wake/exit training)
               are conceptually different things — keeping
               them in one Section with a divider read as
@@ -1256,35 +1218,6 @@ export default function SettingsScreen({
               : '💾 Save audio settings'}
           </Text>
         </TouchableOpacity>
-      </Section>
-
-      {/* ── 🔊 Voice & Speech ──────────────────────────────────
-          v3.6.2: trimmed. The Local (Android TTS) engine
-          and its test buttons stay here — that's the path
-          that works today. The premium API picker and the
-          per-companion voice selection are deferred to
-          v3.7.0 (see the 🔑 API keys section at the bottom
-          for the key storage; per-companion engine/voice
-          pickers will live inside each companion's
-          settings page once that lands). */}
-      <Section title="🔊 Voice & Speech" desc="How your companion speaks back to you.">
-        <SubTitle>Local voice (free)</SubTitle>
-        <Hint>Uses your Android device's built-in Text-to-Speech engine. Works offline.</Hint>
-        <Label>Voice</Label>
-        <View style={styles.optionRow}>
-          {LOCAL_VOICES.map(v => (
-            <OptionBtn key={v.id} active={voiceLocalId === v.id} label={v.label} onPress={() => setVoiceLocalIdAndSave(v.id)} />
-          ))}
-        </View>
-        <TouchableOpacity style={styles.testBtn} onPress={testLocalVoice}>
-          <Text style={styles.testBtnText}>🔊 Test local voice on phone</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.testBtn, { marginTop: 8 }]} onPress={testDesktopVoice}>
-          <Text style={styles.testBtnText}>🖥️ Test voice on desktop</Text>
-        </TouchableOpacity>
-        <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
-        <SubTitle>✨ Premium API voice</SubTitle>
-        <Hint>Cloud voices (ElevenLabs, Google Cloud TTS). Per-companion selection and a global on/off toggle live in v3.7.0 — for now, paste your key in the 🔑 API keys section below so it's ready when the desktop bridge lands.</Hint>
       </Section>
 
       {/* ── 🤖 Agent Reach ───────────────────────────────────── */}
