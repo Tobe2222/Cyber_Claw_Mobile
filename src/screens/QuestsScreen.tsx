@@ -88,12 +88,26 @@ export default function QuestsScreen({
   // migrate any v3.7.4-era per-companion keys (cyberclaw-quests-<id>)
   // into the global cache before deleting them.
   //
-  // SyncClient already auto-fires request_quests_list() on auth
-  // and replays the cached payload on reconnect, so a live
-  // `quests_list` event will arrive shortly after the screen
-  // mounts. The cache read here is for offline-survival and for
-  // covering the brief window before the desktop's first broadcast
-  // lands.
+  // v3.7.10: also fire `requestQuestsList()` on mount so the
+  // desktop sends a fresh payload within ~100ms. Without this,
+  // the screen relies on the broadcast that fired at auth time
+  // (SyncClient auto-fires request_quests_list 500ms after
+  // auth), which the user may have missed if they navigated
+  // here long after connecting, or were on a different tab
+  // when the broadcast went out. The cache is read first for
+  // instant render, then the fresh request fires and the
+  // handler replaces the cache data with the live broadcast.
+  //
+  // Lesson (v3.7.8 → v3.7.10): when a screen mirrors data
+  // from a source that broadcasts only on certain events
+  // (auth, save, etc.), the screen needs to also request on
+  // mount to guarantee a fresh payload. Otherwise the screen
+  // is at the mercy of the auth-time broadcast, which can be
+  // missed in normal navigation patterns. Tobe's first
+  // v3.7.8 test showed the v3.7.7 visual because the cache
+  // was holding pre-v3.1.50 data and the screen wasn't
+  // re-requesting on mount. Adding the mount-time request
+  // fixes this.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -161,6 +175,19 @@ export default function QuestsScreen({
       AsyncStorage.setItem(CACHE_KEY, JSON.stringify(list)).catch(() => {});
     };
     syncClient.on?.('quests_list', handler);
+
+    // v3.7.10: request a fresh list on mount. The auth-time
+    // request fires 500ms after WebSocket auth, but the user
+    // may have navigated to the QuestsScreen long after that
+    // — or the auth-time broadcast may have been missed if the
+    // screen wasn't mounted yet. Requesting on mount guarantees
+    // the handler fires with the latest data, which sets state
+    // to the live broadcast (with the latest `active` and
+    // `latestChanges` fields). The cache read above covered the
+    // brief render window before the response arrives.
+    try {
+      syncClient.requestQuestsList?.();
+    } catch (_) {}
 
     return () => {
       cancelled = true;
@@ -258,11 +285,17 @@ export default function QuestsScreen({
                   }}
                 >
                   {isActive && (
-                    // v3.7.8: ⚡ ACTIVE badge sits in the
-                    // top-right of the card. Bold gold so
-                    // it's the first thing the eye lands on.
-                    <View style={styles.activeBadge}>
-                      <Text style={styles.activeBadgeText}>⚡ ACTIVE</Text>
+                    // v3.7.10: ⚡ ACTIVE banner at the top of
+                    // the card. INLINE (not absolute-positioned
+                    // like v3.7.8 was) so it doesn't overlap
+                    // the done/total count. Bumped font size
+                    // from 9pt to 11pt and added a subtle
+                    // background tint so the eye lands on it
+                    // even at a glance.
+                    <View style={styles.activeBanner}>
+                      <Text style={styles.activeBannerText}>
+                        ⚡  ACTIVE — companion is working on this
+                      </Text>
                     </View>
                   )}
                   <View style={styles.questTopRow}>
@@ -728,26 +761,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // v3.7.8: list-card ACTIVE badge (top-right of each card).
-  // Gold background tint + gold border + uppercase. The eye
-  // lands on this before the rest of the card.
-  activeBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 8,
+  // v3.7.10: list-card ACTIVE banner (inline, top of card).
+  // Replaces the v3.7.8 absolute-positioned badge which was
+  // too subtle (9pt font) and overlapped the done/total count.
+  // Now: full-width banner at the top of the card, 11pt font,
+  // bold gold text on a soft gold tint, slight letter-spacing
+  // for that "alert" feel. Impossible to miss.
+  activeBanner: {
     backgroundColor: 'rgba(247, 147, 26, 0.18)',
     borderWidth: 1,
-    borderColor: 'rgba(247, 147, 26, 0.5)',
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    zIndex: 1,
+    borderColor: 'rgba(247, 147, 26, 0.55)',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginBottom: 8,
   },
-  activeBadgeText: {
+  activeBannerText: {
     color: '#f7931a',
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: '700',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
   // v3.7.8: small inline counter under the goal bar
   // showing how many journal entries exist.
