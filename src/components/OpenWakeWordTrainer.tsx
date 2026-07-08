@@ -57,6 +57,63 @@ import syncClient from '../services/SyncClient';
 const { WakeWordModule } = NativeModules;
 
 const REQUIRED_SAMPLES = 6;  // 6 is a sweet spot for the synthetic-amplified pipeline
+// v3.8.2: optional near-miss recording. Recommended 3
+// (the script does an 80/20 train/test split so 2-3
+// near-misses is enough to test that the model rejects
+// them in validation). Optional — the user can skip
+// and training proceeds with only TTS adversarial
+// negatives.
+const REQUIRED_NEAR_MISS_SAMPLES = 3;
+
+// v3.8.2: generate suggested near-miss phrases from the
+// wake phrase. These are similar-but-wrong phrases the
+// model should reject. The heuristics:
+//
+//   - Swap trailing consonants for similar-sounding ones
+//     (m/n, s/t, k/g) so "hey clawsuu" -> "hey clawsu"
+//   - Drop the trailing vowel so "hey clawsuu" -> "hey claws"
+//   - Add a different first word ("hi clawsuu", "ok clawsuu")
+//   - Sub a different trailing word ("hey clawsaw",
+//     "hey claws you")
+//
+// These are SUGGESTIONS only — the user can type anything.
+// The point is to give them a starting point so they
+// don't have to think of similar-sounding phrases from
+// scratch. The actual training reads the audio bytes,
+// not the text, so the suggestions are just labels.
+function suggestNearMisses(phrase: string, n: number = 3): string[] {
+  const trimmed = phrase.trim();
+  if (!trimmed) return [];
+  const suggestions = new Set<string>();
+  const words = trimmed.split(/\s+/);
+  const first = words[0] || '';
+  const last = words[words.length - 1] || '';
+
+  // Drop trailing vowel from the last word
+  if (last.length > 3) {
+    suggestions.add(words.slice(0, -1).concat([last.replace(/[aeiou]$/, '')]).join(' '));
+  }
+  // Swap first word
+  for (const alt of ['hi', 'ok', 'hey']) {
+    if (alt !== first.toLowerCase()) {
+      suggestions.add([alt, ...words.slice(1)].join(' '));
+    }
+  }
+  // Change the last word slightly
+  if (last.length >= 3) {
+    const flipped = last.split('').reverse().join('');
+    if (flipped !== last) suggestions.add(words.slice(0, -1).concat([flipped]).join(' '));
+  }
+  // Common phonetic confusion pairs
+  for (const swap of [['s', 't'], ['k', 'g'], ['m', 'n'], ['p', 'b']]) {
+    if (last.toLowerCase().includes(swap[0])) {
+      const replaced = last.toLowerCase().replace(swap[0], swap[1]);
+      if (replaced !== last) suggestions.add(words.slice(0, -1).concat([replaced]).join(' '));
+    }
+  }
+
+  return Array.from(suggestions).slice(0, n);
+}
                               // (openWakeWord's docs say "as few as 5" works with
                               // the 10K synthetic positives the desktop generates)
 
@@ -123,6 +180,16 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
   // — the existing behavior for first-time training.
   const [wakePhrase, setWakePhrase] = useState(presetPhrase ?? `hey ${companionName}`);
   const [samples, setSamples] = useState<string[]>([]);  // absolute paths
+  // v3.8.2: optional user-recorded near-miss clips. Each
+  // entry is { path, phrase } where `phrase` is what the user
+  // said (just for their reference — the model gets the
+  // audio bytes, not the text). Sent to the desktop with the
+  // training request; the desktop copies them into the
+  // negative_train / negative_test dirs so the training
+  // script picks them up alongside the Piper-TTS adversarial
+  // negatives. Optional — if empty, training proceeds with
+  // only TTS negatives (v3.8.1 behavior).
+  const [nearMissSamples, setNearMissSamples] = useState<Array<{ path: string; phrase: string }>>([]);
   const [stage, setStage] = useState<Stage>('idle');
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
@@ -464,6 +531,24 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     }
   }, [samples.length, wakePhrase, recordOne]);
 
+  // v3.8.2: near-miss recording. Same audio-capture path as
+  // positive samples (recordOne), but stores into a
+  // separate array. The phrase argument is the user's
+  // label for what they said — captured into AsyncStorage
+  // so the trainer can show "Hey Car (recorded)" in the
+  // near-miss list. Not used by the model itself.
+  const onTapToRecordNearMiss = useCallback(async (phrase: string) => {
+    if (nearMissSamples.length >= REQUIRED_NEAR_MISS_SAMPLES) return;
+    if (!phrase.trim()) {
+      Alert.alert('Pick a phrase', 'Type what you want the near-miss to be.');
+      return;
+    }
+    const path = await recordOne();
+    if (path) {
+      setNearMissSamples((prev) => [...prev, { path, phrase: phrase.trim() }]);
+    }
+  }, [nearMissSamples.length, recordOne]);
+
   const clearSamples = useCallback(() => {
     setSamples((prev) => {
       // Best-effort delete of the temp files
@@ -657,14 +742,31 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
         encoded.push({ name, data });
         setProgress(5 + Math.round(((i + 1) / samples.length) * 25));
       }
-      console.log(`[Trainer] sending requestWakeTraining agentId=${companionId} samples=${encoded.length}`);
-      sync.requestWakeTraining(companionId, wakePhrase.trim(), encoded);
+      // v3.8.2: encode the user-recorded near-miss clips
+      // the same way and ship them with the training
+      // request. Optional — empty array means the desktop
+      // falls back to Piper-TTS-only adversarial
+      // negatives (v3.8.1 behavior).
+      const nearMissEncoded: Array<{ name: string; data: string }> = [];
+      for (let i = 0; i < nearMissSamples.length; i++) {
+        const nm = nearMissSamples[i];
+        // Use the phrase (sanitized) as the filename prefix
+        // so the desktop can see what each near-miss is.
+        // Falls back to a numeric name if the phrase has
+        // weird characters.
+        const safeName = nm.phrase.replace(/[^a-z0-9]+/gi, '_').toLowerCase().slice(0, 20) || `near_miss_${i}`;
+        const name = `${safeName}_${i}.m4a`;
+        const data = await RNFS.readFile(nm.path, 'base64');
+        nearMissEncoded.push({ name, data });
+      }
+      console.log(`[Trainer] sending requestWakeTraining agentId=${companionId} samples=${encoded.length} nearMisses=${nearMissEncoded.length}`);
+      sync.requestWakeTraining(companionId, wakePhrase.trim(), encoded, nearMissEncoded);
     } catch (e: any) {
       clearTimeout(earlyPoll);
       setStage('error');
       setStatusMsg(`Failed to start: ${e?.message || 'unknown'}`);
     }
-  }, [samples, companionId, wakePhrase, _onProgress, _onResult, _onModel, clearSamples]);
+  }, [samples, nearMissSamples, companionId, wakePhrase, _onProgress, _onResult, _onModel, clearSamples]);
 
   // ----- render -----
   const isTrainingInProgress = !['idle', 'complete', 'error'].includes(stage);
@@ -812,6 +914,100 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
                 <Text style={styles.clearBtnText}>Clear all samples</Text>
               </TouchableOpacity>
             )}
+          </View>
+        )}
+
+        {/* v3.8.2: Near-miss recording. Optional — these are
+            similar-but-wrong phrases ("hey car" for "hey
+            clawsuu") that the model should reject. The
+            desktop's Piper-TTS adversarial negatives catch
+            general acoustic variation; user-recorded
+            near-misses in your own voice + environment catch
+            the specific false positives you get at home.
+            Optional. The Trainer generates 3 suggestions from
+            your wake phrase using simple phonetic swaps. */}
+        {!isTrainingInProgress && !isFinished && (
+          <View style={styles.recordCard}>
+            <Text style={styles.label}>
+              Near-misses (optional but recommended): {nearMissSamples.length} / {REQUIRED_NEAR_MISS_SAMPLES}
+            </Text>
+            <Text style={styles.nearMissHint}>
+              Say phrases that sound similar but aren't your wake word. The desktop's TTS-generated
+              negatives catch general variation, but YOUR near-misses in YOUR voice catch what
+              actually trips the model up at home.
+            </Text>
+
+            {Array.from({ length: REQUIRED_NEAR_MISS_SAMPLES }).map((_, i) => {
+              const existing = nearMissSamples[i];
+              // Show suggestions only on the first empty
+              // slot to avoid cluttering the UI.
+              const suggestions = i === 0 ? suggestNearMisses(wakePhrase, 3) : [];
+              return (
+                <View key={i} style={styles.nearMissRow}>
+                  <TextInput
+                    style={[styles.input, styles.nearMissInput]}
+                    value={existing?.phrase || (i === 0 && nearMissSamples.length === 0 ? suggestions[0] : '')}
+                    onChangeText={(text) => {
+                      // If user is editing an existing entry, update it.
+                      // If editing a placeholder for a new entry, store it.
+                      if (existing) {
+                        setNearMissSamples((prev) => prev.map((nm, idx) => idx === i ? { ...nm, phrase: text } : nm));
+                      } else {
+                        // Pre-fill as a placeholder; the actual slot is created on record.
+                        // For simplicity we just track via index.
+                      }
+                    }}
+                    placeholder={suggestions[0] || `e.g. hey car`}
+                    placeholderTextColor="#666"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!existing}
+                    maxLength={40}
+                  />
+                  {existing ? (
+                    <View style={styles.nearMissRecorded}>
+                      <Text style={styles.nearMissRecordedText}>✓</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.nearMissRecordBtn}
+                      onPress={() => {
+                        // Use the text-input value as the phrase
+                        // to say. Default to a suggestion if empty.
+                        const phrase = (i === 0 && nearMissSamples.length === 0 && suggestions[0])
+                          ? suggestions[0]
+                          : existing?.phrase || suggestions[0] || '';
+                        onTapToRecordNearMiss(phrase);
+                      }}
+                      disabled={isRecording}
+                    >
+                      <Text style={styles.nearMissRecordIcon}>🎤</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
+
+            {(() => {
+              const suggestions = suggestNearMisses(wakePhrase, 3);
+              if (suggestions.length === 0) return null;
+              return (
+                <View style={styles.suggestionsRow}>
+                  <Text style={styles.suggestionsLabel}>Suggestions:</Text>
+                  {suggestions.map((s, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      style={styles.suggestionChip}
+                      onPress={() => {
+                        Alert.alert(s, 'Tap the 🎤 on an empty slot to record this phrase.');
+                      }}
+                    >
+                      <Text style={styles.suggestionChipText}>{s}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              );
+            })()}
           </View>
         )}
 
@@ -1016,4 +1212,73 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelBtnText: { color: '#9ca3af', fontSize: 14 },
+
+  // v3.8.2: near-miss recording UI. Three rows, each with
+  // a text input (for the phrase label) + a record button.
+  // When recorded, the row shows a green check and disables
+  // the input.
+  nearMissHint: {
+    color: '#9aa0b4',
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 8,
+    fontStyle: 'italic',
+  },
+  nearMissRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginVertical: 4,
+  },
+  nearMissInput: {
+    flex: 1,
+    marginTop: 0,
+    marginBottom: 0,
+  },
+  nearMissRecordBtn: {
+    backgroundColor: '#1f1f1f',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nearMissRecordIcon: { fontSize: 18 },
+  nearMissRecorded: {
+    backgroundColor: '#10b981',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nearMissRecordedText: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  suggestionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  suggestionsLabel: {
+    color: '#7a809a',
+    fontSize: 11,
+    marginRight: 4,
+  },
+  suggestionChip: {
+    backgroundColor: '#1f1f1f',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2a2a3e',
+  },
+  suggestionChipText: {
+    color: '#cfd2e0',
+    fontSize: 12,
+  },
 });

@@ -372,8 +372,27 @@ class SyncClient {
   // original .m4a filename and `data` is the base64-encoded file
   // contents. The desktop writes them to its training dir — the
   // mobile's filesystem is not reachable from the desktop process.
-  requestWakeTraining(agentId: string, phrase: string, samples: Array<{ name: string; data: string }>) {
-    this.send({ type: 'request_wake_training', agentId, phrase, samples });
+  //
+  // v3.8.2: optional `nearMissSamples` for user-recorded
+  // similar-but-wrong phrases ("hey car" vs "hey clawsuu").
+  // The desktop copies them into the negative_train /
+  // negative_test dirs so the training script picks them
+  // up alongside the Piper-TTS adversarial negatives.
+  // Backward-compat: if not present, the desktop ignores
+  // it (training proceeds with only TTS negatives).
+  requestWakeTraining(
+    agentId: string,
+    phrase: string,
+    samples: Array<{ name: string; data: string }>,
+    nearMissSamples?: Array<{ name: string; data: string }>,
+  ) {
+    this.send({
+      type: 'request_wake_training',
+      agentId,
+      phrase,
+      samples,
+      ...(nearMissSamples && nearMissSamples.length > 0 ? { nearMissSamples } : {}),
+    });
   }
 
   // v3.2.6: ask the desktop for the most recent wake-training
