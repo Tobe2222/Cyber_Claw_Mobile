@@ -18,6 +18,20 @@
 // able to click for a more detailed view of the quest, its
 // points/steps, directory etc."
 //
+// v3.7.8: render the two new fields that desktop v3.1.50 added
+// to the quest model. (1) `active: true|false` on each quest —
+// the active quest is the one the companion is currently
+// working on, persisted in ~/.openclaw/cyberclaw/quests.json.
+// Show a loud ⚡ ACTIVE badge on the active card and put it
+// first in the sort. (2) `latestChanges: [{timestamp, text}]`
+// — the companion's running journal of what it did on this
+// quest. Show as a timeline in the detail modal.
+//
+// Wire protocol: no new channels — the new fields ride the
+// existing `quests_list` event from v3.1.49. The mobile just
+// reads them off the quest object the SyncClient already
+// hands it.
+//
 // Pure-render component: all hooks live at the screen level (per
 // the v3.7.1 lesson about hook-order-invariants when a screen has
 // multiple render-functions). No helpers here that need to call
@@ -46,6 +60,12 @@ type CompanionQuest = {
   directory?: string;
   goals?: Array<{ text: string; completed: boolean }>;
   created?: string;
+  // v3.7.8: new fields from desktop v3.1.50. `active` flags
+  // which quest the companion is currently working on (exactly
+  // one per desktop). `latestChanges` is the companion's
+  // running journal of what it did on this quest.
+  active?: boolean;
+  latestChanges?: Array<{ timestamp: string; text: string }>;
   [k: string]: any;
 };
 
@@ -148,8 +168,13 @@ export default function QuestsScreen({
     };
   }, []);
 
-  // Active first, then completed (matches desktop sort).
+  // v3.7.8: sort order is now (1) the active quest, then
+  // (2) non-completed quests, then (3) completed quests.
+  // Matches the desktop's intent: the working quest is
+  // always at the top, even if it's been marked completed.
   const sorted = quests.slice().sort((a, b) => {
+    if (a.active && !b.active) return -1;
+    if (!a.active && b.active) return 1;
     if (a.status === 'active' && b.status !== 'active') return -1;
     if (a.status !== 'active' && b.status === 'active') return 1;
     return 0;
@@ -190,20 +215,37 @@ export default function QuestsScreen({
           ) : (
             sorted.map((q) => {
               const isComplete = q.status === 'completed';
+              const isActive = !!q.active;
               const goals = Array.isArray(q.goals) ? q.goals : [];
               const done = goals.filter((g) => g.completed).length;
               const pct = goals.length === 0 ? 0 : Math.round((done / goals.length) * 100);
               const dirName = q.directory
                 ? q.directory.split('/').filter(Boolean).pop() || q.directory
                 : '';
+              // v3.7.8: active quest gets a gold border + soft
+              // gold glow. If active + completed, use a muted
+              // gold so it doesn't shout. The completed
+              // (non-active) case is unchanged.
+              const borderColor = isActive
+                ? (isComplete ? 'rgba(247, 147, 26, 0.6)' : '#f7931a')
+                : (isComplete ? '#10b981' : '#a855f7');
+              const cardOpacity = isActive
+                ? (isComplete ? 0.85 : 1)
+                : (isComplete ? 0.55 : 1);
+              // v3.7.8: the number of recent changes goes
+              // next to the done/total as a small inline
+              // counter — subtle hint that the detail modal
+              // has more.
+              const changeCount = Array.isArray(q.latestChanges) ? q.latestChanges.length : 0;
               return (
                 <TouchableOpacity
                   key={q.id}
                   style={[
                     styles.questCard,
                     {
-                      borderColor: isComplete ? '#10b981' : '#a855f7',
-                      opacity: isComplete ? 0.55 : 1,
+                      borderColor,
+                      borderWidth: isActive ? 2 : 1.5,
+                      opacity: cardOpacity,
                     },
                   ]}
                   onPress={() => setDetail(q)}
@@ -213,8 +255,16 @@ export default function QuestsScreen({
                     }
                   }}
                 >
+                  {isActive && (
+                    // v3.7.8: ⚡ ACTIVE badge sits in the
+                    // top-right of the card. Bold gold so
+                    // it's the first thing the eye lands on.
+                    <View style={styles.activeBadge}>
+                      <Text style={styles.activeBadgeText}>⚡ ACTIVE</Text>
+                    </View>
+                  )}
                   <View style={styles.questTopRow}>
-                    <Text style={styles.questName}>
+                    <Text style={styles.questName} numberOfLines={1}>
                       {isComplete ? '✅' : '⚔️'}  {q.name}
                     </Text>
                     <Text style={styles.questPct}>{done}/{goals.length}</Text>
@@ -240,6 +290,15 @@ export default function QuestsScreen({
                   {!!q.directory && (
                     <Text style={styles.questDir} numberOfLines={1}>
                       📁 {dirName}
+                    </Text>
+                  )}
+                  {changeCount > 0 && (
+                    // v3.7.8: small inline counter showing
+                    // how many journal entries exist. Tapping
+                    // the card opens the detail modal where
+                    // the full timeline is rendered.
+                    <Text style={styles.questChangesHint}>
+                      📝 {changeCount} change{changeCount === 1 ? '' : 's'} logged
                     </Text>
                   )}
                 </TouchableOpacity>
@@ -300,10 +359,15 @@ export default function QuestsScreen({
 // the screen-level hook order stays clean (v3.7.1 pattern).
 function QuestDetailBody({ quest }: { quest: CompanionQuest }) {
   const isComplete = quest.status === 'completed';
+  const isActive = !!quest.active;
   const goals = Array.isArray(quest.goals) ? quest.goals : [];
   const done = goals.filter((g) => g.completed).length;
   const pct = goals.length === 0 ? 0 : Math.round((done / goals.length) * 100);
   const created = quest.created ? new Date(quest.created) : null;
+  // v3.7.8: latestChanges is the companion's running journal
+  // of what it did on this quest. Sort newest-first so the
+  // most recent work is at the top of the timeline.
+  const changes = Array.isArray(quest.latestChanges) ? quest.latestChanges.slice().reverse() : [];
 
   return (
     <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
@@ -312,6 +376,21 @@ function QuestDetailBody({ quest }: { quest: CompanionQuest }) {
       </Text>
 
       <View style={styles.modalStatusRow}>
+        {isActive && (
+          // v3.7.8: separate ACTIVE badge so the detail
+          // modal makes it clear which quest is the
+          // working one. The Active/Completed badge
+          // below describes the quest's status; this
+          // ACTIVE badge describes whether the
+          // companion is currently working on it.
+          // The two are independent: you can have a
+          // Completed quest that is still ACTIVE (you
+          // finished but still have it open for
+          // reference).
+          <View style={styles.modalActiveBadge}>
+            <Text style={styles.modalActiveBadgeText}>⚡ ACTIVE</Text>
+          </View>
+        )}
         <View
           style={[
             styles.modalStatusBadge,
@@ -404,8 +483,60 @@ function QuestDetailBody({ quest }: { quest: CompanionQuest }) {
           </Text>
         </View>
       )}
+
+      {changes.length > 0 && (
+        // v3.7.8: latest changes timeline. Shows the
+        // companion's journal of what it did on this quest,
+        // newest first. Each entry has a relative timestamp
+        // (e.g. "2h ago") plus the text. The user can
+        // scroll through the full history.
+        <View style={styles.modalSection}>
+          <Text style={styles.modalSectionTitle}>
+            Latest changes ({changes.length})
+          </Text>
+          <Text style={styles.changeIntro}>
+            Synced from the desktop. The companion appends to this when it does something worth logging.
+          </Text>
+          {changes.map((c, i) => {
+            const ts = c?.timestamp ? new Date(c.timestamp) : null;
+            const ago = ts && !isNaN(ts.getTime()) ? formatTimeAgo(ts) : '';
+            return (
+              <View key={i} style={styles.changeRow}>
+                <View style={styles.changeDot} />
+                <View style={styles.changeBody}>
+                  <Text style={styles.changeText}>{c?.text || ''}</Text>
+                  {!!ago && (
+                    <Text style={styles.changeTime}>{ago}</Text>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
     </ScrollView>
   );
+}
+
+// v3.7.8: format a date as a relative time-ago string.
+// Pure function, no hooks, used in the latestChanges
+// timeline. Mirrors the desktop's fmtAgo in app.js so
+// the mobile and desktop render the same way.
+function formatTimeAgo(date: Date): string {
+  const now = Date.now();
+  const t = date.getTime();
+  if (isNaN(t)) return '';
+  const diff = Math.max(0, now - t);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  if (d < 30) return `${d}d ago`;
+  // Older than 30 days: show the actual date so the
+  // relative time doesn't get absurdly long.
+  return date.toLocaleDateString();
 }
 
 const styles = StyleSheet.create({
@@ -593,5 +724,90 @@ const styles = StyleSheet.create({
     color: '#f7931a',
     fontSize: 15,
     fontWeight: '600',
+  },
+
+  // v3.7.8: list-card ACTIVE badge (top-right of each card).
+  // Gold background tint + gold border + uppercase. The eye
+  // lands on this before the rest of the card.
+  activeBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 8,
+    backgroundColor: 'rgba(247, 147, 26, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(247, 147, 26, 0.5)',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    zIndex: 1,
+  },
+  activeBadgeText: {
+    color: '#f7931a',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  // v3.7.8: small inline counter under the goal bar
+  // showing how many journal entries exist.
+  questChangesHint: {
+    color: '#9aa0b4',
+    fontSize: 11,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  // v3.7.8: detail-modal ACTIVE badge (in the status row).
+  // Sits next to the Active/Completed status badge. The two
+  // are independent concepts.
+  modalActiveBadge: {
+    backgroundColor: 'rgba(247, 147, 26, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(247, 147, 26, 0.5)',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginRight: 8,
+  },
+  modalActiveBadgeText: {
+    color: '#f7931a',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  // v3.7.8: latest-changes timeline. Each row has a small
+  // dot on the left (the timeline bullet) and the text +
+  // timestamp on the right. Newest first.
+  changeIntro: {
+    color: '#7a809a',
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginBottom: 10,
+    lineHeight: 15,
+  },
+  changeRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginVertical: 4,
+  },
+  changeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#a855f7',
+    marginTop: 6,
+    marginRight: 10,
+  },
+  changeBody: {
+    flex: 1,
+  },
+  changeText: {
+    color: '#cfd2e0',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  changeTime: {
+    color: '#7a809a',
+    fontSize: 11,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
   },
 });
