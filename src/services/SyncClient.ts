@@ -275,6 +275,16 @@ class SyncClient {
     this.send({ type: 'request_agents_list' });
   }
 
+  // v3.1.95: ask the desktop for the full quests list. The
+  // desktop caches the payload and replays it on reconnect as
+  // part of _sendFullState; this method lets the mobile pull
+  // again explicitly (e.g. after restoring from AsyncStorage
+  // we want a guaranteed-fresh pull, not whatever the cache
+  // happens to hold).
+  requestQuestsList() {
+    this.send({ type: 'request_quests_list' });
+  }
+
   sendCompanionAction(action: any) {
     this.send({ type: 'companion_interaction', action });
   }
@@ -443,6 +453,10 @@ class SyncClient {
           // HomeScreen useEffect to do it (which has its own retry
           // loop that can give up at 4s on a slow first connect).
           setTimeout(() => this.requestAgentsList(), 400);
+          // v3.1.95: same idea for quests. Slight stagger so
+          // we don't fire six messages in the same tick if more
+          // one-shot pulls get added later.
+          setTimeout(() => this.requestQuestsList(), 500);
         } else {
           this.token = null;
           AsyncStorage.removeItem(STORAGE_KEY_TOKEN);
@@ -517,6 +531,16 @@ class SyncClient {
         // touching the existing companion_id handler.
         console.log('[SyncClient] Received agents_list:', msg.agents?.length, 'agents');
         this.emit('agents_list', msg);
+        break;
+
+      case 'quests_list':
+        // v3.1.95: desktop sent the full quests list so the mobile
+        // can mirror the desktop's quest panel. The full list is
+        // global on the desktop (not per-companion), so the HomeScreen
+        // routes it to the active companion's slot and persists a
+        // snapshot per-agent to AsyncStorage for offline-survival.
+        console.log('[SyncClient] Received quests_list:', msg.quests?.length, 'quest(s)');
+        this.emit('quests_list', msg);
         break;
 
       case 'pong':
