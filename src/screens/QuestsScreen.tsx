@@ -195,9 +195,11 @@ export default function QuestsScreen({
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Active quests</Text>
+          <Text style={styles.sectionTitle}>Quests</Text>
           <Text style={styles.sectionDesc}>
             Synced read-only from the desktop's Quests panel.
+            The active quest (the one the companion is working on) is
+            marked with a ⚡ ACTIVE badge and a gold border.
             Edit / add / delete on the desktop; the phone updates automatically.
           </Text>
           <Text style={styles.hint}>Tap a card for the full details. Long-press to copy the project path.</Text>
