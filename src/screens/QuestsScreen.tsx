@@ -106,8 +106,14 @@ export default function QuestsScreen({
   // the editor when the broadcast confirms the edit.
   const editorOpenRef = useRef<CompanionQuest | null>(null);
   const detailRef = useRef<CompanionQuest | null>(null);
+  // v3.8.1: ref for "is the editor open for a new quest".
+  // When true, the broadcast handler closes the editor on
+  // the next broadcast (we don't need to match an id since
+  // the new quest gets a fresh id from the desktop).
+  const creatingNewRef = useRef<boolean>(false);
   useEffect(() => { editorOpenRef.current = editorOpen; }, [editorOpen]);
   useEffect(() => { detailRef.current = detail; }, [detail]);
+  useEffect(() => { creatingNewRef.current = !!(editorOpen && !editorOpen.id); }, [editorOpen]);
 
   // v3.7.6: hydrate from the global cache key on mount, then
   // migrate any v3.7.4-era per-companion keys (cyberclaw-quests-<id>)
@@ -206,7 +212,13 @@ export default function QuestsScreen({
       // useEffect with empty deps — reading state directly
       // would give us the stale initial value.
       const editingId = editorOpenRef.current?.id;
-      if (editingId) {
+      // v3.8.1: if the editor is open for a new quest
+      // (empty id), the desktop has just created it; any
+      // broadcast that lands after the create_quest call
+      // is the confirmation. Close the editor.
+      if (creatingNewRef.current) {
+        setEditorOpen(null);
+      } else if (editingId) {
         if (list.some((q) => q.id === editingId)) {
           setEditorOpen(null);
         } else {
@@ -303,16 +315,30 @@ export default function QuestsScreen({
             <Text style={styles.detailBackBtnText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.detailHeader}>📜  Quests</Text>
-          <View style={{ width: 60 }} />
+          {/* v3.8.1: + New Quest button. Opens the editor
+              modal in "new" mode (empty fields). Tapping
+              Save sends create_quest to the desktop; the
+              next broadcast replaces the state and the
+              editor auto-closes. Replaces the 60pt spacer
+              that was here before (the spacer kept the
+              header text centered; now the + takes that
+              space). */}
+          <TouchableOpacity
+            onPress={() => setEditorOpen({ id: '', name: '', description: '', status: 'active', goals: [] } as CompanionQuest)}
+            style={styles.newQuestBtn}
+          >
+            <Text style={styles.newQuestBtnText}>+  New</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Quests</Text>
           <Text style={styles.sectionDesc}>
-            Synced read-only from the desktop's Quests panel.
-            The active quest (the one the companion is working on) is
-            marked with a ⚡ ACTIVE badge and a gold border.
-            Edit / add / delete on the desktop; the phone updates automatically.
+            Synced from the desktop's Quests panel. The active quest
+            (the one the companion is working on) is marked with a
+            ⚡ ACTIVE badge and a gold border. Tap the actions below a
+            card to set it active, edit it, or delete it. The phone
+            edits round-trip to the desktop in real-time.
           </Text>
           <Text style={styles.hint}>Tap a card for the full details. Long-press to copy the project path.</Text>
 
@@ -423,23 +449,26 @@ export default function QuestsScreen({
                   )}
 
                   {/* v3.8.0: action row. Three quick actions
-                      on each card: ⭐ set active, ✏️ open
-                      editor, ✕ delete. Inline TouchableOpacity
-                      so the touch is absorbed and doesn't
-                      bubble to the card's onPress (which
-                      would open the detail modal). */}
+                      on each card: ⭐ set active (hidden
+                      on the already-active card since the
+                      ACTIVE banner already says it's
+                      active), ✏️ open editor, ✕ delete.
+                      Inline TouchableOpacity so the touch
+                      is absorbed and doesn't bubble to
+                      the card's onPress (which would open
+                      the detail modal). */}
                   <View style={styles.cardActions}>
-                    <TouchableOpacity
-                      style={styles.cardActionBtn}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        handleSetActive(q.id);
-                      }}
-                    >
-                      <Text style={[styles.cardActionText, isActive && styles.cardActionTextActive]}>
-                        {isActive ? '⭐' : '☆'}
-                      </Text>
-                    </TouchableOpacity>
+                    {!isActive && (
+                      <TouchableOpacity
+                        style={styles.cardActionBtn}
+                        onPress={(e) => {
+                          e?.stopPropagation?.();
+                          handleSetActive(q.id);
+                        }}
+                      >
+                        <Text style={styles.cardActionText}>☆</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       style={styles.cardActionBtn}
                       onPress={(e) => {
@@ -477,9 +506,9 @@ export default function QuestsScreen({
           <Text style={styles.sectionTitle}>About quests on mobile</Text>
           <Text style={styles.sectionDesc}>
             • Quests are owned by the desktop and synced via WebSocket on every change.{'\n'}
+            • Phone edits (name, description, status, set active, delete, mark goal done) round-trip to the desktop in real-time.{'\n'}
             • Project paths are NOT stored on the phone — {`quest.directory`} is read from the desktop as the project's real path and shown for reference only.{'\n'}
-            • Long-press a card to copy the project path to clipboard.{'\n'}
-            • Editing / creating / deleting happens on the desktop for now.
+            • Long-press a card to copy the project path to clipboard.
           </Text>
         </View>
       </ScrollView>
@@ -567,14 +596,35 @@ export default function QuestsScreen({
           {editorOpen && (
             <QuestEditorBody
               quest={editorOpen}
+              isNew={!editorOpen.id}
               onClose={() => setEditorOpen(null)}
               onSave={(updates) => {
-                handleUpdateQuest(editorOpen.id, updates);
+                // v3.8.1: if we opened the editor for a new
+                // quest (empty id), call createQuest instead
+                // of updateQuest. The desktop assigns the id
+                // and broadcasts the new quest; the handler
+                // in the useEffect above closes the editor
+                // when the next broadcast arrives.
+                if (!editorOpen.id) {
+                  syncClient.createQuest?.({
+                    name: updates.name,
+                    description: updates.description,
+                    goals: Array.isArray(editorOpen.goals) ? editorOpen.goals : [],
+                  });
+                } else {
+                  handleUpdateQuest(editorOpen.id, updates);
+                }
                 // Don't close the editor here — let the
                 // broadcast handler close it once the
                 // desktop confirms. (See useEffect above.)
               }}
               onDelete={() => {
+                if (!editorOpen.id) {
+                  // New quest not yet saved — just close the
+                  // editor.
+                  setEditorOpen(null);
+                  return;
+                }
                 const id = editorOpen.id;
                 setEditorOpen(null);
                 setConfirm({
@@ -664,11 +714,18 @@ export default function QuestsScreen({
 // modal's tap-to-toggle).
 function QuestEditorBody({
   quest,
+  isNew,
   onClose,
   onSave,
   onDelete,
 }: {
   quest: CompanionQuest;
+  // v3.8.1: when true, the editor is in "new quest" mode.
+  // Hides the Delete button (nothing to delete yet) and
+  // the title changes to "New quest". The Save handler in
+  // the parent detects this via the empty quest.id and
+  // calls createQuest instead of updateQuest.
+  isNew?: boolean;
   onClose: () => void;
   onSave: (updates: Record<string, any>) => void;
   onDelete: () => void;
@@ -684,7 +741,7 @@ function QuestEditorBody({
   return (
     <View style={styles.editorCard}>
       <View style={styles.editorHeader}>
-        <Text style={styles.editorTitle}>✏️  Edit quest</Text>
+        <Text style={styles.editorTitle}>{isNew ? '➕  New quest' : '✏️  Edit quest'}</Text>
         <TouchableOpacity onPress={onClose} style={styles.editorCloseBtn}>
           <Text style={styles.editorCloseBtnText}>×</Text>
         </TouchableOpacity>
@@ -748,16 +805,18 @@ function QuestEditorBody({
           </Text>
         )}
         <Text style={styles.editorHint}>
-          Goal text editing lands in v3.8.1. For now, tap a goal in the detail modal to mark it done.
+          Goal text editing lands in a future release. For now, tap a goal in the detail modal to mark it done.
         </Text>
       </ScrollView>
       <View style={styles.editorFooter}>
-        <TouchableOpacity
-          style={[styles.editorFooterBtn, styles.editorFooterBtnDanger]}
-          onPress={onDelete}
-        >
-          <Text style={styles.editorFooterBtnTextDanger}>Delete</Text>
-        </TouchableOpacity>
+        {!isNew && (
+          <TouchableOpacity
+            style={[styles.editorFooterBtn, styles.editorFooterBtnDanger]}
+            onPress={onDelete}
+          >
+            <Text style={styles.editorFooterBtnTextDanger}>Delete</Text>
+          </TouchableOpacity>
+        )}
         <View style={{ flex: 1 }} />
         <TouchableOpacity
           style={styles.editorFooterBtn}
@@ -1013,6 +1072,22 @@ const styles = StyleSheet.create({
   },
   detailBackBtn: { paddingVertical: 4, paddingRight: 12 },
   detailBackBtnText: { color: '#f7931a', fontSize: 16 },
+  // v3.8.1: + New Quest button in the header row.
+  // Subtle orange outline so it doesn't shout but is
+  // still discoverable next to the page title.
+  newQuestBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(247, 147, 26, 0.55)',
+    backgroundColor: 'rgba(247, 147, 26, 0.08)',
+  },
+  newQuestBtnText: {
+    color: '#f7931a',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   detailHeader: {
     color: '#fff',
     fontSize: 18,
