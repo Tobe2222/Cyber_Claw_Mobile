@@ -59,16 +59,26 @@ type Companion = {
 export default function CompanionSettingsScreen({
   companionId,
   onBack,
+  initialPhase,
 }: {
   companionId: string;
   onBack: () => void;
+  // v3.7.5: optional initial drill-down phase. null/undefined =
+  // overview (cards). When the arena Quests button fires, App.tsx
+  // passes 'quests' so the user lands directly on the Quests page
+  // instead of the cards.
+  initialPhase?: 'wake' | 'exit' | 'voice' | 'quests' | null;
 }) {
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
   // = sub-page for that phase.
   // v3.7.0: 'voice' added — per-companion voice engine +
   // voice picker (Local / Premium API / Use global default).
-  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | 'quests' | null>(null);
+  // v3.7.4: 'quests' added — read-only mirror of the desktop
+  // quest list, per-companion via AsyncStorage cache.
+  // v3.7.5: `initialPhase` lets deep links (arena Quests button)
+  // land directly in a sub-phase instead of the overview cards.
+  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | 'quests' | null>(initialPhase ?? null);
 
   // Companion list — owned here (not lifted to App.tsx)
   // because this screen needs it to resolve companionId

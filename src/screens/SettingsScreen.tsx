@@ -1127,7 +1127,7 @@ export default function SettingsScreen({
                 section below. */}
             <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
             <SubTitle>✉️ Manual send voice message</SubTitle>
-            <Hint>The word you say during a voice-mode turn to commit the turn to the LLM (e.g. "send", "go"). Independent of the exit phrase — send keeps the conversation going, exit closes voice mode. Shared across all companions.</Hint>
+            <Hint>Backup commit word for voice-mode turns. The primary trigger is silence-detection (the VAD's silence countdown) or gibberish-detection (VAD noise floor). When those miss — e.g. the silence threshold doesn't trip because the audio cuts off mid-word, or the VAD reads low noise as speech — saying this word commits the turn to the LLM by hand. Independent of the exit phrase — send keeps the conversation going, exit closes voice mode. Shared across all companions.</Hint>
             <Label>Send word</Label>
             <View style={styles.optionRow}>
               <TextInput

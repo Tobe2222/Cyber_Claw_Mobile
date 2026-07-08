@@ -301,7 +301,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenCompanion, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onOpenCompanion?: (id: string, initialPhase?: 'wake' | 'exit' | 'voice' | 'quests' | null) => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -870,8 +870,25 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onActiveCo
       if (msg.type === 'saveComp') {
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
+      if (msg.type === 'quests') {
+        // v3.7.5: arena Quests button (top-left, mirrors Voice
+        // Mode at top-right). Routes to the active companion's
+        // Quests phase in CompanionSettingsScreen. Tobe:
+        // "the button is missing in the arena. it should be
+        // located at the top left in the arena, like voice mode
+        // but opposite."
+        // Falls back to the first available agent if there's no
+        // active chat companion yet (cold start).
+        const targetId = activeChatAgentId || (Object.keys(messagesByAgent)[0] ?? null);
+        if (targetId && onOpenCompanion) {
+          addLogEntry(`📜 Arena Quests → companion ${targetId}`, 'debug');
+          onOpenCompanion(targetId, 'quests');
+        } else {
+          addLogEntry('📜 Arena Quests ignored — no companion selected yet', 'debug');
+        }
+      }
     } catch {}
-  }, [closeFullscreen]);
+  }, [closeFullscreen, activeChatAgentId, messagesByAgent, onOpenCompanion]);
 
   // Handle Android back button in fullscreen mode
   // v3.2.18: Wake Mode is gone. Back in Voice Mode goes

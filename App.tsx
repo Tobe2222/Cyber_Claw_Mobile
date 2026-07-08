@@ -78,6 +78,12 @@ export default function App(): React.JSX.Element {
   // when screen === 'companion'. Set by SettingsScreen via
   // onOpenCompanion(id).
   const [companionScreenId, setCompanionScreenId] = useState<string | null>(null);
+  // v3.7.5: optional drill-down phase so deep links (e.g. the
+  // arena Quests button) can land directly on a sub-page of the
+  // companion settings screen instead of the overview cards.
+  // Reset to null when the screen closes (see setScreen('home')
+  // onBack handler) so a subsequent "tap card" flow starts fresh.
+  const [companionScreenInitialPhase, setCompanionScreenInitialPhase] = useState<'wake' | 'exit' | 'voice' | 'quests' | null>(null);
   // v3.1.83: ref so the AppState=active listener (re-added below)
   // can read the CURRENT screen value, not the value captured at
   // useEffect mount time. Without this, the listener would always
@@ -355,6 +361,14 @@ export default function App(): React.JSX.Element {
             <HomeScreen
               onOpenSettings={() => setScreen('settings')}
               onOpenVoiceMode={() => setScreen('voice-mode')}
+              // v3.7.5: arena Quests button deep-links into the
+              // active companion's Quests page (top-left of the
+              // arena WebView, mirrors Voice Mode at top-right).
+              onOpenCompanion={(id, phase) => {
+                setCompanionScreenId(id);
+                setCompanionScreenInitialPhase(phase ?? null);
+                setScreen('companion');
+              }}
               // v3.1.52: HomeScreen reports the currently active chat
               // companion back to App.tsx so WakeModeScreen can show
               // the SAME companion the user is looking at. Previously
@@ -376,6 +390,7 @@ export default function App(): React.JSX.Element {
               onBack={() => setScreen('home')}
               onOpenCompanion={(id) => {
                 setCompanionScreenId(id);
+                setCompanionScreenInitialPhase(null);
                 setScreen('companion');
               }}
             />
@@ -383,8 +398,10 @@ export default function App(): React.JSX.Element {
           {screen === 'companion' && companionScreenId && (
             <CompanionSettingsScreen
               companionId={companionScreenId}
+              initialPhase={companionScreenInitialPhase}
               onBack={() => {
                 setCompanionScreenId(null);
+                setCompanionScreenInitialPhase(null);
                 setScreen('settings');
               }}
             />

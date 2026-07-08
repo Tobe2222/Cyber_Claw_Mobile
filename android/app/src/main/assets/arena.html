@@ -24,6 +24,13 @@ canvas{
   position:absolute;top:6px;right:6px;
   display:flex;gap:4px;z-index:20;pointer-events:all;
 }
+/* v3.7.5: top-left Quests button (mirror of ctrlRight).
+   Same styling as .ctrlBtn — just left-aligned. */
+#ctrlLeft{
+  position:absolute;top:6px;left:6px;
+  display:flex;gap:4px;z-index:20;pointer-events:all;
+}
+body.wake-mode #ctrlLeft{display:none!important}
 .ctrlBtn{
   background:rgba(0,0,0,0.72);
   border:1px solid rgba(247,147,26,0.45);
@@ -75,6 +82,15 @@ body.wake-mode #ctrlRight{display:none!important}
        voice mode." -->
   <button class="ctrlBtn" id="voiceBtn" title="Enter Voice Mode (with wake phrase detection)"
     onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'fullscreen'})); } catch(e) {}">Voice Mode</button>
+</div>
+<!-- v3.7.5: Quests shortcut — top-left, opposite Voice Mode. Posts
+     {type:'quests'} which HomeScreen handles by navigating to the
+     active companion's Quests phase in CompanionSettingsScreen.
+     Tobe: "the button is missing in the arena. it should be located
+     at the top left in the arena, like voice mode but opposite." -->
+<div id="ctrlLeft">
+  <button class="ctrlBtn" id="questsBtn" title="Open Quests for the active companion"
+    onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'quests'})); } catch(e) {}">📜 Quests</button>
 </div>
 <script>
 'use strict';
