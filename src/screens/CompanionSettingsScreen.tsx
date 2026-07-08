@@ -59,26 +59,18 @@ type Companion = {
 export default function CompanionSettingsScreen({
   companionId,
   onBack,
-  initialPhase,
 }: {
   companionId: string;
   onBack: () => void;
-  // v3.7.5: optional initial drill-down phase. null/undefined =
-  // overview (cards). When the arena Quests button fires, App.tsx
-  // passes 'quests' so the user lands directly on the Quests page
-  // instead of the cards.
-  initialPhase?: 'wake' | 'exit' | 'voice' | 'quests' | null;
 }) {
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
   // = sub-page for that phase.
   // v3.7.0: 'voice' added — per-companion voice engine +
   // voice picker (Local / Premium API / Use global default).
-  // v3.7.4: 'quests' added — read-only mirror of the desktop
-  // quest list, per-companion via AsyncStorage cache.
-  // v3.7.5: `initialPhase` lets deep links (arena Quests button)
-  // land directly in a sub-phase instead of the overview cards.
-  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | 'quests' | null>(initialPhase ?? null);
+  // v3.7.6: 'quests' removed — Quests is now a top-level
+  // screen (QuestsScreen.tsx) accessed from the arena button.
+  const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | null>(null);
 
   // Companion list — owned here (not lifted to App.tsx)
   // because this screen needs it to resolve companionId
@@ -129,33 +121,12 @@ export default function CompanionSettingsScreen({
   const [vcSilenceSavedAt, setVcSilenceSavedAt] = useState<number | null>(null);
   const vcSilenceLoadedRef = useRef(false);
 
-  // v3.1.95: per-companion quest lists. The desktop's quest
-  // model is global (every quest is visible to every
-  // companion), but on the mobile side we cache a copy per
-  // companionId so each agent's settings screen sees its own
-  // snapshot — quests can diverge per agent in the future
-  // (different active-quest mappings, agent-specific filters),
-  // and per-keyed storage is the right shape even when the
-  // payload is currently identical for every slot.
-  //
-  // Read-only on mobile for now: we mirror the desktop's list
-  // but don't push edits back. Create/update/delete flows
-  // happen on the desktop (the directory picker, the goals
-  // editor etc. all need filesystem access). Companion-side
-  // toggles (e.g. mark a quest as "active for me") would land
-  // here in v2.
-  type CompanionQuest = {
-    id: string;
-    name: string;
-    description?: string;
-    status?: 'active' | 'completed';
-    directory?: string;
-    goals?: Array<{ text: string; completed: boolean }>;
-    created?: string;
-    [k: string]: any;
-  };
-  const [questsByCompanion, setQuestsByCompanion] = useState<Record<string, CompanionQuest[]>>({});
-  const questsLoadedRef = useRef(false);
+  // v3.7.6: Quests moved out to QuestsScreen.tsx (top-level,
+  // not per-companion). The per-companion cache keying added
+  // in v3.7.4 was speculative for "future per-companion
+  // divergence" that hasn't materialised. Re-introduce per-
+  // companion keying here when the desktop models per-
+  // companion quest assignment.
 
   const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
 
@@ -339,48 +310,6 @@ export default function CompanionSettingsScreen({
     })();
   }, [availableCompanions.length, activeWakeCompanionId]);
 
-  // v3.1.95: hydrate the per-companion quest list from
-  // AsyncStorage on mount + on companion switch, and
-  // subscribe to the SyncClient 'quests_list' event so live
-  // updates from the desktop flow into state + storage.
-  //
-  // We don't fire a separate `requestQuestsList()` here on
-  // mount because the SyncClient already auto-requests on
-  // auth (SyncClient.ts) and replays the cached payload on
-  // reconnect. If the user opened this screen before
-  // connecting, the event listener below picks up the list
-  // as soon as SyncClient receives one.
-  useEffect(() => {
-    if (!companionId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(`cyberclaw-quests-${companionId}`);
-        if (cancelled) return;
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            setQuestsByCompanion(prev => ({ ...prev, [companionId]: parsed }));
-          }
-        }
-        questsLoadedRef.current = true;
-      } catch (_) {
-        questsLoadedRef.current = true;
-      }
-    })();
-
-    const handler = (msg: any) => {
-      const list: CompanionQuest[] = Array.isArray(msg?.quests) ? msg.quests : [];
-      setQuestsByCompanion(prev => ({ ...prev, [companionId]: list }));
-      AsyncStorage.setItem(`cyberclaw-quests-${companionId}`, JSON.stringify(list)).catch(() => {});
-    };
-    syncClient.on?.('quests_list', handler);
-    return () => {
-      cancelled = true;
-      syncClient.off?.('quests_list', handler);
-    };
-  }, [companionId]);
-
   // v3.4.4: refresh saved-wake-models whenever the
   // companion list grows or the active companion
   // changes (covers post-training refresh).
@@ -547,9 +476,6 @@ export default function CompanionSettingsScreen({
   if (companionViewPhase === 'voice') {
     return renderCompanionVoicePage(companion);
   }
-  if (companionViewPhase === 'quests') {
-    return renderCompanionQuestsPage(companion);
-  }
   return renderCompanionOverview(companion);
 
   // Overview (cards)
@@ -621,151 +547,17 @@ export default function CompanionSettingsScreen({
               <Text style={styles.phaseCardArrow}>›</Text>
             </TouchableOpacity>
 
-            {/* v3.1.95: quest list mirror (read-only). The
-                desktop owns quest CRUD, but we want the
-                companion tab to see what's on the desktop
-                — active quest glows, project path on each
-                row, goal progress. */}
-            <TouchableOpacity
-              style={[styles.phaseCard, { borderColor: '#a855f7' }]}
-              onPress={() => setCompanionViewPhase('quests')}
-            >
-              <Text style={styles.phaseCardEmoji}>📜</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.phaseCardTitle}>Quests</Text>
-                <Text style={styles.phaseCardSub}>
-                  {(questsByCompanion[companion.id] || []).length === 0
-                    ? 'No quests on the desktop yet'
-                    : `${(questsByCompanion[companion.id] || []).length} quest(s) from the desktop — read-only`}
-                </Text>
-              </View>
-              <Text style={styles.phaseCardArrow}>›</Text>
-            </TouchableOpacity>
+            {/* v3.7.6: Quests moved to its own top-level screen
+                (QuestsScreen.tsx). Tap the 📜 Quests button on
+                the arena to open it. */}
           </View>
         </ScrollView>
       </View>
     );
   }
 
-  // v3.1.95: read-only quest list mirror. Same
-  // fullscreen-screen pattern as renderCompanionWakePage and
-  // renderCompanionExitPage — back button returns to the
-  // companion overview. Pure render function: hooks live at
-  // the screen level (state + useEffect) so the phase
-  // dispatch can swap render-functions safely without
-  // tripping React's hook-order invariant.
-  function renderCompanionQuestsPage(companion: Companion) {
-    const quests: CompanionQuest[] = questsByCompanion[companion.id] || [];
-    return (
-      <View style={styles.container}>
-        <ScrollView contentContainerStyle={styles.scroll}>
-          <View style={styles.detailHeaderRow}>
-            <TouchableOpacity
-              onPress={() => setCompanionViewPhase(null)}
-              style={styles.detailBackBtn}
-            >
-              <Text style={styles.detailBackBtnText}>← Back</Text>
-            </TouchableOpacity>
-            <Text style={styles.detailHeader}>
-              {companion.emoji || companion.icon || '🐾'}  Quests
-            </Text>
-            <View style={{ width: 60 }} />
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Active quests</Text>
-            <Text style={styles.sectionDesc}>
-              Synced read-only from the desktop's Quests panel.
-              Edit / add / delete on the desktop; the phone updates automatically.
-            </Text>
-            <Hint>Tap a card to copy the project path to clipboard.</Hint>
-
-            {quests.length === 0 ? (
-              <View style={styles.emptyHintBox}>
-                <Text style={styles.emptyHintText}>
-                  No quests yet. Create one on the desktop in the 📜 Quests panel.
-                </Text>
-              </View>
-            ) : (
-              quests
-                // Active first, then completed (matches desktop sort)
-                .slice()
-                .sort((a, b) => {
-                  if (a.status === 'active' && b.status !== 'active') return -1;
-                  if (a.status !== 'active' && b.status === 'active') return 1;
-                  return 0;
-                })
-                .map((q) => {
-                  const isComplete = q.status === 'completed';
-                  const goals = Array.isArray(q.goals) ? q.goals : [];
-                  const done = goals.filter(g => g.completed).length;
-                  const pct = goals.length === 0 ? 0 : Math.round((done / goals.length) * 100);
-                  const dirName = q.directory
-                    ? q.directory.split('/').filter(Boolean).pop() || q.directory
-                    : '';
-                  return (
-                    <TouchableOpacity
-                      key={q.id}
-                      style={[
-                        styles.questCard,
-                        {
-                          borderColor: isComplete ? '#10b981' : '#a855f7',
-                          opacity: isComplete ? 0.55 : 1,
-                        },
-                      ]}
-                      onLongPress={() => {
-                        if (q.directory) {
-                          const { Clipboard } = require('react-native');
-                          Clipboard.setString(q.directory);
-                        }
-                      }}
-                    >
-                      <View style={styles.questTopRow}>
-                        <Text style={styles.questName}>
-                          {isComplete ? '✅' : '⚔️'}  {q.name}
-                        </Text>
-                        <Text style={styles.questPct}>{done}/{goals.length}</Text>
-                      </View>
-                      {!!q.description && (
-                        <Text style={styles.questDesc}>{q.description}</Text>
-                      )}
-                      {goals.length > 0 && (
-                        <View style={styles.questBar}>
-                          <View
-                            style={[
-                              styles.questFill,
-                              {
-                                width: `${pct}%`,
-                                backgroundColor: pct >= 100 ? '#10b981' : '#a855f7',
-                              },
-                            ]}
-                          />
-                        </View>
-                      )}
-                      {!!q.directory && (
-                        <Text style={styles.questDir} numberOfLines={1}>
-                          📁 {dirName}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })
-            )}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>About quests on mobile</Text>
-            <Text style={styles.sectionDesc}>
-              • Quests are owned by the desktop and synced via WebSocket on every change.{'\n'}
-              • Project paths are NOT stored on the phone — {`quest.directory`} is read from the desktop as the project's real path and shown for reference only.{'\n'}
-              • Long-press a card to copy the project path to clipboard.{'\n'}
-              • Editing / creating / deleting happens on the desktop for now.
-            </Text>
-          </View>
-        </ScrollView>
-      </View>
-    );
-  }
+  // v3.7.6: renderCompanionQuestsPage moved to QuestsScreen.tsx
+  // (top-level). Quests are not per-companion on the desktop.
 
   function renderCompanionWakePage(companion: Companion) {
     return (
@@ -1490,48 +1282,9 @@ const styles = StyleSheet.create({
   section: { backgroundColor: '#111', borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#f7931a' },
   sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
   sectionDesc: { color: '#888', fontSize: 13, marginBottom: 16, lineHeight: 18 },
-  // v3.1.95: quest-card styles for the read-only mobile mirror.
-  // Mirrors the desktop's .quest-card look-and-feel (purple
-  // accent, green for completed, dimmed if completed, progress
-  // bar across the bottom).
-  questCard: {
-    backgroundColor: '#0f1626',
-    borderRadius: 12,
-    borderWidth: 2,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginVertical: 6,
-  },
-  questTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  questName: { color: '#fff', fontSize: 15, fontWeight: '600', flex: 1 },
-  questPct: { color: '#aaa', fontSize: 12, fontVariant: ['tabular-nums'] },
-  questDesc: { color: '#9aa0b4', fontSize: 13, lineHeight: 17, marginBottom: 6 },
-  questBar: {
-    height: 4,
-    backgroundColor: '#1a1a2e',
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginTop: 4,
-    marginBottom: 6,
-  },
-  questFill: { height: '100%', borderRadius: 2 },
-  questDir: { color: '#7a809a', fontSize: 11, marginTop: 4 },
-  emptyHintBox: {
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    backgroundColor: '#0f1626',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2a2a3e',
-    borderStyle: 'dashed',
-    marginTop: 4,
-  },
-  emptyHintText: { color: '#888', fontSize: 13, lineHeight: 18, textAlign: 'center' },
+  // v3.7.6: quest-card / empty-state styles removed (they
+  // live in QuestsScreen.tsx now). The styles below are still
+  // used by the wake / exit / voice sub-pages.
   subGroupTitle: { color: '#aaa', fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12, letterSpacing: 0.5 },
   hint: { color: '#666', fontSize: 12, marginTop: 4, marginBottom: 8, lineHeight: 16 },
   savedHint: { color: '#4caf50', fontSize: 12, marginTop: 6 },
