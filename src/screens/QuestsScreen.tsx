@@ -37,7 +37,7 @@
 // multiple render-functions). No helpers here that need to call
 // hooks.
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Clipboard,
   Modal,
@@ -46,6 +46,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -83,6 +84,30 @@ export default function QuestsScreen({
   const [hydrated, setHydrated] = useState(false);
   // v3.7.7: tapped quest shown in the detail modal. null = closed.
   const [detail, setDetail] = useState<CompanionQuest | null>(null);
+  // v3.8.0: editor modal. null = closed, otherwise the
+  // quest being edited (a shallow copy of the current state
+  // so the form fields can be edited without mutating the
+  // displayed quest). When the user taps Save we send an
+  // update to the desktop and the broadcast replaces the
+  // state with the canonical version.
+  const [editorOpen, setEditorOpen] = useState<CompanionQuest | null>(null);
+  // v3.8.0: confirm dialog state. null = hidden,
+  // otherwise {title, message, onConfirm}.
+  const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+  // v3.8.0: transient error toast (e.g. quest edit failed
+  // on the desktop). Cleared automatically on next render
+  // or on user dismiss.
+  const [error, setError] = useState<string | null>(null);
+  // v3.8.0: refs so the quests_list handler (which lives
+  // inside a useEffect with empty deps) can read the
+  // current editorOpen / detail state without going stale.
+  // Without these, the handler would always see the values
+  // from the first render (both null) and never auto-close
+  // the editor when the broadcast confirms the edit.
+  const editorOpenRef = useRef<CompanionQuest | null>(null);
+  const detailRef = useRef<CompanionQuest | null>(null);
+  useEffect(() => { editorOpenRef.current = editorOpen; }, [editorOpen]);
+  useEffect(() => { detailRef.current = detail; }, [detail]);
 
   // v3.7.6: hydrate from the global cache key on mount, then
   // migrate any v3.7.4-era per-companion keys (cyberclaw-quests-<id>)
@@ -173,8 +198,37 @@ export default function QuestsScreen({
       const list: CompanionQuest[] = Array.isArray(msg?.quests) ? msg.quests : [];
       setQuests(list);
       AsyncStorage.setItem(CACHE_KEY, JSON.stringify(list)).catch(() => {});
+      // v3.8.0: if the editor is open and the broadcast
+      // includes a quest with the same id, the desktop has
+      // confirmed the edit. Close the editor so the user
+      // sees the new state in the list. We use refs here
+      // (not state) because the handler lives inside a
+      // useEffect with empty deps — reading state directly
+      // would give us the stale initial value.
+      const editingId = editorOpenRef.current?.id;
+      if (editingId) {
+        if (list.some((q) => q.id === editingId)) {
+          setEditorOpen(null);
+        } else {
+          // The quest was deleted while the editor was open.
+          // Close the editor and any open detail modal.
+          setEditorOpen(null);
+          if (detailRef.current?.id === editingId) setDetail(null);
+        }
+      }
     };
     syncClient.on?.('quests_list', handler);
+
+    // v3.8.0: listen for failed quest edits. The desktop
+    // sends `quests_update_failed` when the mutation
+    // couldn't be applied (e.g. quest not found). Show an
+    // error toast so the user knows the edit didn't take.
+    const failedHandler = (msg: any) => {
+      const action = msg?.action || 'edit';
+      const reason = msg?.error || 'unknown error';
+      setError(`Couldn't ${action.replace(/_/g, ' ')}: ${reason}`);
+    };
+    syncClient.on?.('quests_update_failed', failedHandler);
 
     // v3.7.10: request a fresh list on mount. The auth-time
     // request fires 500ms after WebSocket auth, but the user
@@ -192,8 +246,39 @@ export default function QuestsScreen({
     return () => {
       cancelled = true;
       syncClient.off?.('quests_list', handler);
+      syncClient.off?.('quests_update_failed', failedHandler);
     };
   }, []);
+
+  // v3.8.0: action handlers. Each one calls the
+  // corresponding SyncClient method which sends a WebSocket
+  // message to the desktop. The desktop performs the
+  // mutation and broadcasts the updated list (existing
+  // path); the handler in the useEffect above replaces the
+  // local state with the canonical data within ~100ms.
+  //
+  // No optimistic update here — the broadcast is fast
+  // enough that the user perceives an instant change, and
+  // skipping the optimistic-update path means we never have
+  // to roll back if the desktop rejects the edit. The
+  // `quests_update_failed` handler (also in the useEffect)
+  // shows a toast on rejection.
+  const handleSetActive = (id: string) => {
+    setError(null);
+    syncClient.setQuestActive?.(id);
+  };
+  const handleUpdateQuest = (id: string, updates: Record<string, any>) => {
+    setError(null);
+    syncClient.updateQuest?.(id, updates);
+  };
+  const handleDeleteQuest = (id: string) => {
+    setError(null);
+    syncClient.deleteQuest?.(id);
+  };
+  const handleMarkGoalDone = (id: string, goalIndex: number, completed: boolean) => {
+    setError(null);
+    syncClient.markQuestGoalDone?.(id, goalIndex, completed);
+  };
 
   // v3.7.8: sort order is now (1) the active quest, then
   // (2) non-completed quests, then (3) completed quests.
@@ -336,6 +421,52 @@ export default function QuestsScreen({
                       📝 {changeCount} change{changeCount === 1 ? '' : 's'} logged
                     </Text>
                   )}
+
+                  {/* v3.8.0: action row. Three quick actions
+                      on each card: ⭐ set active, ✏️ open
+                      editor, ✕ delete. Inline TouchableOpacity
+                      so the touch is absorbed and doesn't
+                      bubble to the card's onPress (which
+                      would open the detail modal). */}
+                  <View style={styles.cardActions}>
+                    <TouchableOpacity
+                      style={styles.cardActionBtn}
+                      onPress={(e) => {
+                        e?.stopPropagation?.();
+                        handleSetActive(q.id);
+                      }}
+                    >
+                      <Text style={[styles.cardActionText, isActive && styles.cardActionTextActive]}>
+                        {isActive ? '⭐' : '☆'}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.cardActionBtn}
+                      onPress={(e) => {
+                        e?.stopPropagation?.();
+                        setEditorOpen({ ...q });
+                      }}
+                    >
+                      <Text style={styles.cardActionText}>✏️</Text>
+                    </TouchableOpacity>
+                    <View style={{ flex: 1 }} />
+                    <TouchableOpacity
+                      style={[styles.cardActionBtn, styles.cardActionDelete]}
+                      onPress={(e) => {
+                        e?.stopPropagation?.();
+                        setConfirm({
+                          title: 'Delete quest?',
+                          message: `"${q.name}" will be removed from the desktop too. This can't be undone.`,
+                          onConfirm: () => {
+                            setConfirm(null);
+                            handleDeleteQuest(q.id);
+                          },
+                        });
+                      }}
+                    >
+                      <Text style={[styles.cardActionText, styles.cardActionTextDelete]}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
                 </TouchableOpacity>
               );
             })
@@ -375,16 +506,280 @@ export default function QuestsScreen({
             onPress={() => setDetail(null)}
           />
           <View style={styles.modalCard}>
-            {detail && <QuestDetailBody quest={detail} />}
-            <TouchableOpacity
-              style={styles.modalCloseBtn}
-              onPress={() => setDetail(null)}
-            >
-              <Text style={styles.modalCloseBtnText}>Close</Text>
-            </TouchableOpacity>
+            {detail && (
+              <QuestDetailBody
+                quest={detail}
+                onEdit={() => {
+                  // v3.8.0: open the editor with a copy of
+                  // the current quest. Closing the detail
+                  // modal first so we don't have two modals
+                  // stacked. The editor handles its own
+                  // save/cancel flow.
+                  setEditorOpen({ ...detail });
+                  setDetail(null);
+                }}
+                onMarkGoalDone={(idx, done) => {
+                  if (detail) handleMarkGoalDone(detail.id, idx, done);
+                }}
+              />
+            )}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setDetail(null)}
+              >
+                <Text style={styles.modalCloseBtnText}>Close</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalCloseBtn, styles.modalEditBtn]}
+                onPress={() => {
+                  if (detail) {
+                    setEditorOpen({ ...detail });
+                    setDetail(null);
+                  }
+                }}
+              >
+                <Text style={styles.modalCloseBtnText}>✏️  Edit</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
+
+      {/* v3.8.0: quest editor modal. Opens when the user
+          taps the ✏️ on a list card or the Edit button in
+          the detail modal. The form fields are bound to a
+          local copy of the quest so the user can edit
+          freely. On Save we send `update_quest` to the
+          desktop; the broadcast replaces the canonical
+          state and the handler above closes the editor. */}
+      <Modal
+        visible={!!editorOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditorOpen(null)}
+      >
+        <View style={styles.modalScrim}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setEditorOpen(null)}
+          />
+          {editorOpen && (
+            <QuestEditorBody
+              quest={editorOpen}
+              onClose={() => setEditorOpen(null)}
+              onSave={(updates) => {
+                handleUpdateQuest(editorOpen.id, updates);
+                // Don't close the editor here — let the
+                // broadcast handler close it once the
+                // desktop confirms. (See useEffect above.)
+              }}
+              onDelete={() => {
+                const id = editorOpen.id;
+                setEditorOpen(null);
+                setConfirm({
+                  title: 'Delete quest?',
+                  message: `"${editorOpen.name}" will be removed from the desktop too. This can't be undone.`,
+                  onConfirm: () => {
+                    setConfirm(null);
+                    handleDeleteQuest(id);
+                  },
+                });
+              }}
+            />
+          )}
+        </View>
+      </Modal>
+
+      {/* v3.8.0: confirm dialog (delete). Tiny modal with
+          title + message + Cancel/Delete buttons. */}
+      <Modal
+        visible={!!confirm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirm(null)}
+      >
+        <View style={styles.modalScrim}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setConfirm(null)}
+          />
+          <View style={styles.confirmCard}>
+            {confirm && (
+              <>
+                <Text style={styles.confirmTitle}>{confirm.title}</Text>
+                <Text style={styles.confirmMessage}>{confirm.message}</Text>
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity
+                    style={styles.confirmBtn}
+                    onPress={() => setConfirm(null)}
+                  >
+                    <Text style={styles.confirmBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmBtn, styles.confirmBtnDanger]}
+                    onPress={confirm.onConfirm}
+                  >
+                    <Text style={[styles.confirmBtnText, styles.confirmBtnTextDanger]}>
+                      Delete
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* v3.8.0: error toast. Bottom of screen, shows
+          quests_update_failed messages from the desktop.
+          Auto-dismisses on the next success; user can
+          also tap × to dismiss manually. */}
+      {!!error && (
+        <View style={styles.errorToast}>
+          <Text style={styles.errorToastText} numberOfLines={2}>{error}</Text>
+          <TouchableOpacity
+            onPress={() => setError(null)}
+            style={styles.errorToastClose}
+          >
+            <Text style={styles.errorToastCloseText}>×</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// v3.8.0: quest editor body. Pure render (no hooks
+// inside, v3.7.1 pattern). The form fields are local
+// state — when the user taps Save we call the
+// onSave callback with the diff and the parent
+// (QuestsScreen) sends the update to the desktop.
+//
+// The form is intentionally simple: a ScrollView
+// with TextInput rows. For a richer editor we'd
+// add a goals sub-list with add/remove buttons, but
+// the v3.8.0 scope is the basics (name, description,
+// status, active, plus goal-completion via the detail
+// modal's tap-to-toggle).
+function QuestEditorBody({
+  quest,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  quest: CompanionQuest;
+  onClose: () => void;
+  onSave: (updates: Record<string, any>) => void;
+  onDelete: () => void;
+}) {
+  // Local form state. Initialized from the quest prop.
+  // The form is uncontrolled-ish (we just track values);
+  // Save bundles them into an updates object.
+  const [name, setName] = useState(quest.name || '');
+  const [description, setDescription] = useState(quest.description || '');
+  const [status, setStatus] = useState<'active' | 'completed'>(quest.status || 'active');
+  const [active, setActive] = useState(!!quest.active);
+
+  return (
+    <View style={styles.editorCard}>
+      <View style={styles.editorHeader}>
+        <Text style={styles.editorTitle}>✏️  Edit quest</Text>
+        <TouchableOpacity onPress={onClose} style={styles.editorCloseBtn}>
+          <Text style={styles.editorCloseBtnText}>×</Text>
+        </TouchableOpacity>
+      </View>
+      <ScrollView style={styles.editorBody} contentContainerStyle={styles.editorBodyContent} keyboardShouldPersistTaps="handled">
+        <Text style={styles.editorFieldLabel}>Name</Text>
+        <TextInput
+          style={styles.editorInput}
+          value={name}
+          onChangeText={setName}
+          placeholder="Quest name"
+          placeholderTextColor="#666"
+        />
+        <Text style={styles.editorFieldLabel}>Description</Text>
+        <TextInput
+          style={[styles.editorInput, styles.editorInputMulti]}
+          value={description}
+          onChangeText={setDescription}
+          placeholder="What this quest is about"
+          placeholderTextColor="#666"
+          multiline
+          numberOfLines={3}
+        />
+        <Text style={styles.editorFieldLabel}>Status</Text>
+        <View style={styles.editorStatusRow}>
+          <TouchableOpacity
+            style={[
+              styles.editorStatusChip,
+              status === 'active' && styles.editorStatusChipActive,
+            ]}
+            onPress={() => setStatus('active')}
+          >
+            <Text style={styles.editorStatusChipText}>
+              {status === 'active' ? '⚔️' : '  '} Active
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.editorStatusChip,
+              status === 'completed' && styles.editorStatusChipActive,
+            ]}
+            onPress={() => setStatus('completed')}
+          >
+            <Text style={styles.editorStatusChipText}>
+              {status === 'completed' ? '🏁' : '  '} Completed
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.editorFieldLabel}>Active</Text>
+        <TouchableOpacity
+          style={styles.editorActiveToggle}
+          onPress={() => setActive(!active)}
+        >
+          <Text style={styles.editorActiveToggleText}>
+            {active ? '⚡ This is the active quest' : '☆ Set as active quest'}
+          </Text>
+        </TouchableOpacity>
+        {!!quest.directory && (
+          <Text style={styles.editorDirectoryHint}>
+            📁 {quest.directory}
+          </Text>
+        )}
+        <Text style={styles.editorHint}>
+          Goal text editing lands in v3.8.1. For now, tap a goal in the detail modal to mark it done.
+        </Text>
+      </ScrollView>
+      <View style={styles.editorFooter}>
+        <TouchableOpacity
+          style={[styles.editorFooterBtn, styles.editorFooterBtnDanger]}
+          onPress={onDelete}
+        >
+          <Text style={styles.editorFooterBtnTextDanger}>Delete</Text>
+        </TouchableOpacity>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity
+          style={styles.editorFooterBtn}
+          onPress={onClose}
+        >
+          <Text style={styles.editorFooterBtnText}>Cancel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.editorFooterBtn, styles.editorFooterBtnPrimary]}
+          onPress={() => {
+            const updates: Record<string, any> = {
+              name: name.trim() || quest.name,
+              description: description.trim(),
+              status,
+              active,
+            };
+            onSave(updates);
+          }}
+        >
+          <Text style={styles.editorFooterBtnTextPrimary}>Save</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -392,7 +787,18 @@ export default function QuestsScreen({
 // v3.7.7: detail-modal body. Pure render — props in, JSX out,
 // no hooks. Keeping it a sibling function of QuestsScreen so
 // the screen-level hook order stays clean (v3.7.1 pattern).
-function QuestDetailBody({ quest }: { quest: CompanionQuest }) {
+// v3.8.0: detail body takes optional callbacks for
+// edit and mark-goal-done. Passed in from QuestsScreen so
+// the body stays pure (no hooks) per the v3.7.1 pattern.
+function QuestDetailBody({
+  quest,
+  onEdit,
+  onMarkGoalDone,
+}: {
+  quest: CompanionQuest;
+  onEdit?: () => void;
+  onMarkGoalDone?: (goalIndex: number, done: boolean) => void;
+}) {
   const isComplete = quest.status === 'completed';
   const isActive = !!quest.active;
   const goals = Array.isArray(quest.goals) ? quest.goals : [];
@@ -462,7 +868,19 @@ function QuestDetailBody({ quest }: { quest: CompanionQuest }) {
             Steps / goals ({done}/{goals.length})
           </Text>
           {goals.map((g, i) => (
-            <View key={i} style={styles.goalRow}>
+            // v3.8.0: tap a goal to toggle its completed
+            // flag. TouchableOpacity absorbs the touch so
+            // it doesn't bubble. Optional onMarkGoalDone
+            // callback (only wired when the screen is
+            // rendered via QuestsScreen, which always wires
+            // it; the prop is optional so the function
+            // remains usable in isolation).
+            <TouchableOpacity
+              key={i}
+              style={styles.goalRow}
+              onPress={() => onMarkGoalDone?.(i, !g.completed)}
+              activeOpacity={0.6}
+            >
               <Text
                 style={[
                   styles.goalCheckbox,
@@ -479,7 +897,7 @@ function QuestDetailBody({ quest }: { quest: CompanionQuest }) {
               >
                 {g.text}
               </Text>
-            </View>
+            </TouchableOpacity>
           ))}
           <View style={styles.questBar}>
             <View
@@ -844,5 +1262,277 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2,
     fontVariant: ['tabular-nums'],
+  },
+
+  // v3.8.0: card action row. Three quick actions per
+  // card: ⭐ set active, ✏️ edit, ✕ delete. The row sits
+  // at the bottom of the card with a thin top border.
+  cardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.05)',
+    gap: 4,
+  },
+  cardActionBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  cardActionDelete: {
+    marginLeft: 'auto',
+  },
+  cardActionText: {
+    fontSize: 16,
+    color: '#aaa',
+  },
+  cardActionTextActive: {
+    color: '#f7931a',
+  },
+  cardActionTextDelete: {
+    color: '#a55',
+  },
+
+  // v3.8.0: detail-modal footer (Close + Edit). Replaces
+  // the old single-button layout.
+  modalFooter: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#222',
+  },
+  modalEditBtn: {
+    flex: 1,
+    borderLeftWidth: 1,
+    borderLeftColor: '#222',
+  },
+
+  // v3.8.0: confirm dialog. Compact card with title,
+  // message, and two buttons.
+  confirmCard: {
+    backgroundColor: '#0f1626',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#a55',
+    padding: 18,
+    width: '100%',
+    maxWidth: 360,
+  },
+  confirmTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  confirmMessage: {
+    color: '#cfd2e0',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  confirmBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  confirmBtnDanger: {
+    backgroundColor: '#a55',
+    borderColor: '#a55',
+  },
+  confirmBtnText: {
+    color: '#cfd2e0',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  confirmBtnTextDanger: {
+    color: '#fff',
+  },
+
+  // v3.8.0: error toast. Fixed at the bottom of the
+  // screen, dismissable with ×.
+  errorToast: {
+    position: 'absolute',
+    bottom: 24,
+    left: 16,
+    right: 16,
+    backgroundColor: '#3a0e0e',
+    borderColor: '#a55',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  errorToastText: {
+    color: '#fbb',
+    fontSize: 13,
+    flex: 1,
+    lineHeight: 18,
+  },
+  errorToastClose: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  errorToastCloseText: {
+    color: '#fbb',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+
+  // v3.8.0: editor modal. Slides up from the bottom.
+  // The form fields are inside a ScrollView so long
+  // descriptions don't get clipped on small screens.
+  editorCard: {
+    backgroundColor: '#0f1626',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2a2a3e',
+    width: '100%',
+    maxHeight: '90%',
+    marginTop: 'auto',
+    overflow: 'hidden',
+  },
+  editorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a1a2e',
+  },
+  editorTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  editorCloseBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  editorCloseBtnText: {
+    color: '#aaa',
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  editorBody: {
+    flexGrow: 0,
+  },
+  editorBodyContent: {
+    padding: 16,
+  },
+  editorFieldLabel: {
+    color: '#f7931a',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+    marginTop: 8,
+  },
+  editorInput: {
+    backgroundColor: '#0a0a18',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2a2a3e',
+    color: '#fff',
+    fontSize: 14,
+    padding: 10,
+  },
+  editorInputMulti: {
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  editorStatusRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  editorStatusChip: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  editorStatusChipActive: {
+    backgroundColor: '#1a1a2e',
+    borderColor: '#f7931a',
+  },
+  editorStatusChipText: {
+    color: '#cfd2e0',
+    fontSize: 13,
+  },
+  editorActiveToggle: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    backgroundColor: '#0a0a18',
+  },
+  editorActiveToggleText: {
+    color: '#cfd2e0',
+    fontSize: 13,
+  },
+  editorDirectoryHint: {
+    color: '#7a809a',
+    fontSize: 11,
+    marginTop: 12,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  editorHint: {
+    color: '#666',
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 12,
+    lineHeight: 15,
+  },
+  editorFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#1a1a2e',
+    gap: 8,
+  },
+  editorFooterBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  editorFooterBtnDanger: {
+    borderColor: '#a55',
+  },
+  editorFooterBtnPrimary: {
+    backgroundColor: '#f7931a',
+    borderColor: '#f7931a',
+  },
+  editorFooterBtnText: {
+    color: '#cfd2e0',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  editorFooterBtnTextDanger: {
+    color: '#a55',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  editorFooterBtnTextPrimary: {
+    color: '#0a0a0a',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

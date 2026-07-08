@@ -285,6 +285,32 @@ class SyncClient {
     this.send({ type: 'request_quests_list' });
   }
 
+  // v3.8.0: phone-side quest edit. The mobile can now mutate
+  // quests over WebSocket. Each method sends the appropriate
+  // inbound message to the desktop. The desktop performs the
+  // mutation and broadcasts the updated list (existing path);
+  // the mobile's optimistic update gets replaced with the
+  // canonical data within ~100ms. If the mutation fails
+  // (quest not found, invalid id), the desktop sends a
+  // `quests_update_failed` ack and the SyncClient emits
+  // `quests_update_failed` for the UI to roll back + show
+  // an error.
+  setQuestActive(id: string | null) {
+    this.send({ type: 'set_quest_active', id });
+  }
+  updateQuest(id: string, updates: Record<string, any>) {
+    this.send({ type: 'update_quest', id, updates });
+  }
+  deleteQuest(id: string) {
+    this.send({ type: 'delete_quest', id });
+  }
+  markQuestGoalDone(id: string, goalIndex: number, completed: boolean) {
+    this.send({ type: 'mark_quest_goal_done', id, goalIndex, completed });
+  }
+  createQuest(quest: { name?: string; description?: string; directory?: string; goals?: any[] }) {
+    this.send({ type: 'create_quest', quest });
+  }
+
   sendCompanionAction(action: any) {
     this.send({ type: 'companion_interaction', action });
   }
@@ -541,6 +567,15 @@ class SyncClient {
         // snapshot per-agent to AsyncStorage for offline-survival.
         console.log('[SyncClient] Received quests_list:', msg.quests?.length, 'quest(s)');
         this.emit('quests_list', msg);
+        break;
+
+      case 'quests_update_failed':
+        // v3.8.0: the desktop rejected a quest edit we sent.
+        // Surface to the UI so it can roll back its optimistic
+        // update and show an error. The UI is responsible for
+        // matching this to a pending edit (by action + id).
+        console.warn('[SyncClient] Quest edit failed:', msg);
+        this.emit('quests_update_failed', msg);
         break;
 
       case 'pong':
