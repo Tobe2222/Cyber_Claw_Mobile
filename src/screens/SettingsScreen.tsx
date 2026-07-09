@@ -221,6 +221,36 @@ export default function SettingsScreen({
   // succeeded and the model is hot, since voiceSendPhrase
   // alone is just the user's typed-in string.
   const [sendModelInfo, setSendModelInfo] = useState<{ trainedAt: number; modelPath: string } | null>(null);
+  // v3.8.7: reactive load of trained-model info keyed on
+  // the *current* send phrase. The v3.8.4 mount-time
+  // hydration ran `loadSendModelInfo(voiceSendPhrase)`
+  // with the stale initial value ('send' before the
+  // AsyncStorage hydrate resolved 'send magicly'), so
+  // a freshly-opened Settings screen always started
+  // with the gray "no model" badge even when a trained
+  // .tflite for the actual phrase existed on disk.
+  // This effect re-runs whenever voiceSendPhrase
+  // changes (mount with the hydrated value, every
+  // keystroke in the TextInput, after trainer
+  // onComplete), so the badge always reflects the
+  // currently-displayed phrase. No condition on
+  // "is this a fresh mount" — the AsyncStorage read
+  // is cheap and idempotent.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const trimmed = voiceSendPhrase.trim().toLowerCase();
+      if (!trimmed) {
+        setSendModelInfo(null);
+        return;
+      }
+      const info = await loadSendModelInfo(trimmed);
+      if (!cancelled) {
+        setSendModelInfo(info);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [voiceSendPhrase]);
   // v3.6.0: send-phrase trainer modal. Mirror of
   // showExitPhraseTrainer but for the send word.
   const [showSendPhraseTrainer, setShowSendPhraseTrainer] = useState(false);
@@ -508,14 +538,16 @@ export default function SettingsScreen({
         if (trimmed) setVoiceSendPhrase(trimmed);
       }
     });
-    // v3.8.3: hydrate the trained-model info for the current
-    // send word. The trainer writes `{ trainedAt, modelPath }`
-    // to getSendSamplesKey(phrase) on success; if the user
-    // trains and then closes/reopens settings, the badge
-    // should re-appear immediately on mount.
-    loadSendModelInfo(voiceSendPhrase).then(info => {
-      if (info) setSendModelInfo(info);
-    });
+    // v3.8.3 → v3.8.7: hydrate the trained-model info.
+    // The original (v3.8.3) version called loadSendModelInfo
+    // inline here with the stale initial voiceSendPhrase
+    // ('send', before AsyncStorage had a chance to hydrate
+    // 'send magicly'). That meant the badge always started
+    // as "no model" on a freshly-opened Settings screen.
+    // v3.8.7 replaces this with a reactive
+    // useEffect([voiceSendPhrase]) that re-runs whenever
+    // the phrase changes (mount with hydrated value, every
+    // keystroke, trainer onComplete).
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
         try {
