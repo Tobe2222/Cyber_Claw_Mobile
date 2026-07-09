@@ -122,7 +122,7 @@ function formatClock(d: Date): string {
 export default function SendPhraseTrainer({ presetPhrase, onCancel, onComplete }: {
   presetPhrase?: string;
   onCancel: () => void;
-  onComplete?: () => void;
+  onComplete?: (ok: boolean) => void;
 }) {
   const insets = useSafeAreaInsets();
   const [phrase, setPhrase] = useState(presetPhrase ?? DEFAULT_PHRASE);
@@ -388,7 +388,7 @@ export default function SendPhraseTrainer({ presetPhrase, onCancel, onComplete }
       // Clean up the sample WAVs from cache
       for (const wav of samples) RNFS.unlink(wav).catch(() => {});
       setSamples([]);
-      onComplete?.();
+      onComplete?.(true);
     } catch (e: any) {
       setStage('error');
       setStatusMsg(`Activation failed: ${e?.message ?? e}`);

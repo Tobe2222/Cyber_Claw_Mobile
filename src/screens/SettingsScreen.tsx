@@ -121,7 +121,7 @@ import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/
 import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
 import SendPhraseTrainer from '../components/SendPhraseTrainer';
-import { saveSendPhrase } from '../services/VoiceSettings';
+import { saveSendPhrase, loadSendModelInfo } from '../services/VoiceSettings';
 import {
   getPermissions,
   setPermission,
@@ -213,6 +213,14 @@ export default function SettingsScreen({
   // turn immediately. Empty string disables the feature.
   const [voiceSendPhrase, setVoiceSendPhrase] = useState('send');
   const [voiceSendPhraseSavedAt, setVoiceSendPhraseSavedAt] = useState<number | null>(null);
+  // v3.8.3: trained-model info for the active send word.
+  // Mirrors the wake trainer's getSavedWakeModels badge —
+  // shows the user that a .tflite is actually installed on
+  // the device, when it was trained, and which file. Without
+  // this the user has no way to tell whether the trainer
+  // succeeded and the model is hot, since voiceSendPhrase
+  // alone is just the user's typed-in string.
+  const [sendModelInfo, setSendModelInfo] = useState<{ trainedAt: number; modelPath: string } | null>(null);
   // v3.6.0: send-phrase trainer modal. Mirror of
   // showExitPhraseTrainer but for the send word.
   const [showSendPhraseTrainer, setShowSendPhraseTrainer] = useState(false);
@@ -499,6 +507,14 @@ export default function SettingsScreen({
         const trimmed = v.trim().toLowerCase();
         if (trimmed) setVoiceSendPhrase(trimmed);
       }
+    });
+    // v3.8.3: hydrate the trained-model info for the current
+    // send word. The trainer writes `{ trainedAt, modelPath }`
+    // to getSendSamplesKey(phrase) on success; if the user
+    // trains and then closes/reopens settings, the badge
+    // should re-appear immediately on mount.
+    loadSendModelInfo(voiceSendPhrase).then(info => {
+      if (info) setSendModelInfo(info);
     });
     AsyncStorage.getItem(SETTINGS_KEY).then(raw => {
       if (raw) {
@@ -818,16 +834,41 @@ export default function SettingsScreen({
     );
   }
 
-  // v3.6.0: send-phrase trainer. Mirror of the exit
+  // v3.8.3: send-phrase trainer. Mirror of the exit
   // trainer but for the global send word. No companionId
   // needed — the send word is shared across all
-  // companions.
+  // companions. v3.8.3 fix: when the trainer completes
+  // successfully, bump `voiceSendPhraseSavedAt` and persist
+  // the trained phrase so the settings UI immediately
+  // reflects "✅ Saved" — previously the trainer just
+  // closed and the user had to manually re-save the
+  // phrase to see the saved indicator. Also stash the
+  // trained timestamp + model path in
+  // getSendSamplesKey(...) so VoiceSettings can read it.
   if (showSendPhraseTrainer) {
     return (
       <SendPhraseTrainer
         presetPhrase={voiceSendPhrase || undefined}
         onCancel={() => setShowSendPhraseTrainer(false)}
-        onComplete={() => setShowSendPhraseTrainer(false)}
+        onComplete={async (ok) => {
+          if (ok) {
+            const trimmed = voiceSendPhrase.trim().toLowerCase();
+            if (trimmed) {
+              try {
+                await saveSendPhrase(trimmed);
+              } catch (_) {}
+              setVoiceSendPhrase(trimmed);
+              setVoiceSendPhraseSavedAt(Date.now());
+              // v3.8.3: refresh the trained-model badge so
+              // the user sees the new model + timestamp
+              // immediately on returning to settings, not
+              // after a screen remount.
+              const info = await loadSendModelInfo(trimmed);
+              if (info) setSendModelInfo(info);
+            }
+          }
+          setShowSendPhraseTrainer(false);
+        }}
       />
     );
   }
@@ -1132,7 +1173,23 @@ export default function SettingsScreen({
             <View style={styles.optionRow}>
               <TextInput
                 value={voiceSendPhrase}
-                onChangeText={setVoiceSendPhrase}
+                onChangeText={(text) => {
+                  setVoiceSendPhrase(text);
+                  // v3.8.3: refresh the trained-model badge
+                  // for the newly-typed phrase. Cheap (single
+                  // AsyncStorage read) and means switching
+                  // between 'send' and 'magicly' (for example)
+                  // shows the right model timestamp without
+                  // requiring the user to retrain or remount.
+                  const trimmed = text.trim().toLowerCase();
+                  if (trimmed) {
+                    loadSendModelInfo(trimmed).then(info => {
+                      setSendModelInfo(info);
+                    });
+                  } else {
+                    setSendModelInfo(null);
+                  }
+                }}
                 editable={true}
                 style={[styles.input, { flex: 1 }]}
                 autoCapitalize="none"
@@ -1169,6 +1226,36 @@ export default function SettingsScreen({
             >
               <Text style={styles.saveAudioBtnText}>🎙️ Train send word (6 samples)</Text>
             </TouchableOpacity>
+
+            {/* v3.8.3: trained-model status badge for the send
+                word. Mirrors the wake trainer's "Listening for:
+                <phrase>" badge so the user can see whether a
+                model is actually installed, when it was
+                trained, and which file. Critical for send —
+                the user typed 'magicly' as the word, then trained
+                it, then looked at settings and had no idea if
+                the model was hot. With this badge, the answer is
+                obvious. */}
+            {sendModelInfo ? (
+              <View style={styles.sendModelBadge}>
+                <Text style={styles.sendModelBadgeIcon}>✓</Text>
+                <View style={styles.sendModelBadgeTextWrap}>
+                  <Text style={styles.sendModelBadgeText}>
+                    Listening for "{voiceSendPhrase.trim().toLowerCase()}"
+                  </Text>
+                  <Text style={styles.sendModelBadgeMeta} numberOfLines={1}>
+                    Trained {new Date(sendModelInfo.trainedAt).toLocaleString()}
+                    {sendModelInfo.modelPath ? ` · ${sendModelInfo.modelPath}` : ''}
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.sendModelBadge}>
+                <Text style={styles.sendModelBadgeText}>
+                  No trained send model yet — tap "Train send word" to record 6 samples and hot-swap one in.
+                </Text>
+              </View>
+            )}
           </Section>
       </>
 
@@ -1931,6 +2018,30 @@ const styles = StyleSheet.create({
   testBtnText: { color: '#f7931a', fontSize: 14, fontWeight: '600' },
   saveAudioBtn: { backgroundColor: '#22c55e', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12 },
   saveAudioBtnText: { color: '#000', fontSize: 15, fontWeight: 'bold' },
+  // v3.8.3: send-trained-model badge styles. Same shape as
+  // the wake trainer's getSavedWakeModels badge but tinted
+  // green for the 'trained' state and gray for 'no model'.
+  // The badge sits below the "Train send word" button so the
+  // user can see at a glance whether the model is installed.
+  sendModelBadge: {
+    backgroundColor: 'rgba(156, 163, 175, 0.10)',
+    borderColor: 'rgba(156, 163, 175, 0.3)',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sendModelBadgeIcon: {
+    color: '#22c55e',
+    fontSize: 18,
+    fontWeight: '700',
+    marginRight: 10,
+  },
+  sendModelBadgeTextWrap: { flex: 1 },
+  sendModelBadgeText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  sendModelBadgeMeta: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
   aboutFooter: { alignItems: 'center', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#222' },
   aboutVersion: { color: '#666', fontSize: 12 },
   aboutLink: { color: '#444', fontSize: 11, marginTop: 4 },

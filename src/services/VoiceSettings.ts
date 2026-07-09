@@ -285,6 +285,35 @@ export async function clearSendSamples(phrase: string): Promise<void> {
 }
 
 /**
+ * v3.8.3: read the trained-model metadata for the active
+ * send word. Returns null if no training exists for this
+ * phrase. The send-word trainer writes
+ * `{ trainedAt, modelPath }` to the same AsyncStorage key
+ * after a successful hot-swap; this helper reads that
+ * shape (not the legacy `{ phrase, features, savedAt }`
+ * shape that loadSendSamples expects, which the trainer
+ * never writes). Used by the settings UI to render a
+ * "Listening for: <phrase>" badge and a timestamp so the
+ * user can see at a glance whether a trained model is
+ * installed, when it was trained, and on which file.
+ */
+export async function loadSendModelInfo(
+  phrase: string,
+): Promise<{ trainedAt: number; modelPath: string } | null> {
+  try {
+    const raw = await AsyncStorage.getItem(getSendSamplesKey(phrase));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.trainedAt === 'number' && typeof parsed?.modelPath === 'string') {
+      return { trainedAt: parsed.trainedAt, modelPath: parsed.modelPath };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * Read the per-companion per-phrase training samples. Returns
  * null if no training exists. Used by the voice-mode detector
  * to match against the live audio stream.
