@@ -33,6 +33,7 @@ const { WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
+import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
 // v3.7.0: per-companion voice settings (engine + voice id,
 // both Local and Premium API paths). The catalog of available
 // voices is shared with the global Settings screen via
@@ -139,6 +140,11 @@ export default function CompanionSettingsScreen({
   const [showOwwTrainer, setShowOwwTrainer] = useState(false);
   const [editingExitPhrase, setEditingExitPhrase] = useState<string>('');
   const [showExitPhraseTrainer, setShowExitPhraseTrainer] = useState(false);
+  // v3.9.0: wake set manager — list / activate / rename /
+  // delete / pull-from-desktop / push-to-desktop. Opened
+  // from a per-companion button below the wake trainer
+  // trigger.
+  const [showWakeSetManager, setShowWakeSetManager] = useState(false);
 
   // v3.4.4: set true when the active companionId was
   // missing from a populated cache and we already auto-
@@ -661,7 +667,30 @@ export default function CompanionSettingsScreen({
               <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🎤 Train new wake phrase for {companion.name}</Text>
               <Text style={styles.trainBtnSub}>Record 6 samples — desktop trains a custom neural wake word</Text>
             </TouchableOpacity>
+            {/* v3.9.0: open the wake set manager. Lists
+                every wake .tflite for this companion (and
+                any other companions the user has trained),
+                with activate / rename / delete / push-to-
+                desktop / pull-from-desktop actions. */}
+            <TouchableOpacity
+              style={[styles.trainBtn, { backgroundColor: 'rgba(156, 163, 175, 0.10)', borderColor: '#9ca3af' }]}
+              onPress={() => setShowWakeSetManager(true)}
+            >
+              <Text style={[styles.trainBtnText, { color: '#9ca3af' }]}>📂 Manage wake sets for {companion.name}</Text>
+              <Text style={styles.trainBtnSub}>List, activate, rename, delete, push to / pull from desktop</Text>
+            </TouchableOpacity>
           </View>
+
+          {/* v3.9.0: wake set manager overlay. The trainer
+              (showOwwTrainer) gates above this in the
+              return tree. */}
+          {showWakeSetManager ? (
+            <WakeSetManagerScreen
+              agentId={companion.id}
+              agentName={companion.name}
+              onBack={() => setShowWakeSetManager(false)}
+            />
+          ) : null}
 
           {showOwwTrainer && trainingCompanionId ? (
             <OpenWakeWordTrainer

@@ -121,6 +121,7 @@ import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/
 import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
 import SendPhraseTrainer from '../components/SendPhraseTrainer';
+import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
 import { saveSendPhrase, loadSendModelInfo } from '../services/VoiceSettings';
 import {
   getPermissions,
@@ -271,6 +272,9 @@ export default function SettingsScreen({
   // persists locally; the runtime DTW detector against these
   // samples is wired in v3.2.26.
   const [showExitPhraseTrainer, setShowExitPhraseTrainer] = useState(false);
+  // v3.9.0: wake set manager screen — list / activate /
+  // rename / delete / pull-from-desktop / push-to-desktop.
+  const [showWakeSetManager, setShowWakeSetManager] = useState(false);
   // v3.3.0: pre-fill for the exit trainer when opened
   // from per-row "Retrain" in the ExitPhrasePicker.
   const [editingExitPhrase, setEditingExitPhrase] = useState<string>('');
@@ -862,6 +866,32 @@ export default function SettingsScreen({
           setShowExitPhraseTrainer(false);
           setEditingExitPhrase('');
         }}
+      />
+    );
+  }
+
+  // v3.9.0: wake set manager. Lists every wake .tflite
+  // for the active companion (and other companions the
+  // user has trained), with activate / rename / delete /
+  // push-to-desktop buttons. The "+ Pull from desktop"
+  // button opens a sheet listing the desktop's wake-training
+  // cache so a phone wipe can restore old sets.
+  if (showWakeSetManager) {
+    return (
+      <WakeSetManagerScreen
+        agentId={
+          activeWakeCompanionId ||
+          availableCompanions[0]?.id ||
+          'clawsuu'
+        }
+        agentName={
+          (() => {
+            const id = activeWakeCompanionId || availableCompanions[0]?.id;
+            const a = (availableCompanions || []).find((x: any) => x.id === id);
+            return a?.name || id || 'Companion';
+          })()
+        }
+        onBack={() => setShowWakeSetManager(false)}
       />
     );
   }

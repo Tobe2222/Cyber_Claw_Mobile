@@ -413,6 +413,41 @@ class SyncClient {
     this.send({ type: 'read_wake_model', tflitePath });
   }
 
+  // v3.9.0: trainer manager wire protocol. The desktop
+  // serves as the canonical backup for trained model
+  // .tflites (it already writes them to
+  // ~/.openclaw/cyberclaw/wake-training/<safePhrase>/output/
+  // model/<name>.tflite during training). These methods
+  // let the mobile pull / push individual sets via the
+  // existing WebSocket.
+  //
+  // Reply chain:
+  //   requestListWakeSetsFromDesktop() →
+  //     desktop emits 'wake_sets_list' with {sets: [...]}
+  //     (default _handleMessage case emits to the
+  //      registered listener)
+  //   importWakeSetFromDesktop({setId, sourcePath}) →
+  //     desktop reads the .tflite and emits
+  //     'wake_set_imported' {setId, base64, sizeBytes}
+  //     or {ok:false, error}
+  //   exportWakeSetToDesktop({setId, base64, phrase}) →
+  //     desktop writes the .tflite under
+  //     ~/.openclaw/cyberclaw/wake-training/<safePhrase>/
+  //     and emits 'wake_set_exported' {ok, setId, savedPath}
+  //     or {ok:false, error}
+
+  requestListWakeSetsFromDesktop() {
+    this.send({ type: 'list_wake_sets_from_desktop' });
+  }
+
+  importWakeSetFromDesktop(setId: string, sourcePath: string) {
+    this.send({ type: 'import_wake_set_from_desktop', setId, sourcePath });
+  }
+
+  exportWakeSetToDesktop(setId: string, base64: string, phrase: string) {
+    this.send({ type: 'export_wake_set_to_desktop', setId, base64, phrase });
+  }
+
   // v3.5.0: parallel exit-phrase training pipeline. Mirrors
   // requestWakeTraining + readWakeModel but for the exit
   // classifier. The desktop spawns the same training script

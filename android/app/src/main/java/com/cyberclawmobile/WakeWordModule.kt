@@ -735,38 +735,61 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 promise.reject("ARG", "agentId and base64 required")
                 return
             }
-            val dir = File(reactContext.filesDir, "wake_models")
-            if (!dir.exists()) dir.mkdirs()
-            val tflite = File(dir, "${agentId}.tflite")
+            // v3.9.0: route through the new registry. Each
+            // fresh training creates a NEW set (instead of
+            // overwriting the legacy single-file model). The
+            // setId defaults to `<phrase>-<timestamp>` so the
+            // user can identify it in the manager; renaming
+            // afterwards is supported.
+            migrateWakeSetsSync()
+            val now = System.currentTimeMillis()
+            val safePhrase = phrase.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifEmpty { "wake" }
+            val baseSetId = "$safePhrase-$now"
+            val setId = uniqueWakeSetId(baseSetId)
+            val setDir = File(reactContext.filesDir, "wake_models/$setId")
+            setDir.mkdirs()
+            val tflite = File(setDir, "model.tflite")
             tflite.writeBytes(Base64.decode(base64, Base64.DEFAULT))
-            emitDebug("info", "Wrote custom wake model: ${tflite.absolutePath} (${tflite.length()} bytes)")
+            writeMeta(setDir, WakeSetMeta(
+                setId = setId,
+                phrase = phrase,
+                scope = "agent:$agentId",
+                agentId = agentId,
+                createdAt = now,
+            ))
+            emitDebug("info", "Wrote wake set: ${setDir.absolutePath} (${tflite.length()} bytes)")
 
-            // Persist the binding so we can re-apply on app restart.
-            // Key: wake_model_<agentId> -> {path, phrase, savedAt}
+            // Set the active binding to the new set.
             val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
-            prefs.edit()
-                .putString("${agentId}_path", tflite.absolutePath)
-                .putString("${agentId}_phrase", phrase)
-                .putLong("${agentId}_savedAt", System.currentTimeMillis())
-                .apply()
+            prefs.edit().putString("active_$agentId", setId).apply()
 
-            // Hot-swap into the running detector (if any). If the
-            // detector isn't initialized yet, the loadOwwSavedModel
-            // helper will pick up the file when initOww runs.
+            // Hot-swap into the running detector (if any).
             val detector = owwDetector
             if (detector != null) {
                 val ok = detector.setWakewordModelFromFile(tflite.absolutePath)
                 if (ok) {
                     owwWakeword = phrase
-                    emitDebug("info", "Hot-swapped wake model for $agentId: $phrase")
+                    emitDebug("info", "Hot-swapped wake model for $agentId: $phrase (set $setId)")
                 } else {
                     emitDebug("warn", "Hot-swap failed; will retry on next initOww")
                 }
             }
-            promise.resolve(tflite.absolutePath)
+            promise.resolve(setDir.absolutePath)
         } catch (e: Exception) {
             promise.reject("WAKE_MODEL_SAVE", e.message)
         }
+    }
+
+    /** Resolve a unique setId by appending `-<n>` if needed. */
+    private fun uniqueWakeSetId(base: String): String {
+        val root = File(reactContext.filesDir, "wake_models")
+        var candidate = base
+        var n = 1
+        while (File(root, candidate).exists()) {
+            candidate = "$base-$n"
+            n++
+        }
+        return candidate
     }
 
     // v3.5.0: hot-swap the exit-phrase model. Parallel to
@@ -972,20 +995,23 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     // trained yet.
     fun loadOwwSavedModel(agentId: String): String? {
         if (agentId.isBlank()) return null
+        // v3.9.0: route through the new registry.
+        migrateWakeSetsSync()
         val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
-        val path = prefs.getString("${agentId}_path", null) ?: return null
-        val phrase = prefs.getString("${agentId}_phrase", null) ?: return null
-        if (!File(path).exists()) {
-            // Stale binding (file deleted); clean up.
-            prefs.edit().remove("${agentId}_path").remove("${agentId}_phrase").remove("${agentId}_savedAt").apply()
+        val activeSetId = prefs.getString("active_$agentId", null) ?: return null
+        val meta = readMetaForWakeSet(activeSetId) ?: return null
+        val modelFile = File(File(reactContext.filesDir, "wake_models/$activeSetId"), "model.tflite")
+        if (!modelFile.exists()) {
+            // Stale binding; clear it.
+            prefs.edit().remove("active_$agentId").apply()
             return null
         }
-        val detector = owwDetector ?: return null
-        val ok = detector.setWakewordModelFromFile(path)
+        val detector = owwDetector ?: return meta.phrase  // defer load until initOww
+        val ok = detector.setWakewordModelFromFile(modelFile.absolutePath)
         if (ok) {
-            owwWakeword = phrase
-            emitDebug("info", "Loaded saved wake model for $agentId: $phrase")
-            return phrase
+            owwWakeword = meta.phrase
+            emitDebug("info", "Loaded saved wake model for $agentId (set $activeSetId): ${meta.phrase}")
+            return meta.phrase
         }
         return null
     }
@@ -995,22 +1021,28 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     // menu without having to round-trip to the desktop.
     @ReactMethod fun getSavedWakeModels(promise: Promise) {
         try {
-            val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
-            val all = prefs.all
+            // v3.9.0: route through the new registry. For
+            // backward compat, the returned shape stays
+            // { agentId: { agentId, phrase, path, savedAt, setId, active } }
+            // so the existing badge UI keeps working.
+            migrateWakeSetsSync()
             val result = com.facebook.react.bridge.Arguments.createMap()
-            for ((key, value) in all) {
-                if (key.endsWith("_phrase") && value is String) {
-                    val agentId = key.removeSuffix("_phrase")
-                    val path = prefs.getString("${agentId}_path", null)
-                    val savedAt = prefs.getLong("${agentId}_savedAt", 0L)
-                    if (path != null && File(path).exists()) {
-                        val entry = com.facebook.react.bridge.Arguments.createMap()
-                        entry.putString("agentId", agentId)
-                        entry.putString("phrase", value)
-                        entry.putString("path", path)
-                        entry.putDouble("savedAt", savedAt.toDouble())
-                        result.putMap(agentId, entry)
-                    }
+            val root = File(reactContext.filesDir, "wake_models")
+            if (root.isDirectory) {
+                for (setDir in root.listFiles() ?: emptyArray()) {
+                    if (!setDir.isDirectory) continue
+                    val meta = readMeta(File(setDir, "meta.json")) ?: continue
+                    val agentId = meta.agentId ?: continue
+                    val modelFile = File(setDir, "model.tflite")
+                    if (!modelFile.exists()) continue
+                    val entry = com.facebook.react.bridge.Arguments.createMap()
+                    entry.putString("agentId", agentId)
+                    entry.putString("phrase", meta.phrase)
+                    entry.putString("path", modelFile.absolutePath)
+                    entry.putDouble("savedAt", meta.createdAt.toDouble())
+                    entry.putString("setId", meta.setId)
+                    entry.putBoolean("active", isActiveWakeSet(meta))
+                    result.putMap(agentId, entry)
                 }
             }
             promise.resolve(result)
@@ -1037,6 +1069,344 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Exception) {
             promise.reject("WAKE_MODEL_DELETE", e.message)
         }
+    }
+
+    // =====================================================================
+    // v3.9.0: Trainer Manager — wake-word set registry
+    // =====================================================================
+    //
+    // Prior to v3.9.0, the wake-word storage was a single file
+    // per agent: filesDir/wake_models/<agentId>.tflite with
+    // SharedPreferences keys `<agentId>_path` / `<agentId>_phrase`
+    // / `<agentId>_savedAt`. Re-training the same agent
+    // overwrote the file in place, so there was no way to
+    // keep multiple wake-word sets side-by-side (no list,
+    // no activate-old-set, no rename, no export).
+    //
+    // v3.9.0 introduces a registry:
+    //   filesDir/wake_models/<setId>/
+    //     model.tflite
+    //     meta.json   { setId, phrase, scope: "agent:<id>",
+    //                   createdAt, sizeBytes }
+    // The SharedPreferences active binding moves to
+    //   active_wake_<agentId> -> setId
+    // so the user can have multiple wake-word sets per agent
+    // and switch which one is hot.
+    //
+    // On first read, the old `<agentId>_path` /
+    // `<agentId>_phrase` / `<agentId>_savedAt` keys are
+    // migrated to the new shape in-place: the file moves
+    // from filesDir/wake_models/<agentId>.tflite to
+    // filesDir/wake_models/<setId>/model.tflite and a
+    // meta.json is written next to it. The setId for the
+    // migrated set is `<agentId>__legacy` (deterministic,
+    // easy to rename later via the JS UI).
+    //
+    // The OLD APIs (`setWakeModelFromBase64`, `getSavedWakeModels`,
+    // `loadOwwSavedModel`, `deleteSavedWakeModel`) continue to
+    // work and now route through the new registry internally.
+    // The OLD JS callers don't need to change. The NEW APIs
+    // below are what the trainer manager UI uses.
+
+    /**
+     * Ensure the v3.8 -> v3.9 storage migration has run for
+     * the wake category. Idempotent: if the new registry is
+     * already populated, this is a no-op. Returns the count
+     * of legacy sets migrated (0 if none).
+     */
+    @ReactMethod fun migrateWakeSets(promise: Promise) {
+        try {
+            val count = migrateWakeSetsSync()
+            promise.resolve(count)
+        } catch (e: Exception) {
+            promise.reject("MIGRATE", e.message)
+        }
+    }
+
+    /**
+     * List every wake-word set on disk.
+     * Returns a WritableMap { "<setId>" -> { setId, phrase, scope, agentId, createdAt, sizeBytes, active } }
+     * `active` is true iff this setId matches the active binding
+     * for the set's scope.
+     */
+    @ReactMethod fun listWakeSets(promise: Promise) {
+        try {
+            migrateWakeSetsSync()
+            val result = Arguments.createMap()
+            val root = File(reactContext.filesDir, "wake_models")
+            if (root.isDirectory) {
+                val children = root.listFiles() ?: emptyArray()
+                for (child in children) {
+                    if (!child.isDirectory) continue
+                    val setId = child.name
+                    val metaFile = File(child, "meta.json")
+                    val modelFile = File(child, "model.tflite")
+                    if (!metaFile.exists() || !modelFile.exists()) continue
+                    val entry = readMeta(metaFile) ?: continue
+                    val active = isActiveWakeSet(entry)
+                    val map = Arguments.createMap()
+                    map.putString("setId", entry.setId)
+                    map.putString("phrase", entry.phrase)
+                    map.putString("scope", entry.scope)
+                    if (entry.agentId != null) map.putString("agentId", entry.agentId)
+                    map.putDouble("createdAt", entry.createdAt.toDouble())
+                    map.putDouble("sizeBytes", modelFile.length().toDouble())
+                    map.putBoolean("active", active)
+                    result.putMap(setId, map)
+                }
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("LIST_WAKE_SETS", e.message)
+        }
+    }
+
+    /**
+     * Get the active setId for an agent (or null if none).
+     * The string `__global` is also accepted for categories
+     * that are user-scoped, but wake is always per-agent so
+     * this is mainly used by the exit / send categories.
+     */
+    @ReactMethod fun getActiveWakeSet(agentId: String, promise: Promise) {
+        try {
+            val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+            promise.resolve(prefs.getString("active_$agentId", null))
+        } catch (e: Exception) {
+            promise.reject("GET_ACTIVE", e.message)
+        }
+    }
+
+    /**
+     * Set the active setId for an agent and hot-swap it
+     * into the running detector (if any). Persists the
+     * binding so the same set loads on app restart.
+     */
+    @ReactMethod fun setActiveWakeSet(agentId: String, setId: String, promise: Promise) {
+        try {
+            migrateWakeSetsSync()
+            val meta = readMetaForWakeSet(setId)
+                ?: return promise.reject("ARG", "set not found: $setId")
+            if (meta.agentId != agentId) {
+                return promise.reject("ARG", "set $setId is not scoped to agent $agentId")
+            }
+            val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putString("active_$agentId", setId).apply()
+            // Hot-swap into the running detector (if any).
+            val modelFile = File(File(reactContext.filesDir, "wake_models/$setId"), "model.tflite")
+            val detector = owwDetector
+            if (detector != null && modelFile.exists()) {
+                val ok = detector.setWakewordModelFromFile(modelFile.absolutePath)
+                if (ok) {
+                    owwWakeword = meta.phrase
+                    emitDebug("info", "Activated wake set $setId for $agentId: ${meta.phrase}")
+                } else {
+                    emitDebug("warn", "Wake set activation: hot-swap failed for $setId")
+                }
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SET_ACTIVE", e.message)
+        }
+    }
+
+    /**
+     * Rename a set. Moves the directory on disk, updates
+     * meta.json's `setId`, and rewrites the active binding
+     * if this set was active. The OLD setId must exist; the
+     * NEW setId must not already exist.
+     */
+    @ReactMethod fun renameWakeSet(oldSetId: String, newSetId: String, promise: Promise) {
+        try {
+            if (newSetId.isBlank() || newSetId.contains('/') || newSetId.contains("..")) {
+                return promise.reject("ARG", "invalid setId: $newSetId")
+            }
+            migrateWakeSetsSync()
+            val oldDir = File(reactContext.filesDir, "wake_models/$oldSetId")
+            val newDir = File(reactContext.filesDir, "wake_models/$newSetId")
+            if (!oldDir.isDirectory) return promise.reject("ARG", "set not found: $oldSetId")
+            if (newDir.exists()) return promise.reject("ARG", "set already exists: $newSetId")
+            val meta = readMetaForWakeSet(oldSetId)
+                ?: return promise.reject("ARG", "meta missing for $oldSetId")
+            if (!oldDir.renameTo(newDir)) {
+                return promise.reject("IO", "rename failed")
+            }
+            // Rewrite meta.json with the new setId.
+            writeMeta(newDir, meta.copy(setId = newSetId))
+            // Update active binding if it pointed at the old setId.
+            val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+            if (meta.agentId != null) {
+                val activeKey = "active_${meta.agentId}"
+                if (prefs.getString(activeKey, null) == oldSetId) {
+                    prefs.edit().putString(activeKey, newSetId).apply()
+                }
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("RENAME", e.message)
+        }
+    }
+
+    /**
+     * Delete a set. Removes the directory and clears any
+     * active binding that pointed at this setId.
+     */
+    @ReactMethod fun deleteWakeSet(setId: String, promise: Promise) {
+        try {
+            migrateWakeSetsSync()
+            val dir = File(reactContext.filesDir, "wake_models/$setId")
+            val meta = readMetaForWakeSet(setId)
+            if (dir.exists()) {
+                dir.listFiles()?.forEach { it.delete() }
+                dir.delete()
+            }
+            if (meta?.agentId != null) {
+                val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+                if (prefs.getString("active_${meta.agentId}", null) == setId) {
+                    prefs.edit().remove("active_${meta.agentId}").apply()
+                }
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("DELETE_SET", e.message)
+        }
+    }
+
+    /**
+     * Read a set's .tflite bytes as base64, for export.
+     * Returns a WritableMap { base64, sizeBytes, path }.
+     */
+    @ReactMethod fun readWakeSet(setId: String, promise: Promise) {
+        try {
+            migrateWakeSetsSync()
+            val modelFile = File(File(reactContext.filesDir, "wake_models/$setId"), "model.tflite")
+            if (!modelFile.exists()) return promise.reject("ARG", "set not found: $setId")
+            val bytes = modelFile.readBytes()
+            val map = Arguments.createMap()
+            map.putString("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+            map.putDouble("sizeBytes", bytes.size.toDouble())
+            map.putString("path", modelFile.absolutePath)
+            promise.resolve(map)
+        } catch (e: Exception) {
+            promise.reject("READ_SET", e.message)
+        }
+    }
+
+    // ----- internal: meta.json read/write + migration -----
+
+    data class WakeSetMeta(
+        val setId: String,
+        val phrase: String,
+        val scope: String,        // "agent:<id>" (always, for wake)
+        val agentId: String?,
+        val createdAt: Long,
+    )
+
+    private fun readMeta(file: File): WakeSetMeta? {
+        return try {
+            val raw = file.readText()
+            val obj = org.json.JSONObject(raw)
+            WakeSetMeta(
+                setId = obj.optString("setId"),
+                phrase = obj.optString("phrase"),
+                scope = obj.optString("scope"),
+                agentId = obj.optString("agentId").takeIf { it.isNotEmpty() },
+                createdAt = obj.optLong("createdAt"),
+            )
+        } catch (_: Exception) { null }
+    }
+
+    private fun readMetaForWakeSet(setId: String): WakeSetMeta? {
+        val f = File(File(reactContext.filesDir, "wake_models/$setId"), "meta.json")
+        if (!f.exists()) return null
+        return readMeta(f)
+    }
+
+    private fun writeMeta(setDir: File, meta: WakeSetMeta) {
+        val obj = org.json.JSONObject()
+        obj.put("setId", meta.setId)
+        obj.put("phrase", meta.phrase)
+        obj.put("scope", meta.scope)
+        if (meta.agentId != null) obj.put("agentId", meta.agentId)
+        obj.put("createdAt", meta.createdAt)
+        File(setDir, "meta.json").writeText(obj.toString())
+    }
+
+    /**
+     * Idempotent migration from v3.8 -> v3.9 storage.
+     * For each agentId with a `<agentId>_path` SharedPreferences
+     * entry whose file still exists at the v3.8 path:
+     *   - mkdir filesDir/wake_models/<setId>/   (setId = `<agentId>__legacy`)
+     *   - move the .tflite into the new dir as model.tflite
+     *   - write meta.json
+     *   - set the active binding to the new setId
+     *   - remove the legacy SharedPreferences keys
+     * Returns the count migrated.
+     */
+    private fun migrateWakeSetsSync(): Int {
+        val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+        val root = File(reactContext.filesDir, "wake_models")
+        if (!root.exists()) root.mkdirs()
+        var migrated = 0
+        val legacyAgents = mutableListOf<String>()
+        for ((key, _) in prefs.all) {
+            if (key.endsWith("_path")) {
+                val agentId = key.removeSuffix("_path")
+                val legacyPath = prefs.getString(key, null) ?: continue
+                val legacyFile = File(legacyPath)
+                if (!legacyFile.exists()) {
+                    // Stale binding; clean up but don't migrate.
+                    prefs.edit()
+                        .remove("${agentId}_path")
+                        .remove("${agentId}_phrase")
+                        .remove("${agentId}_savedAt")
+                        .apply()
+                    continue
+                }
+                val newSetId = "${agentId}__legacy"
+                val newDir = File(root, newSetId)
+                if (newDir.exists()) continue  // already migrated
+                newDir.mkdirs()
+                // Move file.
+                val newModel = File(newDir, "model.tflite")
+                if (!legacyFile.renameTo(newModel)) {
+                    // renameTo across devices can fail; fall back to copy.
+                    legacyFile.copyTo(newModel, overwrite = true)
+                    legacyFile.delete()
+                }
+                // Write meta.
+                val phrase = prefs.getString("${agentId}_phrase", "") ?: ""
+                val savedAt = prefs.getLong("${agentId}_savedAt", System.currentTimeMillis())
+                writeMeta(newDir, WakeSetMeta(
+                    setId = newSetId,
+                    phrase = phrase,
+                    scope = "agent:$agentId",
+                    agentId = agentId,
+                    createdAt = savedAt,
+                ))
+                // Set active binding.
+                prefs.edit().putString("active_$agentId", newSetId).apply()
+                legacyAgents.add(agentId)
+                migrated++
+            }
+        }
+        // Now remove the legacy keys for the migrated agents
+        // (do this in a separate pass to keep the loop simple).
+        if (legacyAgents.isNotEmpty()) {
+            val editor = prefs.edit()
+            for (agentId in legacyAgents) {
+                editor.remove("${agentId}_path")
+                editor.remove("${agentId}_phrase")
+                editor.remove("${agentId}_savedAt")
+            }
+            editor.apply()
+        }
+        return migrated
+    }
+
+    private fun isActiveWakeSet(meta: WakeSetMeta): Boolean {
+        if (meta.agentId == null) return false
+        val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+        return prefs.getString("active_${meta.agentId}", null) == meta.setId
     }
 
     @ReactMethod fun startOwwListening(promise: Promise) {
