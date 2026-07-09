@@ -8,6 +8,29 @@ on:
 permissions:
   contents: write
 
+# v3.8.6: GitHub Actions runner moved to Node.js 24 by
+# default on 2026-06-02 (deprecation of Node.js 20).
+# The previous v3.8.5 build (tag `v3.8.5`, run #541)
+# failed at the `android-actions/setup-android@v3`
+# step: the action was last updated Nov 2024 and still
+# uses Node.js 20 internally. When GitHub forced it
+# to run on Node 24, the action's dependency graph
+# broke at the SDK-download step. The maintainer
+# released v4.0.1 (Apr 2026) specifically to fix this;
+# bumping `@v3` -> `@v4` picks up the Node-24-
+# compatible version.
+#
+# FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 is a belt-and-
+# suspenders env var per GitHub's recommended
+# migration path (https://github.blog/changelog/
+# 2025-09-19-deprecation-of-node-20-on-github-actions-
+# runners/). Any remaining Node-20 actions on the
+# runner will be forced to run on Node 24, matching
+# the rest of the workflow. Pinned to v4 (latest);
+# the @v3 -> @v4 jump is what closes the build break.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -38,7 +61,7 @@ jobs:
           node-version: '24'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install SDK components
         run: |
