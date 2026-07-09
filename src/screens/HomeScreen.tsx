@@ -376,6 +376,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // chat. When they've scrolled up to read history, leave them there
   // and show a "↓ new messages" badge so they can jump back down.
   const [chatAtBottom, setChatAtBottom] = useState(true);
+  // v3.8.6: mirror `chatAtBottom` into a ref so the
+  // FlatList's `onContentSizeChange` handler can read the
+  // latest value without a stale closure. The previous
+  // version captured `chatAtBottom` directly inside the
+  // inline arrow; on a race between onScroll (which
+  // updates chatAtBottom) and a new message arriving (which
+  // triggers onContentSizeChange), the handler would see
+  // the stale "true" value and scroll even though the user
+  // had actually scrolled up. The inverse race was the
+  // one Tobe hit: onScroll set chatAtBottom to false
+  // before our scrollToEnd had a chance to land.
+  const chatAtBottomRef = useRef(true);
+  useEffect(() => { chatAtBottomRef.current = chatAtBottom; }, [chatAtBottom]);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
   const isWakeWordStoppedRef = useRef<boolean>(true);
@@ -2346,6 +2359,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 // v3.1.16: data is stored in chronological order (oldest→newest). The
 // newest message is at index length-1, not 0. FlatList is NOT
 // inverted — scrollToEnd jumps to the bottom of the screen.
+//
+// v3.8.6: read chatAtBottom via the ref (chatAtBottomRef)
+// instead of the closure. The closure captures the value at
+// effect-run time, but the FlatList's onScroll updates
+// chatAtBottom via setState, which can race with this
+// effect on the same render. The ref is updated in the
+// useEffect above and is always current.
 const lastMessageIdRef = useRef<string | null>(null);
 useEffect(() => {
   if (messages.length === 0) return;
@@ -2357,14 +2377,14 @@ useEffect(() => {
   // Skip user-sent messages: the user just typed them, they know.
   if (last.isUser) {
     // ...but still scroll to the new (their) message at the bottom.
-    if (chatAtBottom) {
+    if (chatAtBottomRef.current) {
       setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
     }
     return;
   }
   // Incoming message while at bottom: auto-scroll. While scrolled
   // away: increment the unread badge.
-  if (chatAtBottom) {
+  if (chatAtBottomRef.current) {
     setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
   } else {
     setChatUnreadCount(c => c + 1);
@@ -2383,6 +2403,32 @@ useEffect(() => {
     setChatUnreadCount(0);
   }
 }, [activeTab]);
+
+// v3.8.6: explicit first-paint scroll to bottom. Belt-and-
+// suspenders to the onLayout handler above. Fires once when
+// messages first populate (e.g. when AsyncStorage hydration
+// lands) and runs after a short delay so the FlatList has
+// time to render its rows and measure contentSize. Without
+// this, the initial scroll is at the mercy of onLayout's
+// timing on a freshly-mounted FlatList — which can race
+// with the chat history hydration (Tobe hit this: opened
+// the app, chat was scrolled to the top of the history
+// showing old messages, new "Late hour" message was below
+// the fold). Once we run scrollToEnd here, we mark
+// chatAtBottom true so the next incoming message will
+// auto-scroll instead of bumping the unread badge.
+useEffect(() => {
+  if (messages.length === 0) return;
+  // Only fire on the first non-empty render; we don't want
+  // this re-running on every new incoming message (that's
+  // the messages.length useEffect's job).
+  const timer = setTimeout(() => {
+    chatRef.current?.scrollToEnd({ animated: false });
+    setChatAtBottom(true);
+  }, 200);
+  return () => clearTimeout(timer);
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [messages.length > 0]);
 
   const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
@@ -2833,13 +2879,38 @@ useEffect(() => {
                 // Auto-scroll to the newest on first render and whenever
                 // the user is already at the bottom when new content
                 // arrives.
-                if (chatAtBottom) {
+                if (chatAtBottomRef.current) {
                   chatRef.current?.scrollToEnd({ animated: false });
                 }
               }}
               onLayout={() => {
+                // v3.8.6: robust initial-scroll. The previous
+                // version did a single setTimeout(150) and relied
+                // on chatAtBottom already being true. The race
+                // was: onScroll fires with distanceFromEnd huge
+                // → chatAtBottom flips to false BEFORE the 150ms
+                // timer runs → scrollToEnd's effect doesn't
+                // stick. Tobe hit this on app open: a fresh chat
+                // with new messages at the bottom, but the
+                // FlatList landed at the top showing old
+                // messages with no "↓ new messages" badge (the
+                // useEffect skipped because lastMessageIdRef
+                // already matched the hydrated messages).
+                //
+                // The fix:
+                //   1. Two-attempt scroll (immediate + 250ms) so
+                //      the second attempt runs after the FlatList
+                //      has measured the full content. The second
+                //      attempt is what actually sticks.
+                //   2. setChatAtBottom(true) AFTER the scroll so
+                //      the onContentSizeChange handler doesn't
+                //      fight us and reset to "scrolled up".
                 if (messages.length > 0) {
-                  setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 150);
+                  chatRef.current?.scrollToEnd({ animated: false });
+                  setTimeout(() => {
+                    chatRef.current?.scrollToEnd({ animated: false });
+                    setChatAtBottom(true);
+                  }, 250);
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
