@@ -190,6 +190,16 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
   // negatives. Optional — if empty, training proceeds with
   // only TTS negatives (v3.8.1 behavior).
   const [nearMissSamples, setNearMissSamples] = useState<Array<{ path: string; phrase: string }>>([]);
+  // v3.8.4: per-slot draft phrases for empty near-miss
+  // rows. Previously the empty-slot TextInput had no
+  // onChangeText handler, so the user could tap to focus
+  // the input but typing went nowhere (Tobe: 'It did not
+  // allow me to input near misses'). With this state,
+  // typing into an empty slot is captured into drafts[i]
+  // and is then used by the mic button instead of the
+  // fallback suggestion. Drafts are cleared once the
+  // slot is filled.
+  const [nearMissDrafts, setNearMissDrafts] = useState<string[]>(['', '', '']);
   const [stage, setStage] = useState<Stage>('idle');
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
@@ -546,6 +556,15 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     const path = await recordOne();
     if (path) {
       setNearMissSamples((prev) => [...prev, { path, phrase: phrase.trim() }]);
+      // v3.8.4: clear the draft for this slot so it doesn't
+      // ghost through if the user later deletes the recording.
+      // Index = current length since we just appended.
+      setNearMissDrafts((prev) => {
+        const next = [...prev];
+        const idx = nearMissSamples.length; // length before the append above
+        next[idx] = '';
+        return next;
+      });
     }
   }, [nearMissSamples.length, recordOne]);
 
@@ -942,19 +961,41 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
               // Show suggestions only on the first empty
               // slot to avoid cluttering the UI.
               const suggestions = i === 0 ? suggestNearMisses(wakePhrase, 3) : [];
+              // v3.8.4: empty-slot value precedence:
+              //   1. The user's typed draft for this slot (if any)
+              //   2. The auto-suggestion for slot 0 (only on first
+              //      mount, so it doesn't overwrite what the user
+              //      typed)
+              //   3. Empty string — placeholder takes over
+              // The auto-suggestion only auto-fills the FIRST slot
+              // the first time the screen renders. After that the
+              // user's draft wins. Without this priority order, the
+              // suggestion would overwrite the user's typed text on
+              // every render and typing would silently fail.
+              const slotValue = existing?.phrase
+                ?? (nearMissDrafts[i] !== undefined
+                      ? nearMissDrafts[i]
+                      : (i === 0 && nearMissSamples.length === 0 ? (suggestions[0] ?? '') : ''));
               return (
                 <View key={i} style={styles.nearMissRow}>
                   <TextInput
                     style={[styles.input, styles.nearMissInput]}
-                    value={existing?.phrase || (i === 0 && nearMissSamples.length === 0 ? suggestions[0] : '')}
+                    value={slotValue}
                     onChangeText={(text) => {
-                      // If user is editing an existing entry, update it.
-                      // If editing a placeholder for a new entry, store it.
+                      // v3.8.4: capture typed text into the
+                      // per-slot draft array. Once the slot
+                      // gets a recorded entry, the draft is
+                      // superseded by `existing.phrase`.
+                      // Editable stays true for empty slots
+                      // even though `existing` is undefined.
                       if (existing) {
                         setNearMissSamples((prev) => prev.map((nm, idx) => idx === i ? { ...nm, phrase: text } : nm));
                       } else {
-                        // Pre-fill as a placeholder; the actual slot is created on record.
-                        // For simplicity we just track via index.
+                        setNearMissDrafts((prev) => {
+                          const next = [...prev];
+                          next[i] = text;
+                          return next;
+                        });
                       }
                     }}
                     placeholder={suggestions[0] || `e.g. hey car`}
@@ -972,11 +1013,17 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
                     <TouchableOpacity
                       style={styles.nearMissRecordBtn}
                       onPress={() => {
-                        // Use the text-input value as the phrase
-                        // to say. Default to a suggestion if empty.
-                        const phrase = (i === 0 && nearMissSamples.length === 0 && suggestions[0])
-                          ? suggestions[0]
-                          : existing?.phrase || suggestions[0] || '';
+                        // v3.8.4: phrase resolution precedence
+                        //   1. Whatever the user typed in this slot
+                        //   2. The slot's existing recorded phrase
+                        //   3. The first suggestion for slot 0
+                        //   4. Empty (the recording handler will
+                        //      alert if empty)
+                        const typed = nearMissDrafts[i];
+                        const phrase = (typed && typed.trim())
+                          || existing?.phrase
+                          || suggestions[0]
+                          || '';
                         onTapToRecordNearMiss(phrase);
                       }}
                       disabled={isRecording}
