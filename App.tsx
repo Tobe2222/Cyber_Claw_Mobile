@@ -10,7 +10,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import HomeScreen, { markWakeJustExited } from './src/screens/HomeScreen';
+import HomeScreen, { markWakeJustExited, isWakeJustExited } from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import WakeModeScreen from './src/screens/WakeModeScreen';
 import CompanionSettingsScreen from './src/screens/CompanionSettingsScreen';
@@ -105,6 +105,22 @@ export default function App(): React.JSX.Element {
   // can't be wiped by a state reset.
   useEffect(() => {
     const handleWake = () => {
+      // v3.9.1: also respect the just-exited guard here. The
+      // v3.5.2 fix added the same guard to HomeScreen's
+      // handleWakeWord (the owwWakeDetected listener), but this
+      // App-level handleWake is invoked by both the legacy Vosk
+      // path (wakeWordDetected / wakeWordOpenedApp from
+      // CyberClawService → WakeReceiver → MainActivity) AND by
+      // checkNativePending (the cold-launch flag fallback). If
+      // the Vosk recognizer has a wake-like partial buffered
+      // right around voice-mode exit (e.g. the exit phrase
+      // starts with "hey"), it can fire wakeWordOpenedApp within
+      // ~1s of exit. Without this guard the user sees voice mode
+      // re-open immediately after closing it.
+      if (isWakeJustExited()) {
+        console.log('[App] Wake detected but just exited — ignoring');
+        return;
+      }
       // v3.1.14: also persist the pending flag so if the activity gets
       // recreated while waking from the lock screen (which can happen
       // — the React tree unmounts when the activity is torn down and
@@ -183,6 +199,21 @@ export default function App(): React.JSX.Element {
     const checkNativePending = async () => {
       if (!WakeWordModule?.isWakePending) return;
       if (screenRef.current !== 'home') return;
+      // v3.9.1: also respect the just-exited guard on the
+      // cold-launch flag path. If the native side persisted
+      // a wake_pending flag right before voice mode closed
+      // (the MainActivity checkWakeIntent path sets it before
+      // the JS onExit has a chance to clear it; on a slow
+      // device the flag may still be present in SharedPrefs
+      // when HomeScreen mounts a few hundred ms later), the
+      // stale-flag check would still see a fresh timestamp
+      // and re-open voice mode. Same root cause as the
+      // handleWake guard above.
+      if (isWakeJustExited()) {
+        console.log('[App] Native wake-pending flag seen but just exited — ignoring');
+        clearWakePending();
+        return;
+      }
       try {
         const result = await WakeWordModule.isWakePending();
         const pending = !!result?.pending;
