@@ -13,6 +13,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import HomeScreen, { markWakeJustExited, isWakeJustExited } from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import WakeModeScreen from './src/screens/WakeModeScreen';
+// v3.10.0: trainer / manager sub-routes are now
+// full-screen instead of inline-expanded in
+// CompanionSettingsScreen.
+import OpenWakeWordTrainer from './src/components/OpenWakeWordTrainer';
+import WakeSetManagerScreen from './src/components/WakeSetManagerScreen';
+import ExitPhraseTrainer from './src/components/ExitPhraseTrainer';
 import CompanionSettingsScreen from './src/screens/CompanionSettingsScreen';
 import QuestsScreen from './src/screens/QuestsScreen';
 import syncClient from './src/services/SyncClient';
@@ -74,7 +80,33 @@ export default function App(): React.JSX.Element {
 
   // v3.2.18: Wake Mode is gone. Only Home, Settings, and
   // Voice Mode exist. The wake word opens Voice Mode directly.
-  const [screen, setScreen] = useState<'home' | 'settings' | 'voice-mode' | 'companion' | 'quests'>('home');
+  //
+  // v3.10.0: extended with wake-trainer / wake-manager /
+  // exit-trainer as full-screen routes instead of inline
+  // expanded panels inside CompanionSettingsScreen. Each
+  // trainer / manager has its own context state (companion
+  // id, name, optional preset phrase) so the back button
+  // pops back to the companion settings automatically.
+  // Reasoning: Tobe reported that the inline-expanded
+  // trainer + manager scrolled into the same surface as
+  // the wake settings page, making it ambiguous which
+  // "Back" button would do what.
+  const [screen, setScreen] = useState<
+    'home' | 'settings' | 'voice-mode' | 'companion' | 'quests' |
+    'wake-trainer' | 'wake-manager' | 'exit-trainer'
+  >('home');
+  // v3.10.0: contexts for the new trainer / manager
+  // routes. Set when CompanionSettingsScreen calls a
+  // push callback; cleared on pop.
+  const [wakeTrainerCtx, setWakeTrainerCtx] = useState<
+    { companionId: string; companionName: string; presetPhrase?: string } | null
+  >(null);
+  const [wakeManagerCtx, setWakeManagerCtx] = useState<
+    { companionId: string; companionName: string } | null
+  >(null);
+  const [exitTrainerCtx, setExitTrainerCtx] = useState<
+    { companionId: string; companionName: string; presetPhrase?: string } | null
+  >(null);
   // v3.4.4: id of the companion whose settings are open
   // when screen === 'companion'. Set by SettingsScreen via
   // onOpenCompanion(id).
@@ -426,6 +458,65 @@ export default function App(): React.JSX.Element {
               onBack={() => {
                 setCompanionScreenId(null);
                 setScreen('settings');
+              }}
+              // v3.10.0: push-callbacks for trainer /
+              // manager sub-routes. CompanionSettingsScreen
+              // calls these instead of toggling inline
+              // expand panels. The back button on each
+              // sub-screen pops back to the companion
+              // settings page (same as before — no
+              // navigation history rewound).
+              onPushWakeTrainer={(ctx) => {
+                setWakeTrainerCtx(ctx);
+                setScreen('wake-trainer');
+              }}
+              onPushWakeManager={(ctx) => {
+                setWakeManagerCtx(ctx);
+                setScreen('wake-manager');
+              }}
+              onPushExitTrainer={(ctx) => {
+                setExitTrainerCtx(ctx);
+                setScreen('exit-trainer');
+              }}
+            />
+          )}
+          {screen === 'wake-trainer' && wakeTrainerCtx && (
+            <OpenWakeWordTrainer
+              companionId={wakeTrainerCtx.companionId}
+              companionName={wakeTrainerCtx.companionName}
+              presetPhrase={wakeTrainerCtx.presetPhrase}
+              onComplete={() => {
+                setWakeTrainerCtx(null);
+                setScreen('companion');
+              }}
+              onCancel={() => {
+                setWakeTrainerCtx(null);
+                setScreen('companion');
+              }}
+            />
+          )}
+          {screen === 'wake-manager' && wakeManagerCtx && (
+            <WakeSetManagerScreen
+              agentId={wakeManagerCtx.companionId}
+              agentName={wakeManagerCtx.companionName}
+              onBack={() => {
+                setWakeManagerCtx(null);
+                setScreen('companion');
+              }}
+            />
+          )}
+          {screen === 'exit-trainer' && exitTrainerCtx && (
+            <ExitPhraseTrainer
+              companionId={exitTrainerCtx.companionId}
+              companionName={exitTrainerCtx.companionName}
+              presetPhrase={exitTrainerCtx.presetPhrase}
+              onComplete={() => {
+                setExitTrainerCtx(null);
+                setScreen('companion');
+              }}
+              onCancel={() => {
+                setExitTrainerCtx(null);
+                setScreen('companion');
               }}
             />
           )}

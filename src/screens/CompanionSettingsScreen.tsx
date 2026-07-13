@@ -31,9 +31,12 @@ import {
 } from 'react-native';
 const { WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
-import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
-import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
+// v3.10.0: OpenWakeWordTrainer / ExitPhraseTrainer /
+// WakeSetManagerScreen are now rendered as full-screen
+// routes by App.tsx (pushed via onPushWakeTrainer /
+// onPushExitTrainer / onPushWakeManager). This file no
+// longer imports them — only their trigger buttons
+// remain.
 // v3.7.0: per-companion voice settings (engine + voice id,
 // both Local and Premium API paths). The catalog of available
 // voices is shared with the global Settings screen via
@@ -60,9 +63,21 @@ type Companion = {
 export default function CompanionSettingsScreen({
   companionId,
   onBack,
+  // v3.10.0: push-callbacks for trainer / manager /
+  // exit-trainer sub-routes. Lifted to App.tsx as full
+  // screens instead of inline expanded panels inside
+  // this screen. Tobe: "Manage and Train buttons should
+  // really open new pages rather than expanding down the
+  // current. This should be the case for exit also."
+  onPushWakeTrainer,
+  onPushWakeManager,
+  onPushExitTrainer,
 }: {
   companionId: string;
   onBack: () => void;
+  onPushWakeTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
+  onPushWakeManager: (ctx: { companionId: string; companionName: string }) => void;
+  onPushExitTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
 }) {
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
@@ -133,18 +148,15 @@ export default function CompanionSettingsScreen({
 
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
 
-  // Trainer modal state
-  const [trainingCompanionId, setTrainingCompanionId] = useState<string | null>(null);
-  const [trainingCompanionName, setTrainingCompanionName] = useState<string>('');
-  const [editingWakePhrase, setEditingWakePhrase] = useState<string>('');
-  const [showOwwTrainer, setShowOwwTrainer] = useState(false);
-  const [editingExitPhrase, setEditingExitPhrase] = useState<string>('');
-  const [showExitPhraseTrainer, setShowExitPhraseTrainer] = useState(false);
-  // v3.9.0: wake set manager — list / activate / rename /
-  // delete / pull-from-desktop / push-to-desktop. Opened
-  // from a per-companion button below the wake trainer
-  // trigger.
-  const [showWakeSetManager, setShowWakeSetManager] = useState(false);
+  // v3.10.0: trainer + manager + exit-trainer are now
+  // full-screen routes in App.tsx, pushed via
+  // onPushWakeTrainer / onPushWakeManager /
+  // onPushExitTrainer props. The local trainer-modal
+  // state below was deleted as part of that refactor;
+  // the showOwwTrainer / showWakeSetManager /
+  // showExitPhraseTrainer flags and the
+  // trainingCompanionId / editingWakePhrase helpers
+  // are gone.
 
   // v3.4.4: set true when the active companionId was
   // missing from a populated cache and we already auto-
@@ -428,16 +440,18 @@ export default function CompanionSettingsScreen({
   }, [companionId, vcSilenceMs]);
 
   // Hardware back handler — chain through phases
+  // v3.10.0: trainer / manager / exit-trainer are now
+  // top-level routes in App.tsx, not inline modals.
+  // Back button handling is just: drill-down phase →
+  // back to overview; otherwise → onBack() to Settings.
   useEffect(() => {
     const bh = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (showOwwTrainer) { setShowOwwTrainer(false); return true; }
-      if (showExitPhraseTrainer) { setShowExitPhraseTrainer(false); return true; }
       if (companionViewPhase) { setCompanionViewPhase(null); return true; }
       onBack();
       return true;
     });
     return () => bh.remove();
-  }, [onBack, showOwwTrainer, showExitPhraseTrainer, companionViewPhase]);
+  }, [onBack, companionViewPhase]);
 
   // v3.4.4: back out if the active companionId is
   // missing from a populated cache. Idempotent via
@@ -622,10 +636,14 @@ export default function CompanionSettingsScreen({
                 }
               }}
               onRetrain={(rcid, phrase) => {
-                setTrainingCompanionId(rcid);
-                setTrainingCompanionName(companion.name);
-                setEditingWakePhrase(phrase);
-                setShowOwwTrainer(true);
+                // v3.10.0: pushed as a route instead of
+                // inline-expand. The back button on the
+                // trainer pops back to this page.
+                onPushWakeTrainer({
+                  companionId: rcid,
+                  companionName: companion.name,
+                  presetPhrase: phrase,
+                });
               }}
               onDelete={(rcid) => {
                 Alert.alert(
@@ -658,10 +676,13 @@ export default function CompanionSettingsScreen({
             <TouchableOpacity
               style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
               onPress={() => {
-                setTrainingCompanionId(companion.id);
-                setTrainingCompanionName(companion.name);
-                setEditingWakePhrase('');
-                setShowOwwTrainer(true);
+                // v3.10.0: pushed as a route instead of
+                // inline-expand.
+                onPushWakeTrainer({
+                  companionId: companion.id,
+                  companionName: companion.name,
+                  presetPhrase: '',
+                });
               }}
             >
               <Text style={[styles.trainBtnText, { color: '#3b82f6' }]}>🎤 Train new wake phrase for {companion.name}</Text>
@@ -674,32 +695,26 @@ export default function CompanionSettingsScreen({
                 desktop / pull-from-desktop actions. */}
             <TouchableOpacity
               style={[styles.trainBtn, { backgroundColor: 'rgba(156, 163, 175, 0.10)', borderColor: '#9ca3af' }]}
-              onPress={() => setShowWakeSetManager(true)}
+              onPress={() => {
+                // v3.10.0: pushed as a route instead of
+                // inline-expand.
+                onPushWakeManager({
+                  companionId: companion.id,
+                  companionName: companion.name,
+                });
+              }}
             >
               <Text style={[styles.trainBtnText, { color: '#9ca3af' }]}>📂 Manage wake sets for {companion.name}</Text>
               <Text style={styles.trainBtnSub}>List, activate, rename, delete, push to / pull from desktop</Text>
             </TouchableOpacity>
           </View>
 
-          {/* v3.9.0: wake set manager overlay. The trainer
-              (showOwwTrainer) gates above this in the
-              return tree. */}
-          {showWakeSetManager ? (
-            <WakeSetManagerScreen
-              agentId={companion.id}
-              agentName={companion.name}
-              onBack={() => setShowWakeSetManager(false)}
-            />
-          ) : null}
-
-          {showOwwTrainer && trainingCompanionId ? (
-            <OpenWakeWordTrainer
-              companionId={trainingCompanionId}
-              companionName={trainingCompanionName}
-              presetPhrase={editingWakePhrase}
-              onClose={() => setShowOwwTrainer(false)}
-            />
-          ) : null}
+          {/* v3.10.0: the wake trainer and wake set
+              manager are now full-screen routes in
+              App.tsx (pushed via onPushWakeTrainer /
+              onPushWakeManager). No inline render
+              blocks here anymore — Tobe asked for
+              dedicated pages instead of inline-expand. */}
         </ScrollView>
       </View>
     );
@@ -755,8 +770,13 @@ export default function CompanionSettingsScreen({
                 setVoiceExitPhraseSavedAt(Date.now());
               }}
               onRetrain={(p) => {
-                setEditingExitPhrase(p);
-                setShowExitPhraseTrainer(true);
+                // v3.10.0: pushed as a route instead of
+                // inline-expand.
+                onPushExitTrainer({
+                  companionId: companion.id,
+                  companionName: companion.name,
+                  presetPhrase: p,
+                });
               }}
               onDelete={async (p) => {
                 Alert.alert(
@@ -786,8 +806,13 @@ export default function CompanionSettingsScreen({
             <TouchableOpacity
               style={[styles.trainBtn, { borderColor: '#f7931a' }]}
               onPress={() => {
-                setEditingExitPhrase('');
-                setShowExitPhraseTrainer(true);
+                // v3.10.0: pushed as a route instead of
+                // inline-expand.
+                onPushExitTrainer({
+                  companionId: companion.id,
+                  companionName: companion.name,
+                  presetPhrase: '',
+                });
               }}
             >
               <Text style={[styles.trainBtnText, { color: '#f7931a' }]}>🚪 Train new exit phrase for {companion.name}</Text>
@@ -795,14 +820,9 @@ export default function CompanionSettingsScreen({
             </TouchableOpacity>
           </View>
 
-          {showExitPhraseTrainer ? (
-            <ExitPhraseTrainer
-              companionId={companion.id}
-              companionName={companion.name}
-              presetPhrase={editingExitPhrase}
-              onClose={() => setShowExitPhraseTrainer(false)}
-            />
-          ) : null}
+          {/* v3.10.0: exit trainer is now a full-screen
+              route in App.tsx (pushed via onPushExitTrainer).
+              No inline render block here. */}
         </ScrollView>
       </View>
     );
@@ -1063,21 +1083,63 @@ function WakePhrasePicker({
   onRetrain: (companionId: string, phrase: string) => void;
   onDelete: (companionId: string) => void;
 }) {
+  // v3.10.0: defensive re-fetch. The parent screen
+  // already calls getSavedWakeModels on mount +
+  // companion-list growth, but if the cache is stale or
+  // the active-only filter misses something, this
+  // picker would render the "no trained" hint even
+  // though the Wake Manager (separate code path) shows
+  // a trained set. Re-fetch here as a fallback so the
+  // hint text is always accurate.
+  const [localSavedModels, setLocalSavedModels] = useState<
+    Record<string, { phrase: string; path: string; savedAt: number }>
+  >({});
+  useEffect(() => {
+    (async () => {
+      try {
+        const { NativeModules } = require('react-native');
+        const models = await NativeModules.WakeWordModule?.getSavedWakeModels?.();
+        if (!models) return;
+        const out: Record<string, { phrase: string; path: string; savedAt: number }> = {};
+        for (const agentId of Object.keys(models)) {
+          const entry = models[agentId];
+          if (entry?.phrase && entry?.path) {
+            out[agentId] = {
+              phrase: entry.phrase,
+              path: entry.path,
+              savedAt: entry.savedAt || 0,
+            };
+          }
+        }
+        if (Object.keys(out).length > 0) setLocalSavedModels(out);
+      } catch (_) {}
+    })();
+  }, [Object.keys(savedModels).length]);
+  // Merge parent + local. Parent wins (it has the
+  // freshest data from the parent's effect).
+  const merged = { ...localSavedModels, ...savedModels };
   const trainedRows = companions
-    .filter(c => savedModels[c.id]?.phrase)
+    .filter(c => merged[c.id]?.phrase)
     .map(c => ({
       companionId: c.id,
       name: c.name,
       emoji: c.emoji || c.icon || '🐾',
-      phrase: savedModels[c.id].phrase,
-      savedAt: savedModels[c.id].savedAt,
+      phrase: merged[c.id].phrase,
+      savedAt: merged[c.id].savedAt,
     }));
 
   if (trainedRows.length === 0) {
+    // v3.10.0: removed the "No trained wake phrases yet"
+    // hardcoded text. Tobe hit this in v3.9.9 where the
+    // hint said "no trained" even though the manager
+    // (separate code path) showed a trained set. Replaced
+    // with a neutral hint that doesn't make a false claim.
+    // The two buttons below ("Train new wake phrase" /
+    // "Manage wake sets") already explain what to do.
     return (
       <View style={styles.trainedPickerHint}>
         <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
-          No trained wake phrases yet. Tap "Train new wake phrase for {companions[0]?.name || 'this companion'}" below to record 6 samples.
+          Tap the buttons below to train a new wake phrase or open the manager.
         </Text>
       </View>
     );
