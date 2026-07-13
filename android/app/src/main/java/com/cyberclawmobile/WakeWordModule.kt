@@ -1534,7 +1534,24 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             // backward compat, the returned shape stays
             // { agentId: { agentId, phrase, path, savedAt, setId, active } }
             // so the existing badge UI keeps working.
+            //
+            // v3.9.9 — only return the ACTIVE set per
+            // agent. Previously all sets were iterated and
+            // `result.putMap(agentId, entry)` overwrote
+            // earlier entries — so with 4 stale sets for
+            // "clawsuu" (a pre-v3.9.8 condition), the JS
+            // side got the LAST set in filesystem iteration
+            // order, which may or may not be the active
+            // one. The badge UI then showed either the
+            // wrong phrase or "No trained wake phrases yet"
+            // depending on which set won the race.
+            // Filtering to active-only is correct: the JS
+            // side only ever cares which wake model is
+            // currently hot-swapped into the detector.
+            // The full list (for the manager) goes through
+            // listWakeSets() which keeps showing all sets.
             migrateWakeSetsSync()
+            dedupeWakeSetsSync()
             val result = com.facebook.react.bridge.Arguments.createMap()
             val root = File(reactContext.filesDir, "wake_models")
             if (root.isDirectory) {
@@ -1542,6 +1559,9 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     if (!setDir.isDirectory) continue
                     val meta = readMeta(File(setDir, "meta.json")) ?: continue
                     val agentId = meta.agentId ?: continue
+                    // Skip non-active sets — the badge UI
+                    // only wants the currently-bound model.
+                    if (!isActiveWakeSet(meta)) continue
                     val modelFile = File(setDir, "model.tflite")
                     if (!modelFile.exists()) continue
                     val entry = com.facebook.react.bridge.Arguments.createMap()
@@ -1550,7 +1570,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     entry.putString("path", modelFile.absolutePath)
                     entry.putDouble("savedAt", meta.createdAt.toDouble())
                     entry.putString("setId", meta.setId)
-                    entry.putBoolean("active", isActiveWakeSet(meta))
+                    entry.putBoolean("active", true)
                     result.putMap(agentId, entry)
                 }
             }
@@ -1641,6 +1661,11 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun listWakeSets(promise: Promise) {
         try {
             migrateWakeSetsSync()
+            // v3.9.9: dedupe before listing. After this
+            // runs, the manager shows one set per
+            // (agent, phrase). Idempotent — a no-op if
+            // everything is already unique.
+            dedupeWakeSetsSync()
             val result = Arguments.createMap()
             val root = File(reactContext.filesDir, "wake_models")
             if (root.isDirectory) {
@@ -1910,6 +1935,67 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             editor.apply()
         }
         return migrated
+    }
+
+    /**
+     * v3.9.9 — one-shot dedupe of stale wake sets for
+     * the same (agentId, phrase) pair. The v3.9.8 fix
+     * added cleanup-on-new-training but couldn't reach
+     * sets that already existed on disk before the
+     * upgrade. Tobe hit exactly this on v3.9.8: 4
+     * timestamped-the-same-minute orphans from
+     * previous trainings, all visible in the manager.
+     *
+     * Strategy: for each (agentId, phrase) group with
+     * multiple sets, keep exactly one — prefer the one
+     * that's currently bound as active_<agentId>; fall
+     * back to the newest by createdAt. Delete the rest.
+     *
+     * Runs idempotently on every getSavedWakeModels /
+     * listWakeSets / setWakeModelFromBase64 call. Cheap
+     * (small N, single directory scan).
+     */
+    private fun dedupeWakeSetsSync(): Int {
+        val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+        val root = File(reactContext.filesDir, "wake_models")
+        if (!root.isDirectory) return 0
+        // Group sets by (agentId, phrase).
+        // key = "<agentId>|<phrase-lowercase>" for case-insensitive
+        // phrase match (matches the v3.9.8 same-key check).
+        val groups = mutableMapOf<String, MutableList<WakeSetMeta>>()
+        val metaByKey = mutableMapOf<String, File>()
+        for (setDir in root.listFiles() ?: emptyArray()) {
+            if (!setDir.isDirectory) continue
+            val meta = readMeta(File(setDir, "meta.json")) ?: continue
+            val agentId = meta.agentId ?: continue
+            val phraseKey = "${agentId}|${meta.phrase.lowercase()}"
+            groups.getOrPut(phraseKey) { mutableListOf() }.add(meta)
+            metaByKey[meta.setId] = setDir
+        }
+        var deleted = 0
+        for ((_, sets) in groups) {
+            if (sets.size <= 1) continue
+            // Pick the survivor: prefer the active one for
+            // this agent, then newest by createdAt.
+            val activeSetId = prefs.getString("active_${sets[0].agentId}", null)
+            val survivor = sets.firstOrNull { it.setId == activeSetId }
+                ?: sets.maxByOrNull { it.createdAt }
+                ?: continue
+            // Delete all others.
+            for (meta in sets) {
+                if (meta.setId == survivor.setId) continue
+                val dir = metaByKey[meta.setId] ?: continue
+                try {
+                    dir.listFiles()?.forEach { it.delete() }
+                    dir.delete()
+                    deleted++
+                    emitDebug("info", "Dedup: removed stale wake set ${meta.setId}")
+                } catch (e: Exception) {
+                    emitDebug("warn", "Dedup: failed to remove ${meta.setId}: ${e.message}")
+                }
+            }
+        }
+        return deleted
     }
 
     private fun isActiveWakeSet(meta: WakeSetMeta): Boolean {
