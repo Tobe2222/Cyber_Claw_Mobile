@@ -967,7 +967,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         return;
       }
       setVoiceStatus('transcribing');
-      syncClient.sendAudioInput(base64, 'audio/m4a');
+      syncClient.sendAudioInput(base64, 'audio/wav');
       addLogEntry(`Wake Mode: audio sent for transcription (trigger=${triggerReason})`, 'sent');
       addVoiceLog(triggerReason === 'send' ? '📤 Send word → sent' : '📏 Sent, waiting...');
 
@@ -1047,7 +1047,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
     try {
       const fs = require('react-native-fs');
-      const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wakemode-${Date.now()}.m4a`;
+      const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wakemode-${Date.now()}.wav`;
       const recorder = getSimpleAudioRecorder();
 
       // v3.2.17 — silence detection. The user's configured

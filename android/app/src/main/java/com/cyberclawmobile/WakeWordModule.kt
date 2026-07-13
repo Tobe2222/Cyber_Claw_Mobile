@@ -336,10 +336,74 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     }
 
     // ── Audio Recording ────────────────────────────────────────────────────
-
-    private var mediaRecorder: MediaRecorder? = null
+    //
+    // v3.9.4: switched from MediaRecorder (compressed m4a) to
+    // AudioRecord (raw PCM16 → WAV). Two reasons:
+    //
+    //   1. Send-phrase detection. The v3.6.0 send classifier
+    //      runs inside OpenWakeWordDetector.predictScore(pcm16),
+    //      which needs 1280-sample (80ms @ 16kHz) PCM16
+    //      chunks. MediaRecorder produces compressed m4a —
+    //      there's no way to extract raw PCM chunks in real
+    //      time without decoding the m4a on a separate thread,
+    //      which would add 50-200ms latency (breaking the
+    //      send-phrase UX where the user expects instant
+    //      response after saying "send it"). AudioRecord
+    //      gives us raw PCM natively.
+    //
+    //   2. No second mic client. Android only allows ONE
+    //      app to read from MIC at a time per stream type.
+    //      The OWW listening thread uses AudioRecord on MIC
+    //      for its detector. If both OWW and the recorder
+    //      open MIC simultaneously, one of them gets silent
+    //      data (or fails outright). v3.9.4 explicitly stops
+    //      the OWW thread for the duration of the recording
+    //      turn so the recorder has exclusive MIC access,
+    //      and restarts OWW when the turn ends.
+    //
+    // The recording thread below does BOTH the silence/wait-
+    // for-speech logic AND the send/exit-phrase detection in
+    // one pass. Per 80ms chunk it:
+    //   - feeds the chunk to OpenWakeWordDetector.predictScore()
+    //     → checks sendScore vs sendThreshold and exitScore vs
+    //     exitThreshold with the same HIGH_SCORE_RUN/cooldown
+    //     pattern as the OWW thread. Emits owwSendDetected /
+    //     owwExitDetected on hit. Skips wake score (voice
+    //     mode is past the wake step).
+    //   - computes RMS+ZCR on the chunk → emits owwVad at
+    //     ~1Hz cadence for the JS gibberish gate (carries
+    //     forward the v3.9.3 behavior, but now with REAL
+    //     PCM energy rather than MediaRecorder.maxAmplitude,
+    //     which was the best we could do on m4a).
+    //   - tracks hasUserSpoken + silentFor for the existing
+    //     v3.2.23 wait-for-speech-then-silence timer; emits
+    //     recorderSilence after silenceMs of post-speech
+    //     quiet (or MAX_RECORDING_MS hard cap).
+    //
+    // On stop: drains any pending PCM, writes a standard
+    // 16-bit mono 16kHz WAV file (reuses writeWav below).
+    // JS API signature unchanged — SimpleAudioRecorder.start()
+    // / stop() work identically, just the file extension the
+    // JS callers construct for the temp path should now be
+    // .wav (not .m4a) since that's what's actually produced.
+    private var recorderAudioRecord: AudioRecord? = null
+    private var recorderThread: Thread? = null
+    @Volatile private var isRecorderActive = false
+    // PCM16 samples accumulate here while recording; flushed
+    // to a WAV file on stopRecorder(). Buffer is sized to
+    // comfortably hold 30s of audio (30s * 16kHz * 2 bytes =
+    // 960KB; we start at 32KB and grow as needed).
+    private val recorderPcmBuf = java.io.ByteArrayOutputStream(32 * 1024)
     private var recordingPath: String? = null
-    private var silenceTimer: java.util.Timer? = null
+    private var recorderSampleRate = 16000
+    // v3.9.4: the OWW thread holds MIC when running. Since
+    // the recorder now also needs MIC (as AudioRecord), we
+    // explicitly stop the OWW thread before grabbing MIC and
+    // restart it after release. `owwWasListeningBeforeRecord`
+    // captures whether OWW was active so we only restart it
+    // if the user was actually in wake-listening mode (in
+    // voice-mode the user might already have OWW stopped).
+    private var owwWasListeningBeforeRecord = false
 
     @ReactMethod fun startRecorder(path: String, promise: Promise) {
         startRecorderWithSilence(path, 5000, promise)
@@ -347,165 +411,465 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod fun startRecorderWithSilence(path: String, silenceMs: Int, promise: Promise) {
         try {
-            // FIX: Disable listening during recording to prevent dual audio reading from MIC
+            // v3.9.4: stop the OWW listening thread before
+            // grabbing MIC. Android only allows ONE app to
+            // read from MIC per stream type at a time; both
+            // the OWW thread (AudioRecord on MIC) and the new
+            // recorder (AudioRecord on MIC) would conflict.
+            // Capture the pre-existing state so we can restore
+            // it on stopRecorder().
+            owwWasListeningBeforeRecord = isOwwListening
+            if (isOwwListening) {
+                // stopOwwListening() is synchronous-ish — it
+                // sets isOwwListening=false and joins the
+                // thread with a 2s timeout. Good enough for
+                // our purposes; if join times out we proceed
+                // anyway since the recorder opening will
+                // force the OWW AudioRecord read() to fail.
+                stopOwwListeningInternal()
+            }
             isRecording = true
+            // (isListening = false is now redundant for the
+            // OWW case — we stopped it above — but the legacy
+            // Vosk wake-word loop (if ever re-enabled) still
+            // checks this flag, so leave it for backward
+            // compat.)
             isListening = false
-            
-            mediaRecorder?.release()
-            silenceTimer?.cancel(); silenceTimer = null
+
             val outFile = File(path)
             outFile.parentFile?.mkdirs()
             recordingPath = path
 
-            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(reactContext)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }
-            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            recorder.setAudioSamplingRate(16000)
-            recorder.setAudioChannels(1)
-            recorder.setOutputFile(path)
-            recorder.prepare()
-            recorder.start()
-            mediaRecorder = recorder
+            val sampleRate = 16000
+            recorderSampleRate = sampleRate
+            // 1280 samples = 80ms @ 16kHz — openWakeWord's
+            // natural frame size. Buffer must be a multiple
+            // of chunkSamples for clean chunking; round up
+            // to a power of two so AudioRecord's internal
+            // ring buffer is happy too.
+            val chunkSamples = 1280
+            val minBuffer = AudioRecord.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            ).coerceAtLeast(chunkSamples * 2)
+            // Use minBuffer directly. AudioRecord's read()
+            // blocks until at least one chunk of bytes is
+            // available, so we don't need a multi-chunk
+            // ring buffer here. Our 1280-sample frame sync
+            // is done on top of whatever read() returns.
+            val bufferSize = minBuffer
 
-            // Auto-stop on silence: poll amplitude every 500ms, stop after silenceMs of quiet
-            //
-            // v3.2.23 — wait-for-speech-then-silence model (Alexa-style).
-            // The previous version started the silence timer from
-            // recorder start, so if the user hadn't spoken by 3-5s,
-            // the loop closed their turn before they had time to
-            // respond. Tobe reported this exact symptom in v3.2.22.
-            //
-            // New behavior: only emit `recorderSilence` AFTER the
-            // user has actually spoken at least once. The timer
-            // measures "post-speech silence", not "total silence".
-            // `hasUserSpoken` is set true on the first non-silent
-            // amplitude reading and resets on recorder.stop().
-            // A `MAX_RECORDING_MS` hard cap still fires silence
-            // after 30s of total recording time (covers the case
-            // where the user speaks once and then stays quiet for
-            // 30+ seconds).
-            var silentFor = 0L
-            var recordingFor = 0L
-            var hasUserSpoken = false
-            // v3.9.3 — counter for emitting owwVad events from
-            // the recorder path. POLL_MS is 500ms, so emitting
-            // every 2 polls = ~1Hz, well within bridge budget.
-            var vadEmitTick = 0
-            val VAD_EMIT_EVERY_POLLS = 2
-            val SILENCE_THRESHOLD = 1000 // ~3% of max; filters out mic hiss but catches speaking breaks
-            val MIN_RECORDING_MS = 500L   // shorter warmup — 500ms before silence-check begins
-            val MAX_RECORDING_MS = 30_000L // hard cap: 30s total recording, then auto-send regardless
-            val POLL_MS = 500L
-            val timer = java.util.Timer()
-            silenceTimer = timer
-            timer.scheduleAtFixedRate(object : java.util.TimerTask() {
-                override fun run() {
-                    val rec = mediaRecorder ?: run { cancel(); return }
-                    val amp = try { rec.maxAmplitude } catch (_: Exception) { -1 }
-                    if (amp < 0) return // recorder stopped externally
-                    recordingFor += POLL_MS
-                    if (recordingFor >= MAX_RECORDING_MS) { // hard cap
-                        cancel()
-                        handler.post {
-                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                                .emit("recorderSilence", null)
+            val rec = AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                isRecording = false
+                tryRestartOwwAfterRecord()
+                promise.reject("RECORD_ERROR", "AudioRecord failed to initialize (state=${rec.state})")
+                return
+            }
+            recorderAudioRecord = rec
+            try {
+                rec.startRecording()
+                if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    try { rec.release() } catch (_: Exception) {}
+                    recorderAudioRecord = null
+                    isRecording = false
+                    tryRestartOwwAfterRecord()
+                    promise.reject("RECORD_ERROR", "AudioRecord.startRecording failed (state=${rec.recordingState})")
+                    return
+                }
+            } catch (e: Exception) {
+                try { rec.release() } catch (_: Exception) {}
+                recorderAudioRecord = null
+                isRecording = false
+                tryRestartOwwAfterRecord()
+                promise.reject("RECORD_ERROR", "startRecording threw: ${e.message}")
+                return
+            }
+
+            // Reset PCM buffer + flags for this recording turn.
+            synchronized(recorderPcmBuf) {
+                recorderPcmBuf.reset()
+            }
+            recorderSilentForMs = 0L
+            recorderRecordingForMs = 0L
+            recorderHasUserSpoken = false
+            // Reset detector send/exit high-score counters on
+            // each new recording turn so a stale hit from a
+            // previous turn can't fire immediately on the new
+            // turn's first chunk.
+            recorderSendHighScoreFrames = 0
+            recorderExitHighScoreFrames = 0
+            recorderLastSendAt = 0L
+            recorderLastExitAt = 0L
+            recorderVadEmitTick = 0
+            recorderLastVadAt = 0L
+
+            isRecorderActive = true
+
+            // Recording thread: reads PCM, writes to in-memory
+            // buffer + per-chunk sends it to the OWW detector
+            // for send/exit-phrase + VAD. 80ms chunks (1280
+            // samples) match the OWW detector's natural frame
+            // size, same as startOwwListening above.
+            recorderThread = Thread {
+                val readBuf = ShortArray(bufferSize / 2)
+                val chunkBuf = ShortArray(chunkSamples)
+                var chunkFill = 0
+                val sampleRate = recorderSampleRate
+
+                while (isRecorderActive) {
+                    val read = try {
+                        rec.read(readBuf, 0, readBuf.size)
+                    } catch (e: Exception) {
+                        Log.w("WakeWord", "Recorder read() threw: ${e.message}")
+                        -1
+                    }
+                    if (read <= 0) {
+                        // No data or recorder closed externally.
+                        // Brief sleep avoids hot-spinning when MIC
+                        // is unavailable. The loop exits via
+                        // isRecorderActive = false in stopRecorder.
+                        try { Thread.sleep(10) } catch (_: Exception) {}
+                        continue
+                    }
+
+                    // Track total samples accumulated for VAD
+                    // and silence bookkeeping.
+                    val nowMs = System.currentTimeMillis()
+                    // For every sample we read, accumulate into
+                    // the chunkBuf AND the long-term PCM buffer.
+                    // We do this in one pass so the chunkBuf
+                    // (for detector inference) and the WAV
+                    // payload are always in lockstep.
+                    var i = 0
+                    while (i < read && isRecorderActive) {
+                        val toCopy = minOf(read - i, chunkSamples - chunkFill)
+                        System.arraycopy(readBuf, i, chunkBuf, chunkFill, toCopy)
+                        // Append the chunk samples to the PCM
+                        // output buffer as little-endian int16.
+                        synchronized(recorderPcmBuf) {
+                            for (j in 0 until toCopy) {
+                                val s = readBuf[i + j].toInt()
+                                recorderPcmBuf.write(s and 0xFF)
+                                recorderPcmBuf.write(s shr 8 and 0xFF)
+                            }
                         }
-                        return
-                    }
-                    // v3.2.25 — reserved for future exit-phrase
-                    // detection. The polling loop above already
-                    // captures amplitude; future work can add a
-                    // real-time envelope event here.
-                    //
-                    // v3.9.3 — emit owwVad events here so the JS
-                    // gibberish gate has RMS/ZCR data during voice
-                    // mode turns. The OWW listening thread (which
-                    // normally emits owwVad) is explicitly stopped
-                    // at the top of this function (isListening =
-                    // false) to prevent dual audio reads from MIC,
-                    // so without this the JS-side
-                    // speechDetectedDuringRecordingRef stayed
-                    // false for the entire turn and EVERY
-                    // recording got dropped by the gate. Tobe hit
-                    // this in v3.9.2: send phrase spoken, gate
-                    // skipped it, looped on silence. Emit at the
-                    // same ~5Hz cadence as the OWW side (every
-                    // other 500ms poll = every 1s) to keep bridge
-                    // traffic bounded. RMS is the normalized
-                    // maxAmplitude (0..1); ZCR is not available
-                    // from MediaRecorder, so we synthesize a
-                    // pseudo-ZCR: 0.10 when amp is above the
-                    // silence threshold (i.e. speech-like), 0.0
-                    // otherwise. The JS gate only checks RMS>0.03
-                    // AND ZCR>0.02, so this passes for any
-                    // amp > SILENCE_THRESHOLD and fails for
-                    // silence. Net effect: the JS gate fires
-                    // exactly when the native hasUserSpoken flag
-                    // fires.
-                    vadEmitTick++
-                    if (vadEmitTick >= VAD_EMIT_EVERY_POLLS) {
-                        vadEmitTick = 0
-                        val rms = (amp.coerceAtLeast(0).toFloat() / 32767f).coerceIn(0f, 1f)
-                        // Synthesize ZCR: speech-like audio has
-                        // moderate ZCR; silence is 0.
-                        val zcr = if (amp >= SILENCE_THRESHOLD) 0.10f else 0f
-                        val vadParams = Arguments.createMap()
-                        vadParams.putDouble("rms", rms.toDouble())
-                        vadParams.putDouble("zcr", zcr.toDouble())
-                        handler.post {
-                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                                .emit("owwVad", vadParams)
-                        }
-                    }
-                    // Speech detection: amplitude above threshold
-                    // means the user is talking. Mark `hasUserSpoken`
-                    // so future silence checks know to fire.
-                    if (amp >= SILENCE_THRESHOLD) {
-                        hasUserSpoken = true
-                        silentFor = 0L // reset silence counter on speech
-                        return
-                    }
-                    if (!hasUserSpoken) return // still waiting for first speech
-                    if (recordingFor < MIN_RECORDING_MS) return
-                    // User has spoken, now measuring post-speech silence.
-                    silentFor += POLL_MS
-                    if (silentFor >= silenceMs) {
-                        cancel()
-                        handler.post {
-                            // Emit silence event so JS can auto-stop recording
-                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                                .emit("recorderSilence", null)
+                        chunkFill += toCopy
+                        i += toCopy
+
+                        if (chunkFill == chunkSamples) {
+                            processRecorderChunk(chunkBuf, nowMs, silenceMs.toLong())
+                            chunkFill = 0
                         }
                     }
                 }
-            }, POLL_MS, POLL_MS)
+
+                // Loop exited (stopRecorder set isRecorderActive=false).
+                // Any partial chunkFill samples at the end are
+                // discarded — they're <80ms which is below
+                // detector inference granularity anyway, and
+                // keeping them would shift WAV byte counts.
+            }.also { it.isDaemon = true; it.start() }
 
             promise.resolve(path)
         } catch (e: Exception) {
+            isRecording = false
+            isRecorderActive = false
+            tryRestartOwwAfterRecord()
             promise.reject("RECORD_ERROR", e.message)
         }
     }
 
     @ReactMethod fun stopRecorder(promise: Promise) {
-        // FIX: Clear recording flag when stopping
+        // Clear recording flag when stopping.
         isRecording = false
-        
-        silenceTimer?.cancel(); silenceTimer = null
+
+        // Signal the recorder thread to exit, then close
+        // the AudioRecord. The thread is daemonized, but we
+        // still join briefly to ensure clean shutdown.
+        isRecorderActive = false
+        try { recorderAudioRecord?.stop() } catch (_: Exception) {}
+        try { recorderAudioRecord?.release() } catch (_: Exception) {}
+        recorderAudioRecord = null
         try {
-            mediaRecorder?.stop()
-            mediaRecorder?.release()
-            mediaRecorder = null
-            promise.resolve(recordingPath ?: "")
+            recorderThread?.join(2000)
+        } catch (_: Exception) {}
+        recorderThread = null
+
+        // Write the accumulated PCM as a WAV file to recordingPath.
+        // We do this synchronously on the JS thread because the
+        // Promise resolves with the path; the JS side reads the
+        // file immediately after. The PCM is already in memory
+        // (recorderPcmBuf) so writing it out is a single
+        // synchronous write — typically <50ms even for 30s of
+        // 16kHz audio.
+        val outPath = recordingPath ?: ""
+        try {
+            if (outPath.isNotEmpty()) {
+                val pcm: ByteArray
+                synchronized(recorderPcmBuf) {
+                    pcm = recorderPcmBuf.toByteArray()
+                }
+                val outFile = File(outPath)
+                outFile.parentFile?.mkdirs()
+                writeWav(outFile, pcm, recorderSampleRate)
+                emitDebug("info", "Recorder WAV written: $outPath (${pcm.size} bytes PCM)")
+            }
         } catch (e: Exception) {
-            mediaRecorder?.release()
-            mediaRecorder = null
-            promise.reject("RECORD_STOP_ERROR", e.message)
+            Log.e("WakeWord", "Failed to write recorder WAV: ${e.message}", e)
+            promise.reject("RECORD_STOP_ERROR", "WAV write failed: ${e.message}")
+            // Still try to restart OWW below so the app stays
+            // in a sane state even after a write failure.
+            tryRestartOwwAfterRecord()
+            return
+        }
+
+        // Restart the OWW listening thread if it was running
+        // before this recording turn started. In voice-mode
+        // turns the user often stays in voice mode (the JS
+        // side calls startRecordingTurn() to loop into the
+        // next turn), in which case we DON'T want OWW running
+        // — but if the user exits voice mode, OWW should be
+        // ready. To handle both cleanly, we always restore
+        // OWW to its pre-record state. The JS side will call
+        // stopOwwListening() explicitly if it wants voice mode
+        // to stay active.
+        tryRestartOwwAfterRecord()
+
+        promise.resolve(outPath)
+    }
+
+    /**
+     * Restart the OWW listening thread iff it was running
+     * before the current recording turn started. Idempotent
+     * if OWW is already running.
+     */
+    private fun tryRestartOwwAfterRecord() {
+        if (!owwWasListeningBeforeRecord) return
+        if (isOwwListening) return
+        // We don't have an OWW Promise to resolve here; this
+        // is best-effort. Failures are logged but not bubbled
+        // up — stopRecorder's promise is for the WAV file,
+        // not the OWW restart.
+        try {
+            startOwwListening(noOpPromise("Failed to restart OWW after recording"))
+        } catch (e: Exception) {
+            Log.w("WakeWord", "startOwwListening after record threw: ${e.message}")
+        }
+        owwWasListeningBeforeRecord = false
+    }
+
+    /**
+     * Build a no-op Promise that logs failures but never
+     * blocks the caller. Used when invoking a Promise-based
+     * API (like startOwwListening) from a non-Promise context
+     * (e.g. the recorder's stopRecorder, which has its own
+     * Promise to resolve with the WAV path).
+     */
+    private fun noOpPromise(failurePrefix: String): Promise {
+        val log = { msg: String? -> Log.w("WakeWord", "$failurePrefix: $msg") }
+        return object : Promise {
+            override fun resolve(value: Any?) {}
+            override fun reject(code: String?, message: String?) { log("$code: $message") }
+            override fun reject(code: String?, throwable: Throwable?) { log("$code: ${throwable?.message}") }
+            override fun reject(throwable: Throwable) { log(throwable.message) }
+            override fun reject(code: String?, message: String?, throwable: Throwable?) { log("$code: $message / ${throwable?.message}") }
+            override fun reject(throwable: Throwable, userInfo: com.facebook.react.bridge.WritableMap) { log(throwable.message) }
+            override fun reject(code: String?, userInfo: com.facebook.react.bridge.WritableMap) { log("$code: (userInfo)") }
+            override fun reject(code: String?, throwable: Throwable?, userInfo: com.facebook.react.bridge.WritableMap) { log("$code: ${throwable?.message}") }
+            override fun reject(code: String?, message: String?, userInfo: com.facebook.react.bridge.WritableMap) { log("$code: $message") }
+            override fun reject(code: String?, message: String?, throwable: Throwable?, userInfo: com.facebook.react.bridge.WritableMap?) { log("$code: $message / ${throwable?.message}") }
+            override fun reject(message: String) { log(message) }
+        }
+    }
+
+    /**
+     * Internal synchronous-ish version of stopOwwListening.
+     * Used by startRecorderWithSilence to free MIC before
+     * opening the recorder's AudioRecord. The public
+     * stopOwwListening ReactMethod is identical but takes a
+     * Promise; this one swallows it so we can call it from
+     * a non-Promise context (startRecorderWithSilence
+     * resolves its own Promise).
+     */
+    private fun stopOwwListeningInternal() {
+        isOwwListening = false
+        try { owwRecord?.stop() } catch (_: Exception) {}
+        try { owwRecord?.release() } catch (_: Exception) {}
+        owwRecord = null
+        try { owwThread?.join(2000) } catch (_: Exception) {}
+        owwThread = null
+    }
+
+    // ---- per-chunk recorder-thread state ----
+    // These are owned by the recorder thread (no need for
+    // @Volatile or synchronization — only that thread reads
+    // and writes them). Marked @Volatile for safety because
+    // stopRecorder() and the recorder thread may briefly
+    // overlap on shutdown.
+    @Volatile private var recorderSilentForMs = 0L
+    @Volatile private var recorderRecordingForMs = 0L
+    @Volatile private var recorderHasUserSpoken = false
+    @Volatile private var recorderSendHighScoreFrames = 0
+    @Volatile private var recorderExitHighScoreFrames = 0
+    @Volatile private var recorderLastSendAt = 0L
+    @Volatile private var recorderLastExitAt = 0L
+    @Volatile private var recorderVadEmitTick = 0
+    @Volatile private var recorderLastVadAt = 0L
+
+    /**
+     * Per-chunk (80ms) work in the recorder thread.
+     * Runs the OWW detector on the chunk (send + exit scores
+     * only — wake is skipped in voice mode), emits periodic
+     * VAD events, and updates silence bookkeeping. Same
+     * architecture as startOwwListening's chunk handler but
+     * trimmed to the send + exit paths.
+     */
+    private fun processRecorderChunk(chunkBuf: ShortArray, nowMs: Long, silenceMs: Long) {
+        // Chunk size is fixed at 1280; approximate the
+        // elapsed wall time as 80ms for the silence timer.
+        // 80ms × ~12.5 chunks/sec is accurate enough for
+        // the silence threshold (1-3 seconds).
+        val CHUNK_MS = 80L
+        recorderRecordingForMs += CHUNK_MS
+
+        // ---- send / exit phrase detection ----
+        val detector = owwDetector
+        if (detector != null) {
+            val sendThreshold = detector.getSendThreshold()
+            val exitThreshold = detector.getExitThreshold()
+            val pair = try { detector.predictScore(chunkBuf) } catch (e: Exception) {
+                Log.w("WakeWord", "predictScore threw in recorder thread: ${e.message}")
+                OpenWakeWordDetector.TripleScores(null, null, null)
+            }
+            val sendScore = pair.send
+            val exitScore = pair.exit
+
+            // Send phrase. Same HIGH_SCORE_RUN + cooldown as
+            // the OWW thread so behavior is consistent across
+            // the two paths. 3 consecutive frames at 80ms each
+            // = ~240ms confirmation window — short enough
+            // to feel instant, long enough to avoid single-
+            // frame false positives.
+            val SEND_HIGH_SCORE_RUN = 3
+            val DETECTION_COOLDOWN_MS = 2000L
+            if (sendScore != null && sendScore >= sendThreshold) {
+                recorderSendHighScoreFrames++
+                if (recorderSendHighScoreFrames >= SEND_HIGH_SCORE_RUN) {
+                    if (nowMs - recorderLastSendAt >= DETECTION_COOLDOWN_MS) {
+                        recorderLastSendAt = nowMs
+                        handler.post {
+                            val params = Arguments.createMap()
+                            params.putDouble("score", sendScore.toDouble())
+                            params.putString("sendword", detector.sendNameOrEmpty())
+                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                .emit("owwSendDetected", params)
+                        }
+                    } else {
+                        Log.w("WakeWord", "Send detection (recorder path) suppressed by cooldown")
+                    }
+                    recorderSendHighScoreFrames = 0
+                }
+            } else {
+                recorderSendHighScoreFrames = 0
+            }
+
+            // Exit phrase. Same pattern as send. The JS
+            // WakeModeScreen.tsx listener fires a voice-mode
+            // close on owwExitDetected; that handler is
+            // identical to the OWW thread's exit path so
+            // behavior is consistent.
+            val EXIT_HIGH_SCORE_RUN = 3
+            if (exitScore != null && exitScore >= exitThreshold) {
+                recorderExitHighScoreFrames++
+                if (recorderExitHighScoreFrames >= EXIT_HIGH_SCORE_RUN) {
+                    if (nowMs - recorderLastExitAt >= DETECTION_COOLDOWN_MS) {
+                        recorderLastExitAt = nowMs
+                        handler.post {
+                            val params = Arguments.createMap()
+                            params.putDouble("score", exitScore.toDouble())
+                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                .emit("owwExitDetected", params)
+                        }
+                    } else {
+                        Log.w("WakeWord", "Exit detection (recorder path) suppressed by cooldown")
+                    }
+                    recorderExitHighScoreFrames = 0
+                }
+            } else {
+                recorderExitHighScoreFrames = 0
+            }
+        }
+
+        // ---- VAD emission ----
+        // ~1Hz cadence — matches the v3.9.3 polling-loop
+        // behavior that was tied to MediaRecorder's 500ms
+        // amplitude poll. Emit on every 13th 80ms chunk
+        // (13 × 80ms = 1040ms ≈ 1Hz). The OWW thread emits
+        // at a higher ~4Hz rate (every 3 chunks × 80ms =
+        // 240ms) for its wake-mode use case, but for voice
+        // mode the v3.9.3 design chose 1Hz and the JS gate
+        // works fine with that, so we keep it.
+        recorderVadEmitTick++
+        val VAD_EMIT_EVERY_CHUNKS = 13  // 13 × 80ms = 1040ms ≈ 1Hz
+        if (recorderVadEmitTick >= VAD_EMIT_EVERY_CHUNKS) {
+            recorderVadEmitTick = 0
+            val (rms, zcr) = computeEnergyAndZcr(chunkBuf)
+            if (nowMs - recorderLastVadAt >= 200L) {  // ~5Hz hard cap
+                recorderLastVadAt = nowMs
+                handler.post {
+                    val params = Arguments.createMap()
+                    params.putDouble("rms", rms.toDouble())
+                    params.putDouble("zcr", zcr.toDouble())
+                    reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                        .emit("owwVad", params)
+                }
+            }
+        }
+
+        // ---- silence/wait-for-speech bookkeeping ----
+        // v3.2.23 model: only fire recorderSilence AFTER the
+        // user has spoken at least once. While waiting for
+        // first speech, we just track that we're still
+        // listening. RMS energy is a much better "has the
+        // user spoken" signal than MediaRecorder.maxAmplitude
+        // because it's continuous (not quantized to whatever
+        // the encoder happened to capture last poll). The
+        // threshold is tuned for typical spoken-speech levels
+        // (~0.01-0.05 RMS for normal conversational speech,
+        // ~0.001-0.005 for ambient noise).
+        val (rms, _) = computeEnergyAndZcr(chunkBuf)
+        val SPEECH_RMS_THRESHOLD = 0.01f
+        val MIN_RECORDING_MS = 500L
+        val MAX_RECORDING_MS = 30_000L
+
+        if (recorderRecordingForMs >= MAX_RECORDING_MS) {
+            handler.post {
+                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("recorderSilence", null)
+            }
+            return
+        }
+        if (rms >= SPEECH_RMS_THRESHOLD) {
+            recorderHasUserSpoken = true
+            recorderSilentForMs = 0L
+            return
+        }
+        if (!recorderHasUserSpoken) return
+        if (recorderRecordingForMs < MIN_RECORDING_MS) return
+        recorderSilentForMs += CHUNK_MS
+        if (recorderSilentForMs >= silenceMs) {
+            handler.post {
+                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("recorderSilence", null)
+            }
         }
     }
 

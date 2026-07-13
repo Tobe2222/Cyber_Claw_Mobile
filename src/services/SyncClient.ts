@@ -229,7 +229,7 @@ class SyncClient {
     this.send({ type: 'voice_transcript', transcript, context, lookbackMinutes });
   }
 
-  sendAudioInput(audioBase64: string, mimeType: string = 'audio/m4a') {
+  sendAudioInput(audioBase64: string, mimeType: string = 'audio/wav') {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.error('[SyncClient] Audio input failed: WebSocket not open (state: ' + (this.ws?.readyState || 'none') + ')');
       this.emit('send_error', { type: 'audio_input', reason: 'not_connected' });
@@ -369,9 +369,11 @@ class SyncClient {
   //   syncClient.on('wake_training_result', (msg) => ...)
   //
   // `samples` is an array of {name, data} where `name` is the
-  // original .m4a filename and `data` is the base64-encoded file
+  // original .wav filename and `data` is the base64-encoded file
   // contents. The desktop writes them to its training dir — the
   // mobile's filesystem is not reachable from the desktop process.
+  // (v3.9.4: was .m4a/MediaRecorder, now .wav/AudioRecord — see
+  //  CHANGES_3.9.4.md.)
   //
   // v3.8.2: optional `nearMissSamples` for user-recorded
   // similar-but-wrong phrases ("hey car" vs "hey clawsuu").

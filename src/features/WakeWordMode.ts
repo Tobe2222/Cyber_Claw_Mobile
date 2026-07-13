@@ -61,7 +61,7 @@ export class WakeWordController {
     
     // Start recording
     this.recorder = new SimpleAudioRecorder();
-    const path = `/tmp/wake-sentence-${this.session.id}.m4a`;
+    const path = `/tmp/wake-sentence-${this.session.id}.wav`;
     await this.recorder.start(path, 5000);  // 5s silence timeout
   }
   
@@ -89,7 +89,7 @@ export class WakeWordController {
     
     // Start new recording session
     this.recorder = new SimpleAudioRecorder();
-    const path = `/tmp/wake-append-${this.session.id}-${Date.now()}.m4a`;
+    const path = `/tmp/wake-append-${this.session.id}-${Date.now()}.wav`;
     await this.recorder.start(path, 5000);
   }
   
@@ -142,7 +142,7 @@ export class WakeWordController {
  * // During send/reply
  * const sendAudio = async (base64) => {
  *   wakeWordController.setProcessing(true);
- *   syncClient.sendAudioInput(base64, 'audio/m4a');
+ *   syncClient.sendAudioInput(base64, 'audio/wav');
  *   // Wait for response...
  *   wakeWordController.setProcessing(false);
  * };

@@ -682,7 +682,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // Auto-start listening with SimpleAudioRecorder + countdown on silence (runs always)
     try {
         const fs = require('react-native-fs');
-        const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
+        const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.wav`;
         const recorder = getSimpleAudioRecorder();
 
         // FIXED: Track whether we've transitioned to 'recording' state
@@ -733,7 +733,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                   audioSent = true;
                   addVoiceLog('📏 Sending...');
                   setVoiceStatus('transcribing');
-                  syncClient.sendAudioInput(base64, 'audio/m4a');
+                  syncClient.sendAudioInput(base64, 'audio/wav');
                   addLogEntry('Voice message sent for transcription', 'sent');
 
                   // IMPORTANT: Don't exit voice mode!
@@ -788,7 +788,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 if (audioSent) { addLogEntry('Already sent (max-duration), skipping', 'debug'); return; }
                 audioSent = true;
                 setVoiceStatus('transcribing');
-                syncClient.sendAudioInput(base64, 'audio/m4a');
+                syncClient.sendAudioInput(base64, 'audio/wav');
                 addLogEntry('Forced send after max duration', 'sent');
               } catch (e: any) {
                 setVoiceStatus('idle');
@@ -1791,7 +1791,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
           // Restart SimpleAudioRecorder for voice mode
           try {
-            const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.m4a`;
+            const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-voice-${Date.now()}.wav`;
             const recorder = getSimpleAudioRecorder();
 
             // Re-attach silence listener with state tracking
@@ -1833,7 +1833,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                     }
                     setVoiceStatus('transcribing');
                     addLogEntry('Loop: sending audio', 'sent');
-                    syncClient.sendAudioInput(base64, 'audio/m4a');
+                    syncClient.sendAudioInput(base64, 'audio/wav');
                   } catch (e: any) {
                     addLogEntry(`Loop send error: ${e?.message}`, 'error');
                     setVoiceStatus('listening');
@@ -1868,7 +1868,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                   try {
                     const base64 = await fs.readFile(resultPath, 'base64');
                     setVoiceStatus('transcribing');
-                    syncClient.sendAudioInput(base64, 'audio/m4a');
+                    syncClient.sendAudioInput(base64, 'audio/wav');
                     addLogEntry('Loop: forced send after max duration', 'sent');
                   } catch (e: any) {
                     setVoiceStatus('listening');
@@ -2233,7 +2233,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const fs = require('react-native-fs');
         const base64 = await fs.readFile(pendingAudioPath, 'base64');
         setChatVoiceStatus('Sending to desktop...');
-        syncClient.sendAudioInput(base64, 'audio/m4a');
+        syncClient.sendAudioInput(base64, 'audio/wav');
         addLogEntry('Voice message sent', 'sent');
         setPendingAudioPath(null);
         // Status will update via mobile-voice-incoming / transcript events
@@ -2312,7 +2312,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         }
 
         const fs = require('react-native-fs');
-        const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-chat-voice-${Date.now()}.m4a`;
+        const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-chat-voice-${Date.now()}.wav`;
         const recorder = getSimpleAudioRecorder();
 
         // Set up silence detection listener for chat mode

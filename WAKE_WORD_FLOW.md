@@ -10,7 +10,7 @@
 - Click the Record button
 - Speak clearly and naturally
 - Let go when done (auto-stops at 5s)
-- Records to: `~/cache/wake_sample_0.m4a`, etc.
+- Records to: `~/cache/wake_sample_0.wav`, etc. (v3.9.4: was `.m4a`/MediaRecorder; now `.wav`/AudioRecord so the recorder stream can feed the openWakeWord send-phrase detector in real time — see `CHANGES_3.9.4.md`)
 
 ### Step 3: Audio Validation
 Each recording is validated:

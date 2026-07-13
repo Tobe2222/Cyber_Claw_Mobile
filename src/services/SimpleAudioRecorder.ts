@@ -5,7 +5,10 @@
  * 
  * API:
  *   - start(filepath: string, silenceTimeoutMs?: number) → Promise<void>
- *   - stop() → Promise<string> (returns m4a filepath)
+ *   - stop() → Promise<string> (returns WAV filepath; v3.9.4
+ *     switched from m4a/MediaRecorder to WAV/AudioRecord so
+ *     the recorder stream can be fed to the openWakeWord
+ *     send-phrase detector in lockstep with the recording)
  *   - isSilenceDetected() → boolean
  *   - dispose() → void
  * 
@@ -44,7 +47,9 @@ export class SimpleAudioRecorder {
 
   /**
    * Start recording to the specified filepath
-   * @param filepath Path where m4a file will be saved
+   * @param filepath Path where the WAV file will be saved
+   *   (v3.9.4: was m4a, now WAV — internal format change,
+   *   callers should pass a `.wav` path)
    * @param silenceTimeoutMs Timeout in milliseconds (default 5000)
    */
   async start(filepath: string, silenceTimeoutMs: number = 5000): Promise<void> {

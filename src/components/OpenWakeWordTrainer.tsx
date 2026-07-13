@@ -478,7 +478,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       try { await WakeWordModule?.stopSampleListening?.(); } catch (_) {}
 
       const recorder = getSimpleAudioRecorder();
-      const filename = `wake_sample_${Date.now()}.m4a`;
+      const filename = `wake_sample_${Date.now()}.wav`;
       const path = `${RNFS.CachesDirectoryPath}/${filename}`;
       // Start with a short silence timeout so single-word phrases stop
       // quickly once the user is done speaking. The actual stop happens
@@ -750,12 +750,12 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       // v3.2.5: ship the audio bytes themselves, not the on-phone
       // file paths. The desktop can't reach the phone's filesystem
       // (`/data/user/0/com.cyberclawmobile/cache/...`) so it always
-      // reported "sample not found". Read each .m4a as base64 and
+      // reported "sample not found". Read each .wav as base64 and
       // let the desktop decode and write it to its training dir.
       const encoded: Array<{ name: string; data: string }> = [];
       for (let i = 0; i < samples.length; i++) {
         const p = samples[i];
-        const name = p.split('/').pop() || `sample_${i}.m4a`;
+        const name = p.split('/').pop() || `sample_${i}.wav`;
         // readFile with 'base64' returns the raw base64 string.
         const data = await RNFS.readFile(p, 'base64');
         encoded.push({ name, data });
@@ -774,7 +774,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
         // Falls back to a numeric name if the phrase has
         // weird characters.
         const safeName = nm.phrase.replace(/[^a-z0-9]+/gi, '_').toLowerCase().slice(0, 20) || `near_miss_${i}`;
-        const name = `${safeName}_${i}.m4a`;
+        const name = `${safeName}_${i}.wav`;
         const data = await RNFS.readFile(nm.path, 'base64');
         nearMissEncoded.push({ name, data });
       }
