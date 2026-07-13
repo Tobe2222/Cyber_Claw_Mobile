@@ -1435,16 +1435,21 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // turn, or just background noise), stopAndSendRecording
   // drops the recording instead of sending it to STT.
   //
-  // Speech thresholds are intentionally conservative:
-  //   RMS > 0.01  → not pure silence (this filters out the
+  // Speech thresholds (v3.9.5 — match the native-side
+  // SPEECH_RMS_THRESHOLD so the gate fires when the
+  // native code recognizes speech, not at a stricter
+  // RMS that would never trigger):
+  //   RMS > 0.015 → not pure silence (this filters out the
   //                 far-field case where the mic recorded
-  //                 nothing)
+  //                 nothing). Mirrors the native
+  //                 SPEECH_RMS_THRESHOLD in WakeWordModule.kt.
   //   ZCR > 0.02  → not pure DC / clipping (this filters
-  //                 out the case where the mic saturated)
-  //   RMS > 0.03  → plausible speech level (this is the
-  //                 main gate — sustained ambient noise
-  //                 like HVAC / fan noise sits around
-  //                 0.005-0.015 RMS)
+  //                 out the case where the mic saturated).
+  //                 From the native owwVad emission path.
+  //   RMS > 0.015 → plausible speech level (the main
+  //                 gate — sustained ambient noise like
+  //                 HVAC / fan noise sits around
+  //                 0.001-0.005 RMS, well below this).
   //
   // Once the flag is set, it sticks for the turn — even
   // if the user goes quiet afterwards, we already know
@@ -1455,7 +1460,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     if (!emitter) return;
     const sub = emitter.addListener('owwVad', (e: { rms: number; zcr: number }) => {
       if (speechDetectedDuringRecordingRef.current) return;  // already marked
-      if (e.rms > 0.03 && e.zcr > 0.02) {
+      if (e.rms > 0.015 && e.zcr > 0.02) {
         speechDetectedDuringRecordingRef.current = true;
       }
     });

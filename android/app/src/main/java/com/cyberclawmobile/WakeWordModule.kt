@@ -841,12 +841,36 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         // listening. RMS energy is a much better "has the
         // user spoken" signal than MediaRecorder.maxAmplitude
         // because it's continuous (not quantized to whatever
-        // the encoder happened to capture last poll). The
-        // threshold is tuned for typical spoken-speech levels
-        // (~0.01-0.05 RMS for normal conversational speech,
-        // ~0.001-0.005 for ambient noise).
+        // the encoder happened to capture last poll).
+        //
+        // v3.9.5 — hysteresis. The previous single-threshold
+        // design (SPEECH_RMS_THRESHOLD = 0.01) cut users off
+        // mid-conversation because natural speech has 100-
+        // 300ms inter-word gaps where RMS dips below 0.01
+        // (briefly back to ambient-noise levels). Each dip
+        // started the silence counter, and once accumulated
+        // to silenceMs, the recording ended mid-sentence.
+        // Tobe reported this exactly: "the silence detector
+        // is too sensitive or not working correctly. It
+        // cuts me off mid conversation."
+        //
+        // Fix: separate thresholds. Speech detection (which
+        // resets the counter) uses the higher
+        // SPEECH_RMS_THRESHOLD. Silence detection (which
+        // accumulates counter) uses the lower
+        // SILENCE_RMS_THRESHOLD. The gap between them
+        // (hysteresis band) absorbs natural inter-word
+        // drops without the silence timer firing. Calibrated
+        // for typical conversational speech:
+        //   • Speech: RMS ≈ 0.02-0.10 (sustained words)
+        //   • Inter-word gap: RMS ≈ 0.008-0.012 (brief dips)
+        //   • Ambient noise floor: RMS ≈ 0.001-0.005
+        // With thresholds at 0.015 and 0.008, the gap
+        // (0.007 wide) absorbs inter-word drops without
+        // bleeding into ambient noise.
         val (rms, _) = computeEnergyAndZcr(chunkBuf)
-        val SPEECH_RMS_THRESHOLD = 0.01f
+        val SPEECH_RMS_THRESHOLD = 0.015f
+        val SILENCE_RMS_THRESHOLD = 0.008f
         val MIN_RECORDING_MS = 500L
         val MAX_RECORDING_MS = 30_000L
 
@@ -857,12 +881,24 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             }
             return
         }
+        // Speech band: above SPEECH_RMS_THRESHOLD, we're
+        // confident the user is talking. Reset silence counter.
         if (rms >= SPEECH_RMS_THRESHOLD) {
             recorderHasUserSpoken = true
             recorderSilentForMs = 0L
             return
         }
         if (!recorderHasUserSpoken) return
+        // Hysteresis band: RMS is between SILENCE and SPEECH
+        // thresholds. Don't reset counter (we're not in clear
+        // speech) but DON'T accumulate silence either — this
+        // is the natural inter-word gap zone. Bail without
+        // touching recorderSilentForMs.
+        if (rms >= SILENCE_RMS_THRESHOLD) {
+            return
+        }
+        // Below SILENCE_RMS_THRESHOLD: actually quiet enough
+        // to count as silence.
         if (recorderRecordingForMs < MIN_RECORDING_MS) return
         recorderSilentForMs += CHUNK_MS
         if (recorderSilentForMs >= silenceMs) {
