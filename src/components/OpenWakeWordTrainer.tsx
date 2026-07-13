@@ -46,6 +46,9 @@ import {
   Alert,
   TextInput,
   ScrollView,
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
   BackHandler,
   ActivityIndicator,
 } from 'react-native';
@@ -793,7 +796,35 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
 
   return (
     <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+      {/* v3.9.8 — keyboard UX fix. The wake-phrase
+          TextInput at the top, plus the per-row
+          near-miss TextInputs, were getting covered by
+          the soft keyboard when tapped. Fix:
+          1. KeyboardAvoidingView pushes content above
+             the keyboard (behavior="padding" on
+             Android is enough; "height" doesn't work
+             reliably with ScrollView).
+          2. ScrollView gets keyboardShouldPersistTaps
+             so tapping the mic/record button while the
+             keyboard is up doesn't first dismiss the
+             keyboard then re-tap on the next
+             interaction.
+          3. ScrollView gets keyboardDismissMode
+             so swiping down dismisses the keyboard
+             (standard iOS pattern; harmless on
+             Android).
+          Without these, Tobe had to manually scroll to
+          reach the "Tap to record one sample" button
+          after tapping the wake-phrase field. */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+      >
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
         <Text style={styles.title}>Train wake word for {companionName}</Text>
 
         {/* v3.2.8: trained-model status badge. Shown above the
@@ -1076,6 +1107,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
           </View>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Bottom bar — context-sensitive action */}
       {!isTrainingInProgress && !isFinished && (

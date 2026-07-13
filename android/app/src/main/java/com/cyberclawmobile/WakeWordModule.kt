@@ -1203,7 +1203,54 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             // setId defaults to `<phrase>-<timestamp>` so the
             // user can identify it in the manager; renaming
             // afterwards is supported.
+            //
+            // v3.9.8 — auto-cleanup of stale wake sets for
+            // the same (agentId, phrase) pair. Before v3.9.8,
+            // every training appended a new set without
+            // touching the old ones, so retraining the same
+            // phrase 3 times left 3 stale sets in the manager
+            // (all identical-looking, all 204.0 KB, all
+            // timestamped the same minute). Tobe hit this and
+            // asked "which is the correct version? Why are
+            // there more than one?". Cleanup happens BEFORE
+            // we write the new set, and skips:
+            //   - Sets for different (agentId, phrase)
+            //   - The set we're about to create (by name
+            //     match on `setId`)
+            //   - Any set that's currently bound as active
+            //     for a DIFFERENT agent (defensive — shouldn't
+            //     happen but doesn't cost us anything)
+            // The active binding for THIS agent is moved to
+            // the new set below, so the old active set (if
+            // any) is safe to delete.
             migrateWakeSetsSync()
+            val root = File(reactContext.filesDir, "wake_models")
+            if (root.isDirectory) {
+                val existing = root.listFiles() ?: emptyArray()
+                for (child in existing) {
+                    if (!child.isDirectory) continue
+                    val meta = readMeta(child) ?: continue
+                    // Same agent + same phrase = stale candidate.
+                    if (meta.agentId == agentId && meta.phrase.equals(phrase, ignoreCase = true)) {
+                        // Defensive: never delete a set that's
+                        // active for a *different* agent.
+                        // Shouldn't be possible (sets are scoped
+                        // to one agent) but free check.
+                        val prefs = reactContext.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+                        val activeForOther = prefs.all.keys.any {
+                            it.startsWith("active_") && it != "active_$agentId" && prefs.getString(it, null) == meta.setId
+                        }
+                        if (activeForOther) continue
+                        try {
+                            child.listFiles()?.forEach { it.delete() }
+                            child.delete()
+                            emitDebug("info", "Cleaned up stale wake set: ${meta.setId} (phrase=${meta.phrase})")
+                        } catch (e: Exception) {
+                            emitDebug("warn", "Failed to clean up stale wake set ${meta.setId}: ${e.message}")
+                        }
+                    }
+                }
+            }
             val now = System.currentTimeMillis()
             val safePhrase = phrase.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifEmpty { "wake" }
             val baseSetId = "$safePhrase-$now"
