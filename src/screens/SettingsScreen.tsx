@@ -214,6 +214,12 @@ export default function SettingsScreen({
   // turn immediately. Empty string disables the feature.
   const [voiceSendPhrase, setVoiceSendPhrase] = useState('send');
   const [voiceSendPhraseSavedAt, setVoiceSendPhraseSavedAt] = useState<number | null>(null);
+  // v3.9.8: your-turn cue sound preference. 'off' = silent
+  // (default; preserves existing behavior). 'bird' / 'bell' /
+  // 'ding' / 'chime' play the corresponding synthesized WAV
+  // after the desktop finishes its response. State only —
+  // persisted to AsyncStorage via updateVoiceTurnCue().
+  const [voiceTurnCue, setVoiceTurnCue] = useState<string>('off');
   // v3.8.3: trained-model info for the active send word.
   // Mirrors the wake trainer's getSavedWakeModels badge —
   // shows the user that a .tflite is actually installed on
@@ -542,6 +548,14 @@ export default function SettingsScreen({
         if (trimmed) setVoiceSendPhrase(trimmed);
       }
     });
+    // v3.9.8: hydrate the your-turn cue sound preference.
+    // Default 'off' (no sound) for users on older builds
+    // who never had this option.
+    AsyncStorage.getItem('cyberclaw-voice-turn-cue').then(v => {
+      if (v && ['off', 'bird', 'bell', 'ding', 'chime'].includes(v)) {
+        setVoiceTurnCue(v);
+      }
+    });
     // v3.8.3 → v3.8.7: hydrate the trained-model info.
     // The original (v3.8.3) version called loadSendModelInfo
     // inline here with the stale initial voiceSendPhrase
@@ -707,6 +721,20 @@ export default function SettingsScreen({
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
     audioBuffer.updateSettings(audioSettings);
     setAudioSettingsSavedAt(Date.now());
+  };
+
+  // v3.9.8: update the your-turn cue sound preference.
+  // Single-purpose so the UI can call it from the
+  // OptionBtn onPress without rebuilding the save
+  // pipeline. Persists to AsyncStorage immediately (no
+  // separate save button needed) so the next voice-mode
+  // session picks up the new value without waiting for
+  // the user to back out of Settings.
+  const updateVoiceTurnCue = async (cue: string) => {
+    setVoiceTurnCue(cue);
+    try {
+      await AsyncStorage.setItem('cyberclaw-voice-turn-cue', cue);
+    } catch (_) {}
   };
 
   // Debounced auto-save for wake greeting
@@ -1318,6 +1346,31 @@ export default function SettingsScreen({
                 </Text>
               </View>
             )}
+
+            {/* v3.9.8 — your-turn cue sound. Plays after the
+                desktop's audio response finishes and we're
+                about to start the next recording window.
+                Default is 'off' (no sound) so existing users
+                don't get surprised. The four synthesized
+                sounds (bird / bell / ding / chime) are bundled
+                in android/app/src/main/assets/sounds/. They
+                are short, gentle, and designed for repeated
+                playback. The setting is global for v3.9.8;
+                per-companion cue sounds land in v3.10.0. */}
+            <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+            <SubTitle>🔔 Your-turn cue sound</SubTitle>
+            <Hint>Plays when the companion finishes talking and it's your turn to speak. Set to "Off" for no sound; choose a tone for an audio cue alongside the visual "YOUR TURN" overlay.</Hint>
+            <Label>Sound</Label>
+            <View style={styles.optionRow}>
+              {['off', 'bird', 'bell', 'ding', 'chime'].map(opt => (
+                <OptionBtn
+                  key={opt}
+                  active={(voiceTurnCue || 'off') === opt}
+                  label={opt.charAt(0).toUpperCase() + opt.slice(1)}
+                  onPress={() => updateVoiceTurnCue(opt)}
+                />
+              ))}
+            </View>
           </Section>
       </>
 

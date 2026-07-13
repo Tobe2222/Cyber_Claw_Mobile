@@ -78,9 +78,18 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // sub-page, that companion gets its own per-companion value.
 export const SILENCE_MS_KEY = 'cyberclaw-voice-silence-ms';
 
-export const DEFAULT_SILENCE_MS = 5000;
-export const MIN_SILENCE_MS = 2000;
-export const MAX_SILENCE_MS = 10000;
+// v3.9.7 — bumped defaults. Tobe (v3.9.5 testing): "We
+// should have longer silence detection. Or a way to
+// detect drawn out words due to thinking." Natural
+// conversational pauses for "thinking out loud" routinely
+// hit 6-8 seconds; the v3.9.5 default of 5s cut users
+// off mid-thought. New defaults give 6s silence + 5s
+// countdown = 11s total before send. MIN bumped to 3s so
+// even the most aggressive setting is conversation-
+// friendly (was 2s, too tight).
+export const DEFAULT_SILENCE_MS = 6000;
+export const MIN_SILENCE_MS = 3000;
+export const MAX_SILENCE_MS = 15000;
 
 /** v3.7.2: per-companion silence key builder. */
 export const getSilenceMsKey = (companionId: string) =>
@@ -93,6 +102,29 @@ export const MAX_PHRASE_LENGTH = 40;
 /** v3.6.0: send word. Global, single word, default 'send'. */
 export const SEND_PHRASE_KEY = 'cyberclaw-send-phrase';
 export const DEFAULT_SEND_PHRASE = 'send';
+
+/**
+ * v3.9.8: your-turn cue sound. Plays after the desktop's
+ * audio response finishes and we're about to start the
+ * next recording window. Tells the user "your turn to
+ * talk now" via a short gentle sound instead of relying
+ * on visual overlay alone. Values:
+ *   - 'off'         no sound (default; conservative)
+ *   - 'bird'        synthesized 3-note rising bird chirp (0.5s)
+ *   - 'bell'        soft two-tone bell, E5+B5 (1.0s)
+ *   - 'ding'        single gentle A5 ding (0.8s)
+ *   - 'chime'       C5-E5-G arpeggio chime (0.9s)
+ *
+ * The actual WAV files are bundled at android/app/src/main/
+ * assets/sounds/turn-{id}.wav. Synthesized from sine waves
+ * at build time (zero external assets, zero license
+ * concerns). The setting is global (not per-companion) for
+ * v3.9.8; per-companion cue sounds are planned for v3.10.0.
+ */
+export const TURN_CUE_KEY = 'cyberc…-turn-cue';
+export const DEFAULT_TURN_CUE = 'off';
+export const TURN_CUE_OPTIONS = ['off', 'bird', 'bell', 'ding', 'chime'] as const;
+export type TurnCueId = typeof TURN_CUE_OPTIONS[number];
 export const getSendSamplesKey = (phrase: string) =>
   `cyberclaw-send-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 

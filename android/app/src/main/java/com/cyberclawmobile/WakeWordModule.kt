@@ -786,7 +786,23 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             // close on owwExitDetected; that handler is
             // identical to the OWW thread's exit path so
             // behavior is consistent.
-            val EXIT_HIGH_SCORE_RUN = 3
+            //
+            // v3.9.7 — bumped from 3 to 5 frames for the
+            // recorder path specifically. Tobe reported the
+            // exit phrase firing "a couple of times" during
+            // conversation without him saying the configured
+            // exit word. The OWW path uses 3 (240ms
+            // confirmation) because the wake word is
+            // short and distinct. The exit phrase ("thanks",
+            // default) is a 1-syllable common word that
+            // appears all the time in natural speech — it
+            // needs a longer confirmation window to avoid
+            // false positives. 5 × 80ms = 400ms
+            // confirmation is still well within natural
+            // perception time but filters out single-frame
+            // detector spikes that the 3-frame window let
+            // through.
+            val EXIT_HIGH_SCORE_RUN = 5
             if (exitScore != null && exitScore >= exitThreshold) {
                 recorderExitHighScoreFrames++
                 if (recorderExitHighScoreFrames >= EXIT_HIGH_SCORE_RUN) {

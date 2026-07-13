@@ -1098,11 +1098,20 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // silenceMs replaces the previous hardcoded 5000.
       // After continuous silence, give a 3s countdown so
       // the user can keep talking if they want; then send.
+      //
+      // v3.9.7 — bumped countdown from 3s to 5s. Pairs with
+      // the longer silenceMs default (6s) so the total
+      // "user goes silent → audio sent" window is now
+      // 6s + 5s = 11s, comfortable for conversational
+      // pauses including mid-thought hesitations. The 5s
+      // countdown also gives a clearer visual cue
+      // ("Sending in 5...") that the user can interrupt
+      // by speaking again.
       const unsubSilence = recorder.once('silence', async () => {
         addVoiceLog(`⏳ Silence detected (${silenceMs}ms)...`);
         addLogEntry(`Wake/Voice Mode: silence detected after ${silenceMs}ms`, 'info');
         setVoiceStatus('silence_countdown');
-        let count = 3;
+        let count = 5;
         const tick = setInterval(async () => {
           count--;
           if (count <= 0) {
@@ -1291,12 +1300,46 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // from the playback's audio focus, and the silence
       // window starts fresh from a quiet room.
       const RESPONSE_SETTLE_DELAY_MS = 1500;
+      // v3.9.8 — idempotency guard. audioPlayerFinished
+      // listeners are added with `addListener` (not once)
+      // and never cleaned up; combined with the turn-cue
+      // sound also calling startPlayer (which emits
+      // audioPlayerFinished on completion), a single
+      // response can trigger afterPlayback 2-3 times.
+      // Without this guard the recording turn starts
+      // multiple times, the turn cue plays multiple times,
+      // and listeners accumulate across turns. The flag
+      // makes afterPlayback a no-op on subsequent calls
+      // within the same audio-response window.
+      let afterPlaybackFired = false;
       const afterPlayback = async () => {
+        if (afterPlaybackFired) return;
+        afterPlaybackFired = true;
         // Wait for the response to settle before starting
         // the next recording turn. This prevents the
         // multi-turn loop from treating the post-response
         // silence as "user done talking".
         await new Promise((resolve) => setTimeout(resolve, RESPONSE_SETTLE_DELAY_MS));
+
+        // v3.9.8 — play the user's chosen turn-cue sound
+        // BEFORE starting the recording turn. This gives
+        // the user a clear audio signal that the mic is
+        // about to be live and it's their turn to speak.
+        // Fire-and-forget: if the cue sound fails to play,
+        // the recording still starts. The visual overlay
+        // ("🎤 YOUR TURN") is the always-on fallback.
+        // Read the cue setting fresh (user may have
+        // changed it during the response).
+        try {
+          const { TURN_CUE_KEY, DEFAULT_TURN_CUE } = require('../services/VoiceSettings');
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          const cue = (await AsyncStorage.getItem(TURN_CUE_KEY)) || DEFAULT_TURN_CUE;
+          if (cue && cue !== 'off') {
+            const path = `file:///android_asset/sounds/turn-${cue}.wav`;
+            WakeWordModule?.startPlayer?.(path)?.catch(() => {});
+            addLogEntry(`🔔 Turn cue: ${cue}`, 'debug');
+          }
+        } catch (_) {}
 
         if (voiceMode) {
           // Multi-turn loop: immediately start another
@@ -1357,7 +1400,17 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       const wordCount = (msg.text || '').split(/\s+/).length;
       const fallbackMs = Math.max(6000, Math.ceil((wordCount / 130) * 60 * 1000) + 3000);
       setTimeout(afterPlayback, fallbackMs);
-      // Also listen for audioPlayerFinished
+      // Also listen for audioPlayerFinished. v3.9.8:
+      // with the turn-cue sound also calling startPlayer
+      // (which emits audioPlayerFinished on completion),
+      // this listener fires once for the response audio
+      // and once for the cue sound. The afterPlaybackFired
+      // guard inside afterPlayback makes the second call
+      // a no-op so only one recording window starts per
+      // audio-response. Proper listener cleanup (capture
+      // + remove on effect teardown) is left as a
+      // follow-up — the symptom (multiple recording
+      // starts per turn) is fixed by the guard.
       wakeWordEmitter?.addListener('audioPlayerFinished', afterPlayback);
     };
     syncClient.on('chat', onChat);
