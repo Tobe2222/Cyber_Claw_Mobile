@@ -894,6 +894,24 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     if (stopInFlightRef.current) return;
     stopInFlightRef.current = true;
     const recorder = getSimpleAudioRecorder();
+    // v3.9.2 — voiceStatus reset helper for early-return branches.
+    // The state was getting stuck on 'silence_countdown' (the
+    // "⏳ Sending..." overlay) after the gibberish-gate skip and
+    // similar no-send paths, because those branches cleared
+    // wakeWordBusyRef/stopInFlightRef but never reset the
+    // overlay state. Tobe hit this in v3.9.1: silence → skip →
+    // restart → silence again → skip → overlay stuck on "Sending"
+    // forever while the log showed "Still listening".
+    const resetVoiceStatus = () => {
+      // Only reset if we're in a transient state that wouldn't
+      // otherwise be cleared. Don't clobber 'greeting' or
+      // 'responding' (those are owned by other handlers).
+      setVoiceStatus(prev =>
+        prev === 'silence_countdown' || prev === 'transcribing'
+          ? 'listening'
+          : prev
+      );
+    };
     try {
       let resultPath: string;
       try {
@@ -902,12 +920,14 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         addLogEntry(`Wake Mode: stop() failed (${triggerReason}): ${e?.message}`, 'error');
         wakeWordBusyRef.current = false;
         stopInFlightRef.current = false;
+        resetVoiceStatus();
         return;
       }
       if (!resultPath) {
         addLogEntry('Wake Mode: no recording path', 'error');
         wakeWordBusyRef.current = false;
         stopInFlightRef.current = false;
+        resetVoiceStatus();
         return;
       }
       const fs = require('react-native-fs');
@@ -920,6 +940,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         addLogEntry('Wake Mode: base64 too small, treating as empty', 'error');
         wakeWordBusyRef.current = false;
         stopInFlightRef.current = false;
+        resetVoiceStatus();
         if (voiceMode) {
           addVoiceLog('🎤 No speech, still listening...');
           startRecordingTurnRef.current?.().catch(() => {});
@@ -938,6 +959,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         addVoiceLog('🔇 No speech detected, skipping…');
         wakeWordBusyRef.current = false;
         stopInFlightRef.current = false;
+        resetVoiceStatus();
         if (voiceMode) {
           addVoiceLog('🎤 Still listening...');
           startRecordingTurnRef.current?.().catch(() => {});
@@ -962,6 +984,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           addLogEntry('⏰ Transcribing timeout (30s) — no response from desktop', 'error');
           addVoiceLog('⏰ No response, retrying...');
           wakeWordBusyRef.current = false;
+          resetVoiceStatus();
           if (voiceMode) {
             // Start a new recording turn so the loop
             // continues. The user can keep talking.
