@@ -393,6 +393,11 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             var silentFor = 0L
             var recordingFor = 0L
             var hasUserSpoken = false
+            // v3.9.3 — counter for emitting owwVad events from
+            // the recorder path. POLL_MS is 500ms, so emitting
+            // every 2 polls = ~1Hz, well within bridge budget.
+            var vadEmitTick = 0
+            val VAD_EMIT_EVERY_POLLS = 2
             val SILENCE_THRESHOLD = 1000 // ~3% of max; filters out mic hiss but catches speaking breaks
             val MIN_RECORDING_MS = 500L   // shorter warmup — 500ms before silence-check begins
             val MAX_RECORDING_MS = 30_000L // hard cap: 30s total recording, then auto-send regardless
@@ -417,6 +422,47 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     // detection. The polling loop above already
                     // captures amplitude; future work can add a
                     // real-time envelope event here.
+                    //
+                    // v3.9.3 — emit owwVad events here so the JS
+                    // gibberish gate has RMS/ZCR data during voice
+                    // mode turns. The OWW listening thread (which
+                    // normally emits owwVad) is explicitly stopped
+                    // at the top of this function (isListening =
+                    // false) to prevent dual audio reads from MIC,
+                    // so without this the JS-side
+                    // speechDetectedDuringRecordingRef stayed
+                    // false for the entire turn and EVERY
+                    // recording got dropped by the gate. Tobe hit
+                    // this in v3.9.2: send phrase spoken, gate
+                    // skipped it, looped on silence. Emit at the
+                    // same ~5Hz cadence as the OWW side (every
+                    // other 500ms poll = every 1s) to keep bridge
+                    // traffic bounded. RMS is the normalized
+                    // maxAmplitude (0..1); ZCR is not available
+                    // from MediaRecorder, so we synthesize a
+                    // pseudo-ZCR: 0.10 when amp is above the
+                    // silence threshold (i.e. speech-like), 0.0
+                    // otherwise. The JS gate only checks RMS>0.03
+                    // AND ZCR>0.02, so this passes for any
+                    // amp > SILENCE_THRESHOLD and fails for
+                    // silence. Net effect: the JS gate fires
+                    // exactly when the native hasUserSpoken flag
+                    // fires.
+                    vadEmitTick++
+                    if (vadEmitTick >= VAD_EMIT_EVERY_POLLS) {
+                        vadEmitTick = 0
+                        val rms = (amp.coerceAtLeast(0).toFloat() / 32767f).coerceIn(0f, 1f)
+                        // Synthesize ZCR: speech-like audio has
+                        // moderate ZCR; silence is 0.
+                        val zcr = if (amp >= SILENCE_THRESHOLD) 0.10f else 0f
+                        val vadParams = Arguments.createMap()
+                        vadParams.putDouble("rms", rms.toDouble())
+                        vadParams.putDouble("zcr", zcr.toDouble())
+                        handler.post {
+                            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                .emit("owwVad", vadParams)
+                        }
+                    }
                     // Speech detection: amplitude above threshold
                     // means the user is talking. Mark `hasUserSpoken`
                     // so future silence checks know to fire.
