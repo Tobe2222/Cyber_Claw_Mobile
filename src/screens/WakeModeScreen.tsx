@@ -127,6 +127,24 @@ interface WakeModeScreenProps {
 export default function WakeModeScreen({ companionId, agents, onExit, voiceMode = false, onWakeMatch }: WakeModeScreenProps) {
   const webViewRef = useRef<WebView>(null);
   const recorderActiveRef = useRef<boolean>(false);
+  // v3.9.6 — ref for the per-turn silence listener unsub.
+  // startRecordingTurn registers `recorder.once('silence', ...)`
+  // and stores the unsub here; stopAndSendRecording calls it at
+  // the top to clean up. Without this, listeners accumulate
+  // across turns (e.g. when silence never fires because the
+  // turn ended via send-word or gibberish-gate skip) and ALL of
+  // them fire on the next silence event — each one runs its
+  // own 3s countdown and calls stopAndSendRecording, so the
+  // first silence event after a few turns cuts every recording
+  // off within 1s instead of silenceMs + 3s. Tobe reported
+  // this in v3.9.5: "longer conversation → faster silence".
+  const silenceUnsubRef = useRef<(() => void) | null>(null);
+  // v3.9.6 — ref for the JS-side 3s countdown setInterval id.
+  // Same accumulation problem: the silence handler starts a
+  // countdown; if the turn ends early (via send-word, etc.) the
+  // countdown is orphaned and keeps ticking in the background,
+  // eventually firing stopAndSendRecording on the next turn.
+  const silenceCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
   const wakeWordBusyRef = useRef(false);
   const appStateRef = useRef<string>(AppState.currentState);
@@ -894,6 +912,20 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     if (stopInFlightRef.current) return;
     stopInFlightRef.current = true;
     const recorder = getSimpleAudioRecorder();
+    // v3.9.6 — always clear the silence listener + countdown
+    // interval at the top of stopAndSendRecording. Covers all
+    // paths: silence-fired (already auto-unsubscribed by
+    // `once`, but the JS countdown interval might still be
+    // ticking), send-word (turn ended early, listener and
+    // interval still pending), no-speech skip (same). Without
+    // this, listeners and intervals accumulate across turns
+    // and a later silence event cuts everything off fast.
+    silenceUnsubRef.current?.();
+    silenceUnsubRef.current = null;
+    if (silenceCountdownIntervalRef.current != null) {
+      clearInterval(silenceCountdownIntervalRef.current);
+      silenceCountdownIntervalRef.current = null;
+    }
     // v3.9.2 — voiceStatus reset helper for early-return branches.
     // The state was getting stuck on 'silence_countdown' (the
     // "⏳ Sending..." overlay) after the gibberish-gate skip and
@@ -1050,6 +1082,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       const recPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wakemode-${Date.now()}.wav`;
       const recorder = getSimpleAudioRecorder();
 
+      // v3.9.6 — clean up any prior turn's silence listener
+      // and countdown interval before registering a fresh
+      // one. Prevents the listener-accumulation bug where
+      // every silence event after a few turns fires all
+      // accumulated listeners at once.
+      silenceUnsubRef.current?.();
+      silenceUnsubRef.current = null;
+      if (silenceCountdownIntervalRef.current != null) {
+        clearInterval(silenceCountdownIntervalRef.current);
+        silenceCountdownIntervalRef.current = null;
+      }
+
       // v3.2.17 — silence detection. The user's configured
       // silenceMs replaces the previous hardcoded 5000.
       // After continuous silence, give a 3s countdown so
@@ -1063,10 +1107,13 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           count--;
           if (count <= 0) {
             clearInterval(tick);
+            silenceCountdownIntervalRef.current = null;
             await stopAndSendRecording('silence');
           }
         }, 1000);
+        silenceCountdownIntervalRef.current = tick;
       });
+      silenceUnsubRef.current = unsubSilence;
 
       await recorder.start(recPath, silenceMs);
       recorderActiveRef.current = true;
