@@ -187,6 +187,22 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // STT pipeline. Reset to false at the start of each
   // recording turn.
   const speechDetectedDuringRecordingRef = useRef<boolean>(false);
+  // v3.10.15: counter for consecutive recording turns
+  // where no speech was detected. See the gibberish gate
+  // below and MAX_CONSECUTIVE_EMPTY_ROUNDS. Reset to 0
+  // whenever speech IS detected (we got useful audio)
+  // or voice mode exits.
+  const consecutiveEmptyRoundsRef = useRef<number>(0);
+  // v3.10.15: how many "no speech" rounds before we
+  // exit voice mode automatically. Tobe's v3.10.14
+  // feedback: "if it does not detect recognizable
+  // speech for a couple of rounds it should just exit
+  // voice mode." 3 rounds (each round is up to
+  // 7s silence + 5s countdown = ~12s) gives ~36s of
+  // total silence before exit — long enough that an
+  // idle user gets a clear "I'm giving up, please come
+  // back" exit instead of an infinite loop.
+  const MAX_CONSECUTIVE_EMPTY_ROUNDS = 3;
   // v3.6.0 — guards against double-fire when two end-of-
   // turn triggers (silence timer + send word) race for the
   // same recording. Set true the moment stopAndSendRecording
@@ -1068,12 +1084,36 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // bug: the app used to keep recording indefinitely
       // and ship silence to the desktop which then got
       // hallucinated into a response.
+      //
+      // v3.10.15: count consecutive empty rounds. If we
+      // hit 3 rounds of "no speech" (or "silence
+      // detected without speech") without ever hearing
+      // from the user, exit voice mode automatically.
+      // Tobe's v3.10.14 feedback: "if it does not detect
+      // recognizable speech for a couple of rounds it
+      // should just exit voice mode. I think we have
+      // that tho its just that it seems for each round
+      // it goes it cuts me off more frequently." Without
+      // this, an idle user (Tobe thinking about his
+      // reply, looking at his phone, etc.) gets trapped
+      // in a loop of "no speech → still listening → no
+      // speech → still listening" forever.
       if (!speechDetectedDuringRecordingRef.current) {
         addLogEntry(`Wake Mode: no speech detected (${triggerReason}), dropping`, 'info');
         addVoiceLog('🔇 No speech detected, skipping…');
         wakeWordBusyRef.current = false;
         stopInFlightRef.current = false;
         resetVoiceStatus();
+        consecutiveEmptyRoundsRef.current++;
+        const empty = consecutiveEmptyRoundsRef.current;
+        addLogEntry(`Wake Mode: consecutive empty rounds = ${empty}`, 'debug');
+        if (voiceMode && empty >= MAX_CONSECUTIVE_EMPTY_ROUNDS) {
+          addLogEntry(`Wake Mode: ${MAX_CONSECUTIVE_EMPTY_ROUNDS} consecutive empty rounds — exiting voice mode`, 'info');
+          addVoiceLog(`🚪 No speech for ${empty} rounds — exiting voice mode`);
+          consecutiveEmptyRoundsRef.current = 0;
+          exitRef.current();
+          return;
+        }
         if (voiceMode) {
           addVoiceLog('🎤 Still listening...');
           startRecordingTurnRef.current?.().catch(() => {});
@@ -1781,6 +1821,13 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // ignored here.
       if (!speechDetectedDuringRecordingRef.current && e.rms > 0.015 && e.zcr > 0.02) {
         speechDetectedDuringRecordingRef.current = true;
+        // v3.10.15: reset the empty-rounds counter —
+        // the user is actually speaking now, so the
+        // gibberish-gate exit path doesn't apply.
+        // Without this, a user who talks then goes
+        // silent for 3 rounds would exit even though
+        // they were active earlier in the session.
+        consecutiveEmptyRoundsRef.current = 0;
       }
       // v3.10.9: speech-resume detection during the
       // silence countdown. The silence countdown runs
