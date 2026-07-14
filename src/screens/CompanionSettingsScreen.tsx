@@ -378,15 +378,55 @@ export default function CompanionSettingsScreen({
   // same reason as SettingsScreen, the picker
   // could be stale when the user returns from
   // the wake manager or trainer route.
+  //
+  // v3.10.4: bulletproof fetch. Calls
+  // `getSavedWakeModels` (active-only filter)
+  // AND `listWakeSets` (all sets) and merges.
+  // If the active-only filter returns empty for
+  // an agent (e.g. active binding is stale / lost
+  // / pointing at a deleted set), the fallback
+  // picks the most-recent set for that agent. The
+  // two previous versions (3.10.1, 3.10.2) only
+  // used getSavedWakeModels; Tobe hit a real
+  // gap where the manager (listWakeSets) showed
+  // an active set but the Settings + Wake
+  // Settings sub-page both showed "Not trained"
+  // — confirming the active-only filter misses
+  // sets the manager sees. The merge gives us
+  // the manager's data via a different code path
+  // and the active-only filter's data via another;
+  // whichever populates first wins.
   useEffect(() => {
     let cancelled = false;
-    const fetch = () => {
-      WakeWordModule?.getSavedWakeModels?.()
-        .then((models: any) => {
-          if (cancelled || !models) return;
-          const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
-          for (const agentId of Object.keys(models)) {
-            const entry = models[agentId];
+    const fetch = async () => {
+      try {
+        const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
+        const [savedModels, allSets] = await Promise.all([
+          WakeWordModule?.getSavedWakeModels?.().catch(() => null),
+          WakeWordModule?.listWakeSets?.().catch(() => null),
+        ]);
+        if (cancelled) return;
+        // Resolve the active setId for every
+        // available companion in parallel — these
+        // are cheap SharedPreferences reads, so it's
+        // safe to fan out rather than serialise in
+        // the loop below.
+        const activeByCompanion: Record<string, string | null> = {};
+        await Promise.all(
+          availableCompanions.map(async (c) => {
+            try {
+              activeByCompanion[c.id] = await WakeWordModule?.getActiveWakeSet?.(c.id);
+            } catch (_) {
+              activeByCompanion[c.id] = null;
+            }
+          }),
+        );
+        if (cancelled) return;
+        const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
+        // 1. Seed from getSavedWakeModels (active-only).
+        if (savedModels && typeof savedModels === 'object') {
+          for (const agentId of Object.keys(savedModels)) {
+            const entry = savedModels[agentId];
             if (entry?.phrase && entry?.path) {
               out[agentId] = {
                 phrase: entry.phrase,
@@ -396,9 +436,56 @@ export default function CompanionSettingsScreen({
               };
             }
           }
-          setSavedWakeModels(out);
-        })
-        .catch(() => {});
+        }
+        // 2. Fill gaps from listWakeSets. For each
+        // companion in availableCompanions that
+        // doesn't have a savedModels entry, look up
+        // their active set on the manager. If the
+        // agent has any sets, pick the active one
+        // (matched via getActiveWakeSet(agentId)),
+        // otherwise pick the most-recently-created.
+        // Either way, populate out[agentId] so the
+        // per-companion page can show "Trained: X"
+        // even if the active binding is broken.
+        if (allSets && typeof allSets === 'object') {
+          for (const c of availableCompanions) {
+            if (out[c.id]?.phrase) continue; // already populated
+            // listWakeSets returns { setId: entry } where
+            // entry.agentId may be null (legacy) or set.
+            // Filter to entries that match this companion.
+            const candidates = Object.entries(allSets)
+              .map(([setId, raw]: [string, any]) => ({ setId, ...raw }))
+              .filter((e: any) => !e.agentId || e.agentId === c.id);
+            if (candidates.length === 0) continue;
+            const activeId = activeByCompanion[c.id];
+            const active = candidates.find((e: any) => e.setId === activeId);
+            const fallback = [...candidates].sort(
+              (a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0),
+            )[0];
+            const picked = active || fallback;
+            if (picked?.phrase) {
+              const dirPath = `wake_models/${picked.setId}/model.tflite`;
+              out[c.id] = {
+                phrase: picked.phrase,
+                displayName: picked.displayName || picked.phrase,
+                // The path stored by getSavedWakeModels
+                // is the absolute on-disk path; for the
+                // listWakeSets fallback we don't have
+                // the absolute path, but the picker only
+                // uses it for "is this row showing?"
+                // display, so a relative path works.
+                // The trainer / manager still operate
+                // off the setId directly.
+                path: picked.path || dirPath,
+                savedAt: picked.createdAt || 0,
+              };
+            }
+          }
+        }
+        setSavedWakeModels(out);
+      } catch (_) {
+        // best-effort. Empty savedWakeModels is fine.
+      }
     };
     fetch();
     const sub = AppState.addEventListener('change', (state) => {
@@ -558,9 +645,22 @@ export default function CompanionSettingsScreen({
       ? `Default: "${voiceExitPhrase}"`
       : 'Not set';
   const wakeModel = savedWakeModels[companion.id];
+  // v3.10.4: don't claim "not trained" when the JS state
+  // hasn't populated yet. Tobe hit this in v3.10.3: the
+  // manager (listWakeSets path) correctly showed "Hey
+  // Clawsuu" as ✓ Active, but the v3.10.3-era
+  // getSavedWakeModels-only fetch in this screen returned
+  // empty for the same agent — so the card said "Not
+  // trained — uses default wake if no active wake is
+  // bound", a flat-out false claim since a wake word WAS
+  // bound. The bulletproof listWakeSets fallback (right
+  // above this) populates savedWakeModels correctly now;
+  // even if a future fetch gap returns empty again, fall
+  // through to a neutral hint that points at Wake Sets
+  // instead of claiming false state.
   const wakeStatusLine = wakeModel?.phrase
     ? `Trained: "${wakeModel.displayName || wakeModel.phrase}"`
-    : 'Not trained — uses default wake if no active wake is bound';
+    : 'No active wake on this phone — open Wake Sets to manage trained phrases';
 
   // Dispatch
   if (companionViewPhase === 'wake') {
@@ -1202,6 +1302,16 @@ function WakePhrasePicker({
   // though the Wake Manager (separate code path) shows
   // a trained set. Re-fetch here as a fallback so the
   // hint text is always accurate.
+  //
+  // v3.10.4: merged getSavedWakeModels + listWakeSets,
+  // same as the parent screen's effect. Picker rows
+  // should show the same set the manager sees; the
+  // active-only filter from getSavedWakeModels can
+  // miss sets whose meta.json is missing agentId (the
+  // listWakeSets path doesn't require agentId presence
+  // for the display, only for the active check). With
+  // this fallback, a picker row for a companion that
+  // has an active set always appears.
   const [localSavedModels, setLocalSavedModels] = useState<
     Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>
   >({});
@@ -1210,25 +1320,67 @@ function WakePhrasePicker({
     const fetch = async () => {
       try {
         const { NativeModules } = require('react-native');
-        const models = await NativeModules.WakeWordModule?.getSavedWakeModels?.();
-        if (cancelled || !models) return;
+        const WakeWordModule = NativeModules.WakeWordModule;
+        const [savedModels, allSets] = await Promise.all([
+          WakeWordModule?.getSavedWakeModels?.().catch(() => null),
+          WakeWordModule?.listWakeSets?.().catch(() => null),
+        ]);
+        if (cancelled) return;
         const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
-        for (const agentId of Object.keys(models)) {
-          const entry = models[agentId];
-          if (entry?.phrase && entry?.path) {
-            out[agentId] = {
-              phrase: entry.phrase,
-              // v3.10.1: include displayName from the
-              // native response. Falls back to phrase
-              // on legacy meta. Used by the picker
-              // row to show the human-friendly name.
-              displayName: entry.displayName || entry.phrase,
-              path: entry.path,
-              savedAt: entry.savedAt || 0,
-            };
+        // Seed from getSavedWakeModels (active-only).
+        if (savedModels && typeof savedModels === 'object') {
+          for (const agentId of Object.keys(savedModels)) {
+            const entry = savedModels[agentId];
+            if (entry?.phrase && entry?.path) {
+              out[agentId] = {
+                phrase: entry.phrase,
+                displayName: entry.displayName || entry.phrase,
+                path: entry.path,
+                savedAt: entry.savedAt || 0,
+              };
+            }
           }
         }
-        if (Object.keys(out).length > 0) setLocalSavedModels(out);
+        // Fill gaps from listWakeSets. For every companion
+        // we know about, if it doesn't have a savedModels
+        // entry yet, look up sets that match (or have no
+        // agentId — legacy) and pick the active one, or
+        // the most recently created. Either way, the
+        // picker can show a row.
+        if (allSets && typeof allSets === 'object') {
+          for (const c of companions) {
+            if (out[c.id]?.phrase) continue;
+            const candidates = Object.entries(allSets)
+              .map(([setId, raw]: [string, any]) => ({ setId, ...raw }))
+              .filter((e: any) => !e.agentId || e.agentId === c.id);
+            if (candidates.length === 0) continue;
+            let activeId: string | null = null;
+            try {
+              activeId = await WakeWordModule?.getActiveWakeSet?.(c.id);
+            } catch (_) {}
+            if (cancelled) return;
+            const active = activeId ? candidates.find((e: any) => e.setId === activeId) : undefined;
+            const fallback = [...candidates].sort(
+              (a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0),
+            )[0];
+            const picked = active || fallback;
+            if (picked?.phrase) {
+              out[c.id] = {
+                phrase: picked.phrase,
+                displayName: picked.displayName || picked.phrase,
+                path: picked.path || `wake_models/${picked.setId}/model.tflite`,
+                savedAt: picked.createdAt || 0,
+              };
+            }
+          }
+        }
+        // Note: only write if we actually have data.
+        // Parent's effect is the authoritative source for
+        // the wake-status-line display; this local cache is
+        // best-effort and only writes when it has rows
+        // (so it doesn't clobber a populated parent with
+        // an empty result in a race).
+        if (Object.keys(out).length > 0 && !cancelled) setLocalSavedModels(out);
       } catch (_) {}
     };
     fetch();

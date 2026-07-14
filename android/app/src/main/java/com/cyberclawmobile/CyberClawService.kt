@@ -122,9 +122,37 @@ class CyberClawService : Service() {
         val text = Regex("\"(text|partial)\"\\s*:\\s*\"([^\"]+)\"")
             .find(json)?.groupValues?.get(2)?.lowercase() ?: return
         if (text.isBlank()) return
-        if (PhoneticMatcher.matches(text, wakePhrase)) {
-            Log.d("CyberClawService", "Wake phrase detected in service: $text")
-            handler.post { openApp() }
+        // v3.10.4: stricter threshold for the BG service.
+        // The PhoneticMatcher default (0.55) was tuned for
+        // shorter wake phrases like "hey jarvis" and
+        // mistakenly fires on partial Vosk transcripts like
+        // "hey" alone for a 2-word target like "hey
+        // clawsuu" — avgScore for heard="hey" / target=
+        // "hey clawsuu" is (1.0 + 0.14) / 2 = 0.57, just
+        // above 0.55, which is what Tobe hit on v3.10.3: he
+        // got repeated false wake triggers after training
+        // a unique phrase, because Vosk would emit "hey"
+        // whenever anyone nearby spoke, and the matcher
+        // would say MATCH. 0.7 keeps room for genuine fuzzy
+        // matches (typos, mid-word sounds) but rejects
+        // single-word partials.
+        //
+        // We also require the heard text to contain AT
+        // LEAST the same number of word tokens as the
+        // target (modulo one — "hey claws" with target
+        // "hey clawsuu" still passes via 5/7 Levenshtein),
+        // so a single "hey" can't match "hey clawsuu".
+        if (PhoneticMatcher.matches(text, wakePhrase, threshold = 0.7)) {
+            val heardWords = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+            val targetWords = wakePhrase.split(Regex("\\s+")).filter { it.isNotBlank() }
+            // Allow up to N-1 missing tokens (the OWW /
+            // PhoneticMatcher is forgiving for prefix
+            // matches). Disallow 0 tokens (rare in this
+            // truthy-short-text case but worth a guard).
+            if (heardWords.size >= targetWords.size - 1 && heardWords.isNotEmpty()) {
+                Log.d("CyberClawService", "Wake phrase detected in service: $text")
+                handler.post { openApp() }
+            }
         }
     }
 

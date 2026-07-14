@@ -482,33 +482,81 @@ export default function SettingsScreen({
   // picker is gone; the trigger is now onOpenCompanion(id)
   // from the list row (handled by App.tsx route swap), so we just
   // refresh on mount + whenever availableCompanions grows.
+  //
+  // v3.10.4: same bulletproof merge as CompanionSettingsScreen.
+  // Calls both `getSavedWakeModels` (active-only) and
+  // `listWakeSets` (all sets), filling gaps in one with the
+  // other. The Settings screen row is no longer
+  // user-facing for wake info (v3.10.3 stripped the
+  // "no wake yet" hint), but the per-companion
+  // `WakePhrasePicker` (rendered on CompanionSettingsScreen)
+  // reads its own `savedWakeModels`, so this state still
+  // needs to populate correctly for picker consistency.
+  // The Settings-side state remains here for any
+  // forward-compat per-row wake pickers we may re-add.
   useEffect(() => {
     let cancelled = false;
-    const fetch = () => {
-      WakeWordModule?.getSavedWakeModels?.()
-        .then((models: any) => {
-          if (cancelled || !models) return;
-          // models is a JS Map<string, {agentId, phrase, path, savedAt, displayName}>
-          const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
-          for (const agentId of Object.keys(models)) {
-            const entry = models[agentId];
+    const fetch = async () => {
+      try {
+        const { NativeModules } = require('react-native');
+        const WakeWordModule = NativeModules.WakeWordModule;
+        const [savedModels, allSets] = await Promise.all([
+          WakeWordModule?.getSavedWakeModels?.().catch(() => null),
+          WakeWordModule?.listWakeSets?.().catch(() => null),
+        ]);
+        if (cancelled) return;
+        const activeByCompanion: Record<string, string | null> = {};
+        await Promise.all(
+          availableCompanions.map(async (c: any) => {
+            try {
+              activeByCompanion[c.id] = await WakeWordModule?.getActiveWakeSet?.(c.id);
+            } catch (_) {
+              activeByCompanion[c.id] = null;
+            }
+          }),
+        );
+        if (cancelled) return;
+        const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
+        if (savedModels && typeof savedModels === 'object') {
+          for (const agentId of Object.keys(savedModels)) {
+            const entry = savedModels[agentId];
             if (entry?.phrase && entry?.path) {
               out[agentId] = {
                 phrase: entry.phrase,
-                // v3.10.1: include displayName from the
-                // native response. Falls back to phrase
-                // on legacy meta. Used by the companion
-                // list row to show the human-friendly
-                // name like "wake: \"Hey Clawsuu\"".
                 displayName: entry.displayName || entry.phrase,
                 path: entry.path,
                 savedAt: entry.savedAt || 0,
               };
             }
           }
-          setSavedWakeModels(out);
-        })
-        .catch(() => {});
+        }
+        if (allSets && typeof allSets === 'object') {
+          for (const c of availableCompanions) {
+            if (out[c.id]?.phrase) continue;
+            const candidates = Object.entries(allSets)
+              .map(([setId, raw]: [string, any]) => ({ setId, ...raw }))
+              .filter((e: any) => !e.agentId || e.agentId === c.id);
+            if (candidates.length === 0) continue;
+            const activeId = activeByCompanion[c.id];
+            const active = candidates.find((e: any) => e.setId === activeId);
+            const fallback = [...candidates].sort(
+              (a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0),
+            )[0];
+            const picked = active || fallback;
+            if (picked?.phrase) {
+              out[c.id] = {
+                phrase: picked.phrase,
+                displayName: picked.displayName || picked.phrase,
+                path: picked.path || `wake_models/${picked.setId}/model.tflite`,
+                savedAt: picked.createdAt || 0,
+              };
+            }
+          }
+        }
+        if (!cancelled) setSavedWakeModels(out);
+      } catch (_) {
+        // best-effort.
+      }
     };
     fetch();
     // v3.10.1: also refetch when the screen comes back

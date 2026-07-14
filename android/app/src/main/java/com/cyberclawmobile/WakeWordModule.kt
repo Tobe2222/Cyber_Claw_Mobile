@@ -289,13 +289,25 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
         emitDebug("partial", text)
 
-        if (PhoneticMatcher.matches(text, wakePhrase)) {
-            Log.d("WakeWord", "Wake phrase detected: $text (target: $wakePhrase)")
-            handler.post {
-                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                    .emit("wakeWordDetected", null)
+        // v3.10.4: same stricter threshold + token-count
+        // guard as CyberClawService. The
+        // PhoneticMatcher default of 0.55 fires on
+        // "hey" for target "hey clawsuu" (avgScore
+        // 0.57) — Tobe's v3.10.3 false trigger source.
+        // Threshold 0.7 + require >= N-1 words
+        // knocks out the single-word partials while
+        // keeping fuzzy full-phrase matches.
+        if (PhoneticMatcher.matches(text, wakePhrase, threshold = 0.7)) {
+            val heardWords = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+            val targetWords = wakePhrase.split(Regex("\\s+")).filter { it.isNotBlank() }
+            if (heardWords.size >= targetWords.size - 1 && heardWords.isNotEmpty()) {
+                Log.d("WakeWord", "Wake phrase detected: $text (target: $wakePhrase)")
+                handler.post {
+                    reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                        .emit("wakeWordDetected", null)
+                }
+                emitDebug("detected", text)
             }
-            emitDebug("detected", text)
         }
     }
 

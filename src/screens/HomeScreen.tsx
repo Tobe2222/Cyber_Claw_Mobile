@@ -171,8 +171,44 @@ async function startBgService() {
   try {
     const enabled = await AsyncStorage.getItem('cyberclaw-bg-listening');
     if (enabled !== 'false' && BackgroundService) {
+      // v3.10.4: prefer the trained wake phrase from
+      // the active set (the manager's source of truth)
+      // over `cyberclaw-audio-settings.wakeWord`. The
+      // audio-settings key is correct MOST of the time
+      // (the trainer / manager write it on every wake
+      // update), but if it's stale — e.g. the user
+      // toggled BG listening on BEFORE training their
+      // first wake phrase, or the key was wiped by a
+      // test path that bypassed the v3.10.1 sync — the
+      // BG service would fall back to the
+      // 'hey clawsuu' default and false-trigger on
+      // any Vosk partial containing 'hey'. The active
+      // set is the actual bound phrase the OWW
+      // detector is using; passing it through keeps
+      // BG service in lockstep with the foreground
+      // detector.
       const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-      const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+      let phrase = settingsRaw ? JSON.parse(settingsRaw).wakeWord : '';
+      if (!phrase) {
+        const agentId = await AsyncStorage.getItem('cyberclaw-active-wake-companion').catch(() => null);
+        if (agentId) {
+          try {
+            const sets = await WakeWordModule?.listWakeSets?.().catch(() => null);
+            if (sets && typeof sets === 'object') {
+              const candidates = Object.entries(sets)
+                .map(([setId, raw]: [string, any]) => ({ setId, ...raw }))
+                .filter((e: any) => !e.agentId || e.agentId === agentId);
+              const activeId = await WakeWordModule?.getActiveWakeSet?.(agentId).catch(() => null);
+              const active = activeId ? candidates.find((e: any) => e.setId === activeId) : null;
+              const picked = active || [...candidates].sort(
+                (a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0),
+              )[0];
+              if (picked?.phrase) phrase = picked.phrase;
+            }
+          } catch (_) {}
+        }
+      }
+      if (!phrase) phrase = 'hey clawsuu';
       await BackgroundService.start(phrase);
     }
   } catch {}
