@@ -479,6 +479,60 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   }, [speak]);
   playExitReplyRef.current = playExitReply;
 
+  // v3.10.13: play the user's chosen turn-cue sound and
+  // wait for it to finish. Used by both the
+  // response-complete path (afterPlayback in onAudioResponse)
+  // and the no-response-retry path (transcribingTimeout in
+  // stopAndSendRecording) so the user always gets audio
+  // feedback that their turn is starting, regardless of
+  // whether the desktop responded.
+  //
+  // Tobe's v3.10.12 feedback: "This time it failed to
+  // respond for some reason and again it continued the
+  // conversation Instead of retrying. And when it was
+  // the user turn it did not make the cue sound either."
+  // The second part is the relevant bug here — when the
+  // desktop times out, afterPlayback never fires (no audio
+  // = no audioPlayerFinished = no cue). The user transitions
+  // to a new recording turn silently. Calling this function
+  // from the no-response retry path fixes that.
+  //
+  // Implementation notes (lifted from the inline block in
+  // afterPlayback):
+  // - Reads the cue setting fresh each call (user may
+  //   change it during the response)
+  // - Waits for audioPlayerFinished OR a 3s safety timeout
+  // - Resolves on either: cue played to completion OR
+  //   cue failed OR 3s elapsed
+  const playTurnCueAndWait = useCallback(async (): Promise<void> => {
+    try {
+      const { TURN_CUE_KEY, DEFAULT_TURN_CUE } = require('../services/VoiceSettings');
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const cue = (await AsyncStorage.getItem(TURN_CUE_KEY)) || DEFAULT_TURN_CUE;
+      if (!cue || cue === 'off') return;
+      const path = `file:///android_asset/sounds/turn-${cue}.wav`;
+      addLogEntry(`🔔 Turn cue: ${cue}`, 'debug');
+      let cueFinished = false;
+      const cueSub = wakeWordEmitter?.addListener('audioPlayerFinished', () => {
+        cueFinished = true;
+      });
+      WakeWordModule?.startPlayer?.(path)?.catch((e: any) => {
+        addLogEntry(`Turn cue play failed: ${e?.message || e}`, 'warn');
+        cueFinished = true;
+      });
+      await new Promise<void>((resolve) => {
+        const start = Date.now();
+        const tick = setInterval(() => {
+          if (cueFinished || Date.now() - start > 3000) {
+            clearInterval(tick);
+            resolve();
+          }
+        }, 50);
+      });
+      cueSub?.remove?.();
+    } catch (_) {}
+  }, []);
+
   // v3.2.20 — clear the transcribing-timeout on unmount so a
   // stale timer can't fire after the user has already left
   // voice mode.
@@ -1069,17 +1123,33 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           if (voiceMode) {
             // Start a new recording turn so the loop
             // continues. The user can keep talking.
-            startRecordingTurnRef.current?.()
-              .then(() => {
-                // startRecordingTurn sets 'listening'
-                // internally; nothing to do.
-              })
-              .catch(() => {
-                // If the new turn couldn't start,
-                // clear the retrying state so the
-                // overlay doesn't get stuck.
+            //
+            // v3.10.13: play the turn cue BEFORE opening
+            // the new recording window so the user gets
+            // audio feedback that "it's your turn again".
+            // Previously the cue only played on the
+            // successful-response path (via afterPlayback);
+            // on a no-response retry there was no cue
+            // because audioPlayerFinished never fired.
+            playTurnCueAndWait().then(() => {
+              startRecordingTurnRef.current?.()
+                .then(() => {
+                  // startRecordingTurn sets 'listening'
+                  // internally; nothing to do.
+                })
+                .catch(() => {
+                  // If the new turn couldn't start,
+                  // clear the retrying state so the
+                  // overlay doesn't get stuck.
+                  setVoiceStatus('listening');
+                });
+            }).catch(() => {
+              // If the cue itself failed, still try to
+              // start the recording turn.
+              startRecordingTurnRef.current?.().catch(() => {
                 setVoiceStatus('listening');
               });
+            });
           }
         }
       }, 30000);
@@ -1456,63 +1526,15 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         // BEFORE starting the recording turn. This gives
         // the user a clear audio signal that the mic is
         // about to be live and it's their turn to speak.
-        // Fire-and-forget: if the cue sound fails to play,
-        // the recording still starts. The visual overlay
-        // ("🎤 YOUR TURN") is the always-on fallback.
-        // Read the cue setting fresh (user may have
-        // changed it during the response).
         //
-        // v3.10.7: wait for the cue to finish playing
-        // before starting the recorder. The original
-        // fire-and-forget + immediate-recorder-start pattern
-        // was racy: the recorder (AudioRecord) opens the
-        // audio HAL within ~50-100ms of the cue's
-        // MediaPlayer.start(), and even though the player
-        // doesn't request audio focus, the same audio HAL
-        // stream being opened twice in quick succession
-        // would cut the cue off after only the first
-        // 100-200ms — enough that Tobe never heard it.
-        // (The v3.9.8 code logs "🔔 Turn cue: bird" etc.
-        // so we KNOW the cue was attempted; the bug was
-        // the race, not a missing file or wrong key.)
-        //
-        // Fix: wait for the cue's audioPlayerFinished
-        // event (emitted from MediaPlayer.setOnCompletionListener
-        // in WakeWordModule.kt's startPlayer) before
-        // starting the recording turn. Use a 3s safety
-        // timeout so the recording still starts if the cue
-        // somehow never completes (e.g. cue file missing,
-        // prepare() failed silently). The visual overlay
-        // flips to 'listening' (YOUR TURN) immediately so
-        // the user always sees the cue state change — only
-        // the mic activation is gated on the cue.
-        try {
-          const { TURN_CUE_KEY, DEFAULT_TURN_CUE } = require('../services/VoiceSettings');
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-          const cue = (await AsyncStorage.getItem(TURN_CUE_KEY)) || DEFAULT_TURN_CUE;
-          if (cue && cue !== 'off') {
-            const path = `file:///android_asset/sounds/turn-${cue}.wav`;
-            addLogEntry(`🔔 Turn cue: ${cue}`, 'debug');
-            let cueFinished = false;
-            const cueSub = wakeWordEmitter?.addListener('audioPlayerFinished', () => {
-              cueFinished = true;
-            });
-            WakeWordModule?.startPlayer?.(path)?.catch((e: any) => {
-              addLogEntry(`Turn cue play failed: ${e?.message || e}`, 'warn');
-              cueFinished = true;
-            });
-            await new Promise<void>((resolve) => {
-              const start = Date.now();
-              const tick = setInterval(() => {
-                if (cueFinished || Date.now() - start > 3000) {
-                  clearInterval(tick);
-                  resolve();
-                }
-              }, 50);
-            });
-            cueSub?.remove?.();
-          }
-        } catch (_) {}
+        // v3.10.13: lifted the cue-play + wait-for-completion
+        // logic out of afterPlayback into a shared
+        // playTurnCueAndWait() callback (defined near
+        // playExitReply). Now also called from the
+        // no-response retry path so the user gets the
+        // cue on EVERY transition to a new recording
+        // turn, not just after successful responses.
+        await playTurnCueAndWait();
 
         if (voiceMode) {
           // Multi-turn loop: immediately start another
