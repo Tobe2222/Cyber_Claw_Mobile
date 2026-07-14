@@ -149,6 +149,42 @@ export default function CompanionSettingsScreen({
 
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>>({});
 
+  // v3.10.2: trained-exit-phrase list for the
+  // overview card. Lifted to the screen level so
+  // the hook rule is honored — renderCompanionOverview
+  // is called from a dispatch (not always called),
+  // and putting useState/useEffect inside it would
+  // break the same-hook-order rule (same v3.7.1
+  // bug class that bit voice picker state).
+  //
+  // CRITICAL: this hook MUST live ABOVE any
+  // early-return paths (e.g. `if (!companion)
+  // return <placeholder />`) so it's called on
+  // every render. In v3.10.1 the state was
+  // declared AFTER the `if (!companion)` early
+  // return; on the first render the cache hadn't
+  // hydrated so the early return fired without
+  // the hook, then the cache populated and the
+  // hook ran on the second render — different
+  // hook counts between renders → "Rendered
+  // more hooks than during the previous render"
+  // crash. The same rule applies to the resolved
+  // `companion` lookup below — never wrap the
+  // hook declaration in conditional logic.
+  const [trainedExitPhrases, setTrainedExitPhrases] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+        const prefix = `cyberclaw-exit-samples-${companionId}-`;
+        const list = keys
+          .filter(k => k.startsWith(prefix))
+          .map(k => k.replace(prefix, '').replace(/-/g, ' '));
+        setTrainedExitPhrases(list);
+      } catch (_) {}
+    })();
+  }, [companionId]);
+
   // v3.10.0: trainer + manager + exit-trainer are now
   // full-screen routes in App.tsx, pushed via
   // onPushWakeTrainer / onPushWakeManager /
@@ -509,34 +545,19 @@ export default function CompanionSettingsScreen({
     );
   }
 
-  // v3.10.1: trained-exit-phrase list for the
-  // overview card. Lifted to the screen level so
-  // the hook rule is honored — renderCompanionOverview
-  // is called from a dispatch (not always called),
-  // and putting useState/useEffect inside it would
-  // break the same-hook-order rule (same v3.7.1
-  // bug class that bit voice picker state).
-  const [trainedExitPhrases, setTrainedExitPhrases] = useState<string[]>([]);
-  useEffect(() => {
-    (async () => {
-      try {
-        const keys = await AsyncStorage.getAllKeys();
-        const prefix = `cyberclaw-exit-samples-${companionId}-`;
-        const list = keys
-          .filter(k => k.startsWith(prefix))
-          .map(k => k.replace(prefix, '').replace(/-/g, ' '));
-        setTrainedExitPhrases(list);
-      } catch (_) {}
-    })();
-  }, [companionId]);
+  // v3.10.2: per-companion status lines for the
+  // overview cards. Computed after the early
+  // return so `companion` is guaranteed to be
+  // defined (the dispatch below only runs when
+  // we have a companion). The trainedExitPhrases
+  // state + effect are at the screen level (above
+  // the early return) so this is just derivation.
   const exitStatusLine = trainedExitPhrases.length > 0
     ? `Trained: "${trainedExitPhrases[0]}"`
     : voiceExitPhrase
       ? `Default: "${voiceExitPhrase}"`
       : 'Not set';
-  // Wake status: derived from savedWakeModels map
-  // (already hydrated by the parent's effect).
-  const wakeModel = savedWakeModels[companionId];
+  const wakeModel = savedWakeModels[companion.id];
   const wakeStatusLine = wakeModel?.phrase
     ? `Trained: "${wakeModel.displayName || wakeModel.phrase}"`
     : 'Not trained — uses default wake if no active wake is bound';

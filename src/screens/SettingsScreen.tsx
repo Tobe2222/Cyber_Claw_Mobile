@@ -1252,38 +1252,35 @@ export default function SettingsScreen({
             ) : (
               <View style={styles.companionList}>
                 {availableCompanions.map(c => {
-                  const isActive = activeWakeCompanionId === c.id;
-                  // v3.10.1: removed the wake-status line
-                  // entirely. Tobe: "It should not say
-                  // anything there but rather in the
-                  // wake and exit section when the
-                  // companion is clicked." The Settings
-                  // companion list now stays clean (just
-                  // emoji + name + active indicator).
-                  // Wake / exit status lives in the
-                  // per-companion detail page
-                  // (CompanionSettingsScreen phase=null),
-                  // which now shows a status line under
-                  // each of the Wake / Exit / Voice
-                  // phase cards.
+                  // v3.10.2: removed the green active
+                  // indicator from the Settings
+                  // companion list row. Tobe:
+                  // "clawsuu in my case is green in
+                  // the settings, like its active,
+                  // No need for that." The green
+                  // border + name tint + ◉ dot
+                  // conveyed which companion has the
+                  // active wake — useful when the
+                  // list also showed wake-status
+                  // text, but redundant now that the
+                  // status moved to the per-
+                  // companion page. The list is now
+                  // visually uniform across all
+                  // companions; the active state is
+                  // visible only by drilling into the
+                  // companion's Wake Settings.
                   return (
                     <TouchableOpacity
                       key={c.id}
-                      style={[
-                        styles.companionListRow,
-                        isActive && styles.companionListRowActive,
-                      ]}
+                      style={styles.companionListRow}
                       onPress={() => onOpenCompanion(c.id)}
                     >
                       <Text style={styles.companionListEmoji}>{c.emoji || c.icon || '🐾'}</Text>
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.companionListName, isActive && { color: '#10b981' }]}>
+                        <Text style={styles.companionListName}>
                           {c.name}
                         </Text>
                       </View>
-                      {isActive ? (
-                        <Text style={styles.companionListActive}>◉</Text>
-                      ) : null}
                       <Text style={styles.companionListArrow}>›</Text>
                     </TouchableOpacity>
                   );
