@@ -132,12 +132,61 @@ class OpenWakeWordDetector(private val context: Context) {
             } catch (e: Exception) {
                 Log.w(tag, "No bundled model for '$wakeword', looking for custom-trained file")
                 val context = context ?: return false
-                val customFile = java.io.File(context.filesDir, "wake_models/${wakeword}.tflite")
-                if (!customFile.exists()) {
-                    Log.e(tag, "No model file found for '$wakeword' (bundled or custom)")
-                    return false
+                // v3.10.1: look in BOTH the legacy flat
+                // path AND the v3.9.0 directory
+                // registry. The trainer writes to
+                // filesDir/wake_models/<setId>/model.tflite
+                // (directory-per-set) and the setId is a
+                // slugified, timestamped name
+                // (e.g. hey-clawsuu-1784025212000), NOT
+                // the typed phrase. So matching on the
+                // wakeword argument to find the file
+                // requires scanning the registry and
+                // matching by meta.json's phrase field
+                // (case-insensitive contains or exact
+                // match) rather than file name.
+                //
+                // Tobe hit a real-world false-wake bug
+                // from this: training completed,
+                // setWakeModelFromBase64 hot-swapped
+                // the model into the running detector,
+                // but the trainer's unmount cleanup
+                // called initOww(typed phrase) which
+                // closed + re-created the detector.
+                // loadModels couldn't find the file
+                // (it's at <setId>/model.tflite, not
+                // <phrase>.tflite), the new detector
+                // was half-initialized (melspec +
+                // embedding only, no wake classifier),
+                // and owwWakeDetected stopped firing.
+                // The BG service (Vosk + PhoneticMatcher,
+                // separate code path) was still
+                // running with the old phrase and
+                // produced the false wakes.
+                //
+                // 1. Try the legacy flat file (any
+                //    pre-v3.9.0 custom-trained model
+                //    plus the bundled pre-trained
+                //    wake words when the asset name
+                //    matches the wakeword arg).
+                val legacyFile = java.io.File(context.filesDir, "wake_models/${wakeword}.tflite")
+                if (legacyFile.exists()) {
+                    wakewordInterpreter = loadInterpreterFromFile(legacyFile.absolutePath)
+                } else {
+                    // 2. Scan the v3.9.0 directory
+                    //    registry for a set whose
+                    //    meta.json phrase matches the
+                    //    wakeword argument
+                    //    (case-insensitive). The
+                    //    active set wins; otherwise
+                    //    newest by createdAt.
+                    val matched = findWakeModelByPhrase(context, wakeword)
+                    if (matched == null) {
+                        Log.e(tag, "No model file found for '$wakeword' (bundled or custom)")
+                        return false
+                    }
+                    wakewordInterpreter = loadInterpreterFromFile(matched)
                 }
-                wakewordInterpreter = loadInterpreterFromFile(customFile.absolutePath)
             }
             // v3.5.0: exitInterpreter is NOT loaded here — it's
             // hot-swapped later when the user trains an exit
@@ -465,5 +514,91 @@ class OpenWakeWordDetector(private val context: Context) {
         return Interpreter(buffer, Interpreter.Options().apply {
             setNumThreads(1)
         })
+    }
+
+    /**
+     * v3.10.1: scan the v3.9.0 directory registry
+     * (filesDir/wake_models/<setId>/model.tflite) for
+     * a set whose meta.json phrase matches the given
+     * wakeword. Returns the absolute path of the
+     * matching model's model.tflite, or null if none.
+     *
+     * Match strategy:
+     *  1. Read SharedPreferences `wake_models` for
+     *     the active_<agentId> binding. If the
+     *     wakeword argument matches the active
+     *     set's agentId (case-insensitive), prefer
+     *     that set.
+     *  2. Otherwise, scan all sets, compare phrase
+     *     (case-insensitive, trimmed, exact match
+     *     preferred, contains-match as fallback).
+     *     Newest by createdAt wins ties.
+     *
+     * The reason for the SharedPreferences check
+     * first: when initOww is called with the typed
+     * phrase (e.g. "Hey Clawsuu"), the user usually
+     * wants the currently-active wake model. The
+     * active binding points to the setId whose
+     * meta.json.phrase is "Hey Clawsuu". Going
+     * straight to the active binding avoids
+     * matching an old, deleted set that happens to
+     * share the same phrase.
+     */
+    private fun findWakeModelByPhrase(context: android.content.Context, wakeword: String): String? {
+        val root = java.io.File(context.filesDir, "wake_models")
+        if (!root.isDirectory) return null
+        val normalized = wakeword.lowercase().trim()
+        // SharedPreferences: check if wakeword is
+        // an agentId with an active binding whose
+        // set's phrase matches. This is the common
+        // case for initOww(companionName) callers
+        // that already know the agentId.
+        try {
+            val prefs = context.getSharedPreferences("wake_models", android.content.Context.MODE_PRIVATE)
+            for ((key, _) in prefs.all) {
+                if (!key.startsWith("active_")) continue
+                val agentId = key.removePrefix("active_")
+                if (agentId.lowercase() != normalized) continue
+                val setId = prefs.getString(key, null) ?: continue
+                val modelFile = java.io.File(java.io.File(root, setId), "model.tflite")
+                if (modelFile.exists()) return modelFile.absolutePath
+            }
+        } catch (_: Exception) {
+            // ignore, fall through to scan
+        }
+        // Fallback: scan all sets, match by phrase.
+        // Higher score wins; for equal score, newer
+        // (larger createdAt) wins.
+        val children = root.listFiles() ?: return null
+        data class Match(val path: String, val score: Int, val createdAt: Long)
+        var best: Match? = null
+        for (setDir in children) {
+            if (!setDir.isDirectory) continue
+            val metaFile = java.io.File(setDir, "meta.json")
+            if (!metaFile.exists()) continue
+            val obj = try {
+                org.json.JSONObject(metaFile.readText())
+            } catch (_: Exception) { continue }
+            val phrase = obj.optString("phrase")
+            if (phrase.isEmpty()) continue
+            val phraseNorm = phrase.lowercase().trim()
+            // Exact match wins; contains-match is a
+            // fallback for partial-phrase callers.
+            val score = when {
+                phraseNorm == normalized -> 2
+                phraseNorm.contains(normalized) || normalized.contains(phraseNorm) -> 1
+                else -> 0
+            }
+            if (score == 0) continue
+            val createdAt = obj.optLong("createdAt")
+            val modelFile = java.io.File(setDir, "model.tflite")
+            if (!modelFile.exists()) continue
+            val cur = best
+            if (cur == null || score > cur.score ||
+                (score == cur.score && createdAt > cur.createdAt)) {
+                best = Match(modelFile.absolutePath, score, createdAt)
+            }
+        }
+        return best?.path
     }
 }

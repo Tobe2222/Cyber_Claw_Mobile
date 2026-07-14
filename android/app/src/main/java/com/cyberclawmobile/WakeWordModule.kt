@@ -1265,6 +1265,15 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 scope = "agent:$agentId",
                 agentId = agentId,
                 createdAt = now,
+                // v3.10.1: the human-friendly display name
+                // defaults to whatever the user typed in
+                // the trainer. The user can rename later
+                // (manager's Rename button) and the rename
+                // path (renameWakeSet) only touches setId
+                // for the folder, not displayName, so the
+                // typed phrase is preserved as the
+                // canonical name across renames.
+                displayName = phrase,
             ))
             emitDebug("info", "Wrote wake set: ${setDir.absolutePath} (${tflite.length()} bytes)")
 
@@ -1570,6 +1579,12 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     entry.putString("path", modelFile.absolutePath)
                     entry.putDouble("savedAt", meta.createdAt.toDouble())
                     entry.putString("setId", meta.setId)
+                    // v3.10.1: include displayName for the
+                    // JS-side badge UI. Falls back to phrase
+                    // on the JS side when null (old meta
+                    // files pre-v3.10.1 don't have the
+                    // field).
+                    entry.putString("displayName", meta.displayName ?: meta.phrase)
                     entry.putBoolean("active", true)
                     result.putMap(agentId, entry)
                 }
@@ -1681,6 +1696,11 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     val map = Arguments.createMap()
                     map.putString("setId", entry.setId)
                     map.putString("phrase", entry.phrase)
+                    // v3.10.1: include displayName for
+                    // the manager card title. Falls
+                    // back to phrase when the field is
+                    // absent (legacy meta).
+                    map.putString("displayName", entry.displayName ?: entry.phrase)
                     map.putString("scope", entry.scope)
                     if (entry.agentId != null) map.putString("agentId", entry.agentId)
                     map.putDouble("createdAt", entry.createdAt.toDouble())
@@ -1833,6 +1853,15 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         val scope: String,        // "agent:<id>" (always, for wake)
         val agentId: String?,
         val createdAt: Long,
+        // v3.10.1: human-friendly display name. Defaults
+        // to the typed phrase (e.g. "Hey Clawsuu") so the
+        // manager card top-line reads naturally instead of
+        // the filesystem slug `hey-clawsuu-1784025212000`.
+        // Tobe renamed sets via the manager's Rename button
+        // just to make the display look right; this field
+        // captures that intent at creation time so no
+        // manual rename is needed.
+        val displayName: String? = null,
     )
 
     private fun readMeta(file: File): WakeSetMeta? {
@@ -1845,6 +1874,12 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 scope = obj.optString("scope"),
                 agentId = obj.optString("agentId").takeIf { it.isNotEmpty() },
                 createdAt = obj.optLong("createdAt"),
+                // Old meta.json files (pre-v3.10.1) have
+                // no displayName key. readMeta treats
+                // missing as null, and the manager UI
+                // falls back to phrase. Backward
+                // compatible — no migration required.
+                displayName = obj.optString("displayName").takeIf { it.isNotEmpty() },
             )
         } catch (_: Exception) { null }
     }
@@ -1862,6 +1897,11 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         obj.put("scope", meta.scope)
         if (meta.agentId != null) obj.put("agentId", meta.agentId)
         obj.put("createdAt", meta.createdAt)
+        // v3.10.1: persist the human-friendly display
+        // name. Omit when null so the on-disk meta
+        // stays small (the field is optional in the
+        // data class and readMeta handles missing).
+        if (meta.displayName != null) obj.put("displayName", meta.displayName)
         File(setDir, "meta.json").writeText(obj.toString())
     }
 
@@ -1916,6 +1956,13 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     scope = "agent:$agentId",
                     agentId = agentId,
                     createdAt = savedAt,
+                    // v3.10.1: also set the display
+                    // name to the legacy phrase so
+                    // migrated sets show the
+                    // human-friendly name in the
+                    // manager (same as fresh-trained
+                    // sets).
+                    displayName = phrase,
                 ))
                 // Set active binding.
                 prefs.edit().putString("active_$agentId", newSetId).apply()

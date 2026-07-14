@@ -54,10 +54,11 @@ import {
 } from 'react-native';
 import RNFS from 'react-native-fs';
 import { NativeModules } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import syncClient from '../services/SyncClient';
 
-const { WakeWordModule } = NativeModules;
+const { WakeWordModule, BackgroundService } = NativeModules;
 
 const REQUIRED_SAMPLES = 6;  // 6 is a sweet spot for the synthetic-amplified pipeline
 // v3.8.2: optional near-miss recording. Recommended 3
@@ -704,6 +705,72 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       setStatusMsg(`Wake word ready. Saved to ${savedPath}`);
       // Clean up the sample WAVs from cache
       clearSamples();
+      // v3.10.1: push the new wake phrase to the
+      // background-listening service. Before this fix,
+      // the OWW detector (foreground, used while the
+      // app is in WakeModeScreen) got the hot-swap
+      // above, but the BACKGROUND CyberClawService
+      // (Vosk + PhoneticMatcher, runs whenever
+      // "Background listening" is on) kept listening
+      // for whatever was in
+      // `cyberclaw-audio-settings.wakeWord` — usually
+      // the old "hey clawsuu" default. Tobe hit this
+      // hard: trained a unique phrase, then got
+      // repeated false wakes because the BG service
+      // was still fuzzy-matching natural speech
+      // containing "hey" + vaguely similar second
+      // word against the OLD phrase. Three writes
+      // need to happen atomically with the training
+      // completion:
+      //
+      //   1. `cyberclaw-audio-settings.wakeWord` — the
+      //      phrase the BG service uses (read by
+      //      startBgService in HomeScreen).
+      //   2. `cyberclaw-active-wake-companion` — which
+      //      companion owns the active wake. The
+      //      Settings screen reads this to highlight
+      //      the right row.
+      //   3. If BG listening is enabled, restart
+      //      BackgroundService with the new phrase.
+      //      (stop + start, in case the running
+      //      service cached the old phrase and
+      //      doesn't pick up the AsyncStorage change
+      //      until restart.)
+      //
+      // We do these in parallel — none of them block
+      // the training completion, and a partial
+      // failure (e.g. AsyncStorage write fails) is
+      // logged but doesn't roll back the training
+      // (the .tflite is already on disk + hot-swapped
+      // into the OWW detector).
+      try {
+        const [settingsRaw, bgRaw] = await Promise.all([
+          AsyncStorage.getItem('cyberclaw-audio-settings'),
+          AsyncStorage.getItem('cyberclaw-bg-listening'),
+        ]);
+        const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+        settings.wakeWord = wakePhrase;
+        const writes = [
+          AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings)),
+          AsyncStorage.setItem('cyberclaw-active-wake-companion', companionId),
+        ];
+        await Promise.all(writes);
+        if (bgRaw === 'true' && BackgroundService?.stop && BackgroundService?.start) {
+          // BG listening is on. The running service
+          // cached the old phrase on start. Stop +
+          // start with the new phrase so the
+          // detector picks it up. Brief audio gap
+          // (~200ms) is acceptable — this is right
+          // after a training completion, the user
+          // hasn't started talking yet.
+          try { await BackgroundService.stop(); } catch (_) {}
+          try { await BackgroundService.start(wakePhrase); } catch (_) {}
+        }
+      } catch (_) {
+        // best-effort. The training itself succeeded;
+        // the BG service will pick up the new phrase
+        // the next time the app restarts / toggles.
+      }
     } catch (e: any) {
       setStage('error');
       setStatusMsg(`Activation failed: ${e?.message || 'unknown'}`);

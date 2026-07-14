@@ -28,6 +28,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Alert, Platform, NativeModules, BackHandler,
+  AppState,
 } from 'react-native';
 const { WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -146,7 +147,7 @@ export default function CompanionSettingsScreen({
 
   const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
 
-  const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
+  const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>>({});
 
   // v3.10.0: trainer + manager + exit-trainer are now
   // full-screen routes in App.tsx, pushed via
@@ -331,24 +332,46 @@ export default function CompanionSettingsScreen({
   // v3.4.4: refresh saved-wake-models whenever the
   // companion list grows or the active companion
   // changes (covers post-training refresh).
+  //
+  // v3.10.1: also include displayName from the
+  // native response (falls back to phrase on
+  // legacy meta) so the picker's row title can
+  // show the human-friendly name instead of the
+  // raw setId / phrase interchangeably. Also
+  // refetch on AppState 'active' transition —
+  // same reason as SettingsScreen, the picker
+  // could be stale when the user returns from
+  // the wake manager or trainer route.
   useEffect(() => {
-    WakeWordModule?.getSavedWakeModels?.()
-      .then((models: any) => {
-        if (!models) return;
-        const out: Record<string, { phrase: string; path: string; savedAt: number }> = {};
-        for (const agentId of Object.keys(models)) {
-          const entry = models[agentId];
-          if (entry?.phrase && entry?.path) {
-            out[agentId] = {
-              phrase: entry.phrase,
-              path: entry.path,
-              savedAt: entry.savedAt || 0,
-            };
+    let cancelled = false;
+    const fetch = () => {
+      WakeWordModule?.getSavedWakeModels?.()
+        .then((models: any) => {
+          if (cancelled || !models) return;
+          const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
+          for (const agentId of Object.keys(models)) {
+            const entry = models[agentId];
+            if (entry?.phrase && entry?.path) {
+              out[agentId] = {
+                phrase: entry.phrase,
+                displayName: entry.displayName || entry.phrase,
+                path: entry.path,
+                savedAt: entry.savedAt || 0,
+              };
+            }
           }
-        }
-        setSavedWakeModels(out);
-      })
-      .catch(() => {});
+          setSavedWakeModels(out);
+        })
+        .catch(() => {});
+    };
+    fetch();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') fetch();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, [availableCompanions.length, activeWakeCompanionId]);
 
   // Debounced auto-save for wake greeting
@@ -1077,7 +1100,7 @@ function WakePhrasePicker({
   onDelete,
 }: {
   companions: Companion[];
-  savedModels: Record<string, { phrase: string; path: string; savedAt: number }>;
+  savedModels: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>;
   activeCompanionId: string | null;
   onSelect: (companionId: string) => void;
   onRetrain: (companionId: string, phrase: string) => void;
@@ -1092,20 +1115,26 @@ function WakePhrasePicker({
   // a trained set. Re-fetch here as a fallback so the
   // hint text is always accurate.
   const [localSavedModels, setLocalSavedModels] = useState<
-    Record<string, { phrase: string; path: string; savedAt: number }>
+    Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>
   >({});
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+    const fetch = async () => {
       try {
         const { NativeModules } = require('react-native');
         const models = await NativeModules.WakeWordModule?.getSavedWakeModels?.();
-        if (!models) return;
-        const out: Record<string, { phrase: string; path: string; savedAt: number }> = {};
+        if (cancelled || !models) return;
+        const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
         for (const agentId of Object.keys(models)) {
           const entry = models[agentId];
           if (entry?.phrase && entry?.path) {
             out[agentId] = {
               phrase: entry.phrase,
+              // v3.10.1: include displayName from the
+              // native response. Falls back to phrase
+              // on legacy meta. Used by the picker
+              // row to show the human-friendly name.
+              displayName: entry.displayName || entry.phrase,
               path: entry.path,
               savedAt: entry.savedAt || 0,
             };
@@ -1113,7 +1142,28 @@ function WakePhrasePicker({
         }
         if (Object.keys(out).length > 0) setLocalSavedModels(out);
       } catch (_) {}
-    })();
+    };
+    fetch();
+    // v3.10.1: also re-fetch on focus. The
+    // parent's effect covers mount + dep
+    // changes, but returning from the wake
+    // manager route doesn't change the parent's
+    // deps (the active binding didn't change,
+    // the agent list didn't grow) so the
+    // picker's localSavedModels would stay
+    // stale. AppState 'active' fires when the
+    // screen comes back to focus from the
+    // trainer/manager route (those are full-
+    // screen pushes that don't change the JS
+    // app state to background, but the focus
+    // still happens when the route pops).
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') fetch();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, [Object.keys(savedModels).length]);
   // Merge parent + local. Parent wins (it has the
   // freshest data from the parent's effect).
@@ -1125,6 +1175,11 @@ function WakePhrasePicker({
       name: c.name,
       emoji: c.emoji || c.icon || '🐾',
       phrase: merged[c.id].phrase,
+      // v3.10.1: prefer the human-friendly
+      // displayName for the row's phrase
+      // display. Falls back to phrase on
+      // legacy meta.
+      displayName: merged[c.id].displayName || merged[c.id].phrase,
       savedAt: merged[c.id].savedAt,
     }));
 
@@ -1164,7 +1219,7 @@ function WakePhrasePicker({
                 {r.name}
               </Text>
               <Text style={styles.trainedPickerPhrase}>
-                {r.phrase}
+                {r.displayName}
               </Text>
             </View>
             <View style={styles.trainedPickerActions}>

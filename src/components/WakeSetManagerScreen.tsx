@@ -58,13 +58,20 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeModules } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
 
-const { WakeWordModule } = NativeModules;
+const { WakeWordModule, BackgroundService } = NativeModules;
 
 export type WakeSetEntry = {
   setId: string;
   phrase: string;
+  // v3.10.1: human-friendly display name
+  // (defaults to the typed phrase, can be
+  // edited via Rename). The manager card
+  // title uses this; setId is the
+  // filesystem-safe slug.
+  displayName?: string;
   scope: string;
   agentId?: string;
   createdAt: number;
@@ -122,6 +129,13 @@ export default function WakeSetManagerScreen({
           list.push({
             setId,
             phrase: entry.phrase || setId,
+            // v3.10.1: prefer the human-friendly
+            // displayName written by the trainer
+            // (the typed phrase, e.g. "Hey Clawsuu")
+            // and fall back to phrase for legacy
+            // meta.json files that don't have the
+            // field.
+            displayName: entry.displayName || entry.phrase || setId,
             scope: entry.scope || '',
             agentId: entry.agentId,
             createdAt: Number(entry.createdAt) || 0,
@@ -157,12 +171,44 @@ export default function WakeSetManagerScreen({
       await WakeWordModule.setActiveWakeSet(agentId, setId);
       setActiveSetId(setId);
       await refresh();
+      // v3.10.1: also push the new phrase to the
+      // background-listening service. Same reason
+      // as the trainer's _onModel: the running
+      // CyberClawService (Vosk + PhoneticMatcher)
+      // cached the old phrase on start and won't
+      // pick up the change until restart. Look up
+      // the activated set's phrase from the
+      // refreshed list so we know what to set.
+      try {
+        const activated = sets.find((s) => s.setId === setId);
+        const phrase = activated?.phrase;
+        if (phrase) {
+          const [settingsRaw, bgRaw] = await Promise.all([
+            AsyncStorage.getItem('cyberclaw-audio-settings'),
+            AsyncStorage.getItem('cyberclaw-bg-listening'),
+          ]);
+          const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+          settings.wakeWord = phrase;
+          await Promise.all([
+            AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings)),
+            AsyncStorage.setItem('cyberclaw-active-wake-companion', agentId),
+          ]);
+          if (bgRaw === 'true' && BackgroundService?.stop && BackgroundService?.start) {
+            try { await BackgroundService.stop(); } catch (_) {}
+            try { await BackgroundService.start(phrase); } catch (_) {}
+          }
+        }
+      } catch (_) {
+        // best-effort. The OWW hot-swap already
+        // happened in setActiveWakeSet; the BG
+        // service will sync on next app restart.
+      }
     } catch (e: any) {
       Alert.alert('Activation failed', e?.message || String(e));
     } finally {
       setBusy(null);
     }
-  }, [agentId, refresh]);
+  }, [agentId, refresh, sets]);
 
   const handleDelete = useCallback((setId: string, phrase: string) => {
     Alert.alert(
@@ -244,7 +290,36 @@ export default function WakeSetManagerScreen({
           msg.base64,
           msg.phrase || setId,
         )
-          .then(() => {
+          .then(async () => {
+            // v3.10.1: also push the imported phrase
+            // to the BG service. Same as the
+            // trainer's _onModel and handleActivate:
+            // update audio-settings + active-wake-
+            // companion, and restart the BG service
+            // if it's enabled. Otherwise the
+            // imported set is on disk + hot-swapped
+            // in the OWW detector, but the BG
+            // service keeps listening for the old
+            // phrase.
+            const importedPhrase = msg.phrase || setId;
+            try {
+              const [settingsRaw, bgRaw] = await Promise.all([
+                AsyncStorage.getItem('cyberclaw-audio-settings'),
+                AsyncStorage.getItem('cyberclaw-bg-listening'),
+              ]);
+              const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+              settings.wakeWord = importedPhrase;
+              await Promise.all([
+                AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings)),
+                AsyncStorage.setItem('cyberclaw-active-wake-companion', agentId),
+              ]);
+              if (bgRaw === 'true' && BackgroundService?.stop && BackgroundService?.start) {
+                try { await BackgroundService.stop(); } catch (_) {}
+                try { await BackgroundService.start(importedPhrase); } catch (_) {}
+              }
+            } catch (_) {
+              // best-effort.
+            }
             Alert.alert('Imported', `Pulled ${msg.sizeBytes || 0} bytes into "${setId}".`);
             setShowDesktopPicker(false);
             refresh();
@@ -342,14 +417,20 @@ export default function WakeSetManagerScreen({
           mySets.map((entry) => (
             <View key={entry.setId} style={[styles.setCard, entry.setId === activeSetId && styles.setCardActive]}>
               <View style={styles.setHeader}>
-                <Text style={styles.setId}>{entry.setId}</Text>
+                {/* v3.10.1: the human-friendly display
+                    name (the typed phrase) is the
+                    primary title. setId stays visible
+                    as a small muted line below so the
+                    user can still see the filesystem
+                    identifier for advanced use. */}
+                <Text style={styles.phrase}>{entry.displayName || entry.phrase}</Text>
                 {entry.setId === activeSetId ? (
                   <View style={styles.activeBadge}>
                     <Text style={styles.activeBadgeText}>✓ Active</Text>
                   </View>
                 ) : null}
               </View>
-              <Text style={styles.phrase}>{entry.phrase}</Text>
+              <Text style={styles.setId}>{entry.setId}</Text>
               <Text style={styles.meta}>
                 {formatBytes(entry.sizeBytes)} · {formatDate(entry.createdAt)}
               </Text>
@@ -540,7 +621,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   activeBadgeText: { color: '#22c55e', fontSize: 11, fontWeight: '700' },
-  phrase: { color: '#fff', fontSize: 18, fontWeight: '600', marginBottom: 4 },
+  phrase: { color: '#fff', fontSize: 18, fontWeight: '600', marginBottom: 4, flex: 1, marginRight: 8 },
   meta: { color: '#6b7280', fontSize: 12, marginBottom: 12 },
   actionRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
   actionBtn: {

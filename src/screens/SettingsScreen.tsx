@@ -111,7 +111,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
   Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules, BackHandler,
-  Modal, Pressable,
+  Modal, Pressable, AppState,
 } from 'react-native';
 const { BackgroundService, WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -287,7 +287,7 @@ export default function SettingsScreen({
   // v3.2.1: map of agentId -> {phrase, path, savedAt} for
   // companions that have a saved custom wake model. Used
   // to show "✓ trained" badges in the companion picker.
-  const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number }>>({});
+  const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>>({});
   // v3.4.4: selectedCompanionId / companionViewPhase
   // REMOVED — companion detail view now lives in its own
   // screen (CompanionSettingsScreen) reached via App.tsx's
@@ -483,24 +483,55 @@ export default function SettingsScreen({
   // from the list row (handled by App.tsx route swap), so we just
   // refresh on mount + whenever availableCompanions grows.
   useEffect(() => {
-    WakeWordModule?.getSavedWakeModels?.()
-      .then((models: any) => {
-        if (!models) return;
-        // models is a JS Map<string, {agentId, phrase, path, savedAt}>
-        const out: Record<string, { phrase: string; path: string; savedAt: number }> = {};
-        for (const agentId of Object.keys(models)) {
-          const entry = models[agentId];
-          if (entry?.phrase && entry?.path) {
-            out[agentId] = {
-              phrase: entry.phrase,
-              path: entry.path,
-              savedAt: entry.savedAt || 0,
-            };
+    let cancelled = false;
+    const fetch = () => {
+      WakeWordModule?.getSavedWakeModels?.()
+        .then((models: any) => {
+          if (cancelled || !models) return;
+          // models is a JS Map<string, {agentId, phrase, path, savedAt, displayName}>
+          const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
+          for (const agentId of Object.keys(models)) {
+            const entry = models[agentId];
+            if (entry?.phrase && entry?.path) {
+              out[agentId] = {
+                phrase: entry.phrase,
+                // v3.10.1: include displayName from the
+                // native response. Falls back to phrase
+                // on legacy meta. Used by the companion
+                // list row to show the human-friendly
+                // name like "wake: \"Hey Clawsuu\"".
+                displayName: entry.displayName || entry.phrase,
+                path: entry.path,
+                savedAt: entry.savedAt || 0,
+              };
+            }
           }
-        }
-        setSavedWakeModels(out);
-      })
-      .catch(() => {});
+          setSavedWakeModels(out);
+        })
+        .catch(() => {});
+    };
+    fetch();
+    // v3.10.1: also refetch when the screen comes back
+    // into focus via the AppState 'active' transition.
+    // Tobe hit a v3.9.9-vintage symptom: the Settings
+    // companion list showed "no wake word yet" even
+    // though the manager (separate code path, same
+    // `getSavedWakeModels` source) showed a trained
+    // set. Root cause was a stale JS-side cache that
+    // didn't refetch after returning from the wake
+    // trainer. The useEffect with deps
+    // [availableCompanions.length] doesn't fire on
+    // remount if the agents cache is still warm AND
+    // a fresh training was completed in another
+    // route. Re-fetching on every focus brings the
+    // two views back into agreement.
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') fetch();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, [availableCompanions.length]);
 
   // ── Initial load ──────────────────────────────────────────────
@@ -846,12 +877,17 @@ export default function SettingsScreen({
             WakeWordModule?.getSavedWakeModels?.()
               .then((models: any) => {
                 if (!models) return;
-                const out: Record<string, { phrase: string; path: string; savedAt: number }> = {};
+                const out: Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }> = {};
                 for (const agentId of Object.keys(models)) {
                   const entry = models[agentId];
                   if (entry?.phrase && entry?.path) {
                     out[agentId] = {
                       phrase: entry.phrase,
+                      // v3.10.1: include displayName from
+                      // the native response so the
+                      // companion list row shows the
+                      // human-friendly name.
+                      displayName: entry.displayName || entry.phrase,
                       path: entry.path,
                       savedAt: entry.savedAt || 0,
                     };
@@ -1233,7 +1269,7 @@ export default function SettingsScreen({
                           {c.name}
                         </Text>
                         <Text style={styles.companionListDetail}>
-                          {savedModel?.phrase ? `wake: "${savedModel.phrase}"` : 'no wake word yet'}
+                          {savedModel?.phrase ? `wake: "${savedModel.displayName || savedModel.phrase}"` : 'no wake word yet'}
                         </Text>
                       </View>
                       {isActive ? (
