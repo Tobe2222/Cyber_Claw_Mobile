@@ -1401,7 +1401,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // to mentally prepare, the mic has time to release
       // from the playback's audio focus, and the silence
       // window starts fresh from a quiet room.
-      const RESPONSE_SETTLE_DELAY_MS = 2500;
+      const RESPONSE_SETTLE_DELAY_MS = 4000;
       // v3.10.9: bumped from 1500ms to 2500ms. Tobe's
       // v3.10.8 report: "the cue sound interrupts the
       // companion speech at its end." MediaPlayer's
@@ -1413,6 +1413,24 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // the last syllable was still audible. 2500ms
       // gives a comfortable buffer that should always
       // clear the speaker before the cue plays.
+      //
+      // v3.10.9 (later): bumped 2500 → 4000ms. Tobe
+      // reported "i think you need more delay on point
+      // 2. perhaps double, but it should be smart than
+      // a delay? it should run after its done talking
+      // if you get my point." The "smart" version would
+      // be MediaPlayer.setNextMediaPlayer to chain the
+      // cue to the response audio natively — no JS-side
+      // coordination needed. That's a larger native
+      // refactor (requires the cue asset to be preloaded
+      // and a second MediaPlayer instance held alive
+      // across the response playback). For now, bump
+      // the settle delay further to give the HAL buffer
+      // time to drain. 4000ms is a comfortable cap —
+      // long enough to mask even the slowest HAL drain
+      // (~200-500ms observed on Android 12+), short
+      // enough to feel snappy when the user is ready
+      // for the next turn.
       // v3.9.8 — idempotency guard. audioPlayerFinished
       // listeners are added with `addListener` (not once)
       // and never cleaned up; combined with the turn-cue
