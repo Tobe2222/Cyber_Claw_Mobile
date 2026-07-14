@@ -893,12 +893,36 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         //   • Speech: RMS ≈ 0.02-0.10 (sustained words)
         //   • Inter-word gap: RMS ≈ 0.008-0.012 (brief dips)
         //   • Ambient noise floor: RMS ≈ 0.001-0.005
-        // With thresholds at 0.015 and 0.008, the gap
-        // (0.007 wide) absorbs inter-word drops without
-        // bleeding into ambient noise.
+        // v3.10.12: lowered thresholds from 0.015/0.008
+        // to 0.010/0.005. Tobe's v3.10.11 report: "it
+        // cutted me off while talking again. I was mid
+        // sentence" with silenceMs=7000. The VAD was
+        // classifying his soft speech as "hysteresis
+        // band" (between 0.008 and 0.015), which neither
+        // reset the silence timer NOR accumulated silence
+        // — the intent was to absorb natural inter-word
+        // drops without firing. But for soft-spoken users
+        // (low mic gain, phone distance, quiet mic on
+        // headset), their speech RMS can sit in this
+        // band continuously, which means the silence
+        // timer keeps growing on every chunk without ever
+        // resetting. After 7s the user gets cut off
+        // mid-sentence.
+        //
+        // New thresholds: speech 0.010 (was 0.015),
+        // silence 0.005 (was 0.008). The hysteresis band
+        // is now 0.005 wide instead of 0.007 — still wide
+        // enough to absorb inter-word drops in normal
+        // speech but narrow enough that soft-spoken
+        // users' RMS gets recognised as speech.
+        //
+        // With thresholds at 0.010 and 0.005, the gap
+        // (0.005 wide) absorbs inter-word drops without
+        // bleeding into ambient noise (room noise floor
+        // typically 0.001-0.003 per the comment above).
         val (rms, _) = computeEnergyAndZcr(chunkBuf)
-        val SPEECH_RMS_THRESHOLD = 0.015f
-        val SILENCE_RMS_THRESHOLD = 0.008f
+        val SPEECH_RMS_THRESHOLD = 0.010f
+        val SILENCE_RMS_THRESHOLD = 0.005f
         val MIN_RECORDING_MS = 500L
         val MAX_RECORDING_MS = 30_000L
 
