@@ -221,6 +221,22 @@ export default function CompanionSettingsScreen({
     durationMs: number;
   } | null>(null);
   const wakeTestAbortRef = useRef<{ cancelled: boolean } | null>(null);
+
+  // v3.10.19: speaker enrollment state. The OWW
+  // detector stashes a 96-dim embedding per audio
+  // chunk (1280 samples = 80ms at 16kHz). The user
+  // can enroll by tapping the "Learn my voice" button
+  // below the test button — the native code averages
+  // the last 8 chunks (~640ms) into a 96-dim profile
+  // and stores it per-companion. After enrollment,
+  // matchSpeaker(companionId) returns a cosine
+  // similarity score in [-1, 1] (typical same-speaker
+  // scores 0.7-0.9). Tobe's "ideal feature": learn
+  // the user's voice so wake-word detection can
+  // ignore other speakers saying the wake phrase.
+  const [speakerEnrolled, setSpeakerEnrolled] = useState<boolean>(false);
+  const [speakerEnrolling, setSpeakerEnrolling] = useState<boolean>(false);
+  const [speakerMatchScore, setSpeakerMatchScore] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
     const fetch = async () => {
@@ -383,6 +399,68 @@ export default function CompanionSettingsScreen({
     });
     setWakeTestRunning(false);
   }, [wakeTestRunning]);
+
+  // v3.10.19: speaker enrollment handler. Calls the
+  // native OWW detector to average the last 8 embeddings
+  // (~640ms) into a per-companion voice profile. The
+  // user needs to have spoken for at least 640ms
+  // recently for the enrollment to succeed (the OWW
+  // listener must be running and processing audio).
+  // After enrollment, we poll matchSpeaker once to
+  // confirm the score is reasonable (>0.5 = same person
+  // talking right now). If it's lower, the user
+  // probably wasn't talking during enrollment.
+  const handleEnrollSpeaker = useCallback(async () => {
+    if (speakerEnrolling || !companion) return;
+    setSpeakerEnrolling(true);
+    try {
+      const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
+      if (!WakeWordModule?.enrollSpeaker) {
+        addLogEntry('⚠️ Wake module not available for enrollment', 'error');
+        return;
+      }
+      await WakeWordModule.enrollSpeaker(companion.id);
+      setSpeakerEnrolled(true);
+      addLogEntry(`✓ Speaker enrolled for ${companion.name}`, 'success');
+      // Confirm the score by matching immediately.
+      // If the score is low, the enrollment may have
+      // captured background noise.
+      const score = await WakeWordModule.matchSpeaker(companion.id);
+      if (typeof score === 'number') {
+        setSpeakerMatchScore(score);
+        addLogEntry(`Match score after enrollment: ${(score * 100).toFixed(0)}%`, 'info');
+      }
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      addLogEntry(`✗ Enrollment failed: ${msg}`, 'error');
+    } finally {
+      setSpeakerEnrolling(false);
+    }
+  }, [speakerEnrolling, companion, addLogEntry]);
+
+  // v3.10.19: check existing enrollment on mount and
+  // whenever the companion changes. Cheap native call
+  // (just an in-memory Map lookup).
+  useEffect(() => {
+    if (!companion) { setSpeakerEnrolled(false); return; }
+    const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
+    WakeWordModule?.hasSpeakerEnrollment?.(companion.id)
+      .then((enrolled: boolean) => setSpeakerEnrolled(!!enrolled))
+      .catch(() => setSpeakerEnrolled(false));
+  }, [companion?.id]);
+
+  const handleClearEnrollment = useCallback(async () => {
+    if (!companion) return;
+    try {
+      const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
+      await WakeWordModule?.clearSpeakerEnrollment?.(companion.id);
+      setSpeakerEnrolled(false);
+      setSpeakerMatchScore(null);
+      addLogEntry(`Speaker profile cleared for ${companion.name}`, 'info');
+    } catch (e: any) {
+      addLogEntry(`✗ Clear failed: ${e?.message || e}`, 'error');
+    }
+  }, [companion, addLogEntry]);
 
   // v3.10.2: trained-exit-phrase list for the
   // overview card. Lifted to the screen level so
@@ -1192,6 +1270,60 @@ export default function CompanionSettingsScreen({
                     <Text style={styles.activeWakeTestNote}>
                       Over {(wakeTestResult.durationMs / 1000).toFixed(1)}s. Tip: aim for Wake peak ≥ 70%.
                     </Text>
+                  </View>
+                )}
+
+                {/*
+                  v3.10.19: speaker enrollment section.
+                  Lives in the active-wake panel because
+                  it's closely related to "is the wake
+                  detector going to fire for THIS person".
+                  The Learn-my-voice button captures the
+                  user's voice profile (96-dim OWW embedding
+                  averaged across ~640ms of audio) so the
+                  detector can later confirm that wake-word
+                  fires match this person — useful for
+                  ignoring background speakers who happen
+                  to say the wake phrase.
+                */}
+                <View style={styles.activeWakeTestRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.activeWakeTestBtn,
+                      speakerEnrolling && styles.activeWakeTestBtnRunning,
+                      speakerEnrolled && styles.activeWakeTestBtnEnrolled,
+                    ]}
+                    onPress={handleEnrollSpeaker}
+                    disabled={speakerEnrolling}
+                  >
+                    <Text style={styles.activeWakeTestBtnText}>
+                      {speakerEnrolling ? '🎤 Listening\u2026' : speakerEnrolled ? '✓ Voice enrolled' : '🎤 Learn my voice'}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={styles.activeWakeTestHint}>
+                    {speakerEnrolled
+                      ? 'Wake-word can be filtered to your voice. Talk for a moment then tap again to refresh.'
+                      : 'Tap while talking — captures ~640ms of your voice. After enrollment, other speakers saying the wake word can be ignored.'}
+                  </Text>
+                </View>
+                {speakerEnrolled && speakerMatchScore !== null && (
+                  <View style={styles.activeWakeTestResult}>
+                    <Text style={styles.activeWakeTestResultTitle}>
+                      Match score: {(speakerMatchScore * 100 | 0)}%
+                    </Text>
+                    <Text style={styles.activeWakeTestNote}>
+                      {speakerMatchScore >= 0.7
+                        ? 'Strong match — wake-word fires should be from you.'
+                        : speakerMatchScore >= 0.5
+                          ? 'Moderate match — try re-enrolling in a quieter spot.'
+                          : 'Weak match — the audio may not have been you. Tap again while talking.'}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={handleClearEnrollment}
+                      style={styles.activeWakeManageBtn}
+                    >
+                      <Text style={styles.activeWakeManageBtnText}>🗑 Clear voice profile</Text>
+                    </TouchableOpacity>
                   </View>
                 )}
               </View>
@@ -2232,6 +2364,13 @@ const styles = StyleSheet.create({
   activeWakeTestBtnRunning: {
     borderColor: '#fbbf24',
     backgroundColor: 'rgba(251, 191, 36, 0.15)',
+  },
+  activeWakeTestBtnEnrolled: {
+    // v3.10.19: solid green border + filled bg to
+    // distinguish "voice is enrolled" from the
+    // default "tap to enroll" state.
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.25)',
   },
   activeWakeTestBtnText: {
     color: '#10b981',

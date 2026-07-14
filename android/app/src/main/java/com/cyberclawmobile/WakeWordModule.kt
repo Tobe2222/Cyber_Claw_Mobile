@@ -2383,6 +2383,63 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // v3.10.19: speaker enrollment. Averages the most
+    // recent embeddings in the OWW detector's buffer
+    // into a single 96-dim profile for the agent.
+    // Returns true if enrollment succeeded (enough
+    // samples in buffer; default min=8 = ~640ms of
+    // audio). Tobe's "ideal feature": learn the
+    // user's voice so wake-word detection can ignore
+    // other speakers.
+    @ReactMethod fun enrollSpeaker(agentId: String, promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det == null) {
+                promise.reject("ENROLL_NO_DETECTOR", "OWW detector not initialized")
+                return
+            }
+            val ok = det.enrollSpeakerFromBuffer(agentId)
+            if (ok) promise.resolve(true) else promise.reject("ENROLL_TOO_FEW_SAMPLES", "Not enough audio samples yet — talk for a few seconds before re-enrolling")
+        } catch (e: Exception) {
+            promise.reject("ENROLL_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun hasSpeakerEnrollment(agentId: String, promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det == null) { promise.resolve(false); return }
+            promise.resolve(det.hasEnrollment(agentId))
+        } catch (e: Exception) {
+            promise.reject("HAS_ENROLL_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun clearSpeakerEnrollment(agentId: String, promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det != null) det.clearEnrollment(agentId)
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("CLEAR_ENROLL_ERROR", e.message)
+        }
+    }
+
+    // v3.10.19: compute speaker match score against the
+    // enrolled profile. Returns null if no enrollment
+    // exists. Otherwise returns cosine similarity in
+    // [-1, 1]; typical same-speaker scores are 0.7-0.9.
+    @ReactMethod fun matchSpeaker(agentId: String, promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det == null) { promise.resolve(null); return }
+            val score = det.matchRecentSpeaker(agentId)
+            promise.resolve(score?.toDouble())
+        } catch (e: Exception) {
+            promise.reject("MATCH_ERROR", e.message)
+        }
+    }
+
     @ReactMethod fun stopOwwListening(promise: Promise) {
         isOwwListening = false
         try { owwRecord?.stop() } catch (_: Exception) {}

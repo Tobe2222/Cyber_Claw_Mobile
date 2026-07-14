@@ -84,6 +84,38 @@ class OpenWakeWordDetector(private val context: Context) {
     private val melspecHistory = ArrayDeque<FloatArray>()
     private val maxHistory = 5  // melspec model expects 5-frame history
 
+    // v3.10.19: speaker-embedding circular buffer. We
+    // keep the last N embeddings (each 96-dim float) so
+    // that on a wake-word fire, we can compute a
+    // stable speaker match against an enrolled profile
+    // using the most recent audio — not just the
+    // single chunk that triggered the wake. KEEP_LAST
+    // = ~32 chunks = ~2.5s of audio at the 80ms chunk
+    // rate. That's enough to be a stable speaker ID
+    // signal even if individual chunks vary.
+    private val embeddingHistory = ArrayDeque<FloatArray>()
+    private val embeddingHistoryMax = 32
+    private val enrollments = HashMap<String, FloatArray>() // agentId -> averaged 96-dim
+
+    /**
+     * v3.10.19: cosine similarity between two 96-dim
+     * vectors. Returns a value in [-1, 1]; typical
+     * same-speaker scores are 0.7-0.9.
+     */
+    private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
+        if (a.size != b.size) return 0f
+        var dot = 0.0
+        var normA = 0.0
+        var normB = 0.0
+        for (i in a.indices) {
+            dot += a[i] * b[i]
+            normA += a[i] * a[i]
+            normB += b[i] * b[i]
+        }
+        val denom = Math.sqrt(normA) * Math.sqrt(normB)
+        return if (denom == 0.0) 0f else (dot / denom).toFloat()
+    }
+
     /**
      * v3.6.0: scores from a single inference pass. Any
      * field can be null if the corresponding classifier
@@ -414,6 +446,22 @@ class OpenWakeWordDetector(private val context: Context) {
 
             val embedding = embOutput[0][0]
 
+            // v3.10.19: stash a copy of the embedding for
+            // speaker matching. The classifier scores are
+            // computed from this same embedding; saving it
+            // costs nothing extra. We keep the last
+            // embeddingHistoryMax frames (default 32 = ~2.5s)
+            // so a wake-fire can compute a stable match
+            // score across the wake-word audio and the
+            // seconds that follow (when the user says the
+            // actual command).
+            synchronized(embeddingHistory) {
+                embeddingHistory.addLast(embedding.copyOf())
+                while (embeddingHistory.size > embeddingHistoryMax) {
+                    embeddingHistory.removeFirst()
+                }
+            }
+
             // Step 4: run all classifiers (wake + exit + send)
             // on the same embedding. Each expects [1, 1, 96]
             // (single embedding frame) and outputs [1, 1]
@@ -480,7 +528,76 @@ class OpenWakeWordDetector(private val context: Context) {
         exitInterpreter = null
         sendInterpreter = null
         melspecHistory.clear()
+        synchronized(embeddingHistory) { embeddingHistory.clear() }
     }
+
+    // v3.10.19: speaker enrollment. Averages the most
+    // recent embeddings in the buffer into a single
+    // 96-dim profile for the agent. Returns true if
+    // enrollment succeeded (enough samples in buffer).
+    // Tobe's "ideal feature": learn the user's voice
+    // over time so the wake-word detector can ignore
+    // other speakers.
+    //
+    // Why average over the buffer rather than the
+    // single wake-fire moment: averaging 32 frames
+    // (~2.5s) smooths over momentary voice variations
+    // (prosody, microphone angle) and produces a
+    // stable profile. The buffer is updated
+    // continuously as the listener runs, so by the
+    // time the user has used the app for a few minutes
+    // we have plenty of enrollment data.
+    fun enrollSpeakerFromBuffer(agentId: String, minSamples: Int = 8): Boolean {
+        val snapshot: List<FloatArray>
+        synchronized(embeddingHistory) {
+            if (embeddingHistory.size < minSamples) return false
+            snapshot = embeddingHistory.toList()
+        }
+        // Average the embeddings, then L2-normalize so
+        // the resulting profile has unit norm (cosine
+        // similarity = dot product for normalized vectors).
+        val avg = FloatArray(96)
+        for (emb in snapshot) {
+            for (i in 0 until 96) avg[i] += emb[i]
+        }
+        val n = snapshot.size.toFloat()
+        for (i in 0 until 96) avg[i] /= n
+        var norm = 0.0
+        for (i in 0 until 96) norm += avg[i] * avg[i]
+        norm = Math.sqrt(norm)
+        if (norm > 0.0) for (i in 0 until 96) avg[i] = (avg[i] / norm).toFloat()
+        enrollments[agentId] = avg
+        Log.i(tag, "Enrolled speaker for agent=$agentId from ${snapshot.size} embeddings")
+        return true
+    }
+
+    /**
+     * v3.10.19: compute speaker match score against the
+     * enrolled profile for this agent. Returns the
+     * AVERAGE cosine similarity across the most
+     * recent K embeddings in the buffer (default K=8
+     * = ~640ms). Averaging across K frames gives a
+     * more stable match than a single-frame comparison.
+     *
+     * Returns null if no enrollment exists for the
+     * agent. Caller should treat null as "no
+     * preference" (allow the wake word).
+     */
+    fun matchRecentSpeaker(agentId: String, recentK: Int = 8): Float? {
+        val profile = enrollments[agentId] ?: return null
+        val snapshot: List<FloatArray>
+        synchronized(embeddingHistory) {
+            val n = Math.min(recentK, embeddingHistory.size)
+            if (n == 0) return null
+            snapshot = embeddingHistory.toList().takeLast(n)
+        }
+        var total = 0.0
+        for (emb in snapshot) total += cosineSimilarity(profile, emb)
+        return (total / snapshot.size).toFloat()
+    }
+
+    fun hasEnrollment(agentId: String): Boolean = enrollments.containsKey(agentId)
+    fun clearEnrollment(agentId: String) { enrollments.remove(agentId) }
 
     private fun loadInterpreter(assetPath: String): Interpreter {
         val afd = context.assets.openFd(assetPath)
