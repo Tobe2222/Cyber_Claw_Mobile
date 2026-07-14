@@ -1346,7 +1346,27 @@ export default function SettingsScreen({
                 voice settings (engine / voice picker) are
                 coming in v3.7.0 — see the 🔊 Voice & Speech
                 section below. */}
-            <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+            {/*
+              v3.10.6: Send word + Your-turn cue sound moved
+              out of this Section into their own top-level
+              "🎙️ Voice mode" Section below (after the
+              </Section>). They're universal settings, not
+              per-companion, so visually grouping them
+              under Companions was misleading.
+            */}
+          </Section>
+
+          {/*
+            v3.10.6: NEW top-level Section for universal
+            voice-mode behaviour. See the comment at the
+            end of the Companions Section for why this
+            was split out.
+
+            The SendPhraseTrainer modal (separate route)
+            is unchanged — this is just the placement of
+            the settings/shortcuts inside the page.
+          */}
+          <Section title="🎙️ Voice mode" desc="Voice-mode behaviour shared across every companion. Per-companion settings (engine, voice picker, silence timeout) live in each companion's detail page.">
             <SubTitle>✉️ Manual send voice message</SubTitle>
             <Hint>Backup commit word for voice-mode turns. The primary trigger is silence-detection (the VAD's silence countdown) or gibberish-detection (VAD noise floor). When those miss — e.g. the silence threshold doesn't trip because the audio cuts off mid-word, or the VAD reads low noise as speech — saying this word commits the turn to the LLM by hand. Independent of the exit phrase — send keeps the conversation going, exit closes voice mode. Shared across all companions.</Hint>
             <Label>Send word</Label>

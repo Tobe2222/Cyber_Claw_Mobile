@@ -943,6 +943,14 @@ export default function CompanionSettingsScreen({
               savedWakeModels (which can miss the active
               binding in edge cases, see v3.10.4 fix
               notes).
+
+              v3.10.6: removed the inline "Manage wake
+              sets" button from this panel — there's
+              already one further down. Only render the
+              setId line when it differs from the
+              displayName/phrase (otherwise it just
+              repeats the name above, which looks like
+              a typo).
             */}
             <SubTitle>Currently active wake</SubTitle>
             {activeWakeDirect ? (
@@ -953,9 +961,22 @@ export default function CompanionSettingsScreen({
                     <Text style={styles.activeWakePhrase}>
                       {activeWakeDirect.displayName || activeWakeDirect.phrase}
                     </Text>
-                    <Text style={styles.activeWakeSetId}>
-                      {activeWakeDirect.setId}
-                    </Text>
+                    {/*
+                      v3.10.6: only show setId when it
+                      differs from the human-facing name.
+                      When Tobe renamed a set to "Hey
+                      Clawsuu", setId, displayName and
+                      phrase all became the same string —
+                      and v3.10.5's panel showed it twice
+                      (once big in white, once small in
+                      green). Hide the setId line when it
+                      would just repeat the phrase above.
+                    */}
+                    {activeWakeDirect.setId !== (activeWakeDirect.displayName || activeWakeDirect.phrase) ? (
+                      <Text style={styles.activeWakeSetId}>
+                        {activeWakeDirect.setId}
+                      </Text>
+                    ) : null}
                     {activeWakeDirect.path ? (
                       <Text style={styles.activeWakePath} numberOfLines={1}>
                         {activeWakeDirect.path}
@@ -963,15 +984,17 @@ export default function CompanionSettingsScreen({
                     ) : null}
                   </View>
                 </View>
-                <TouchableOpacity
-                  style={styles.activeWakeManageBtn}
-                  onPress={() => onPushWakeManager({
-                    companionId: companion.id,
-                    companionName: companion.name,
-                  })}
-                >
-                  <Text style={styles.activeWakeManageBtnText}>📂 Manage wake sets</Text>
-                </TouchableOpacity>
+                {/*
+                  v3.10.6: removed the "Manage wake sets"
+                  button from this panel. It's redundant —
+                  there's a "Manage wake sets for {name}"
+                  button at the bottom of this same Wake
+                  sub-page (further down, just below the
+                  Wake phrases section). Two buttons to the
+                  same screen = UI noise. The active-wake
+                  panel's job is to show what's currently
+                  active, not to navigate.
+                */}
               </View>
             ) : (
               <View style={styles.activeWakePanelEmpty}>
@@ -1987,21 +2010,6 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 13,
     fontStyle: 'italic',
-  },
-  activeWakeManageBtn: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#9ca3af',
-    backgroundColor: 'rgba(156, 163, 175, 0.10)',
-  },
-  activeWakeManageBtnText: {
-    color: '#9ca3af',
-    fontSize: 12,
-    fontWeight: '600',
   },
   // v3.7.0: radio-style row for the per-companion voice picker.
   // Reused for engine (Use global default / Local / Premium API)
