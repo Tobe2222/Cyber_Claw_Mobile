@@ -321,8 +321,32 @@ function appendAgentMessage(
 ) {
   setMessagesByAgent(prev => {
     const list = prev[agentId] || [];
-    // dedupe
-    if (list.some(m => Math.abs(m.ts - msg.ts) < 2000 && m.text === msg.text)) {
+    // v3.10.17: expanded dedupe. Was (ts within 2s AND
+    // same text). Tobe's v3.10.16 report: voice messages
+    // appeared twice in chat — once as a local add and
+    // once as the desktop echo. The 2s window was too
+    // tight because the desktop echo's timestamp can
+    // lag the mobile-side timestamp by several seconds
+    // (network + STT + IPC round-trip).
+    //
+    // Two-stage dedupe:
+    // 1. Same isUser AND same text within 10s — likely
+    //    a duplicate
+    // 2. Same text within 30s — defensive (catches the
+    //    case where isUser was set wrong somehow)
+    const dupWindowMs = 10000;
+    const dupWindowMsDefensive = 30000;
+    if (list.some(m =>
+      m.text === msg.text &&
+      m.isUser === msg.isUser &&
+      Math.abs(m.ts - msg.ts) < dupWindowMs
+    )) {
+      return prev;
+    }
+    if (list.some(m =>
+      m.text === msg.text &&
+      Math.abs(m.ts - msg.ts) < dupWindowMsDefensive
+    )) {
       return prev;
     }
     const next = { ...prev, [agentId]: [...list, msg] };
@@ -2012,13 +2036,36 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         return;
       }
       addLogEntry(`Transcribed: "${msg.transcript}"`, 'received');
-      // Display transcript in UI
-      setMessages(prev => {
-        const dupe = prev.some(m => m.isUser && Math.abs(m.ts - Date.now()) < 5000 && m.text === msg.transcript);
-        if (dupe) return prev;
-        // v3.1.16: append in chronological order.
-        return [...prev, { id: `user-${Date.now()}`, text: msg.transcript, isUser: true, ts: Date.now() }];
-      });
+      // Display transcript in UI. v3.10.17: use the
+      // shared appendAgentMessage helper so the local
+      // voice-add goes to BOTH messages (view) and
+      // messagesByAgent (per-companion store). Without
+      // this, the local add lives only in messages, and
+      // the desktop echo (which appends via the same
+      // helper but with the desktop's timestamp) doesn't
+      // see the local entry in messagesByAgent — its
+      // dedupe misses, and the user sees their message
+      // twice. Tobe's v3.10.16 screenshot showed exactly
+      // this: 'The windows build does not create the
+      // hive_control...' appearing as two consecutive
+      // user bubbles.
+      //
+      // Why not drop the local add entirely? Without it,
+      // there's a visible delay between the user speaking
+      // and the message appearing in chat (waiting for
+      // the desktop echo round-trip). The local add makes
+      // the UI feel instant; the dedupe just needs to be
+      // coordinated across both adds.
+      const aid = activeChatAgentIdRef.current || 'companion';
+      const localTs = Date.now();
+      const localUserMsg: ChatMessage = {
+        id: `user-local-${localTs}-${Math.random().toString(36).slice(2, 6)}`,
+        text: msg.transcript,
+        isUser: true,
+        agentId: aid,
+        ts: localTs,
+      };
+      appendAgentMessage(localUserMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
       const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
       const name = a?.name || 'Companion';
