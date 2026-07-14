@@ -181,6 +181,46 @@ export default function CompanionSettingsScreen({
     displayName?: string;
     path?: string;
   } | null>(null);
+
+  // v3.10.8: "Test wake" button state. When the user
+  // taps the test button on the Wake settings page,
+  // we start a 4-second listening window during which
+  // we poll WakeWordModule.getLatestScores() every
+  // ~80ms (matching the OWW chunk rate) and record
+  // the peak wake / exit / send scores. At the end of
+  // the window we display the peak so the user can
+  // see how confidently the model recognised their
+  // wake phrase (or whether false-positive noise is
+  // hitting the threshold — Tobe's report).
+  //
+  // Why this matters: Tobe's complaint has two parts
+  // that need different fixes, and we can't tell
+  // which one is happening without data:
+  //   1. Wake needs to be repeated right after startup
+  //      → could be cold-start OWW warm-up OR a too-
+  //      high threshold OR a model that genuinely
+  //      doesn't recognise his voice yet
+  //   2. False triggers from ambient noise / TV / etc
+  //      → either the threshold is too low for the
+  //      environment OR the model is too eager
+  //
+  // Without the test button, both look the same from
+  // the outside (wake fires or doesn't). With scores,
+  // we can see exactly what's happening and tune
+  // accordingly.
+  const [wakeTestRunning, setWakeTestRunning] = useState<boolean>(false);
+  const [wakeTestResult, setWakeTestResult] = useState<{
+    fired: boolean;
+    peakWake: number;
+    peakExit: number;
+    peakSend: number;
+    finalWake: number;
+    finalExit: number;
+    finalSend: number;
+    firedScore: number | null;
+    durationMs: number;
+  } | null>(null);
+  const wakeTestAbortRef = useRef<{ cancelled: boolean } | null>(null);
   useEffect(() => {
     let cancelled = false;
     const fetch = async () => {
@@ -255,6 +295,94 @@ export default function CompanionSettingsScreen({
       sub.remove();
     };
   }, [companion?.id, availableCompanions.length]);
+
+  // v3.10.8: test-wake handler. Starts a 4-second
+  // listening window during which we poll
+  // WakeWordModule.getLatestScores() on the same 80ms
+  // cadence the OWW thread uses. Records peak wake /
+  // exit / send scores observed, plus the final scores
+  // when the window closes. Also listens for an
+  // owwWakeDetected event — if one fires within the
+  // window, the test "passed" and the score at fire time
+  // is the headline number.
+  //
+  // The OWW detector must already be initialized (the
+  // FG listener initOwws it on screen open). If for
+  // some reason it isn't, this still works — the peak
+  // scores will just all be 0.
+  const handleTestWake = useCallback(async () => {
+    if (wakeTestRunning) return;
+    setWakeTestRunning(true);
+    setWakeTestResult(null);
+    const abort = { cancelled: false };
+    wakeTestAbortRef.current = abort;
+    const start = Date.now();
+    const TEST_DURATION_MS = 4000;
+    const POLL_MS = 80;
+    let peakWake = 0;
+    let peakExit = 0;
+    let peakSend = 0;
+    let finalWake = 0;
+    let finalExit = 0;
+    let finalSend = 0;
+    let firedScore: number | null = null;
+    let fired = false;
+    try {
+      const { NativeEventEmitter } = require('react-native');
+      const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
+      // Listen for a wake-detect event during the test
+      // window. If one fires, mark `fired` and remember
+      // the score — the peak tracking below still runs
+      // so we can also report peak (useful when many
+      // false triggers happen during the window).
+      const emitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
+      const onDetect = (e: any) => {
+        if (abort.cancelled) return;
+        if (!fired) {
+          fired = true;
+          firedScore = typeof e?.score === 'number' ? e.score : null;
+        }
+      };
+      const sub = emitter?.addListener('owwWakeDetected', onDetect);
+      try {
+        while (!abort.cancelled && Date.now() - start < TEST_DURATION_MS) {
+          try {
+            const scores: any = await WakeWordModule?.getLatestScores?.();
+            if (scores) {
+              const w = Number(scores.wake) || 0;
+              const x = Number(scores.exit) || 0;
+              const s = Number(scores.send) || 0;
+              if (w > peakWake) peakWake = w;
+              if (x > peakExit) peakExit = x;
+              if (s > peakSend) peakSend = s;
+              finalWake = w;
+              finalExit = x;
+              finalSend = s;
+            }
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, POLL_MS));
+        }
+      } finally {
+        sub?.remove?.();
+      }
+    } catch (_) {
+      // best-effort; result still reports whatever was
+      // captured before the error
+    }
+    if (abort.cancelled) return;
+    setWakeTestResult({
+      fired,
+      peakWake,
+      peakExit,
+      peakSend,
+      finalWake,
+      finalExit,
+      finalSend,
+      firedScore,
+      durationMs: Date.now() - start,
+    });
+    setWakeTestRunning(false);
+  }, [wakeTestRunning]);
 
   // v3.10.2: trained-exit-phrase list for the
   // overview card. Lifted to the screen level so
@@ -994,7 +1122,78 @@ export default function CompanionSettingsScreen({
                   same screen = UI noise. The active-wake
                   panel's job is to show what's currently
                   active, not to navigate.
+
+                  v3.10.8: added the "🎤 Test wake" button
+                  here. The user can verify their trained
+                  wake phrase is being recognised by the
+                  OWW model, and see the peak score across
+                  a 4-second test window. Useful for
+                  diagnosing cold-start sensitivity
+                  (Tobe: "have to almost yell") and false
+                  triggers (scores spike on ambient noise).
                 */}
+                <View style={styles.activeWakeTestRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.activeWakeTestBtn,
+                      wakeTestRunning ? styles.activeWakeTestBtnRunning : null,
+                    ]}
+                    onPress={handleTestWake}
+                    disabled={wakeTestRunning}
+                  >
+                    <Text style={styles.activeWakeTestBtnText}>
+                      {wakeTestRunning ? '🎤 Listening\u2026' : '🎤 Test wake'}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={styles.activeWakeTestHint}>
+                    Tap, then say the wake phrase. Peak score shown after 4s.
+                  </Text>
+                </View>
+                {/*
+                  v3.10.8: test result panel. Shows whether
+                  the OWW detector fired during the test
+                  window, plus the peak wake / exit / send
+                  scores observed. Scores above the
+                  threshold (typically 0.5 after the v3.10.7
+                  lower-default change) should fire; below
+                  that they shouldn't. If peakWake is high
+                  but fired=false, the model isn't firing
+                  consistently across the HIGH_SCORE_RUN
+                  frames (3 frames @ 80ms = 240ms). If
+                  peakWake stays low even when the user
+                  says the phrase clearly, the model
+                  doesn't recognise their voice — retrain.
+                */}
+                {wakeTestResult && (
+                  <View style={styles.activeWakeTestResult}>
+                    <Text style={styles.activeWakeTestResultTitle}>
+                      {wakeTestResult.fired
+                        ? `✓ Wake fired (${(wakeTestResult.firedScore ?? 0) * 100 | 0}%)`
+                        : '✗ No fire during test'}
+                    </Text>
+                    <View style={styles.activeWakeTestScoreRow}>
+                      <Text style={styles.activeWakeTestScoreLabel}>Wake peak</Text>
+                      <Text style={styles.activeWakeTestScoreValue}>
+                        {(wakeTestResult.peakWake * 100 | 0)}%
+                      </Text>
+                    </View>
+                    <View style={styles.activeWakeTestScoreRow}>
+                      <Text style={styles.activeWakeTestScoreLabel}>Exit peak</Text>
+                      <Text style={styles.activeWakeTestScoreValue}>
+                        {(wakeTestResult.peakExit * 100 | 0)}%
+                      </Text>
+                    </View>
+                    <View style={styles.activeWakeTestScoreRow}>
+                      <Text style={styles.activeWakeTestScoreLabel}>Send peak</Text>
+                      <Text style={styles.activeWakeTestScoreValue}>
+                        {(wakeTestResult.peakSend * 100 | 0)}%
+                      </Text>
+                    </View>
+                    <Text style={styles.activeWakeTestNote}>
+                      Over {(wakeTestResult.durationMs / 1000).toFixed(1)}s. Tip: aim for Wake peak ≥ 70%.
+                    </Text>
+                  </View>
+                )}
               </View>
             ) : (
               <View style={styles.activeWakePanelEmpty}>
@@ -2009,6 +2208,75 @@ const styles = StyleSheet.create({
   activeWakeEmptyText: {
     color: '#888',
     fontSize: 13,
+    fontStyle: 'italic',
+  },
+  // v3.10.8: test-wake button + result styles. The
+  // button is a small teal pill that starts a 4-second
+  // listening window. Result is a small panel showing
+  // the peak wake/exit/send scores observed.
+  activeWakeTestRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  activeWakeTestBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.10)',
+  },
+  activeWakeTestBtnRunning: {
+    borderColor: '#fbbf24',
+    backgroundColor: 'rgba(251, 191, 36, 0.15)',
+  },
+  activeWakeTestBtnText: {
+    color: '#10b981',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  activeWakeTestHint: {
+    color: '#9aa0b4',
+    fontSize: 11,
+    flexShrink: 1,
+  },
+  activeWakeTestResult: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    backgroundColor: '#0a0e18',
+  },
+  activeWakeTestResultTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  activeWakeTestScoreRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  activeWakeTestScoreLabel: {
+    color: '#888',
+    fontSize: 12,
+  },
+  activeWakeTestScoreValue: {
+    color: '#10b981',
+    fontSize: 12,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontWeight: '600',
+  },
+  activeWakeTestNote: {
+    color: '#666',
+    fontSize: 10,
+    marginTop: 6,
     fontStyle: 'italic',
   },
   // v3.7.0: radio-style row for the per-companion voice picker.

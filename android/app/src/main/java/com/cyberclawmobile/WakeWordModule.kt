@@ -1172,6 +1172,19 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private var owwThread: Thread? = null
     @Volatile private var isOwwListening = false
     private var owwWakeword = "hey_jarvis"
+    // v3.10.8: latest scores captured from the OWW
+    // listening thread. Updated on every 80ms chunk.
+    // Exposed via getLatestScores() so the JS-side
+    // test button on the Wake settings page can poll
+    // and report the peak wake / exit / send score
+    // observed during a test window. @Volatile
+    // because the writer is the OWW thread and the
+    // reader is the JS thread (or a test harness
+    // thread); without it the JS side could read a
+    // stale value indefinitely.
+    @Volatile private var latestWakeScore: Float? = null
+    @Volatile private var latestExitScore: Float? = null
+    @Volatile private var latestSendScore: Float? = null
 
     @ReactMethod fun initOww(wakeword: String, threshold: Double = 0.5, promise: Promise) {
         try {
@@ -2178,6 +2191,15 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                             val wakeScore = pair.wake
                             val exitScore = pair.exit
                             val sendScore = pair.send
+                            // v3.10.8: stash the latest scores
+                            // so getLatestScores() (called from
+                            // JS for the Wake test button) can
+                            // read them. The OWW thread is the
+                            // only writer; the JS side reads
+                            // via the @Volatile field.
+                            latestWakeScore = wakeScore
+                            latestExitScore = exitScore
+                            latestSendScore = sendScore
                             val threshold = detector.getThreshold()
                             val exitThreshold = detector.getExitThreshold()
                             val sendThreshold = detector.getSendThreshold()
@@ -2316,6 +2338,27 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // v3.10.8: return the latest scores captured by
+    // the OWW listening thread. JS-side callers (the
+    // Wake test button) poll this during a test window
+    // to compute peak wake/exit/send scores, so the
+    // user can see how confident the model was that
+    // they said the wake word. Returns nulls if the
+    // OWW thread isn't running yet (e.g. before the
+    // first startOwwListening).
+    @ReactMethod fun getLatestScores(promise: Promise) {
+        try {
+            val result = Arguments.createMap().apply {
+                putDouble("wake", (latestWakeScore ?: 0.0).toDouble())
+                putDouble("exit", (latestExitScore ?: 0.0).toDouble())
+                putDouble("send", (latestSendScore ?: 0.0).toDouble())
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("GET_SCORES_ERROR", e.message)
+        }
+    }
+
     @ReactMethod fun stopOwwListening(promise: Promise) {
         isOwwListening = false
         try { owwRecord?.stop() } catch (_: Exception) {}
@@ -2373,19 +2416,50 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun startPlayer(path: String, promise: Promise) {
         try {
             mediaPlayer?.release()
-            mediaPlayer = MediaPlayer().apply {
-                setDataSource(path)
-                prepare()
-                start()
-                setOnCompletionListener {
+            val mp = MediaPlayer()
+            // v3.10.8: handle three path shapes properly.
+            //  - "file:///android_asset/..." — bundled assets
+            //    MUST go through AssetManager.openFd() with
+            //    explicit offset/length. setDataSource(String)
+            //    on these URIs SILENTLY FAILS in some Android
+            //    builds (the MediaPlayer enters the Error
+            //    state without throwing, and start() does
+            //    nothing). Tobe's "no your turn sound" bug
+            //    across v3.9.8 → v3.10.7 was likely this
+            //    exact failure path.
+            //  - "file:///..." (non-asset) — setDataSource
+            //    handles the file:// URI directly.
+            //  - bare filesystem path — setDataSource(String)
+            //    handles it directly.
+            if (path.startsWith("file:///android_asset/")) {
+                val assetRel = path.removePrefix("file:///android_asset/")
+                val afd = reactContext.assets.openFd(assetRel)
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            } else {
+                mp.setDataSource(path)
+            }
+            mp.setOnErrorListener { _, what, extra ->
+                emitDebug("error", "MediaPlayer error what=$what extra=$extra for path=$path")
+                try { mp.release() } catch (_: Exception) {}
+                mediaPlayer = null
+                true
+            }
+            mp.setOnCompletionListener {
+                try {
                     reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                         .emit("audioPlayerFinished", null)
-                    release()
-                    mediaPlayer = null
-                }
+                } catch (_: Exception) {}
+                try { mp.release() } catch (_: Exception) {}
+                mediaPlayer = null
             }
+            mp.prepare()
+            mp.start()
+            mediaPlayer = mp
             promise.resolve(null)
         } catch (e: Exception) {
+            try { mediaPlayer?.release() } catch (_: Exception) {}
+            mediaPlayer = null
             promise.reject("PLAY_ERROR", e.message)
         }
     }
