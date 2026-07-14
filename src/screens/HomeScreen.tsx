@@ -1630,20 +1630,43 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
     const onChat = (msg: any) => {
       addLogEntry(`📨 Chat message received from server`, 'received');
-      if (msg.isUser) {
-        addLogEntry(`📨 Skipping user message`, 'received');
-        return;
-      }
-      // v3.1.17: route incoming chat to the correct companion tab.
-      // The desktop tags the message with agentId; if it's missing,
-      // fall back to the active chat agent. Either way, we update
-      // messagesByAgent[aid] and bump the unread counter for that
-      // agent unless it's the currently active one.
+      // v3.10.11: allow user messages through to the chat
+      // history. Previously we skipped them, which meant
+      // voice-message transcriptions (the desktop sends
+      // these back via sync-broadcast-chat with isUser=true)
+      // never appeared in the chat. Tobe reported "I saw my
+      // interpreted voice message in the chat but it
+      // vanished. It should stay in the chat." The
+      // vanishing was because:
+      //   1. Voice audio is sent via sendAudioInput (no
+      //      local appendAgentMessage call)
+      //   2. Desktop transcribes + calls
+      //      sync-broadcast-chat with isUser=true
+      //   3. Mobile receives chat event, this handler
+      //      filtered it out as a duplicate-skip
+      //   4. The transcript was therefore never added to
+      //      the chat history at all
+      //
+      // Removing the skip lets voice transcriptions land
+      // in the chat. The existing dedupe in
+      // appendAgentMessage (ts+text within 2s) prevents
+      // duplicates when the user TYPES a message — that
+      // path adds locally first, then the desktop echoes
+      // back, and the second append is deduped by the
+      // ts+text check.
+      //
+      // For voice messages, the desktop's STT sometimes
+      // produces a slightly different transcript than the
+      // raw speech (correcting "um"s, fixing grammar),
+      // so the ts+text match might miss. But the user
+      // has no local copy for voice messages (we never
+      // added one), so a missed dedupe just means the
+      // transcription is the only entry — no duplicate.
       const aid: string = msg.agentId || activeChatAgentIdRef.current || 'companion';
       const incoming: ChatMessage = {
         id: `${msg.ts || Date.now()}-${Math.random()}`,
         text: msg.text,
-        isUser: false,
+        isUser: !!msg.isUser,
         agentId: aid,
         agentName: msg.agentName,
         ts: msg.ts || Date.now(),
