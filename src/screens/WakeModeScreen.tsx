@@ -1610,9 +1610,31 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     };
     syncClient.on('chat', onChat);
     syncClient.on('audio_response', onAudioResponse);
+    // v3.10.14: listen for the desktop's
+    // voice_pipeline_stalled event. Emitted by the
+    // desktop's renderer-ack watchdog (cyberclaw
+    // v3.2.3) when the desktop's renderer doesn't ack
+    // the mobile-voice IPC within 8s. Surface a hint
+    // earlier than the 30s transcribing timeout so the
+    // user knows the desktop pipeline is hung, not
+    // just that the response is taking a while.
+    const onPipelineStalled = (msg: any) => {
+      addLogEntry(
+        `⚠️ Desktop pipeline stalled: ${msg?.hint || 'unknown reason'}`,
+        'warn',
+      );
+      addVoiceLog('⚠️ Desktop renderer hung — waiting for retry...');
+      // Don't change status here — the desktop may
+      // recover and send the response any moment.
+      // The hint is purely informational; the
+      // transcribing timeout (30s) is the actual
+      // failure boundary.
+    };
+    syncClient.on('voice_pipeline_stalled', onPipelineStalled);
     return () => {
       syncClient.off?.('chat', onChat);
       syncClient.off?.('audio_response', onAudioResponse);
+      syncClient.off?.('voice_pipeline_stalled', onPipelineStalled);
     };
   }, [handleWakeWordInner, voiceMode]);
 
