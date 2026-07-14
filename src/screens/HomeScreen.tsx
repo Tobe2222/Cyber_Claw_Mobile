@@ -2997,7 +2997,7 @@ useEffect(() => {
             )}
             <View style={styles.inputContainer}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
-                <Text style={styles.micButtonText}>+</Text>
+                <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
@@ -3005,8 +3005,8 @@ useEffect(() => {
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 activeOpacity={0.6}
               >
-                <Text style={[styles.micButtonText, isVoiceListening && { color: '#ef4444' }]}>
-                  {isVoiceListening ? '⏹ Stop' : 'Mic'}
+                <Text style={[styles.micButtonText, styles.micButtonMicText, isVoiceListening && { color: '#ef4444' }]}>
+                  {isVoiceListening ? '⏹' : '🎙️'}
                 </Text>
               </TouchableOpacity>
               {pendingAudioPath ? (
@@ -3298,15 +3298,26 @@ const styles = StyleSheet.create({
   logReceived: { color: '#4ade80' },
   logError: { color: '#ff0000' },  // Red for error logs
   micButton: {
-    backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 20,
-    width: 48, height: 48, justifyContent: 'center', alignItems: 'center',
+    backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 18,
+    // v3.10.16: shrunk from 48x48 to 36x36 — the buttons
+    // were eating too much of the keyboard-adjacent
+    // real estate. Tobe's v3.10.15 feedback: "make the
+    // + and mic button smaller."
+    width: 36, height: 36, justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: 'rgba(247,147,26,0.4)', marginRight: 6,
   },
   micButtonActive: {
     backgroundColor: 'rgba(239,68,68,0.25)', borderColor: '#ef4444',
   },
 
-  micButtonText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
+  micButtonText: { color: '#f7931a', fontWeight: '600' },
+  // v3.10.16: different sizes for the + vs mic-icon
+  // labels so each renders cleanly inside the smaller
+  // 36x36 button. The + is a single ASCII char and
+  // looks fine at fontSize 22; the mic/stop emoji
+  // glyphs render a bit larger and look better at 18.
+  micButtonPlusText: { fontSize: 22, lineHeight: 24 },
+  micButtonMicText: { fontSize: 18, lineHeight: 20 },
   voicePreview: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 12, paddingHorizontal: 14,
