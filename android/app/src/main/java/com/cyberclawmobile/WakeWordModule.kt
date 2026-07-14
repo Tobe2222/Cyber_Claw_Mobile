@@ -1210,6 +1210,22 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @Volatile private var latestExitScore: Float? = null
     @Volatile private var latestSendScore: Float? = null
 
+    // v3.10.21: passive speaker enrollment threshold.
+    // Set to the same value as the existing speech
+    // band (SPEECH_RMS_THRESHOLD = 0.010) so we enroll
+    // on every chunk where the user's voice is active.
+    // The ZCR threshold (0.02) matches the WakeModeScreen
+    // owwVad handler's speech classification — these
+    // are independent classifiers with the same intent.
+    private val PASSIVE_ENROLLMENT_RMS_THRESHOLD = 0.010f
+    private val PASSIVE_ENROLLMENT_ZCR_THRESHOLD = 0.02f
+    // Per-chunk flag computed by the OWW thread. Read
+    // immediately after predictScore returns — if true,
+    // push the latest embedding into the enrollment
+    // buffer. Single-threaded access (OWW thread is
+    // the only writer/reader).
+    private var pendingEnrollmentSample = false
+
     @ReactMethod fun initOww(wakeword: String, threshold: Double = 0.5, promise: Promise) {
         try {
             owwWakeword = wakeword
@@ -2211,10 +2227,41 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                             // its own threshold and its own
                             // HIGH_SCORE_RUN counter so they
                             // can fire independently.
+                            // v3.10.21: passive speaker enrollment.
+                            // Compute rms + zcr first; if voice-
+                            // active, push the latest embedding
+                            // (which predictScore will compute
+                            // next) into the enrollment buffer.
+                            // Cheap (one DSP pass per chunk = 80ms)
+                            // and runs CONTINUOUSLY as long as the
+                            // OWW listener is running — no user
+                            // action required. Tobe's "passive
+                            // option" request.
+                            val (rms, zcr) = computeEnergyAndZcr(chunkBuf)
+                            if (rms >= PASSIVE_ENROLLMENT_RMS_THRESHOLD &&
+                                zcr >= PASSIVE_ENROLLMENT_ZCR_THRESHOLD) {
+                                // We add the embedding AFTER
+                                // predictScore below, since the
+                                // detector stashes the latest
+                                // embedding into embeddingHistory
+                                // as part of predictScore. Defer
+                                // the actual accumulation to a
+                                // post-predict call.
+                                pendingEnrollmentSample = true
+                            } else {
+                                pendingEnrollmentSample = false
+                            }
                             val pair = detector.predictScore(chunkBuf)
                             val wakeScore = pair.wake
                             val exitScore = pair.exit
                             val sendScore = pair.send
+                            // v3.10.21: capture the latest
+                            // embedding for passive
+                            // enrollment (after
+                            // predictScore stashed it).
+                            if (pendingEnrollmentSample) {
+                                detector.accumulateLatestEmbedding()
+                            }
                             // v3.10.8: stash the latest scores
                             // so getLatestScores() (called from
                             // JS for the Wake test button) can
@@ -2437,6 +2484,62 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(score?.toDouble())
         } catch (e: Exception) {
             promise.reject("MATCH_ERROR", e.message)
+        }
+    }
+
+    // v3.10.21: passive enrollment status. Returns:
+    //  - "samplesTotal": total voice-active samples seen
+    //    since last clear (cumulative, monotonically
+    //    increases — used to show "X / 5 min learned")
+    //  - "bufferSize": current rolling buffer size
+    //    (0-64; used for debugging)
+    //  - "hasEnrollment": whether an enrollment is
+    //    currently set for this agent
+    //  - "matchScore": current cosine similarity vs
+    //    enrollment (null if no enrollment)
+    @ReactMethod fun getSpeakerStatus(agentId: String, promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det == null) {
+                promise.resolve(Arguments.createMap().apply {
+                    putInt("samplesTotal", 0)
+                    putInt("bufferSize", 0)
+                    putBoolean("hasEnrollment", false)
+                    putNull("matchScore")
+                })
+                return
+            }
+            val result = Arguments.createMap().apply {
+                putInt("samplesTotal", det.getEnrollmentSamplesTotal().toInt())
+                putInt("bufferSize", det.getEnrollmentBufferSize())
+                putBoolean("hasEnrollment", det.hasEnrollment(agentId))
+                val score = det.matchRecentSpeaker(agentId)
+                if (score != null) putDouble("matchScore", score.toDouble())
+                else putNull("matchScore")
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("STATUS_ERROR", e.message)
+        }
+    }
+
+    /**
+     * v3.10.21: force a profile recompute from the
+     * current enrollment buffer. Normally called
+     * periodically by the JS side (every 5s) — but
+     * also exposed for explicit "save my voice now"
+     * buttons. Throttled by the native side too
+     * (5s cooldown in recomputeEnrollmentProfile)
+     * so spamming this from JS is harmless.
+     */
+    @ReactMethod fun recomputeEnrollment(agentId: String, promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det == null) { promise.resolve(false); return }
+            val updated = det.recomputeEnrollmentProfile(agentId)
+            promise.resolve(updated)
+        } catch (e: Exception) {
+            promise.reject("RECOMPUTE_ERROR", e.message)
         }
     }
 

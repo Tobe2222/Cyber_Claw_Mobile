@@ -97,6 +97,38 @@ class OpenWakeWordDetector(private val context: Context) {
     private val embeddingHistoryMax = 32
     private val enrollments = HashMap<String, FloatArray>() // agentId -> averaged 96-dim
 
+    // v3.10.21: passive enrollment accumulator. Unlike
+    // embeddingHistory (which keeps the LAST N for
+    // matching), this buffer keeps voice-active
+    // embeddings for a longer window so we can
+    // auto-learn the user's voice over time. Voice-
+    // active filtering happens at the call site (the
+    // WakeWordModule checks rms/zcr before calling
+    // maybeAddToEnrollment) so the detector doesn't
+    // need to recompute them.
+    //
+    // KEEP_LAST = ~64 voice-active embeddings = ~5s of
+    // continuous speech. Long enough to capture a
+    // sentence; short enough to bias toward recent
+    // voice (recent speech averages out earlier noise).
+    private val enrollmentBuffer = ArrayDeque<FloatArray>()
+    private val enrollmentBufferMax = 64
+    // Cumulative count of voice-active samples seen
+    // across all enrollment sessions. Never decreases;
+    // resets only on clearEnrollment. Used by the JS
+    // UI to show "auto-learning progress" (e.g.
+    // "3.2 / 5.0 min learned").
+    private var enrollmentSamplesTotal = 0L
+    // Last profile recomputation time (ms). Used to
+    // throttle the averaging — recomputing every chunk
+    // is wasted CPU; every 5s is plenty.
+    private var enrollmentLastUpdateMs = 0L
+    // Per-agent enrollment status: count of voice-active
+    // samples contributed to that agent's profile.
+    // Tobe's "passive learning" request — accumulates
+    // across multiple sessions without user action.
+    private val enrollmentSamplesByAgent = HashMap<String, Long>()
+
     /**
      * v3.10.19: cosine similarity between two 96-dim
      * vectors. Returns a value in [-1, 1]; typical
@@ -597,7 +629,113 @@ class OpenWakeWordDetector(private val context: Context) {
     }
 
     fun hasEnrollment(agentId: String): Boolean = enrollments.containsKey(agentId)
-    fun clearEnrollment(agentId: String) { enrollments.remove(agentId) }
+    fun clearEnrollment(agentId: String) {
+        enrollments.remove(agentId)
+        synchronized(enrollmentBuffer) { enrollmentBuffer.clear() }
+        enrollmentSamplesTotal = 0L
+        enrollmentSamplesByAgent.clear()
+    }
+
+    // v3.10.21: passive enrollment accumulator. Called
+    // from WakeWordModule whenever an audio chunk is
+    // classified as voice-active (rms > SPEECH_THRESHOLD
+    // + zcr > VOICE_ZCR_THRESHOLD). Pushes the chunk's
+    // 96-dim embedding into the enrollment buffer (which
+    // keeps the last 64 frames = ~5s of speech).
+    //
+    // This runs CONTINUOUSLY while the OWW listener is
+    // active — no user action required. Tobe's
+    // "passive option" request: auto-learn the user's
+    // voice in the background over time.
+    fun accumulateEnrollmentSample(embedding: FloatArray) {
+        synchronized(enrollmentBuffer) {
+            enrollmentBuffer.addLast(embedding.copyOf())
+            while (enrollmentBuffer.size > enrollmentBufferMax) {
+                enrollmentBuffer.removeFirst()
+            }
+        }
+        enrollmentSamplesTotal++
+    }
+
+    /**
+     * v3.10.21: convenience wrapper — pull the most
+     * recent embedding from `embeddingHistory` (which
+     * predictScore stashes every chunk into) and push
+     * it into the enrollment buffer. Called from
+     * WakeWordModule's OWW thread loop immediately
+     * after predictScore returns, when the previous
+     * chunk was classified as voice-active.
+     *
+     * Cheap: no extra DSP, just a buffer copy.
+     */
+    fun accumulateLatestEmbedding() {
+        val latest = synchronized(embeddingHistory) {
+            if (embeddingHistory.isEmpty()) null
+            else embeddingHistory.last().copyOf()
+        } ?: return
+        accumulateEnrollmentSample(latest)
+    }
+
+    /**
+     * v3.10.21: number of voice-active samples seen
+     * across all enrollment. Used by the JS UI to show
+     * "auto-learning progress". Monotonically increases
+     * (until clearEnrollment resets).
+     */
+    fun getEnrollmentSamplesTotal(): Long = enrollmentSamplesTotal
+
+    /**
+     * v3.10.21: how many samples are currently in the
+     * rolling enrollment buffer (max 64). Useful for
+     * debugging — "did the user's recent speech get
+     * captured?"
+     */
+    fun getEnrollmentBufferSize(): Int = synchronized(enrollmentBuffer) { enrollmentBuffer.size }
+
+    /**
+     * v3.10.21: recompute the agent's profile from the
+     * current enrollment buffer. Throttled to once per
+     * `cooldownMs` so we don't recompute every chunk.
+     * Returns true if the profile was updated.
+     *
+     * After this call:
+     * - `enrollments[agentId]` is updated to the new
+     *   averaged + L2-normalized profile
+     * - `enrollmentSamplesByAgent[agentId]` is updated
+     *
+     * The JS side calls this periodically (every 5s) or
+     * on demand (when the user taps "Save voice profile
+     * now" in Settings).
+     */
+    fun recomputeEnrollmentProfile(agentId: String, minSamples: Int = 16, cooldownMs: Long = 5000L): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - enrollmentLastUpdateMs < cooldownMs) {
+            // Throttled — but if we don't have an existing
+            // enrollment yet, allow an immediate first
+            // recompute.
+            if (enrollments.containsKey(agentId)) return false
+        }
+        val snapshot: List<FloatArray>
+        synchronized(enrollmentBuffer) {
+            if (enrollmentBuffer.size < minSamples) return false
+            snapshot = enrollmentBuffer.toList()
+        }
+        val avg = FloatArray(96)
+        for (emb in snapshot) {
+            for (i in 0 until 96) avg[i] += emb[i]
+        }
+        val n = snapshot.size.toFloat()
+        for (i in 0 until 96) avg[i] /= n
+        var norm = 0.0
+        for (i in 0 until 96) norm += avg[i] * avg[i]
+        norm = Math.sqrt(norm)
+        if (norm > 0.0) for (i in 0 until 96) avg[i] = (avg[i] / norm).toFloat()
+        enrollments[agentId] = avg
+        enrollmentSamplesByAgent[agentId] = enrollmentSamplesTotal
+        enrollmentLastUpdateMs = now
+        Log.i(tag, "Recomputed speaker profile for agent=$agentId from ${snapshot.size} samples (cumulative ${enrollmentSamplesTotal} samples)")
+        return true
+    }
 
     private fun loadInterpreter(assetPath: String): Interpreter {
         val afd = context.assets.openFd(assetPath)
