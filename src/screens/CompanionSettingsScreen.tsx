@@ -149,6 +149,113 @@ export default function CompanionSettingsScreen({
 
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>>({});
 
+  // v3.10.5: direct active-wake-phrase lookup. Single
+  // source of truth for the Wake card status line + the
+  // Wake sub-page's "Currently active" panel.
+  //
+  // Why this exists: the v3.10.4 merge of
+  // getSavedWakeModels + listWakeSets still misses the
+  // active wake when the JS companionId doesn't strictly
+  // match `meta.agentId` in some edge case (e.g. agentId
+  // casing diff, or the set was trained before the JS
+  // companionId was renamed by a desktop sync). The
+  // merge filter `e.agentId === c.id` then returns zero
+  // candidates and the card shows the misleading
+  // fallback even though the manager shows ✓ Active.
+  //
+  // getActiveWakeSet(c.id) is the canonical "what's
+  // currently active for this companion?" call — it's
+  // a single SharedPreferences read of `active_<agentId>`,
+  // the exact same key the Wake Manager reads. If it
+  // returns a setId, we have an active wake; if null,
+  // we don't. Then listWakeSets gives us the metadata
+  // for that setId (phrase, displayName, path).
+  //
+  // We keep this as a SEPARATE piece of state (not
+  // merged into savedWakeModels) so the UI displays the
+  // canonical truth directly, and so a merge bug in
+  // savedWakeModels can't mask the active binding.
+  const [activeWakeDirect, setActiveWakeDirect] = useState<{
+    setId: string;
+    phrase: string;
+    displayName?: string;
+    path?: string;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const fetch = async () => {
+      // v3.10.5: only fetch when we know which
+      // companion we're showing. The companion
+      // object is resolved from availableCompanions,
+      // which hydrates from cyberclaw-agents-cache
+      // on mount — companion may be undefined on
+      // the first render until that hydration
+      // completes. Skip in that case; the effect
+      // re-runs when availableCompanions changes.
+      if (!companion) {
+        setActiveWakeDirect(null);
+        return;
+      }
+      try {
+        const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
+        const activeSetId = await WakeWordModule?.getActiveWakeSet?.(companion.id);
+        if (cancelled) return;
+        if (!activeSetId) {
+          setActiveWakeDirect(null);
+          return;
+        }
+        // Look up the set's metadata in listWakeSets so
+        // we can show phrase / displayName / path. If
+        // listWakeSets fails or doesn't include this set
+        // (it should — the manager just wrote the binding),
+        // fall back to a minimal record so the UI can at
+        // least show the setId.
+        let meta: any = null;
+        try {
+          const allSets = await WakeWordModule?.listWakeSets?.();
+          if (allSets && typeof allSets === 'object') {
+            meta = allSets[activeSetId] || null;
+          }
+        } catch (_) {}
+        if (cancelled) return;
+        if (meta && meta.phrase) {
+          setActiveWakeDirect({
+            setId: activeSetId,
+            phrase: meta.phrase,
+            displayName: meta.displayName || meta.phrase,
+            path: meta.path || `wake_models/${activeSetId}/model.tflite`,
+          });
+        } else {
+          // Active binding exists but we couldn't read
+          // the meta. Show a degraded entry so the user
+          // sees "Active: <setId>" rather than nothing.
+          setActiveWakeDirect({
+            setId: activeSetId,
+            phrase: activeSetId,
+          });
+        }
+      } catch (_) {
+        // Best-effort. Don't overwrite with null on a
+        // transient failure — let the previous value
+        // stay so the UI doesn't flicker.
+      }
+    };
+    fetch();
+    // Also refetch when the screen comes back to focus
+    // (e.g. user returns from the wake manager route,
+    // where they may have just activated a different
+    // set). AppState 'active' covers the focus event
+    // even when the route stack didn't unmount this
+    // screen.
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') fetch();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [companion?.id, availableCompanions.length]);
+
   // v3.10.2: trained-exit-phrase list for the
   // overview card. Lifted to the screen level so
   // the hook rule is honored — renderCompanionOverview
@@ -645,21 +752,17 @@ export default function CompanionSettingsScreen({
       ? `Default: "${voiceExitPhrase}"`
       : 'Not set';
   const wakeModel = savedWakeModels[companion.id];
-  // v3.10.4: don't claim "not trained" when the JS state
-  // hasn't populated yet. Tobe hit this in v3.10.3: the
-  // manager (listWakeSets path) correctly showed "Hey
-  // Clawsuu" as ✓ Active, but the v3.10.3-era
-  // getSavedWakeModels-only fetch in this screen returned
-  // empty for the same agent — so the card said "Not
-  // trained — uses default wake if no active wake is
-  // bound", a flat-out false claim since a wake word WAS
-  // bound. The bulletproof listWakeSets fallback (right
-  // above this) populates savedWakeModels correctly now;
-  // even if a future fetch gap returns empty again, fall
-  // through to a neutral hint that points at Wake Sets
-  // instead of claiming false state.
-  const wakeStatusLine = wakeModel?.phrase
-    ? `Trained: "${wakeModel.displayName || wakeModel.phrase}"`
+  // v3.10.5: prefer the direct activeWakeDirect lookup
+  // (canonical — reads the same SharedPreferences key
+  // the manager reads) over the merged savedWakeModels.
+  // If activeWakeDirect resolves, show that phrase. If
+  // it's null but savedWakeModels has an entry (e.g. a
+  // non-active set exists for this companion), fall
+  // through to that. If both are empty, show the
+  // neutral hint.
+  const activeWake = activeWakeDirect || (wakeModel?.phrase ? wakeModel : null);
+  const wakeStatusLine = activeWake
+    ? `Trained: "${activeWake.displayName || activeWake.phrase}"`
     : 'No active wake on this phone — open Wake Sets to manage trained phrases';
 
   // Dispatch
@@ -828,8 +931,69 @@ export default function CompanionSettingsScreen({
               <Text style={styles.savedHint}>✅ Saved at {new Date(readyPhraseSavedAt).toLocaleTimeString()}</Text>
             )}
 
+            {/*
+              v3.10.5: "Currently active" panel. Shows
+              the active wake phrase + setId + .tflite
+              path right on this page so the user doesn't
+              have to tap "Manage wake sets" to find out
+              what's bound. The data comes from the
+              activeWakeDirect lookup (canonical —
+              reads the same SharedPreferences key the
+              manager reads) rather than the merged
+              savedWakeModels (which can miss the active
+              binding in edge cases, see v3.10.4 fix
+              notes).
+            */}
+            <SubTitle>Currently active wake</SubTitle>
+            {activeWakeDirect ? (
+              <View style={styles.activeWakePanel}>
+                <View style={styles.activeWakeHeader}>
+                  <Text style={styles.activeWakeDot}>◉</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.activeWakePhrase}>
+                      {activeWakeDirect.displayName || activeWakeDirect.phrase}
+                    </Text>
+                    <Text style={styles.activeWakeSetId}>
+                      {activeWakeDirect.setId}
+                    </Text>
+                    {activeWakeDirect.path ? (
+                      <Text style={styles.activeWakePath} numberOfLines={1}>
+                        {activeWakeDirect.path}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={styles.activeWakeManageBtn}
+                  onPress={() => onPushWakeManager({
+                    companionId: companion.id,
+                    companionName: companion.name,
+                  })}
+                >
+                  <Text style={styles.activeWakeManageBtnText}>📂 Manage wake sets</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.activeWakePanelEmpty}>
+                <Text style={styles.activeWakeEmptyText}>
+                  No wake word is currently bound for {companion.name}. Use the buttons below to train one.
+                </Text>
+              </View>
+            )}
+
             <SubTitle>Wake phrases</SubTitle>
-            <Hint>Trained wake words for {companion.name}. Tap 🎙 to retrain, 🗑 to delete.</Hint>
+            <Hint>
+              {/*
+                v3.10.5: rewrote the stale "Tap 🎙 to
+                retrain, 🗑 to delete" hint. The picker
+                rows below render retrain + delete
+                buttons inline only when rows exist;
+                when empty, this section just points
+                at the manager. Don't promise an
+                interaction that may not be there.
+              */}
+              Trained wake phrases for {companion.name}. Use "Manage wake sets" below to retrain, rename, or delete.
+            </Hint>
             <WakePhrasePicker
               companions={[companion]}
               savedModels={savedWakeModels}
@@ -1765,6 +1929,80 @@ const styles = StyleSheet.create({
   },
   trainBtnText: { fontSize: 15, fontWeight: '600' },
   trainBtnSub: { color: '#888', fontSize: 11, marginTop: 4 },
+  // v3.10.5: "Currently active wake" panel on the Wake
+  // sub-page. Shows the active phrase + setId + .tflite
+  // path so the user doesn't have to drill into the
+  // manager to see what's bound. Mirrors the visual
+  // language of the green ◉ indicator used elsewhere
+  // (e.g. voice picker rows) so it reads as "active".
+  activeWakePanel: {
+    backgroundColor: '#0f1626',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#10b981',
+    padding: 12,
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  activeWakePanelEmpty: {
+    backgroundColor: '#0f1626',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#3a3a3a',
+    borderStyle: 'dashed',
+    padding: 12,
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  activeWakeHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  activeWakeDot: {
+    color: '#10b981',
+    fontSize: 18,
+    width: 18,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  activeWakePhrase: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  activeWakeSetId: {
+    color: '#10b981',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginTop: 4,
+  },
+  activeWakePath: {
+    color: '#666',
+    fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginTop: 2,
+  },
+  activeWakeEmptyText: {
+    color: '#888',
+    fontSize: 13,
+    fontStyle: 'italic',
+  },
+  activeWakeManageBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#9ca3af',
+    backgroundColor: 'rgba(156, 163, 175, 0.10)',
+  },
+  activeWakeManageBtnText: {
+    color: '#9ca3af',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   // v3.7.0: radio-style row for the per-companion voice picker.
   // Reused for engine (Use global default / Local / Premium API)
   // and for the voice lists under each engine.
