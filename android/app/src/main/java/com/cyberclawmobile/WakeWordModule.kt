@@ -2437,8 +2437,53 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private var mediaPlayer: MediaPlayer? = null
 
-    @ReactMethod fun startPlayer(path: String, promise: Promise) {
+    @ReactMethod fun startPlayer(path: String, queueIfPlaying: Boolean, promise: Promise) {
         try {
+            // v3.10.18: queueIfPlaying mode. When true and
+            // a MediaPlayer is currently playing, instead
+            // of starting a new player (which would
+            // truncate the current one), use
+            // setNextMediaPlayer to queue this one. This
+            // is the smart cue-after-response path Tobe
+            // asked for: when the response audio finishes,
+            // the framework automatically starts the cue
+            // — no JS-side settle delay, no race with the
+            // audio HAL buffer drain.
+            val existing = mediaPlayer
+            if (queueIfPlaying && existing != null && existing.isPlaying) {
+                val next = MediaPlayer()
+                if (path.startsWith("file:///android_asset/")) {
+                    val assetRel = path.removePrefix("file:///android_asset/")
+                    val afd = reactContext.assets.openFd(assetRel)
+                    next.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    afd.close()
+                } else {
+                    next.setDataSource(path)
+                }
+                next.setOnErrorListener { _, what, extra ->
+                    emitDebug("error", "Next MediaPlayer error what=$what extra=$extra for path=$path")
+                    try { next.release() } catch (_: Exception) {}
+                    true
+                }
+                next.setOnCompletionListener {
+                    // Emit on the LAST in the chain.
+                    try {
+                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                            .emit("audioPlayerFinished", null)
+                    } catch (_: Exception) {}
+                    try { next.release() } catch (_: Exception) {}
+                    if (mediaPlayer === next) mediaPlayer = null
+                }
+                next.prepare()
+                existing.setNextMediaPlayer(next)
+                // Don't update mediaPlayer to `next` yet —
+                // the existing player still owns the audio
+                // session. Once existing completes, the
+                // framework transitions to `next`.
+                promise.resolve(null)
+                return
+            }
+
             mediaPlayer?.release()
             val mp = MediaPlayer()
             // v3.10.8: handle three path shapes properly.

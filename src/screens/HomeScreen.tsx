@@ -1857,7 +1857,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         }
 
         try {
-          await WakeWordModule.startPlayer(tmpPath);
+          await WakeWordModule.startPlayer(tmpPath, false);
           addLogEntry('🔊 startPlayer resolved OK', 'info');
         } catch (playerErr: any) {
           addLogEntry(`🔊 startPlayer ERROR: ${playerErr?.message}`, 'error');

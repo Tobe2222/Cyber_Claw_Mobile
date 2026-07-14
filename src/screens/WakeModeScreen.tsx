@@ -430,7 +430,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     // are typically 1-3s.
     const safetyTimer = setTimeout(() => finish('safety'), 10000);
     try {
-      await WakeWordModule.startPlayer(filePath);
+      await WakeWordModule.startPlayer(filePath, false);
     } catch (e: any) {
       addVoiceLog(`🔊 cached play failed: ${e?.message}`);
       finish('error');
@@ -532,7 +532,16 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       const cueSub = wakeWordEmitter?.addListener('audioPlayerFinished', () => {
         cueFinished = true;
       });
-      WakeWordModule?.startPlayer?.(path)?.catch((e: any) => {
+      // v3.10.18: pass queueIfPlaying=true so the cue
+      // uses MediaPlayer.setNextMediaPlayer. When the
+      // response audio is still playing, the cue queues
+      // behind it natively — the framework transitions
+      // to the cue only after the response audio's
+      // HAL buffer has fully drained. This is the
+      // "smart" path Tobe asked for in v3.10.10: no
+      // JS-side settle delay, no race with audio HAL
+      // drain, no overlap with the response audio.
+      WakeWordModule?.startPlayer?.(path, true)?.catch((e: any) => {
         addLogEntry(`Turn cue play failed: ${e?.message || e}`, 'warn');
         cueFinished = true;
       });
@@ -1490,7 +1499,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wakemode-response-${Date.now()}.${ext}`;
           await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
           addLogEntry(`🔊 Wake Mode: audio written to ${tmpPath.split('/').pop()}, calling startPlayer`, 'info');
-          await WakeWordModule?.startPlayer?.(tmpPath);
+          await WakeWordModule?.startPlayer?.(tmpPath, false);
           addLogEntry('🔊 Wake Mode: startPlayer resolved', 'info');
         } catch (e: any) {
           addLogEntry(`🔊 Wake Mode: startPlayer failed: ${e?.message}`, 'error');
