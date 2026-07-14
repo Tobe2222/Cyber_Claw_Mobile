@@ -247,6 +247,32 @@ class SyncClient {
     this.send({ type: 'request_chat_history' });
   }
 
+  // v3.10.20: attachment (image) upload to desktop. The
+  // desktop processes the image and the LLM can use it
+  // for vision tasks (TTS-only models ignore it; vision
+  // models like GPT-4V/Claude can describe/analyse).
+  // Tobe's v3.10.19 feedback: "images don't attach
+  // themselves to the chat such that one can click them
+  // and look at them also" — also "tried taking a picture
+  // with camera but it did not send it either". The
+  // sendAttachment method didn't exist on SyncClient
+  // (the call site was calling a non-existent method
+  // and failing silently in the .then callback). Adding
+  // it here so the attachment actually goes out over WS.
+  sendAttachment(base64: string, mimeType: string, fileName: string) {
+    if (!this.connected) {
+      console.warn('[SyncClient] sendAttachment: not connected');
+      return false;
+    }
+    try {
+      this.send({ type: 'attachment', data: base64, mimeType, fileName });
+      return true;
+    } catch (e: any) {
+      console.error('[SyncClient] Attachment send failed:', e?.message);
+      return false;
+    }
+  }
+
   // v3.1.17: per-agent chat history request for the companion tab bar.
   // Each companion has its own chat history on the desktop; when the
   // user switches to a different companion tab, we ask the desktop

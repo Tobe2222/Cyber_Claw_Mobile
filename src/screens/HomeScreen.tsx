@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, ScrollView, StyleSheet, Image,
-  Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert,
+  Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert, Modal,
   NativeModules, StatusBar, NativeEventEmitter, BackHandler, AppState,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -231,6 +231,7 @@ interface ChatMessage {
   agentId?: string;
   agentName?: string; // v3.1.15: human-readable name from desktop (e.g. "Lamasuu")
   ts: number;
+  attachments?: Array<{ uri: string; type: string; name: string }>; // v3.10.20
 }
 
 interface LogEntry {
@@ -386,6 +387,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  // v3.10.20: fullscreen attachment viewer. When the user
+  // taps an image preview in the chat, we open this modal
+  // with the full-size image and a close button. Tobe's
+  // v3.10.19 feedback: "images dont attach themselves to
+  // the chat, such that one can Click them and look at them
+  // also, like discord does".
+  const [fullscreenAttachment, setFullscreenAttachment] = useState<{ uri: string; type: string; name: string } | null>(null);
 
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
@@ -2352,15 +2360,29 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const text = inputText.trim();
     if (!text && attachments.length === 0) return;
 
-    if (text) {
+    if (text || attachments.length > 0) {
       // v3.1.17: tag the user message with the active companion's
       // agentId so it lands in the right slot of messagesByAgent and
       // the desktop routes the response back to the same companion.
+      // v3.10.20: include attachments in the local message so the
+      // image preview shows up in the chat immediately (instead of
+      // disappearing after send). Also wait for attachments to be
+      // read as base64 BEFORE clearing them — otherwise the user
+      // sees the previews vanish before they're sent.
       const aid = activeChatAgentIdRef.current || 'companion';
-      const userMsg: ChatMessage = { id: `user-${Date.now()}`, text, isUser: true, agentId: aid, ts: Date.now() };
+      const userMsg: ChatMessage = {
+        id: `user-${Date.now()}`,
+        text,
+        isUser: true,
+        agentId: aid,
+        ts: Date.now(),
+        attachments: attachments.map(a => ({ uri: a.uri, type: a.type, name: a.name })),
+      };
       appendAgentMessage(userMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
-      syncClient.sendChat(text, aid);
-      addLogEntry(`→ [${aid}] ${text.substring(0, 80)}`, 'sent');
+      if (text) {
+        syncClient.sendChat(text, aid);
+        addLogEntry(`→ [${aid}] ${text.substring(0, 80)}`, 'sent');
+      }
     }
 
     for (const att of attachments) {
@@ -2368,11 +2390,22 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const fs = require('react-native-fs');
         if (att.uri.startsWith('file://')) {
           fs.readFile(att.uri, 'base64').then((b64: string) => {
-            syncClient.sendAttachment(b64, att.type, att.name);
-            addLogEntry(`📎 Sent: ${att.name}`, 'info');
+            const ok = syncClient.sendAttachment(b64, att.type, att.name);
+            addLogEntry(ok ? `📎 Sent: ${att.name}` : `📎 Send failed: ${att.name}`, ok ? 'info' : 'error');
+          }).catch((e: any) => {
+            addLogEntry(`📎 Read failed: ${att.name}: ${e?.message}`, 'error');
           });
+        } else if (att.uri.startsWith('content://') && (att as any).data) {
+          // Some Android camera capture results come back as
+          // content:// URIs with the data inline — fall back
+          // to whatever the picker provided.
+          const b64 = (att as any).data;
+          const ok = syncClient.sendAttachment(b64, att.type, att.name);
+          addLogEntry(ok ? `📎 Sent: ${att.name}` : `📎 Send failed: ${att.name}`, ok ? 'info' : 'error');
         }
-      } catch (e) { console.log('attachment error', e); }
+      } catch (e: any) {
+        addLogEntry(`📎 Error: ${att.name}: ${e?.message}`, 'error');
+      }
     }
 
     setInputText('');
@@ -2594,6 +2627,42 @@ useEffect(() => {
             {agentLabel}
           </Text>
           <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
+          {/* v3.10.20: render attachment previews. Images
+              show inline with a tap-to-open-fullscreen
+              handler; non-image attachments (audio, video,
+              files) show as a tap-to-open card with the
+              filename. The user can preview before sending
+              AND after — same component in both states. */}
+          {item.attachments && item.attachments.length > 0 && (
+            <View style={styles.attachmentsRow}>
+              {item.attachments.map((att, idx) => {
+                const isImage = att.type?.startsWith('image/');
+                return (
+                  <TouchableOpacity
+                    key={`${item.id}-att-${idx}`}
+                    style={isImage ? styles.attachmentImageWrap : styles.attachmentFileWrap}
+                    onPress={() => setFullscreenAttachment(att)}
+                    activeOpacity={0.8}
+                  >
+                    {isImage ? (
+                      <Image
+                        source={{ uri: att.uri }}
+                        style={styles.attachmentImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={styles.attachmentFileInner}>
+                        <Text style={styles.attachmentFileIcon}>📎</Text>
+                        <Text style={styles.attachmentFileName} numberOfLines={1}>
+                          {att.name}
+                        </Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
           <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
         </View>
       </View>
@@ -3147,6 +3216,50 @@ useEffect(() => {
         )}
       </KeyboardAvoidingView>
       )}
+
+      {/* v3.10.20: fullscreen attachment viewer. Opens
+          when the user taps an attachment preview in
+          the chat. Shows the image at its natural size
+          (capped at the screen dimensions) with a dark
+          background and a close button. Tap the close
+          button OR the image to dismiss. */}
+      <Modal
+        visible={fullscreenAttachment !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFullscreenAttachment(null)}
+      >
+        <TouchableOpacity
+          style={styles.fullscreenAttachmentBackdrop}
+          activeOpacity={1}
+          onPress={() => setFullscreenAttachment(null)}
+        >
+          {fullscreenAttachment && (
+            <View style={styles.fullscreenAttachmentContent}>
+              {fullscreenAttachment.type?.startsWith('image/') ? (
+                <Image
+                  source={{ uri: fullscreenAttachment.uri }}
+                  style={styles.fullscreenAttachmentImage}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View style={styles.fullscreenAttachmentFileCard}>
+                  <Text style={styles.fullscreenAttachmentFileIcon}>📎</Text>
+                  <Text style={styles.fullscreenAttachmentFileName}>
+                    {fullscreenAttachment.name}
+                  </Text>
+                </View>
+              )}
+              <TouchableOpacity
+                style={styles.fullscreenAttachmentClose}
+                onPress={() => setFullscreenAttachment(null)}
+              >
+                <Text style={styles.fullscreenAttachmentCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -3320,6 +3433,87 @@ const styles = StyleSheet.create({
   userText: { color: '#ffffff', fontWeight: '500' },  // White for user
   aiText: { color: '#f7931a' },  // Orange for companion
   timestamp: { color: '#888', fontSize: 8, marginTop: 4, textAlign: 'right' },
+
+  // v3.10.20: attachment rendering. Inline image
+  // previews (square 96px thumbnails) inside the
+  // message bubble, plus a tap-to-fullscreen Modal
+  // for the full-size view. Non-image attachments
+  // show as a file card.
+  attachmentsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 6,
+    gap: 6,
+  },
+  attachmentImageWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+  },
+  attachmentImage: {
+    width: '100%',
+    height: '100%',
+  },
+  attachmentFileWrap: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: 'rgba(247,147,26,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(247,147,26,0.4)',
+    minWidth: 96,
+  },
+  attachmentFileInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  attachmentFileIcon: { fontSize: 16 },
+  attachmentFileName: { fontSize: 12, color: '#f7931a', flexShrink: 1 },
+  fullscreenAttachmentBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullscreenAttachmentContent: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullscreenAttachmentImage: {
+    width: '100%',
+    height: '100%',
+  },
+  fullscreenAttachmentFileCard: {
+    padding: 32,
+    backgroundColor: '#1a1a2e',
+    borderRadius: 12,
+    alignItems: 'center',
+    gap: 12,
+  },
+  fullscreenAttachmentFileIcon: { fontSize: 48, color: '#f7931a' },
+  fullscreenAttachmentFileName: { fontSize: 16, color: '#fff' },
+  fullscreenAttachmentClose: {
+    position: 'absolute',
+    top: 48,
+    right: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullscreenAttachmentCloseText: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '600',
+  },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
   emptyChatText: { color: '#555', fontSize: 14, textAlign: 'center' },
   inputContainer: {
