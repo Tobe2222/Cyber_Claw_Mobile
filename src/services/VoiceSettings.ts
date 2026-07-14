@@ -121,10 +121,55 @@ export const DEFAULT_SEND_PHRASE = 'send';
  * concerns). The setting is global (not per-companion) for
  * v3.9.8; per-companion cue sounds are planned for v3.10.0.
  */
-export const TURN_CUE_KEY = 'cyberc…-turn-cue';
+export const TURN_CUE_KEY = 'cyberclaw-voice-turn-cue';
+export const LEGACY_TURN_CUE_KEY = 'cyberc…-turn-cue'; // v3.10.1: was the canonical key by accident; SettingsScreen wrote/read `cyberclaw-voice-turn-cue`, so the user-selected cue was never read by WakeModeScreen and no cue ever played. Fixed by aligning the two paths to the SettingsScreen canonical key.
 export const DEFAULT_TURN_CUE = 'off';
 export const TURN_CUE_OPTIONS = ['off', 'bird', 'bell', 'ding', 'chime'] as const;
 export type TurnCueId = typeof TURN_CUE_OPTIONS[number];
+
+/**
+ * v3.10.1: migrate the legacy turn-cue key
+ * (cyberc…-turn-cue, with the ellipsis as a typo'd
+ * abbreviation) to the canonical key
+ * (cyberclaw-voice-turn-cue). Tobe's v3.9.8 + v3.10.0
+ * installs wrote to the canonical key (SettingsScreen
+ * always used it) but WakeModeScreen's TURN_CUE_KEY
+ * constant pointed at the typo'd legacy key. As a
+ * result WakeModeScreen always read the default
+ * ('off') and never played a cue, even when Tobe had
+ * set one in Settings.
+ *
+ * Idempotent: runs on app start (App.tsx
+ * initial-load effect). If the legacy key has a
+ * value AND the canonical key is unset, copy the
+ * legacy value to the canonical key and clear the
+ * legacy key. If the canonical key already has a
+ * value, leave it alone (it was set by SettingsScreen
+ * and reflects the user's current choice).
+ */
+export async function migrateLegacyTurnCueKey(): Promise<boolean> {
+  try {
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    const [legacy, current] = await Promise.all([
+      AsyncStorage.getItem(LEGACY_TURN_CUE_KEY),
+      AsyncStorage.getItem(TURN_CUE_KEY),
+    ]);
+    if (!legacy) return false;
+    if (current) {
+      // The user has a value at the canonical key
+      // (e.g. set by SettingsScreen). Drop the
+      // legacy value — it's stale.
+      await AsyncStorage.removeItem(LEGACY_TURN_CUE_KEY);
+      return false;
+    }
+    // Migrate: copy legacy to canonical.
+    await AsyncStorage.setItem(TURN_CUE_KEY, legacy);
+    await AsyncStorage.removeItem(LEGACY_TURN_CUE_KEY);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 export const getSendSamplesKey = (phrase: string) =>
   `cyberclaw-send-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 

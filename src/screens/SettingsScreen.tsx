@@ -1253,7 +1253,19 @@ export default function SettingsScreen({
               <View style={styles.companionList}>
                 {availableCompanions.map(c => {
                   const isActive = activeWakeCompanionId === c.id;
-                  const savedModel = savedWakeModels[c.id];
+                  // v3.10.1: removed the wake-status line
+                  // entirely. Tobe: "It should not say
+                  // anything there but rather in the
+                  // wake and exit section when the
+                  // companion is clicked." The Settings
+                  // companion list now stays clean (just
+                  // emoji + name + active indicator).
+                  // Wake / exit status lives in the
+                  // per-companion detail page
+                  // (CompanionSettingsScreen phase=null),
+                  // which now shows a status line under
+                  // each of the Wake / Exit / Voice
+                  // phase cards.
                   return (
                     <TouchableOpacity
                       key={c.id}
@@ -1267,9 +1279,6 @@ export default function SettingsScreen({
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.companionListName, isActive && { color: '#10b981' }]}>
                           {c.name}
-                        </Text>
-                        <Text style={styles.companionListDetail}>
-                          {savedModel?.phrase ? `wake: "${savedModel.displayName || savedModel.phrase}"` : 'no wake word yet'}
                         </Text>
                       </View>
                       {isActive ? (

@@ -23,6 +23,7 @@ import CompanionSettingsScreen from './src/screens/CompanionSettingsScreen';
 import QuestsScreen from './src/screens/QuestsScreen';
 import syncClient from './src/services/SyncClient';
 import { saveGreetingAudio } from './src/services/GreetingAudioCache';
+import { migrateLegacyTurnCueKey } from './src/services/VoiceSettings';
 
 const { WakeWordModule } = NativeModules;
 
@@ -119,6 +120,21 @@ export default function App(): React.JSX.Element {
   // ping-pong in v3.1.82.
   const screenRef = useRef<'home' | 'settings' | 'voice-mode'>('home');
   useEffect(() => { screenRef.current = screen; }, [screen]);
+
+  // v3.10.1: one-time AsyncStorage key migration.
+  // The WakeModeScreen turn-cue reader was pointing at
+  // a typo'd legacy key (`cyberc…-turn-cue`) while
+  // SettingsScreen wrote to the canonical key
+  // (`cyberclaw-voice-turn-cue`). As a result, no cue
+  // ever played even when the user had one selected
+  // (Tobe hit this — confirmed the cause: the two
+  // keys never matched). The fix aligns WakeModeScreen
+  // to the canonical key AND migrates any value from
+  // the legacy key on the next app start.
+  useEffect(() => {
+    migrateLegacyTurnCueKey().catch(() => {});
+  }, []);
+
   const [companionId, setCompanionId] = useState('boar');
   // v3.1.59: lift agents list to App.tsx so WakeModeScreen can
   // inject setAgents into its (fresh) WebView on mount. Without

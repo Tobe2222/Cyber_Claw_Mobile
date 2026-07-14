@@ -509,6 +509,38 @@ export default function CompanionSettingsScreen({
     );
   }
 
+  // v3.10.1: trained-exit-phrase list for the
+  // overview card. Lifted to the screen level so
+  // the hook rule is honored — renderCompanionOverview
+  // is called from a dispatch (not always called),
+  // and putting useState/useEffect inside it would
+  // break the same-hook-order rule (same v3.7.1
+  // bug class that bit voice picker state).
+  const [trainedExitPhrases, setTrainedExitPhrases] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+        const prefix = `cyberclaw-exit-samples-${companionId}-`;
+        const list = keys
+          .filter(k => k.startsWith(prefix))
+          .map(k => k.replace(prefix, '').replace(/-/g, ' '));
+        setTrainedExitPhrases(list);
+      } catch (_) {}
+    })();
+  }, [companionId]);
+  const exitStatusLine = trainedExitPhrases.length > 0
+    ? `Trained: "${trainedExitPhrases[0]}"`
+    : voiceExitPhrase
+      ? `Default: "${voiceExitPhrase}"`
+      : 'Not set';
+  // Wake status: derived from savedWakeModels map
+  // (already hydrated by the parent's effect).
+  const wakeModel = savedWakeModels[companionId];
+  const wakeStatusLine = wakeModel?.phrase
+    ? `Trained: "${wakeModel.displayName || wakeModel.phrase}"`
+    : 'Not trained — uses default wake if no active wake is bound';
+
   // Dispatch
   if (companionViewPhase === 'wake') {
     return renderCompanionWakePage(companion);
@@ -553,6 +585,23 @@ export default function CompanionSettingsScreen({
                 <Text style={styles.phaseCardSub}>
                   Greeting, trained wake words, train a new wake phrase
                 </Text>
+                {/*
+                  v3.10.1: show wake status here on the
+                  per-companion page (Tobe: "It should
+                  not say anything there but rather in
+                  the wake and exit section when the
+                  companion is clicked"). Two lines:
+                  one for the active wake phrase (if
+                  any), one for the existence of any
+                  trained phrases. Falls back to "Not
+                  trained" / "Default X" hints when the
+                  user hasn't trained anything.
+                */}
+                {wakeStatusLine ? (
+                  <Text style={[styles.phaseCardSub, { color: '#10b981', marginTop: 6, fontStyle: 'italic' }]}>
+                    {wakeStatusLine}
+                  </Text>
+                ) : null}
               </View>
               <Text style={styles.phaseCardArrow}>›</Text>
             </TouchableOpacity>
@@ -567,6 +616,24 @@ export default function CompanionSettingsScreen({
                 <Text style={styles.phaseCardSub}>
                   Exit reply, trained exit phrases, train a new exit phrase
                 </Text>
+                {/*
+                  v3.10.1: same pattern as the Wake
+                  card. Two flavors: "Trained: thanks"
+                  when PerCompanionExitPicker found a
+                  trained phrase, "Default: thanks"
+                  when only the v3.7.1 default
+                  voiceExitPhrase is in use. The exit
+                  phrase is also reflected in the
+                  Voice Settings voiceExitPhrase
+                  control, but showing it once in the
+                  per-companion list keeps the user
+                  oriented without having to drill in.
+                */}
+                {exitStatusLine ? (
+                  <Text style={[styles.phaseCardSub, { color: '#10b981', marginTop: 6, fontStyle: 'italic' }]}>
+                    {exitStatusLine}
+                  </Text>
+                ) : null}
               </View>
               <Text style={styles.phaseCardArrow}>›</Text>
             </TouchableOpacity>
