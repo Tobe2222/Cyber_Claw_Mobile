@@ -54,8 +54,8 @@ const getWakeWordEmitter = () => {
 };
 const wakeWordEmitter = { addListener: (event: string, cb: (...args: any[]) => void) => getWakeWordEmitter()?.addListener(event, cb) ?? null };
 
-const SAMPLE_MATCH_THRESHOLD_FG = 0.55;
-const SAMPLE_MATCH_THRESHOLD_BG = 0.65;
+const SAMPLE_MATCH_THRESHOLD_FG = 0.5;
+const SAMPLE_MATCH_THRESHOLD_BG = 0.6;
 const getWakeSamplesKey = (phrase: string) =>
   `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 
@@ -775,8 +775,22 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // Read FRESH here so a change made during the
           // greeting delay takes effect immediately when
           // the listener starts.
+          // v3.10.7: lowered default from 0.55 → 0.5 to
+          // match the SAMPLE_MATCH_THRESHOLD_FG constant.
+          // Tobe's v3.10.6 feedback: "the wake should
+          // perhaps be more sensitive, some times,
+          // perhaps only shortly after startup i have
+          // to almost yell". Lowering the threshold
+          // makes OWW trigger on slightly weaker
+          // evidence — for a custom-trained wake model
+          // (which is the only model we use) the score
+          // distribution is tight, so 0.5 still keeps
+          // false positives low. The auto-tightening
+          // bump from false-open tracking still applies
+          // on top, so the user can't accidentally
+          // crash it by lowering further.
           const fgThreshold = parseFloat(
-            (await AsyncStorage.getItem('cyberclaw-wake-fg-threshold')) || '0.55',
+            (await AsyncStorage.getItem('cyberclaw-wake-fg-threshold')) || '0.5',
           );
           // v3.1.85: await the speak() Promise so the
           // listener doesn't start until the greeting
@@ -1016,11 +1030,42 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           addLogEntry('⏰ Transcribing timeout (30s) — no response from desktop', 'error');
           addVoiceLog('⏰ No response, retrying...');
           wakeWordBusyRef.current = false;
-          resetVoiceStatus();
+          // v3.10.7: show a "retrying" status instead of
+          // jumping straight to "listening" / YOUR TURN.
+          // Tobe's v3.10.6 feedback: "If its trying again
+          // it should not be your turn." During the retry
+          // window (we're about to call startRecordingTurn
+          // which itself takes a moment), the overlay
+          // should reflect "we're waiting, not yet
+          // listening". The status clears to 'listening'
+          // automatically when the next recording turn
+          // starts (via setVoiceStatus('listening') inside
+          // startRecordingTurn). This avoids a flash of
+          // YOUR TURN during the gap between "retrying"
+          // and the next recording window opening.
+          setVoiceStatus('retrying');
+          // Keep resetVoiceStatus behavior for safety
+          // (e.g. startRecordingTurn fails and we leave
+          // the state inconsistent). resetVoiceStatus
+          // only downgrades 'silence_countdown' or
+          // 'transcribing' to 'listening'; for
+          // 'retrying' we need an explicit clear.
+          // Done below in the startRecordingTurn
+          // promise chain.
           if (voiceMode) {
             // Start a new recording turn so the loop
             // continues. The user can keep talking.
-            startRecordingTurnRef.current?.().catch(() => {});
+            startRecordingTurnRef.current?.()
+              .then(() => {
+                // startRecordingTurn sets 'listening'
+                // internally; nothing to do.
+              })
+              .catch(() => {
+                // If the new turn couldn't start,
+                // clear the retrying state so the
+                // overlay doesn't get stuck.
+                setVoiceStatus('listening');
+              });
           }
         }
       }, 30000);
@@ -1060,6 +1105,22 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // stopInFlightRef so the gibberish gate and the
   // double-fire guard are fresh for each turn.
   const startRecordingTurn = useCallback(async () => {
+    // v3.10.7: clear any transient 'retrying' state
+    // (or any other stuck transient) before opening the
+    // new recording window. Without this, the overlay
+    // would stay on "Retrying..." even after the
+    // recorder is live, because startRecordingTurn
+    // doesn't call setVoiceStatus('listening') anywhere
+    // internally — it relies on the silence event to
+    // transition to 'silence_countdown' when the user
+    // actually stops talking. For the gap between
+    // recorder.start() and the first audio frame, the
+    // overlay shows whatever the previous state was,
+    // which is 'retrying' on the no-response retry path.
+    // Flip to 'listening' here so the user sees the
+    // correct "YOUR TURN" overlay as soon as the new
+    // turn opens.
+    setVoiceStatus('listening');
     const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
     resetVAD();
     speechDetectedDuringRecordingRef.current = false;
@@ -1330,14 +1391,56 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         // ("🎤 YOUR TURN") is the always-on fallback.
         // Read the cue setting fresh (user may have
         // changed it during the response).
+        //
+        // v3.10.7: wait for the cue to finish playing
+        // before starting the recorder. The original
+        // fire-and-forget + immediate-recorder-start pattern
+        // was racy: the recorder (AudioRecord) opens the
+        // audio HAL within ~50-100ms of the cue's
+        // MediaPlayer.start(), and even though the player
+        // doesn't request audio focus, the same audio HAL
+        // stream being opened twice in quick succession
+        // would cut the cue off after only the first
+        // 100-200ms — enough that Tobe never heard it.
+        // (The v3.9.8 code logs "🔔 Turn cue: bird" etc.
+        // so we KNOW the cue was attempted; the bug was
+        // the race, not a missing file or wrong key.)
+        //
+        // Fix: wait for the cue's audioPlayerFinished
+        // event (emitted from MediaPlayer.setOnCompletionListener
+        // in WakeWordModule.kt's startPlayer) before
+        // starting the recording turn. Use a 3s safety
+        // timeout so the recording still starts if the cue
+        // somehow never completes (e.g. cue file missing,
+        // prepare() failed silently). The visual overlay
+        // flips to 'listening' (YOUR TURN) immediately so
+        // the user always sees the cue state change — only
+        // the mic activation is gated on the cue.
         try {
           const { TURN_CUE_KEY, DEFAULT_TURN_CUE } = require('../services/VoiceSettings');
           const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           const cue = (await AsyncStorage.getItem(TURN_CUE_KEY)) || DEFAULT_TURN_CUE;
           if (cue && cue !== 'off') {
             const path = `file:///android_asset/sounds/turn-${cue}.wav`;
-            WakeWordModule?.startPlayer?.(path)?.catch(() => {});
             addLogEntry(`🔔 Turn cue: ${cue}`, 'debug');
+            let cueFinished = false;
+            const cueSub = wakeWordEmitter?.addListener('audioPlayerFinished', () => {
+              cueFinished = true;
+            });
+            WakeWordModule?.startPlayer?.(path)?.catch((e: any) => {
+              addLogEntry(`Turn cue play failed: ${e?.message || e}`, 'warn');
+              cueFinished = true;
+            });
+            await new Promise<void>((resolve) => {
+              const start = Date.now();
+              const tick = setInterval(() => {
+                if (cueFinished || Date.now() - start > 3000) {
+                  clearInterval(tick);
+                  resolve();
+                }
+              }, 50);
+            });
+            cueSub?.remove?.();
           }
         } catch (_) {}
 
@@ -1750,9 +1853,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // talking. Recording (red, big) when user is
           // actively talking. The user must instantly see
           // whether to talk or to wait.
+          //
+          // v3.10.7: added 'retrying' status (yellow).
+          // Shows during the gap between "no response,
+          // retrying" and the next recording window
+          // opening, so the overlay doesn't flash
+          // YOUR TURN during the retry (Tobe's report:
+          // "if its trying again it should not be your
+          // turn"). Maps to voiceStatusRetrying style.
           voiceStatus === 'listening' && voiceMode ? styles.voiceStatusYourTurn :
           voiceStatus === 'recording' ? styles.voiceStatusRecording :
           voiceStatus === 'responding' ? styles.voiceStatusResponding :
+          voiceStatus === 'retrying' ? styles.voiceStatusRetrying :
           null,
         ]}>
           {voiceStatus === 'greeting' ? '🔊 Greeting... (say wake word to continue)' :
@@ -1761,6 +1873,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
            voiceStatus === 'silence_countdown' ? '⏳ Sending...' :
            voiceStatus === 'transcribing' ? '📝 Transcribing...' :
            voiceStatus === 'responding' ? '💬 Responding...' :
+           // v3.10.7: retrying state shown between no-
+           // response timeout and the next recording
+           // window opening. Yellow + hourglass so it
+           // visually reads as "waiting, not yet ready
+           // for you to talk".
+           voiceStatus === 'retrying' ? '⏳ Retrying...' :
            voiceMode ? '🎤 YOUR TURN' : '🎧 Listening for wake word...'}
         </Text>
       </View>
@@ -1826,6 +1944,21 @@ const styles = StyleSheet.create({
     color: '#fbbf24',
     fontSize: 16,
     fontWeight: '600',
+  },
+  voiceStatusRetrying: {
+    // v3.10.7: yellow, smaller than YOUR TURN but
+    // larger than responding — we want to convey
+    // "waiting briefly, not yet ready for input".
+    // Distinct from 'responding' (which is amber too)
+    // so the user knows it's a transient state, not
+    // "AI is currently talking". Tobe's complaint
+    // was that "YOUR TURN" during retry invited him
+    // to talk, but the next recording window wasn't
+    // open yet — he would talk into a dead mic.
+    color: '#fbbf24',
+    fontSize: 20,
+    fontWeight: '700',
+    fontStyle: 'italic',
   },
   voiceLogOverlay: {
     position: 'absolute',
