@@ -145,6 +145,15 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // countdown is orphaned and keeps ticking in the background,
   // eventually firing stopAndSendRecording on the next turn.
   const silenceCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // v3.10.9: tracks whether the silence listener has
+  // fired its initial countdown for the current silence
+  // period. The native side re-emits 'recorderSilence'
+  // every 80ms while silence persists (until speech
+  // resets the internal counter). We use this flag to
+  // make sure we only START a countdown once per silence
+  // period, not every 80ms. Reset to false when speech
+  // resumes so the next silence period can fire again.
+  const silenceFiredRef = useRef<boolean>(false);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
   const wakeWordBusyRef = useRef(false);
   const appStateRef = useRef<string>(AppState.currentState);
@@ -940,6 +949,11 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       clearInterval(silenceCountdownIntervalRef.current);
       silenceCountdownIntervalRef.current = null;
     }
+    // v3.10.9: reset silence-fired so a future recording
+    // turn can fire the countdown again. Without this the
+    // ref could carry over across turns if stopAndSendRecording
+    // was bypassed (e.g. early returns).
+    silenceFiredRef.current = false;
     // v3.9.2 — voiceStatus reset helper for early-return branches.
     // The state was getting stuck on 'silence_countdown' (the
     // "⏳ Sending..." overlay) after the gibberish-gate skip and
@@ -1124,6 +1138,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
     resetVAD();
     speechDetectedDuringRecordingRef.current = false;
+    // v3.10.9: reset silence-fired so the new turn can
+    // fire the countdown if it sees silence. Without this
+    // a turn that ends on a paused-countdown (e.g. user
+    // exits voice mode mid-countdown) would suppress the
+    // next turn's silence event.
+    silenceFiredRef.current = false;
     stopInFlightRef.current = false;
 
     let silenceMs = DEFAULT_SILENCE_MS;
@@ -1168,7 +1188,28 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // countdown also gives a clearer visual cue
       // ("Sending in 5...") that the user can interrupt
       // by speaking again.
-      const unsubSilence = recorder.once('silence', async () => {
+      //
+      // v3.10.9: switched `once` → `on` and added
+      // silenceFiredRef guard. The native recorder emits
+      // 'recorderSilence' EVERY 80ms while silence
+      // persists (the threshold gate is just `>= silenceMs`,
+      // not edge-triggered), so `once` actually fires only
+      // once at the boundary, but we lost the ability to
+      // re-trigger the countdown if the user resumes
+      // speaking during the countdown. With `on` plus the
+      // guard, the countdown starts once per silence
+      // period, and the owwVad listener below resets the
+      // guard + clears the countdown on speech resume.
+      // Net effect: "I went to the store [PAUSE 7s] to get
+      // milk" no longer sends at PAUSE+5s into the
+      // countdown — the user's continuation cancels the
+      // countdown and waits for the NEXT silence period.
+      // Matches what Tobe reported in v3.10.8:
+      // "cuts me off a few seconds before my last
+      // sentence finishes".
+      const onSilenceEvent = async () => {
+        if (silenceFiredRef.current) return;
+        silenceFiredRef.current = true;
         addVoiceLog(`⏳ Silence detected (${silenceMs}ms)...`);
         addLogEntry(`Wake/Voice Mode: silence detected after ${silenceMs}ms`, 'info');
         setVoiceStatus('silence_countdown');
@@ -1182,8 +1223,8 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           }
         }, 1000);
         silenceCountdownIntervalRef.current = tick;
-      });
-      silenceUnsubRef.current = unsubSilence;
+      };
+      silenceUnsubRef.current = recorder.on('silence', onSilenceEvent);
 
       await recorder.start(recPath, silenceMs);
       recorderActiveRef.current = true;
@@ -1360,7 +1401,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // to mentally prepare, the mic has time to release
       // from the playback's audio focus, and the silence
       // window starts fresh from a quiet room.
-      const RESPONSE_SETTLE_DELAY_MS = 1500;
+      const RESPONSE_SETTLE_DELAY_MS = 2500;
+      // v3.10.9: bumped from 1500ms to 2500ms. Tobe's
+      // v3.10.8 report: "the cue sound interrupts the
+      // companion speech at its end." MediaPlayer's
+      // OnCompletionListener fires when the player's
+      // internal buffer is drained, but the audio HAL
+      // still has 100-300ms of buffered audio on the
+      // speakers. The 1500ms gap was sometimes not
+      // enough to mask this — the cue would start while
+      // the last syllable was still audible. 2500ms
+      // gives a comfortable buffer that should always
+      // clear the speaker before the cue plays.
       // v3.9.8 — idempotency guard. audioPlayerFinished
       // listeners are added with `addListener` (not once)
       // and never cleaned up; combined with the turn-cue
@@ -1662,9 +1714,41 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     const emitter = getWakeWordEmitter();
     if (!emitter) return;
     const sub = emitter.addListener('owwVad', (e: { rms: number; zcr: number }) => {
-      if (speechDetectedDuringRecordingRef.current) return;  // already marked
-      if (e.rms > 0.015 && e.zcr > 0.02) {
+      // First speech in this recording turn — mark the
+      // gate as passed. Subsequent RMS samples are
+      // ignored here.
+      if (!speechDetectedDuringRecordingRef.current && e.rms > 0.015 && e.zcr > 0.02) {
         speechDetectedDuringRecordingRef.current = true;
+      }
+      // v3.10.9: speech-resume detection during the
+      // silence countdown. The silence countdown runs
+      // for 5s after a silence period is detected. If
+      // the user resumes speaking during that window,
+      // we should cancel the countdown and let the user
+      // continue. Without this, Tobe reported "cuts me
+      // off a few seconds before my last sentence
+      // finishes" — the typical pattern is "I went to
+      // the store [PAUSE 6s] to get milk": the silence
+      // detector fires, countdown starts, then Tobe says
+      // "to get milk" 2s into the countdown, but the
+      // countdown is still running and sends at the 5s
+      // mark, cutting off "to get milk". After this fix,
+      // speech during countdown cancels it and waits
+      // for the NEXT silence period to re-fire.
+      //
+      // Important: this guard fires on EVERY owwVad
+      // sample (1Hz), so we only need to check if the
+      // countdown is currently running. If so, cancel.
+      // Don't require speechDetectedDuringRecordingRef
+      // to be true (that's a first-time flag, not a
+      // continuous signal).
+      if (silenceCountdownIntervalRef.current != null && e.rms > 0.015) {
+        clearInterval(silenceCountdownIntervalRef.current);
+        silenceCountdownIntervalRef.current = null;
+        silenceFiredRef.current = false;
+        setVoiceStatus('listening');
+        addVoiceLog('🎤 Speech resumed, continuing to listen');
+        addLogEntry('Wake/Voice Mode: speech resumed during countdown, cancelled', 'debug');
       }
     });
     return () => {
