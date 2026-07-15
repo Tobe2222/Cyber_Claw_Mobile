@@ -2136,35 +2136,44 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       <View style={styles.enrollmentBarCompact} pointerEvents="none">
         <VoiceEnrollmentBar variant="compact" />
       </View>
-      <WebView
-        key={webViewKey}
-        ref={webViewRef}
-        // v3.1.50: include ?mode=wake so the arena renders with a
-        // solid black background (no forest). Also include the
-        // APP_VERSION cache-buster so an APK upgrade forces a
-        // fresh arena.html load (Android WebView caches
-        // file:///android_asset/ aggressively by URI).
-        source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&companion=${companionId}&platform=mobile&mode=wake&onlyActive=true&centered=true` }}
-        style={styles.webview}
-        scrollEnabled={false}
-        bounces={false}
-        javaScriptEnabled
-        allowFileAccess
-        originWhitelist={['*']}
-        onLoadEnd={() => {
-          // v3.1.64: init the canvas with the full screen
-          // dimensions, not the small ARENA_HEIGHT. Without
-          // this, the canvas stays at 360x200 (the default
-          // fallback) and the CSS-stretched canvas makes the
-          // 320px companion look gigantic. Re-initializing to
-          // the full WebView size keeps the companion at the
-          // intended visual size.
-          const { width: SW, height: SH } = require('react-native').Dimensions.get('window');
-          webViewRef.current?.injectJavaScript(
-            `window.Arena && window.Arena.init(${SW}, ${SH}); true;`,
-          );
-        }}
-      />
+      {/* v3.10.32: wrap the WebView in a marginTop
+          container so the companion sprite is visually
+          pushed below the camera cutout. The WebView
+          itself stays full-width; the wrapper provides
+          the 80px top margin. */}
+      <View style={styles.webviewWrapper}>
+        <WebView
+          key={webViewKey}
+          ref={webViewRef}
+          // v3.1.50: include ?mode=wake so the arena renders with a
+          // solid black background (no forest). Also include the
+          // APP_VERSION cache-buster so an APK upgrade forces a
+          // fresh arena.html load (Android WebView caches
+          // file:///android_asset/ aggressively by URI).
+          source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&companion=${companionId}&platform=mobile&mode=wake&onlyActive=true&centered=true` }}
+          style={styles.webview}
+          scrollEnabled={false}
+          bounces={false}
+          javaScriptEnabled
+          allowFileAccess
+          originWhitelist={['*']}
+          onLoadEnd={() => {
+            // v3.10.32: size the arena to the WebView's
+            // actual content area, not the window. The
+            // wrapper pushes the WebView down by 80px so
+            // the camera is clear; the JS-side canvas
+            // needs to match the WebView's content size
+            // (window height minus 80px) so the
+            // companion renders in the visible area, not
+            // the bottom 80px being cut off.
+            const { width: SW, height: SH } = require('react-native').Dimensions.get('window');
+            const webviewHeight = SH - 80;  // marginTop
+            webViewRef.current?.injectJavaScript(
+              `window.Arena && window.Arena.init(${SW}, ${webviewHeight}); true;`,
+            );
+          }}
+        />
+      </View>
 
       {/* Voice status overlay (top) */}
       <View style={styles.voiceStatusOverlay} pointerEvents="none">
@@ -2225,31 +2234,40 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
+  // v3.10.32: WebView wrapper with marginTop 80 so
+  // the companion sprite sits below the front
+  // camera (hole-punch / notch) on modern phones.
+  // Tobe reported the bar + companion were both
+  // hitting the camera cutout in v3.10.30/31. The
+  // wrapper shrinks the WebView's content area;
+  // onLoadEnd uses the adjusted height when
+  // calling Arena.init so the canvas matches.
+  webviewWrapper: { flex: 1, marginTop: 80 },
   webview: { flex: 1, backgroundColor: '#000' },
-  // v3.10.30: pinned at the top of WakeModeScreen,
-  // centered horizontally with 16px top padding so
-  // it sits below the status bar (or the iOS notch).
-  // The voice-status overlay (YOUR TURN) is moved
-  // down to top: 110 so it doesn't sit on top of the
-  // pill.
+  // v3.10.32: pushed down to clear the front
+  // camera. Tobe reported the pill was hitting
+  // the camera cutout at top: 16. paddingTop 80
+  // sits it below the typical camera area on a
+  // phone with a centered hole-punch, with
+  // enough room for the pill (~30px) + a small
+  // gap to the YOUR TURN text below.
   enrollmentBarCompact: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 100,
-    paddingTop: 16,
+    paddingTop: 80,
     paddingBottom: 4,
     alignItems: 'center',
   },
   voiceStatusOverlay: {
     position: 'absolute',
-    // v3.10.30: moved from top: 60 to top: 110 so it
-    // sits below the centered enrollment bar pill.
-    // The pill is ~30px tall + 16px top padding = ~50px
-    // total, plus a 60px gap so the YOUR TURN text
-    // doesn't crowd the bar.
-    top: 110,
+    // v3.10.32: moved from top: 110 to top: 170 so
+    // it sits below the pill at its new top: 80
+    // position. The pill is ~30px tall + 80px top
+    // padding = ~110px, plus a 60px gap.
+    top: 170,
     left: 0,
     right: 0,
     alignItems: 'center',
