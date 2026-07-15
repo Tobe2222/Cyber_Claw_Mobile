@@ -214,6 +214,14 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // begins; subsequent calls bail. Reset at the start of
   // each recording turn.
   const stopInFlightRef = useRef<boolean>(false);
+  // v3.10.29: track the most recent WS state + the
+  // most recent send_error so the 30s transcribing
+  // timeout can log a specific reason instead of just
+  // "no response from desktop". Reset on every
+  // recording turn (see stopAndSendRecording). Read
+  // by the timeout fire handler.
+  const lastWsStateRef = useRef<string>('unknown');
+  const lastSendErrorRef = useRef<{ type: string; reason: string; at: number } | null>(null);
 
   const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'listening' : 'listening');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
@@ -1139,6 +1147,15 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       addLogEntry(`Wake Mode: audio sent for transcription (trigger=${triggerReason})`, 'sent');
       addVoiceLog(triggerReason === 'send' ? '📤 Send word → sent' : '📏 Sent, waiting...');
 
+      // v3.10.29: reset the per-turn WS error tracking
+      // so the transcribing timeout reads the state
+      // for THIS turn, not a stale one from a
+      // previous turn. `syncClient.state` is the
+      // public getter (see SyncClient.ts:520) — we
+      // don't reach into the private `_state`.
+      lastWsStateRef.current = syncClient.state || 'unknown';
+      lastSendErrorRef.current = null;
+
       // v3.2.20 — transcribing timeout. If the desktop
       // doesn't respond within 30s (network stall, STT
       // hang, LLM outage, etc), give up and either start
@@ -1147,8 +1164,39 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // user from being permanently stuck on "Transcribing..."
       // when the desktop pipeline is jammed. Tobe reported
       // this exact symptom in v3.2.19.
+      //
+      // v3.10.29: log a specific reason using the WS
+      // state + most recent send_error, instead of the
+      // generic "no response from desktop". Categories:
+      //   - "WS state: disconnected" → we never sent
+      //     the audio at all (or it was lost on a
+      //     drop). Re-trying won't help; user needs
+      //     to re-pair or check their network.
+      //   - "WS state: reconnecting" → socket is
+      //     trying to come back. Re-trying might
+      //     succeed if it comes back in time.
+      //   - "Last send error: not_connected" → same
+      //     as disconnected, but we have the
+      //     specific reason from syncClient.
+      //   - "WS state: connected, no error" → silent
+      //     stall. The desktop received the audio
+      //     but didn't respond in 30s. Most likely
+      //     a desktop-side pipeline jam.
       transcribingTimeoutRef.current = setTimeout(() => {
         if (wakeWordBusyRef.current) {
+          const wsState = lastWsStateRef.current;
+          const lastErr = lastSendErrorRef.current;
+          let reason = `WS state: ${wsState}, no error events`;
+          if (lastErr) {
+            reason = `Last send error: type=${lastErr.type} reason=${lastErr.reason} (${Math.round((Date.now() - lastErr.at) / 1000)}s ago)`;
+          } else if (wsState === 'disconnected' || wsState === 'lost') {
+            reason = `WS state: ${wsState} — audio never reached the desktop`;
+          } else if (wsState === 'reconnecting') {
+            reason = `WS state: reconnecting — connection dropped mid-conversation`;
+          } else if (wsState === 'connected') {
+            reason = `WS state: connected, desktop pipeline stalled`;
+          }
+          addLogEntry(`⏰ Transcribing timeout (30s) — ${reason}`, 'error');
           addLogEntry('⏰ Transcribing timeout (30s) — no response from desktop', 'error');
           addVoiceLog('⏰ No response, retrying...');
           wakeWordBusyRef.current = false;
@@ -1703,10 +1751,51 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // failure boundary.
     };
     syncClient.on('voice_pipeline_stalled', onPipelineStalled);
+    // v3.10.29: track WS state + send errors so the
+    // transcribing timeout can give a specific reason
+    // instead of just "no response from desktop".
+    // The state_change event fires when the WS
+    // transitions between disconnected / connecting /
+    // connected / reconnecting / lost. The send_error
+    // event fires when we tried to send something but
+    // the socket was closed.
+    const onStateChange = (msg: any) => {
+      const newState = msg?.state || 'unknown';
+      addLogEntry(`[WS] State change: ${newState}`, 'info');
+      // The transcribing-timeout reason lookup
+      // reads this most-recent state, so update
+      // the ref inline.
+      lastWsStateRef.current = newState;
+      if (newState === 'disconnected' || newState === 'lost') {
+        // v3.10.29: tell the user immediately, not
+        // 30s later when the transcribing timeout
+        // fires. Better feedback for the "I sent
+        // audio and nothing happened" symptom.
+        addVoiceLog(`🔌 Lost connection to desktop (${newState})`);
+      } else if (newState === 'reconnecting') {
+        addVoiceLog('🔄 Reconnecting to desktop…');
+      } else if (newState === 'connected') {
+        addLogEntry('[WS] Connected to desktop', 'info');
+      }
+    };
+    const onSendError = (msg: any) => {
+      const reason = msg?.reason || 'unknown';
+      const type = msg?.type || 'unknown';
+      addLogEntry(
+        `[WS] Send failed: type=${type} reason=${reason}`,
+        'error',
+      );
+      addVoiceLog(`⚠️ Send failed (${reason})`);
+      lastSendErrorRef.current = { type, reason, at: Date.now() };
+    };
+    syncClient.on('state_change', onStateChange);
+    syncClient.on('send_error', onSendError);
     return () => {
       syncClient.off?.('chat', onChat);
       syncClient.off?.('audio_response', onAudioResponse);
       syncClient.off?.('voice_pipeline_stalled', onPipelineStalled);
+      syncClient.off?.('state_change', onStateChange);
+      syncClient.off?.('send_error', onSendError);
     };
   }, [handleWakeWordInner, voiceMode]);
 
@@ -2137,12 +2226,13 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   webview: { flex: 1, backgroundColor: '#000' },
-  // v3.10.24: pinned at the very top of WakeModeScreen,
-  // above the voice-status overlay (top: 60). The compact
-  // bar is ~3px tall plus padding so it doesn't crowd
-  // the status text below it. Slightly translucent so it
-  // reads as an "always-on" indicator rather than a
-  // modal banner.
+  // v3.10.29: pinned at the very top of WakeModeScreen,
+  // above the voice-status overlay (top: 60). The
+  // compact variant is now a small pill (not a full-
+  // width bar) — `alignItems: 'flex-start'` so the
+  // pill sits left-aligned at its natural width
+  // instead of stretching across the screen. Padding
+  // top accounts for the iOS notch.
   enrollmentBarCompact: {
     position: 'absolute',
     top: 0,
@@ -2152,7 +2242,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: Platform.OS === 'ios' ? 50 : 12,
     paddingBottom: 4,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    alignItems: 'flex-start',
   },
   voiceStatusOverlay: {
     position: 'absolute',
