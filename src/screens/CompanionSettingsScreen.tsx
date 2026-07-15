@@ -1214,18 +1214,6 @@ export default function CompanionSettingsScreen({
                         {(wakeTestResult.peakWake * 100 | 0)}%
                       </Text>
                     </View>
-                    <View style={styles.activeWakeTestScoreRow}>
-                      <Text style={styles.activeWakeTestScoreLabel}>Exit peak</Text>
-                      <Text style={styles.activeWakeTestScoreValue}>
-                        {(wakeTestResult.peakExit * 100 | 0)}%
-                      </Text>
-                    </View>
-                    <View style={styles.activeWakeTestScoreRow}>
-                      <Text style={styles.activeWakeTestScoreLabel}>Send peak</Text>
-                      <Text style={styles.activeWakeTestScoreValue}>
-                        {(wakeTestResult.peakSend * 100 | 0)}%
-                      </Text>
-                    </View>
                     <Text style={styles.activeWakeTestNote}>
                       Over {(wakeTestResult.durationMs / 1000).toFixed(1)}s. Tip: aim for Wake peak ≥ 70%.
                     </Text>
