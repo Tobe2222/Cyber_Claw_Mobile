@@ -54,7 +54,10 @@ import {
 // v3.10.25: shared "Test wake" panel (the wake page
 // also uses the hook internally — the wake panel
 // here renders the standard layout).
-import ClassifierTestPanel, { useClassifierTest } from '../components/ClassifierTest';
+// v3.10.26: NAMED import, not default. The component
+// is `export function ClassifierTestPanel(...)` with
+// no default export.
+import { ClassifierTestPanel, useClassifierTest } from '../components/ClassifierTest';
 // v3.7.1: syncClient for the desktop "Test voice" button.
 import syncClient from '../services/SyncClient';
 // v3.10.23: addLogEntry import removed. The speaker-enrollment

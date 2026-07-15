@@ -128,7 +128,13 @@ import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
 // v3.10.25: shared "Test send" panel. Same hook + UI
 // as wake/exit — Send lives in the global Voice mode
 // section here, so its test button does too.
-import ClassifierTestPanel from '../components/ClassifierTest';
+// v3.10.26: NAMED import, not default. The component
+// is `export function ClassifierTestPanel(...)` with
+// no default export. Importing as default gets
+// undefined, which renders as "Element type is
+// invalid: ... but got: undefined" — the crash Tobe
+// hit on Settings screen open in v3.10.26.
+import { ClassifierTestPanel } from '../components/ClassifierTest';
 import { saveSendPhrase, loadSendModelInfo } from '../services/VoiceSettings';
 import {
   getPermissions,
