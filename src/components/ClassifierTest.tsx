@@ -68,8 +68,20 @@ export type ClassifierTestResult = {
   // Average RMS energy over the test window. A
   // proxy for "did the mic hear anything at all".
   // Below ~0.005 means the user probably didn't
-  // speak, or the mic gain is off.
+  // speak, or the mic gain is off, or (most
+  // importantly) the OWW listener wasn't actually
+  // running during the test — see `owwWasRunning`
+  // below.
   avgRms: number;
+  // v3.10.31: was the OWW listener actually
+  // running during the test? If false, the
+  // avgRms=0 result is NOT a mic problem — it's
+  // because we never started the mic. Tobe hit
+  // this: "Tested 4 times, all 0%" was the
+  // listener not being started, not the mic
+  // being dead. The result panel now says
+  // "OWW listener wasn't running" when false.
+  owwWasRunning: boolean;
   final: number;
   durationMs: number;
 };
@@ -112,6 +124,53 @@ export function useClassifierTest(kind: ClassifierKind) {
     setResult(null);
     const abort = { cancelled: false };
     abortRef.current = abort;
+    // v3.10.31: ensure the OWW listener is running
+    // for the wake test. v3.10.30's "Mic heard
+    // almost nothing" tip was firing on EVERY wake
+    // test because the OWW listener is only started
+    // when the user enters voice mode (WakeModeScreen
+    // on mount). If the user opens CompanionSettings
+    // → Wake settings → Test wake WITHOUT going
+    // through voice mode first, the listener is
+    // initialized but the mic is off. avgRms=0 in
+    // that case is NOT a mic problem — it's that
+    // we never started recording.
+    //
+    // For wake tests we call startOwwListening
+    // (no-op if already running). For exit/send
+    // tests we don't need the wake listener — exit
+    // and send both run on the chunk-side detector
+    // that's already wired up to whatever mic path
+    // is active. (If no listener is running, exit
+    // and send will also see no audio, but the
+    // 'owwVad' event is emitted from the same chunk
+    // processor, so we can tell the user either
+    // way.)
+    let owwWasRunning = false;
+    if (kind === 'wake') {
+      try {
+        // startOwwListening is a Promise-returning
+        // ReactMethod. We await it so the listener
+        // is up by the time we start polling. The
+        // method is idempotent (returns null if
+        // already listening) per the native comment.
+        await WakeWordModule.startOwwListening?.();
+        owwWasRunning = true;
+      } catch (_) {
+        owwWasRunning = false;
+      }
+    } else {
+      // For exit/send, we can't directly query
+      // "is the wake listener running?" from JS
+      // (the API is no Promise getter). But the
+      // owwVad event firing/not-firing is a fine
+      // proxy: if no events arrive, avgRms stays
+      // 0 and the diagnostic tip says "mic heard
+      // almost nothing". User can navigate to
+      // voice mode to start the listener and
+      // retry.
+      owwWasRunning = true;  // optimistic; corrected below
+    }
     const startMs = Date.now();
     let peak = 0;
     let maxChunk = 0;
@@ -175,6 +234,13 @@ export function useClassifierTest(kind: ClassifierKind) {
     if (abort.cancelled) return;
     const avg = scoreSamples > 0 ? scoreSum / scoreSamples : 0;
     const avgRms = rmsSamples > 0 ? rmsSum / rmsSamples : lastRms;
+    // v3.10.31: refine owwWasRunning. If we
+    // expected the listener to be running and no
+    // owwVad events arrived at all, the listener
+    // wasn't actually up (or some other mic path
+    // issue). Set false so the diagnostic tip
+    // fires correctly.
+    if (rmsSamples === 0) owwWasRunning = false;
     setResult({
       fired,
       firedScore,
@@ -182,6 +248,7 @@ export function useClassifierTest(kind: ClassifierKind) {
       avg,
       maxChunk,
       avgRms,
+      owwWasRunning,
       final,
       durationMs: Date.now() - startMs,
     });
@@ -279,6 +346,20 @@ export function ClassifierTestPanel({
               {(result.avgRms * 1000 | 0) / 1000}
             </Text>
           </View>
+          {/* v3.10.31: explicit "listener running" row.
+              When false, the wake test ran against
+              silence because the mic was never
+              started. Tobe hit this on 4 consecutive
+              tries — the diagnostic was correct
+              ("mic heard almost nothing") but the
+              cause was the wrong one. The listener
+              state makes the cause unambiguous. */}
+          <View style={styles.scoreRow}>
+            <Text style={styles.scoreLabel}>Wake listener</Text>
+            <Text style={[styles.scoreValue, { color: result.owwWasRunning ? '#10b981' : '#ef4444' }]}>
+              {result.owwWasRunning ? 'running' : 'not running'}
+            </Text>
+          </View>
           <Text style={styles.tipNote}>
             Over {(result.durationMs / 1000).toFixed(1)}s. {diagnosticTip(result, c.tip)}
           </Text>
@@ -308,6 +389,19 @@ export function ClassifierTestPanel({
 // The default fallback keeps the original
 // "aim for 70%" tip for the common case.
 function diagnosticTip(r: ClassifierTestResult, fallback: string): string {
+  // v3.10.31: distinguish "mic not running" from
+  // "mic dead". The former is the most common
+  // cause of "0% on 4 tries" — the OWW listener
+  // is only started when the user enters voice
+  // mode, so the wake test in CompanionSettings
+  // runs against silence unless we explicitly
+  // start the listener (which v3.10.31 does).
+  // If owwWasRunning is false AFTER the test, the
+  // listener never came up — different fix than
+  // mic permission/loudness.
+  if (!r.owwWasRunning) {
+    return '⚠️ Wake listener wasn\u2019t running — opened the mic for this test, but the detector never produced audio. Try entering voice mode first (it primes the listener), then re-run the test.';
+  }
   if (r.avgRms < 0.005) {
     return '⚠️ Mic heard almost nothing. Check mic permission, speak louder, or hold the phone closer.';
   }

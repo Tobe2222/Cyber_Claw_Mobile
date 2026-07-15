@@ -414,12 +414,18 @@ const styles = StyleSheet.create({
   // v3.10.29: a small floating pill, not a full-width
   // bar. The pill is the surface; the progress is
   // a thin strip inside.
+  // v3.10.31: larger pill. Tobe's v3.10.30 feedback:
+  // "the bar can be longer and slightly bigger for
+  // both voice mode and in the settings." Bumped
+  // padding 10/5 → 16/8, font 10 → 12, track width
+  // 60 → 140, track height 2 → 3. Same color/pulse
+  // language, just bigger and more readable.
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderRadius: 999,
     backgroundColor: 'rgba(6, 182, 212, 0.15)',
     borderWidth: 1,
@@ -430,20 +436,20 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(16, 185, 129, 0.55)',
   },
   pillIcon: {
-    fontSize: 11,
+    fontSize: 14,
     color: '#67e8f9',
-    marginRight: 6,
+    marginRight: 8,
   },
   pillIconLocked: {
     color: '#6ee7b7',
   },
   pillTextWrap: {
     flexDirection: 'column',
-    minWidth: 60,
+    minWidth: 140,
   },
   pillLabel: {
     color: '#a5f3fc',
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '600',
     letterSpacing: 0.3,
   },
@@ -451,16 +457,16 @@ const styles = StyleSheet.create({
     color: '#a7f3d0',
   },
   pillTrack: {
-    marginTop: 3,
-    height: 2,
-    width: 60,
+    marginTop: 4,
+    height: 3,
+    width: 140,
     backgroundColor: 'rgba(6, 182, 212, 0.20)',
-    borderRadius: 1,
+    borderRadius: 2,
     overflow: 'hidden',
   },
   pillTrackFill: {
     height: '100%',
     backgroundColor: '#22d3ee',
-    borderRadius: 1,
+    borderRadius: 2,
   },
 });
