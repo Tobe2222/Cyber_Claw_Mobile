@@ -1404,7 +1404,14 @@ export default function SettingsScreen({
                 screens so the user can watch it fill as
                 they talk — same colors and animation so
                 they read as the same indicator. */}
-            <VoiceEnrollmentBar variant="full" />
+            {/* v3.10.30: switched to the compact pill
+                variant so the bar looks the same in
+                settings and in voice mode. The pill
+                has the moving internal progress bar
+                (the "1/1000 indication" Tobe asked
+                for) so the user can see the count
+                tick up as they use voice mode. */}
+            <VoiceEnrollmentBar variant="compact" />
 
             {/* v3.10.28: smart-silence toggle. The
                 noise-aware silence detector calibrates

@@ -2226,27 +2226,30 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   webview: { flex: 1, backgroundColor: '#000' },
-  // v3.10.29: pinned at the very top of WakeModeScreen,
-  // above the voice-status overlay (top: 60). The
-  // compact variant is now a small pill (not a full-
-  // width bar) — `alignItems: 'flex-start'` so the
-  // pill sits left-aligned at its natural width
-  // instead of stretching across the screen. Padding
-  // top accounts for the iOS notch.
+  // v3.10.30: pinned at the top of WakeModeScreen,
+  // centered horizontally with 16px top padding so
+  // it sits below the status bar (or the iOS notch).
+  // The voice-status overlay (YOUR TURN) is moved
+  // down to top: 110 so it doesn't sit on top of the
+  // pill.
   enrollmentBarCompact: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 100,
-    paddingHorizontal: 12,
-    paddingTop: Platform.OS === 'ios' ? 50 : 12,
+    paddingTop: 16,
     paddingBottom: 4,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   voiceStatusOverlay: {
     position: 'absolute',
-    top: 60,
+    // v3.10.30: moved from top: 60 to top: 110 so it
+    // sits below the centered enrollment bar pill.
+    // The pill is ~30px tall + 16px top padding = ~50px
+    // total, plus a 60px gap so the YOUR TURN text
+    // doesn't crowd the bar.
+    top: 110,
     left: 0,
     right: 0,
     alignItems: 'center',

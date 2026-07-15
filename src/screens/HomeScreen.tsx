@@ -3111,6 +3111,54 @@ useEffect(() => {
                 <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
               </View>
             )}
+            {/* v3.10.30: attachment preview row. When
+                the user has attached a file/image, we
+                show a small thumbnail strip ABOVE the
+                input row with a × button to remove.
+                v3.10.20 added attachment support but
+                didn't show previews in the input area
+                — the user had no idea their attachment
+                was even there, and the send button was
+                disabled when text was empty (so they
+                couldn't send the attachment). Tobe:
+                "one still cannot see the pasted picture
+                in the chat. It might not even attach
+                since i cannot hit send after adding it."
+                Fixed in v3.10.30 by:
+                1. Rendering this preview row
+                2. Enabling the send button when
+                   attachments exist (see sendMessage
+                   enabled check below) */}
+            {attachments.length > 0 && (
+              <View style={styles.attachmentPreviewRow}>
+                {attachments.map(att => {
+                  const isImage = att.type?.startsWith('image/');
+                  return (
+                    <View key={att.id} style={styles.attachmentPreviewItem}>
+                      {isImage ? (
+                        <Image
+                          source={{ uri: att.uri }}
+                          style={styles.attachmentPreviewThumb}
+                        />
+                      ) : (
+                        <View style={styles.attachmentPreviewFile}>
+                          <Text style={styles.attachmentPreviewFileText} numberOfLines={1}>
+                            {att.name}
+                          </Text>
+                        </View>
+                      )}
+                      <TouchableOpacity
+                        style={styles.attachmentPreviewRemove}
+                        onPress={() => removeAttachment(att.id)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Text style={styles.attachmentPreviewRemoveText}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
             <View style={styles.inputContainer}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
@@ -3155,9 +3203,9 @@ useEffect(() => {
                 />
               )}
               <TouchableOpacity
-                style={[styles.sendButton, (!pendingAudioPath && !inputText.trim() || !isConnected) && styles.sendButtonDisabled]}
+                style={[styles.sendButton, (!pendingAudioPath && !inputText.trim() && attachments.length === 0 || !isConnected) && styles.sendButtonDisabled]}
                 onPress={sendMessage}
-                disabled={!pendingAudioPath && (!inputText.trim() || !isConnected)}
+                disabled={!pendingAudioPath && !inputText.trim() && attachments.length === 0 || !isConnected}
               >
                 <Text style={styles.sendButtonText}>▶</Text>
               </TouchableOpacity>
@@ -3520,6 +3568,64 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-end',
     paddingHorizontal: 12, paddingVertical: 8,
     borderTopWidth: 1, borderTopColor: '#222', backgroundColor: '#111',
+  },
+  // v3.10.30: attachment preview row (sits above
+  // the inputContainer). Horizontal scroll of
+  // thumbnails with a small × on each.
+  attachmentPreviewRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: '#111',
+    borderTopWidth: 1,
+    borderTopColor: '#222',
+    gap: 8,
+  },
+  attachmentPreviewItem: {
+    position: 'relative',
+    width: 60,
+    height: 60,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  attachmentPreviewThumb: {
+    width: '100%',
+    height: '100%',
+  },
+  attachmentPreviewFile: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#1a1a2e',
+    borderWidth: 1,
+    borderColor: '#333',
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 4,
+  },
+  attachmentPreviewFileText: {
+    color: '#888',
+    fontSize: 9,
+    textAlign: 'center',
+  },
+  attachmentPreviewRemove: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentPreviewRemoveText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 16,
   },
   textInput: {
     flex: 1, backgroundColor: '#1a1a2e', color: '#e0e0e0',

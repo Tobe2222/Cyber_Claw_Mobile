@@ -48,6 +48,28 @@ export type ClassifierTestResult = {
   fired: boolean;
   firedScore: number | null;
   peak: number;
+  // v3.10.30: extra diagnostic fields. Peak is the
+  // single highest score observed; the test user
+  // needs to know whether the model is hearing
+  // them at all. With just `peak`, three tries at
+  // 0% tell the user nothing — was the mic dead?
+  // The wake phrase wrong? The model broken? The
+  // user can't tell. The new fields let the
+  // result panel say "model heard 2% of your
+  // audio" vs "model heard 0% — your mic may not
+  // be picking anything up". See process()
+  // for the update logic.
+  avg: number;
+  // Highest single-chunk score. Useful when the
+  // user says the wake phrase very briefly —
+  // peak avg would be low (most chunks are silence)
+  // but max could still be meaningful.
+  maxChunk: number;
+  // Average RMS energy over the test window. A
+  // proxy for "did the mic hear anything at all".
+  // Below ~0.005 means the user probably didn't
+  // speak, or the mic gain is off.
+  avgRms: number;
   final: number;
   durationMs: number;
 };
@@ -92,7 +114,19 @@ export function useClassifierTest(kind: ClassifierKind) {
     abortRef.current = abort;
     const startMs = Date.now();
     let peak = 0;
+    let maxChunk = 0;
+    let scoreSum = 0;
+    let scoreSamples = 0;
     let final = 0;
+    // v3.10.30: also track RMS energy so we can
+    // tell the user "your mic heard audio" vs "your
+    // mic is dead / you're not talking". The native
+    // side exposes `rms` in the owwVad event (5Hz
+    // cadence) — we listen for the most recent one
+    // and average it. Cheap.
+    let rmsSum = 0;
+    let rmsSamples = 0;
+    let lastRms = 0;
     let firedScore: number | null = null;
     let fired = false;
     try {
@@ -104,7 +138,18 @@ export function useClassifierTest(kind: ClassifierKind) {
           firedScore = typeof e?.score === 'number' ? e.score : null;
         }
       };
+      // v3.10.30: also listen to owwVad for the
+      // RMS. Same emitter, different event.
+      const onVad = (e: any) => {
+        if (abort.cancelled) return;
+        if (typeof e?.rms === 'number') {
+          lastRms = e.rms;
+          rmsSum += e.rms;
+          rmsSamples++;
+        }
+      };
       const sub = emitter?.addListener(EVENT_NAME[kind], onDetect);
+      const subVad = emitter?.addListener('owwVad', onVad);
       try {
         while (!abort.cancelled && Date.now() - startMs < TEST_DURATION_MS) {
           try {
@@ -112,6 +157,9 @@ export function useClassifierTest(kind: ClassifierKind) {
             if (scores) {
               const v = Number(scores[SCORE_FIELD[kind]]) || 0;
               if (v > peak) peak = v;
+              if (v > maxChunk) maxChunk = v;
+              scoreSum += v;
+              scoreSamples++;
               final = v;
             }
           } catch (_) {}
@@ -119,15 +167,21 @@ export function useClassifierTest(kind: ClassifierKind) {
         }
       } finally {
         sub?.remove?.();
+        subVad?.remove?.();
       }
     } catch (_) {
       // best-effort
     }
     if (abort.cancelled) return;
+    const avg = scoreSamples > 0 ? scoreSum / scoreSamples : 0;
+    const avgRms = rmsSamples > 0 ? rmsSum / rmsSamples : lastRms;
     setResult({
       fired,
       firedScore,
       peak,
+      avg,
+      maxChunk,
+      avgRms,
       final,
       durationMs: Date.now() - startMs,
     });
@@ -205,13 +259,68 @@ export function ClassifierTestPanel({
               {(result.peak * 100 | 0)}%
             </Text>
           </View>
+          {/* v3.10.30: diagnostic rows. The user hit
+              "0% on all 3 tries" before this — no
+              way to tell if their mic was dead or
+              the model just didn't match. Now we
+              show avg score (overall match across
+              the test window) and avg RMS (did the
+              mic hear anything). The dynamic tip
+              below suggests the most likely fix. */}
+          <View style={styles.scoreRow}>
+            <Text style={styles.scoreLabel}>Average</Text>
+            <Text style={styles.scoreValue}>
+              {(result.avg * 100 | 0)}%
+            </Text>
+          </View>
+          <View style={styles.scoreRow}>
+            <Text style={styles.scoreLabel}>Mic RMS (avg)</Text>
+            <Text style={[styles.scoreValue, { color: result.avgRms < 0.005 ? '#ef4444' : '#10b981' }]}>
+              {(result.avgRms * 1000 | 0) / 1000}
+            </Text>
+          </View>
           <Text style={styles.tipNote}>
-            Over {(result.durationMs / 1000).toFixed(1)}s. {c.tip}
+            Over {(result.durationMs / 1000).toFixed(1)}s. {diagnosticTip(result, c.tip)}
           </Text>
         </View>
       )}
     </View>
   );
+}
+
+// v3.10.30: dynamic diagnostic tip. Picks the
+// most likely cause based on what the test
+// observed, instead of always saying the same
+// "aim for 70%" generic message. Categories:
+//   1. mic RMS < 0.005 → "mic didn't hear
+//      anything — check mic permission, speak
+//      louder, or hold phone closer"
+//   2. peak < 5% but mic heard plenty → "model
+//      didn't recognise this voice. Retrain with
+//      cleaner samples"
+//   3. peak 5-30% → "model sees something but
+//      not enough. Try again with a clearer
+//      pronunciation, or retrain"
+//   4. peak ≥ 70% but didn't fire → "model
+//      matched but the runtime didn't trigger.
+//      Threshold is fine; check the
+//      silence/gibberish gate"
+// The default fallback keeps the original
+// "aim for 70%" tip for the common case.
+function diagnosticTip(r: ClassifierTestResult, fallback: string): string {
+  if (r.avgRms < 0.005) {
+    return '⚠️ Mic heard almost nothing. Check mic permission, speak louder, or hold the phone closer.';
+  }
+  if (r.peak < 0.05) {
+    return '⚠️ Mic heard you, but the model never matched. The wake phrase in the trained model may differ from what you said — try again with the exact phrase, or retrain with cleaner samples.';
+  }
+  if (r.peak < 0.30) {
+    return '⚠️ Model saw something but not enough. Try a clearer pronunciation, or retrain with 6 fresh samples in a quiet room.';
+  }
+  if (r.peak < 0.70) {
+    return `Model saw a real signal (peak ${(r.peak * 100 | 0)}%) but below the 70% fire threshold. Try again, or retrain if it keeps happening.`;
+  }
+  return fallback;
 }
 
 const styles = StyleSheet.create({
