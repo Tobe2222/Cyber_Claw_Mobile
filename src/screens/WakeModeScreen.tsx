@@ -18,7 +18,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, BackHandler, StatusBar,
-  NativeModules, NativeEventEmitter, AppState,
+  NativeModules, NativeEventEmitter, AppState, Platform,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -42,6 +42,11 @@ import { version as APP_VERSION } from '../../package.json';
 // the mode if no input has happened for 60s.
 import { noteWakeModeOpen, noteWakeModeExit } from '../services/WakeTrainingModel';
 import { getCachedGreetingPath, ensureGreetingCached } from '../services/GreetingAudioCache';
+// v3.10.24: compact speaker-profile bar at the top of
+// the voice-mode screen. User sees it fill as they
+// talk; same color/animation as the full bar in
+// SettingsScreen's Voice mode section.
+import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
 
 const { AppControl, WakeWordModule } = NativeModules;
 
@@ -2016,6 +2021,14 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   return (
     <View style={styles.container}>
       <StatusBar hidden />
+      {/* v3.10.24: compact enrollment bar pinned at the
+          very top. Sits ABOVE the voice-status overlay
+          so it stays visible while the user talks.
+          pointerEvents="none" so it never eats taps
+          intended for the WebView below. */}
+      <View style={styles.enrollmentBarCompact} pointerEvents="none">
+        <VoiceEnrollmentBar variant="compact" />
+      </View>
       <WebView
         key={webViewKey}
         ref={webViewRef}
@@ -2106,6 +2119,23 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   webview: { flex: 1, backgroundColor: '#000' },
+  // v3.10.24: pinned at the very top of WakeModeScreen,
+  // above the voice-status overlay (top: 60). The compact
+  // bar is ~3px tall plus padding so it doesn't crowd
+  // the status text below it. Slightly translucent so it
+  // reads as an "always-on" indicator rather than a
+  // modal banner.
+  enrollmentBarCompact: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    paddingHorizontal: 12,
+    paddingTop: Platform.OS === 'ios' ? 50 : 12,
+    paddingBottom: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+  },
   voiceStatusOverlay: {
     position: 'absolute',
     top: 60,

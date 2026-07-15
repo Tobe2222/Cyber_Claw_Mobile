@@ -122,6 +122,9 @@ import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
 import SendPhraseTrainer from '../components/SendPhraseTrainer';
 import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
+// v3.10.24: shared global speaker-profile bar (full
+// variant) at the top of the Voice mode section.
+import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
 import { saveSendPhrase, loadSendModelInfo } from '../services/VoiceSettings';
 import {
   getPermissions,
@@ -1367,6 +1370,16 @@ export default function SettingsScreen({
             the settings/shortcuts inside the page.
           */}
           <Section title="🎙️ Voice mode" desc="Voice-mode behaviour shared across every companion. Per-companion settings (engine, voice picker, silence timeout) live in each companion's detail page.">
+            {/* v3.10.24: global speaker-profile progress
+                bar. The bar lives here at the top of the
+                Voice mode section because it's a
+                cross-companion setting (the user's voice
+                is one thing, not N things). The compact
+                twin appears at the top of voice-mode
+                screens so the user can watch it fill as
+                they talk — same colors and animation so
+                they read as the same indicator. */}
+            <VoiceEnrollmentBar variant="full" />
             <SubTitle>✉️ Manual send voice message</SubTitle>
             <Hint>Backup commit word for voice-mode turns. The primary trigger is silence-detection (the VAD's silence countdown) or gibberish-detection (VAD noise floor). When those miss — e.g. the silence threshold doesn't trip because the audio cuts off mid-word, or the VAD reads low noise as speech — saying this word commits the turn to the LLM by hand. Independent of the exit phrase — send keeps the conversation going, exit closes voice mode. Shared across all companions.</Hint>
             <Label>Send word</Label>
