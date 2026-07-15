@@ -53,6 +53,17 @@ import {
 } from '../services/VoiceCatalog';
 // v3.7.1: syncClient for the desktop "Test voice" button.
 import syncClient from '../services/SyncClient';
+// v3.10.22: import addLogEntry directly. CompanionSettingsScreen
+// was added in v3.4.4 as a standalone screen, but the v3.10.21
+// passive speaker-enrollment feature (and v3.10.19 speaker
+// enrollment POC) reference addLogEntry for status output. The
+// function lives on HomeScreen because that's where the Log tab
+// subscribes to it. There's no clean service-level wrapper today,
+// so we import it from the screen that owns it.
+// Long-term: lift addLogEntry / syncLog / logListeners to a
+// shared src/services/LogStore.ts (same shape as SyncClient.ts)
+// so screens don't cross-import each other for log calls.
+import { addLogEntry } from './HomeScreen';
 
 type Companion = {
   id: string;
