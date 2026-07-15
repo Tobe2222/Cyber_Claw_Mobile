@@ -135,6 +135,34 @@ export default function App(): React.JSX.Element {
     migrateLegacyTurnCueKey().catch(() => {});
   }, []);
 
+  // v3.10.23: restore the persisted global speaker
+  // profile on cold start. The OWW detector stashes
+  // the learned user voice profile in
+  // SharedPreferences (96 float bytes, base64-encoded).
+  // Loading it on boot means the user doesn't have to
+  // re-teach the app after every restart. Until the
+  // detector is initialized, this call is a no-op
+  // (the native side handles the "detector null" case
+  // by resolving false). Once the wake-word module
+  // boots (later in this same mount cycle), the profile
+  // is in place and the speaker gate activates
+  // automatically for any wake fires after that.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const WakeWordModule = (NativeModules as any).WakeWordModule;
+        WakeWordModule?.loadPersistedSpeakerProfile?.()
+          .then((loaded: boolean) => {
+            if (loaded) {
+              console.log('[App] Speaker profile restored from disk');
+            }
+          })
+          .catch(() => {});
+      } catch (_) {}
+    }, 1500); // small delay so initOww has a chance to run first
+    return () => clearTimeout(t);
+  }, []);
+
   const [companionId, setCompanionId] = useState('boar');
   // v3.1.59: lift agents list to App.tsx so WakeModeScreen can
   // inject setAgents into its (fresh) WebView on mount. Without

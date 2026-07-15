@@ -2281,6 +2281,38 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                                 if (highScoreFrames >= HIGH_SCORE_RUN) {
                                     val now = System.currentTimeMillis()
                                     if (now - lastWakeAt >= DETECTION_COOLDOWN_MS) {
+                                        // v3.10.23: speaker gate.
+                                        // If the primary profile
+                                        // is locked and the recent
+                                        // audio doesn't match the
+                                        // enrolled user, suppress
+                                        // the wake event entirely.
+                                        // If no profile is set yet,
+                                        // the gate is a no-op
+                                        // (system has to work
+                                        // before it can learn).
+                                        // v3.10.23: also bump the
+                                        // confirmed-wake-fire
+                                        // counter when the audio
+                                        // WAS voice-active within
+                                        // the last 2s (recent
+                                        // embedding from the
+                                        // wake-fire moment is in
+                                        // the rolling history).
+                                        val pendingWasVoice = pendingEnrollmentSample
+                                        if (pendingWasVoice) detector.noteConfirmedWakeFire()
+                                        if (detector.shouldSuppressWakeForSpeaker()) {
+                                            // Not the enrolled
+                                            // user. Don't open voice
+                                            // mode. Log so we can
+                                            // see how often this
+                                            // fires in dev builds.
+                                            val sm = detector.matchRecentSpeaker() ?: 0f
+                                            Log.i("WakeWord", "OWW wake suppressed by speaker gate (match=${"%.2f".format(sm)} < $0.50)")
+                                            highScoreFrames = 0
+                                            chunkFill = 0
+                                            continue
+                                        }
                                         lastWakeAt = now
                                         // Wake word detected!
                                         handler.post {
@@ -2381,6 +2413,31 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                             chunkCount++
                             if (chunkCount >= VAD_ENERGY_SEND_EVERY) {
                                 chunkCount = 0
+                                // v3.10.23: piggyback on the
+                                // periodic VAD tick to drive
+                                // the auto-enrollment loop.
+                                // recomputePrimaryProfileIfReady
+                                // is throttled internally (5s
+                                // cooldown) so calling it every
+                                // 3 chunks (~600ms) is harmless
+                                // — most calls return immediately
+                                // with no work.
+                                val (recompUpdated, recompLocked) = detector.recomputePrimaryProfileIfReady()
+                                if (recompLocked) {
+                                    // Profile just locked on
+                                    // this call. Emit a single
+                                    // event so any JS subscriber
+                                    // can react (no UI today —
+                                    // the wake gate goes active
+                                    // automatically).
+                                    handler.post {
+                                        val params = Arguments.createMap()
+                                        params.putBoolean("locked", true)
+                                        params.putInt("samplesTotal", detector.getEnrollmentSamplesTotal().toInt())
+                                        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                            .emit("speakerProfileLocked", params)
+                                    }
+                                }
                                 val (rms, zcr) = computeEnergyAndZcr(chunkBuf)
                                 val now = System.currentTimeMillis()
                                 if (now - lastVadAt >= VAD_ENERGY_MIN_GAP_MS) {
@@ -2430,74 +2487,83 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    // v3.10.19: speaker enrollment. Averages the most
-    // recent embeddings in the OWW detector's buffer
-    // into a single 96-dim profile for the agent.
-    // Returns true if enrollment succeeded (enough
-    // samples in buffer; default min=8 = ~640ms of
-    // audio). Tobe's "ideal feature": learn the
-    // user's voice so wake-word detection can ignore
-    // other speakers.
-    @ReactMethod fun enrollSpeaker(agentId: String, promise: Promise) {
+    // v3.10.23: speaker enrollment. Averages the most
+    // recent voice-active embeddings in the OWW
+    // detector's buffer into a single 96-dim GLOBAL
+    // profile (one profile for the user, not per-
+    // companion). Returns true if enrollment succeeded.
+    //
+    // Kept as a debug/manual hook — the auto-lock
+    // path (tryLockPrimaryProfile) is what runs in
+    // practice, called by recomputeSpeakerProfile.
+    // The JS layer is not expected to call this in
+    // production; it exists for explicit "save my
+    // voice now" commands in dev tools.
+    @ReactMethod fun enrollSpeaker(promise: Promise) {
         try {
             val det = owwDetector
             if (det == null) {
                 promise.reject("ENROLL_NO_DETECTOR", "OWW detector not initialized")
                 return
             }
-            val ok = det.enrollSpeakerFromBuffer(agentId)
+            val ok = det.enrollPrimaryProfileFromBuffer()
             if (ok) promise.resolve(true) else promise.reject("ENROLL_TOO_FEW_SAMPLES", "Not enough audio samples yet — talk for a few seconds before re-enrolling")
         } catch (e: Exception) {
             promise.reject("ENROLL_ERROR", e.message)
         }
     }
 
-    @ReactMethod fun hasSpeakerEnrollment(agentId: String, promise: Promise) {
+    @ReactMethod fun hasSpeakerEnrollment(promise: Promise) {
         try {
             val det = owwDetector
             if (det == null) { promise.resolve(false); return }
-            promise.resolve(det.hasEnrollment(agentId))
+            promise.resolve(det.hasPrimaryProfile())
         } catch (e: Exception) {
             promise.reject("HAS_ENROLL_ERROR", e.message)
         }
     }
 
-    @ReactMethod fun clearSpeakerEnrollment(agentId: String, promise: Promise) {
+    @ReactMethod fun clearSpeakerEnrollment(promise: Promise) {
         try {
             val det = owwDetector
-            if (det != null) det.clearEnrollment(agentId)
+            if (det != null) det.clearPrimaryProfile()
             promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("CLEAR_ENROLL_ERROR", e.message)
         }
     }
 
-    // v3.10.19: compute speaker match score against the
-    // enrolled profile. Returns null if no enrollment
-    // exists. Otherwise returns cosine similarity in
-    // [-1, 1]; typical same-speaker scores are 0.7-0.9.
-    @ReactMethod fun matchSpeaker(agentId: String, promise: Promise) {
+    // v3.10.23: compute speaker match score against the
+    // primary profile. Returns null if no profile is
+    // set yet (caller should treat as "no preference").
+    // Otherwise returns cosine similarity in [-1, 1];
+    // typical same-speaker scores are 0.7-0.9.
+    @ReactMethod fun matchSpeaker(promise: Promise) {
         try {
             val det = owwDetector
             if (det == null) { promise.resolve(null); return }
-            val score = det.matchRecentSpeaker(agentId)
+            val score = det.matchRecentSpeaker()
             promise.resolve(score?.toDouble())
         } catch (e: Exception) {
             promise.reject("MATCH_ERROR", e.message)
         }
     }
 
-    // v3.10.21: passive enrollment status. Returns:
-    //  - "samplesTotal": total voice-active samples seen
-    //    since last clear (cumulative, monotonically
-    //    increases — used to show "X / 5 min learned")
+    // v3.10.23: passive enrollment status. Returns:
+    //  - "samplesTotal": total voice-active samples
+    //    seen since last clear (cumulative, mono-
+    //    tonically increases)
     //  - "bufferSize": current rolling buffer size
     //    (0-64; used for debugging)
-    //  - "hasEnrollment": whether an enrollment is
-    //    currently set for this agent
+    //  - "hasEnrollment": whether a profile is
+    //    currently set (NOT per-companion — global)
+    //  - "profileLocked": whether the profile is
+    //    locked (auto-lock thresholds met)
+    //  - "confirmedWakeFires": count of confirmed
+    //    wake-fires used by the auto-lock threshold
     //  - "matchScore": current cosine similarity vs
-    //    enrollment (null if no enrollment)
-    @ReactMethod fun getSpeakerStatus(agentId: String, promise: Promise) {
+    //    profile (null if no profile)
+    @ReactMethod fun getSpeakerStatus(promise: Promise) {
         try {
             val det = owwDetector
             if (det == null) {
@@ -2505,6 +2571,8 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     putInt("samplesTotal", 0)
                     putInt("bufferSize", 0)
                     putBoolean("hasEnrollment", false)
+                    putBoolean("profileLocked", false)
+                    putInt("confirmedWakeFires", 0)
                     putNull("matchScore")
                 })
                 return
@@ -2512,8 +2580,10 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             val result = Arguments.createMap().apply {
                 putInt("samplesTotal", det.getEnrollmentSamplesTotal().toInt())
                 putInt("bufferSize", det.getEnrollmentBufferSize())
-                putBoolean("hasEnrollment", det.hasEnrollment(agentId))
-                val score = det.matchRecentSpeaker(agentId)
+                putBoolean("hasEnrollment", det.hasPrimaryProfile())
+                putBoolean("profileLocked", det.isProfileLocked())
+                putInt("confirmedWakeFires", det.getConfirmedWakeFires())
+                val score = det.matchRecentSpeaker()
                 if (score != null) putDouble("matchScore", score.toDouble())
                 else putNull("matchScore")
             }
@@ -2524,22 +2594,79 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     }
 
     /**
-     * v3.10.21: force a profile recompute from the
-     * current enrollment buffer. Normally called
-     * periodically by the JS side (every 5s) — but
-     * also exposed for explicit "save my voice now"
-     * buttons. Throttled by the native side too
-     * (5s cooldown in recomputeEnrollmentProfile)
-     * so spamming this from JS is harmless.
+     * v3.10.23: recompute the primary profile from the
+     * current enrollment buffer. If auto-lock thresholds
+     * are met, locks + persists the profile in this call.
+     *
+     * Returns: WritableMap { updated: Boolean,
+     * justLocked: Boolean }. The justLocked flag is true
+     * iff THIS call caused the unlocked→locked
+     * transition (so the caller can log it once).
+     *
+     * Called by:
+     *  - WakeWordModule itself, from the OWW loop, every
+     *    5s (drives the auto-lock path).
+     *  - Debug "force recompute now" buttons.
      */
-    @ReactMethod fun recomputeEnrollment(agentId: String, promise: Promise) {
+    @ReactMethod fun recomputeSpeakerProfile(promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det == null) {
+                promise.resolve(Arguments.createMap().apply {
+                    putBoolean("updated", false)
+                    putBoolean("justLocked", false)
+                })
+                return
+            }
+            val (updated, justLocked) = det.recomputePrimaryProfileIfReady()
+            promise.resolve(Arguments.createMap().apply {
+                putBoolean("updated", updated)
+                putBoolean("justLocked", justLocked)
+            })
+        } catch (e: Exception) {
+            promise.reject("RECOMPUTE_ERROR", e.message)
+        }
+    }
+
+    /**
+     * v3.10.23: load the persisted primary profile from
+     * SharedPreferences. Called once at app boot (from
+     * JS, after initOww) so the user doesn't have to
+     * re-teach the app on every cold start. Returns
+     * true if a profile was loaded.
+     */
+    @ReactMethod fun loadPersistedSpeakerProfile(promise: Promise) {
         try {
             val det = owwDetector
             if (det == null) { promise.resolve(false); return }
-            val updated = det.recomputeEnrollmentProfile(agentId)
-            promise.resolve(updated)
+            val ok = det.loadPersistedPrimaryProfile()
+            if (ok && det.hasPrimaryProfile()) {
+                // v3.10.23: emit a status event so any
+                // subscriber can react (no UI today —
+                // the gate goes active automatically).
+                val params = Arguments.createMap()
+                params.putBoolean("loaded", true)
+                params.putBoolean("locked", det.isProfileLocked())
+                reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("speakerProfileLoaded", params)
+            }
+            promise.resolve(ok)
         } catch (e: Exception) {
-            promise.reject("RECOMPUTE_ERROR", e.message)
+            promise.reject("LOAD_PROFILE_ERROR", e.message)
+        }
+    }
+
+    /**
+     * v3.10.23: serialize the primary profile to base64.
+     * Debug / future use — no current JS consumer.
+     */
+    @ReactMethod fun getSpeakerProfileBytes(promise: Promise) {
+        try {
+            val det = owwDetector
+            if (det == null) { promise.resolve(null); return }
+            promise.resolve(det.getPrimaryProfileBase64())
+        } catch (e: Exception) {
+            promise.reject("GET_PROFILE_ERROR", e.message)
         }
     }
 

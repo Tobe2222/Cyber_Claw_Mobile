@@ -53,17 +53,13 @@ import {
 } from '../services/VoiceCatalog';
 // v3.7.1: syncClient for the desktop "Test voice" button.
 import syncClient from '../services/SyncClient';
-// v3.10.22: import addLogEntry directly. CompanionSettingsScreen
-// was added in v3.4.4 as a standalone screen, but the v3.10.21
-// passive speaker-enrollment feature (and v3.10.19 speaker
-// enrollment POC) reference addLogEntry for status output. The
-// function lives on HomeScreen because that's where the Log tab
-// subscribes to it. There's no clean service-level wrapper today,
-// so we import it from the screen that owns it.
-// Long-term: lift addLogEntry / syncLog / logListeners to a
-// shared src/services/LogStore.ts (same shape as SyncClient.ts)
-// so screens don't cross-import each other for log calls.
-import { addLogEntry } from './HomeScreen';
+// v3.10.23: addLogEntry import removed. The speaker-enrollment
+// callbacks that referenced it (v3.10.19/v3.10.21) are gone in
+// the v3.10.23 refactor (passive global profile, no UI). If a
+// future feature here needs log output, prefer lifting
+// addLogEntry / syncLog / logListeners to a shared
+// src/services/LogStore.ts (same shape as SyncClient.ts) so
+// screens don't cross-import each other for log calls.
 
 type Companion = {
   id: string;
@@ -233,42 +229,28 @@ export default function CompanionSettingsScreen({
   } | null>(null);
   const wakeTestAbortRef = useRef<{ cancelled: boolean } | null>(null);
 
-  // v3.10.19: speaker enrollment state. The OWW
-  // detector stashes a 96-dim embedding per audio
-  // chunk (1280 samples = 80ms at 16kHz). The user
-  // can enroll by tapping the "Learn my voice" button
-  // below the test button — the native code averages
-  // the last 8 chunks (~640ms) into a 96-dim profile
-  // and stores it per-companion. After enrollment,
-  // matchSpeaker(companionId) returns a cosine
-  // similarity score in [-1, 1] (typical same-speaker
-  // scores 0.7-0.9). Tobe's "ideal feature": learn
-  // the user's voice so wake-word detection can
-  // ignore other speakers saying the wake phrase.
-  const [speakerEnrolled, setSpeakerEnrolled] = useState<boolean>(false);
-  const [speakerEnrolling, setSpeakerEnrolling] = useState<boolean>(false);
-  const [speakerMatchScore, setSpeakerMatchScore] = useState<number | null>(null);
-  // v3.10.21: passive enrollment status. Polled from
-  // native every 5s. Shows the user how much voice
-  // audio the OWW detector has captured for their
-  // profile. Tobe's "passive option" request — the
-  // OWW listener (always-on when the app is open)
-  // accumulates voice-active embeddings into the
-  // enrollment buffer. Every 5s the JS side calls
-  // recomputeEnrollment() to bake the buffer into
-  // the actual profile. Once enough speech has
-  // accumulated (default 1000 samples ≈ 80s), the
-  // enrollment is "mature" and used for matching.
-  const [speakerSamplesTotal, setSpeakerSamplesTotal] = useState<number>(0);
-  const [speakerBufferSize, setSpeakerBufferSize] = useState<number>(0);
-  // The mature threshold is 1000 voice-active samples.
-  // At the OWW chunk rate (12.5 Hz) and the typical
-  // speech-active fraction (~25% during a conversation,
-  // ~5% during background), that's:
-  //  - 80s of continuous conversation
-  //  - 6-7 minutes of mixed speech + silence
-  // Conservative but enough for a stable profile.
-  const SPEAKER_MATURE_SAMPLES = 1000;
+  // v3.10.23: speaker enrollment was removed from
+  // CompanionSettingsScreen. The user voice profile
+  // is now a SINGLE GLOBAL thing that the OWW
+  // detector learns passively in the background
+  // (no button, no progress bar, no per-companion
+  // state). The native side auto-locks the profile
+  // after enough voice-active samples or confirmed
+  // wake-fires and gates wake detection on speaker
+  // match. Tobe's v3.10.23 direction: "lift it out
+  // entirely, learn from conversation, independent
+  // of companions, no opt-in button".
+  //
+  // All state and callbacks previously here were
+  // for v3.10.19/v3.10.21 per-companion enrollment.
+  // They're gone. CompanionSettingsScreen has no
+  // awareness of the speaker profile.
+  //
+  // If the user wants to inspect / forget the
+  // profile, that's a debug surface that would live
+  // in global Voice mode settings (not per-companion).
+  // Not in scope for v3.10.23.
+  //
   useEffect(() => {
     let cancelled = false;
     const fetch = async () => {
@@ -432,114 +414,12 @@ export default function CompanionSettingsScreen({
     setWakeTestRunning(false);
   }, [wakeTestRunning]);
 
-  // v3.10.19: speaker enrollment handler. Calls the
-  // native OWW detector to average the last 8 embeddings
-  // (~640ms) into a per-companion voice profile. The
-  // user needs to have spoken for at least 640ms
-  // recently for the enrollment to succeed (the OWW
-  // listener must be running and processing audio).
-  // After enrollment, we poll matchSpeaker once to
-  // confirm the score is reasonable (>0.5 = same person
-  // talking right now). If it's lower, the user
-  // probably wasn't talking during enrollment.
-  const handleEnrollSpeaker = useCallback(async () => {
-    if (speakerEnrolling || !companion) return;
-    setSpeakerEnrolling(true);
-    try {
-      const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
-      if (!WakeWordModule?.enrollSpeaker) {
-        addLogEntry('⚠️ Wake module not available for enrollment', 'error');
-        return;
-      }
-      await WakeWordModule.enrollSpeaker(companion.id);
-      setSpeakerEnrolled(true);
-      addLogEntry(`✓ Speaker enrolled for ${companion.name}`, 'success');
-      // Confirm the score by matching immediately.
-      // If the score is low, the enrollment may have
-      // captured background noise.
-      const score = await WakeWordModule.matchSpeaker(companion.id);
-      if (typeof score === 'number') {
-        setSpeakerMatchScore(score);
-        addLogEntry(`Match score after enrollment: ${(score * 100).toFixed(0)}%`, 'info');
-      }
-    } catch (e: any) {
-      const msg = e?.message || String(e);
-      addLogEntry(`✗ Enrollment failed: ${msg}`, 'error');
-    } finally {
-      setSpeakerEnrolling(false);
-    }
-  }, [speakerEnrolling, companion, addLogEntry]);
-
-  // v3.10.19: check existing enrollment on mount and
-  // whenever the companion changes. Cheap native call
-  // (just an in-memory Map lookup).
-  useEffect(() => {
-    if (!companion) { setSpeakerEnrolled(false); return; }
-    const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
-    WakeWordModule?.hasSpeakerEnrollment?.(companion.id)
-      .then((enrolled: boolean) => setSpeakerEnrolled(!!enrolled))
-      .catch(() => setSpeakerEnrolled(false));
-  }, [companion?.id]);
-
-  // v3.10.21: passive enrollment poll. Every 5s, ask
-  // the native side for current status. If new voice-
-  // active samples have accumulated, ask the native
-  // side to recompute the profile (which averages the
-  // rolling buffer into a stable 96-dim profile and
-  // stores it for matching). The JS side just renders
-  // the progress.
-  //
-  // Why 5s: matches the native-side recompute
-  // throttle (cooldownMs=5000 in
-  // recomputeEnrollmentProfile). Polling faster would
-  // hit the throttle and waste CPU. Polling slower
-  // would make the UI feel laggy.
-  useEffect(() => {
-    if (!companion) return;
-    const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
-    let cancelled = false;
-    const tick = async () => {
-      if (cancelled) return;
-      try {
-        const status = await WakeWordModule?.getSpeakerStatus?.(companion.id);
-        if (cancelled || !status) return;
-        setSpeakerSamplesTotal(status.samplesTotal ?? 0);
-        setSpeakerBufferSize(status.bufferSize ?? 0);
-        setSpeakerEnrolled(!!status.hasEnrollment);
-        if (typeof status.matchScore === 'number') {
-          setSpeakerMatchScore(status.matchScore);
-        } else {
-          setSpeakerMatchScore(null);
-        }
-        // If we have voice-active samples in the buffer,
-        // ask native to bake them into the profile.
-        if ((status.bufferSize ?? 0) >= 16) {
-          await WakeWordModule?.recomputeEnrollment?.(companion.id);
-        }
-      } catch (_) {}
-    };
-    const id = setInterval(tick, 5000);
-    // Run once immediately so the UI shows current
-    // state without waiting 5s.
-    tick();
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [companion?.id]);
-
-  const handleClearEnrollment = useCallback(async () => {
-    if (!companion) return;
-    try {
-      const WakeWordModule = require('react-native').NativeModules.WakeWordModule;
-      await WakeWordModule?.clearSpeakerEnrollment?.(companion.id);
-      setSpeakerEnrolled(false);
-      setSpeakerMatchScore(null);
-      addLogEntry(`Speaker profile cleared for ${companion.name}`, 'info');
-    } catch (e: any) {
-      addLogEntry(`✗ Clear failed: ${e?.message || e}`, 'error');
-    }
-  }, [companion, addLogEntry]);
+  // v3.10.23: per-companion speaker enrollment UI was
+  // removed entirely. The profile is now global and
+  // passive (handled by the OWW detector's auto-lock).
+  // CompanionSettingsScreen has no awareness of speaker
+  // enrollment. See the v3.10.23 CHANGES file for the
+  // design.
 
   // v3.10.2: trained-exit-phrase list for the
   // overview card. Lifted to the screen level so
@@ -1353,105 +1233,17 @@ export default function CompanionSettingsScreen({
                 )}
 
                 {/*
-                  v3.10.19: speaker enrollment section.
-                  Lives in the active-wake panel because
-                  it's closely related to "is the wake
-                  detector going to fire for THIS person".
-                  The Learn-my-voice button captures the
-                  user's voice profile (96-dim OWW embedding
-                  averaged across ~640ms of audio) so the
-                  detector can later confirm that wake-word
-                  fires match this person — useful for
-                  ignoring background speakers who happen
-                  to say the wake phrase.
+                  v3.10.23: speaker enrollment UI removed.
+                  The wake-word detector now learns the
+                  user's voice passively in the background
+                  (no button, no progress bar). Once the
+                  profile is auto-locked, wake fires are
+                  gated on speaker match — the gate is
+                  invisible to the user; only the
+                  "did wake fire for me?" outcome differs.
+                  See CHANGES_3.10.23.md for the full
+                  design.
                 */}
-                <View style={styles.activeWakeTestRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.activeWakeTestBtn,
-                      speakerEnrolling && styles.activeWakeTestBtnRunning,
-                      speakerEnrolled && styles.activeWakeTestBtnEnrolled,
-                    ]}
-                    onPress={handleEnrollSpeaker}
-                    disabled={speakerEnrolling}
-                  >
-                    <Text style={styles.activeWakeTestBtnText}>
-                      {speakerEnrolling ? '🎤 Listening\u2026' : speakerEnrolled ? '✓ Voice enrolled' : '🎤 Learn my voice'}
-                    </Text>
-                  </TouchableOpacity>
-                  <Text style={styles.activeWakeTestHint}>
-                    {speakerEnrolled
-                      ? 'Wake-word can be filtered to your voice. Talk for a moment then tap again to refresh.'
-                      : 'Tap while talking — captures ~640ms of your voice. After enrollment, other speakers saying the wake word can be ignored.'}
-                  </Text>
-                </View>
-
-                {/*
-                  v3.10.21: passive learning progress bar.
-                  Shown whenever the OWW listener is
-                  running and accumulating voice-active
-                  samples. Tobe's "passive option" request
-                  — auto-learns the user's voice in the
-                  background over time, no user action.
-                  Three states:
-                   - "Auto-learning your voice (X% done)"
-                     — still accumulating
-                   - "Voice learned — auto-filter on"
-                     — mature (>=1000 samples), speaker
-                     matching now used for wake-word
-                     filtering (TODO: wire to wake fires)
-                   - Hidden — no listener running or
-                     very few samples yet
-                  The progress percentage is based on
-                  SPEAKER_MATURE_SAMPLES (1000) which is
-                  ~80s of continuous conversation.
-                */}
-                {speakerSamplesTotal > 50 && speakerSamplesTotal < SPEAKER_MATURE_SAMPLES && (
-                  <View style={styles.passiveLearningRow}>
-                    <Text style={styles.passiveLearningLabel}>
-                      🎙 Auto-learning your voice ({Math.min(100, Math.round((speakerSamplesTotal / SPEAKER_MATURE_SAMPLES) * 100))}%)
-                    </Text>
-                    <View style={styles.passiveLearningBarOuter}>
-                      <View style={[
-                        styles.passiveLearningBarInner,
-                        { width: `${Math.min(100, (speakerSamplesTotal / SPEAKER_MATURE_SAMPLES) * 100)}%` as any },
-                      ]} />
-                    </View>
-                    <Text style={styles.passiveLearningNote}>
-                      {speakerSamplesTotal} voice samples captured — keep talking or just leave the app open. Auto-saves when mature.
-                    </Text>
-                  </View>
-                )}
-                {speakerEnrolled && speakerSamplesTotal >= SPEAKER_MATURE_SAMPLES && (
-                  <View style={styles.passiveLearningMature}>
-                    <Text style={styles.passiveLearningMatureTitle}>
-                      ✓ Voice learned — wake fires filtered by speaker
-                    </Text>
-                    <Text style={styles.passiveLearningNote}>
-                      {speakerSamplesTotal} samples, current match {speakerMatchScore !== null ? (speakerMatchScore * 100 | 0) + '%' : '—'}. Wake fires below the match threshold will be ignored.
-                    </Text>
-                  </View>
-                )}
-                {speakerEnrolled && speakerMatchScore !== null && (
-                  <View style={styles.activeWakeTestResult}>
-                    <Text style={styles.activeWakeTestResultTitle}>
-                      Match score: {(speakerMatchScore * 100 | 0)}%
-                    </Text>
-                    <Text style={styles.activeWakeTestNote}>
-                      {speakerMatchScore >= 0.7
-                        ? 'Strong match — wake-word fires should be from you.'
-                        : speakerMatchScore >= 0.5
-                          ? 'Moderate match — try re-enrolling in a quieter spot.'
-                          : 'Weak match — the audio may not have been you. Tap again while talking.'}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={handleClearEnrollment}
-                      style={styles.activeWakeManageBtn}
-                    >
-                      <Text style={styles.activeWakeManageBtnText}>🗑 Clear voice profile</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
               </View>
             ) : (
               <View style={styles.activeWakePanelEmpty}>
@@ -2491,61 +2283,13 @@ const styles = StyleSheet.create({
     borderColor: '#fbbf24',
     backgroundColor: 'rgba(251, 191, 36, 0.15)',
   },
-  activeWakeTestBtnEnrolled: {
-    // v3.10.19: solid green border + filled bg to
-    // distinguish "voice is enrolled" from the
-    // default "tap to enroll" state.
-    borderColor: '#10b981',
-    backgroundColor: 'rgba(16, 185, 129, 0.25)',
-  },
-  // v3.10.21: passive learning progress UI. Shown
-  // under the wake test panel when the OWW listener
-  // is accumulating voice samples in the background.
-  passiveLearningRow: {
-    marginTop: 12,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#3a3a3a',
-    backgroundColor: '#0f1626',
-  },
-  passiveLearningLabel: {
-    color: '#10b981',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  passiveLearningBarOuter: {
-    height: 6,
-    backgroundColor: '#222',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  passiveLearningBarInner: {
-    height: '100%',
-    backgroundColor: '#10b981',
-    borderRadius: 3,
-  },
-  passiveLearningNote: {
-    color: '#888',
-    fontSize: 10,
-    marginTop: 6,
-    fontStyle: 'italic',
-  },
-  passiveLearningMature: {
-    marginTop: 12,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#10b981',
-    backgroundColor: 'rgba(16, 185, 129, 0.10)',
-  },
-  passiveLearningMatureTitle: {
-    color: '#10b981',
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
+  // v3.10.23: activeWakeTestBtnEnrolled removed
+  // (no "voice is enrolled" UI anymore — enrollment
+  // is global and silent).
+  // v3.10.23: passive learning progress UI removed
+  // (no button, no progress bar in v3.10.23 — the
+  // OWW detector handles enrollment silently in
+  // the background).
   activeWakeTestBtnText: {
     color: '#10b981',
     fontSize: 12,

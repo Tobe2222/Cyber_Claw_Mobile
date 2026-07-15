@@ -95,16 +95,32 @@ class OpenWakeWordDetector(private val context: Context) {
     // signal even if individual chunks vary.
     private val embeddingHistory = ArrayDeque<FloatArray>()
     private val embeddingHistoryMax = 32
-    private val enrollments = HashMap<String, FloatArray>() // agentId -> averaged 96-dim
 
-    // v3.10.21: passive enrollment accumulator. Unlike
+    // v3.10.23: single global speaker profile. Replaces
+    // the v3.10.21 per-agent enrollment HashMap. The user's voice is one thing — it
+    // doesn't depend on which companion they're talking
+    // to. The profile is a 96-dim float vector (the
+    // averaged + L2-normalized OWW embeddings over many
+    // voice-active chunks).
+    //
+    // null = no profile yet (we haven't accumulated
+    //   enough voice to be confident). Wake detection
+    //   proceeds WITHOUT speaker gating in this state
+    //   — the system has to work before it can learn.
+    // non-null = profile is set. Wake detection is
+    //   GATED by speaker match: if the audio doesn't
+    //   sound like the enrolled user, suppress the
+    //   wake event.
+    @Volatile private var primaryProfile: FloatArray? = null
+
+    // v3.10.23: passive enrollment accumulator. Unlike
     // embeddingHistory (which keeps the LAST N for
     // matching), this buffer keeps voice-active
     // embeddings for a longer window so we can
     // auto-learn the user's voice over time. Voice-
     // active filtering happens at the call site (the
     // WakeWordModule checks rms/zcr before calling
-    // maybeAddToEnrollment) so the detector doesn't
+    // accumulateLatestEmbedding) so the detector doesn't
     // need to recompute them.
     //
     // KEEP_LAST = ~64 voice-active embeddings = ~5s of
@@ -115,19 +131,54 @@ class OpenWakeWordDetector(private val context: Context) {
     private val enrollmentBufferMax = 64
     // Cumulative count of voice-active samples seen
     // across all enrollment sessions. Never decreases;
-    // resets only on clearEnrollment. Used by the JS
-    // UI to show "auto-learning progress" (e.g.
-    // "3.2 / 5.0 min learned").
+    // resets only on clearPrimaryProfile. Used by the
+    // auto-lock threshold + by JS for status (debug only
+    // — no UI in production).
     private var enrollmentSamplesTotal = 0L
     // Last profile recomputation time (ms). Used to
     // throttle the averaging — recomputing every chunk
     // is wasted CPU; every 5s is plenty.
     private var enrollmentLastUpdateMs = 0L
-    // Per-agent enrollment status: count of voice-active
-    // samples contributed to that agent's profile.
-    // Tobe's "passive learning" request — accumulates
-    // across multiple sessions without user action.
-    private val enrollmentSamplesByAgent = HashMap<String, Long>()
+    // v3.10.23: confirmed wake-fire count. A wake-fire
+    // counts as "confirmed" only if a recent voice-active
+    // embedding was within 2 seconds of the wake fire
+    // (i.e. the user actually said something, not a
+    // stray TV / door slam). Used as an alternative
+    // auto-lock trigger: lock the profile when we've
+    // seen enough CONFIRMED wake fires (real user use),
+    // even if total sample count is low.
+    private var confirmedWakeFires = 0
+    // v3.10.23: persistent lock flag. Once true, the
+    // profile is "locked" — it's been written to
+    // SharedPreferences and survives app restarts. The
+    // auto-enrollment no longer fires (the buffer can
+    // still accumulate for drift detection, but it
+    // doesn't overwrite the locked profile).
+    @Volatile private var profileLocked = false
+    // Auto-lock thresholds. Either condition triggers
+    // lock; whichever hits first.
+    private val PROFILE_LOCK_SAMPLES = 1000   // ~30s of voice-active buffers
+    private val PROFILE_LOCK_WAKE_FIRES = 5   // 5 confirmed wake-fires
+    // v3.10.23: gate threshold for wake suppression.
+    // When a profile is locked and the most recent
+    // audio's cosine match against the profile is below
+    // this value, suppress the wake event. 0.5 was
+    // chosen as a balance: typical same-speaker matches
+    // are 0.7-0.9 (gate lets them through), and a
+    // different speaker typically scores 0.3-0.5 (gate
+    // suppresses). Set too high and the user's voice
+    // drift causes false negatives; too low and other
+    // speakers slip through.
+    private val SPEAKER_GATE_THRESHOLD = 0.5f
+    // SharedPreferences key for persisting the profile
+    // across app restarts. The value is a base64-
+    // encoded 96-float vector (96 * 4 bytes = 384
+    // bytes → ~512 chars base64). The `v1` suffix
+    // lets us bump the encoding format without colliding
+    // with the v3.10.21 per-agent stored data (which
+    // used a different key prefix).
+    private val PROFILE_PREFS_NAME = "speaker_profile_v1"
+    private val PROFILE_PREFS_KEY = "profile_b64"
 
     /**
      * v3.10.19: cosine similarity between two 96-dim
@@ -579,7 +630,7 @@ class OpenWakeWordDetector(private val context: Context) {
     // continuously as the listener runs, so by the
     // time the user has used the app for a few minutes
     // we have plenty of enrollment data.
-    fun enrollSpeakerFromBuffer(agentId: String, minSamples: Int = 8): Boolean {
+    fun enrollPrimaryProfileFromBuffer(minSamples: Int = 8): Boolean {
         val snapshot: List<FloatArray>
         synchronized(embeddingHistory) {
             if (embeddingHistory.size < minSamples) return false
@@ -598,8 +649,8 @@ class OpenWakeWordDetector(private val context: Context) {
         for (i in 0 until 96) norm += avg[i] * avg[i]
         norm = Math.sqrt(norm)
         if (norm > 0.0) for (i in 0 until 96) avg[i] = (avg[i] / norm).toFloat()
-        enrollments[agentId] = avg
-        Log.i(tag, "Enrolled speaker for agent=$agentId from ${snapshot.size} embeddings")
+        primaryProfile = avg
+        Log.i(tag, "Set primary speaker profile from ${snapshot.size} embeddings")
         return true
     }
 
@@ -615,8 +666,8 @@ class OpenWakeWordDetector(private val context: Context) {
      * agent. Caller should treat null as "no
      * preference" (allow the wake word).
      */
-    fun matchRecentSpeaker(agentId: String, recentK: Int = 8): Float? {
-        val profile = enrollments[agentId] ?: return null
+    fun matchRecentSpeaker(recentK: Int = 8): Float? {
+        val profile = primaryProfile ?: return null
         val snapshot: List<FloatArray>
         synchronized(embeddingHistory) {
             val n = Math.min(recentK, embeddingHistory.size)
@@ -628,12 +679,50 @@ class OpenWakeWordDetector(private val context: Context) {
         return (total / snapshot.size).toFloat()
     }
 
-    fun hasEnrollment(agentId: String): Boolean = enrollments.containsKey(agentId)
-    fun clearEnrollment(agentId: String) {
-        enrollments.remove(agentId)
+    fun hasPrimaryProfile(): Boolean = primaryProfile != null
+
+    /** v3.10.23: gate query for the wake-fire path. */
+    fun isProfileLocked(): Boolean = profileLocked
+
+    /**
+     * v3.10.23: gate query for wake suppression. Returns
+     * true if the wake should be suppressed because the
+     * recent audio doesn't match the user's profile.
+     * Returns false if the profile isn't set yet (the
+     * system has to work BEFORE it can learn — wake
+     * fires unrestricted until the profile locks).
+     */
+    fun shouldSuppressWakeForSpeaker(recentK: Int = 8): Boolean {
+        if (primaryProfile == null) return false
+        val score = matchRecentSpeaker(recentK) ?: return false
+        return score < SPEAKER_GATE_THRESHOLD
+    }
+
+    /**
+     * v3.10.23: clear the primary profile + reset all
+     * enrollment counters. Wipes SharedPreferences too
+     * so the next cold start is a fresh enrollment.
+     */
+    fun clearPrimaryProfile() {
+        primaryProfile = null
+        profileLocked = false
+        confirmedWakeFires = 0
         synchronized(enrollmentBuffer) { enrollmentBuffer.clear() }
         enrollmentSamplesTotal = 0L
-        enrollmentSamplesByAgent.clear()
+        context?.getSharedPreferences(PROFILE_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            ?.edit()?.remove(PROFILE_PREFS_KEY)?.apply()
+        Log.i(tag, "Primary speaker profile cleared")
+    }
+
+    /**
+     * v3.10.23: bump the confirmed-wake-fire counter.
+     * Called by WakeWordModule from the wake-detect
+     * path when a recent voice-active embedding was
+     * within 2s of the wake fire (i.e. the user
+     * actually said something back — not a stray TV).
+     */
+    fun noteConfirmedWakeFire() {
+        confirmedWakeFires++
     }
 
     // v3.10.21: passive enrollment accumulator. Called
@@ -677,10 +766,10 @@ class OpenWakeWordDetector(private val context: Context) {
     }
 
     /**
-     * v3.10.21: number of voice-active samples seen
-     * across all enrollment. Used by the JS UI to show
-     * "auto-learning progress". Monotonically increases
-     * (until clearEnrollment resets).
+     * v3.10.23: number of voice-active samples seen
+     * since the last clear. Used by the JS status
+     * query (debug only — no UI). Monotonically
+     * increases (until clearPrimaryProfile resets).
      */
     fun getEnrollmentSamplesTotal(): Long = enrollmentSamplesTotal
 
@@ -693,33 +782,65 @@ class OpenWakeWordDetector(private val context: Context) {
     fun getEnrollmentBufferSize(): Int = synchronized(enrollmentBuffer) { enrollmentBuffer.size }
 
     /**
-     * v3.10.21: recompute the agent's profile from the
+     * v3.10.23: recompute the primary profile from the
      * current enrollment buffer. Throttled to once per
-     * `cooldownMs` so we don't recompute every chunk.
-     * Returns true if the profile was updated.
+     * `cooldownMs` (5s) so we don't recompute every
+     * chunk.
      *
-     * After this call:
-     * - `enrollments[agentId]` is updated to the new
-     *   averaged + L2-normalized profile
-     * - `enrollmentSamplesByAgent[agentId]` is updated
+     * If the auto-lock thresholds are met
+     * (PROFILE_LOCK_SAMPLES samples OR
+     * PROFILE_LOCK_WAKE_FIRES confirmed wake-fires),
+     * the profile is locked and persisted to
+     * SharedPreferences. Once locked, the gate becomes
+     * active — wake detection requires the speaker to
+     * match.
      *
-     * The JS side calls this periodically (every 5s) or
-     * on demand (when the user taps "Save voice profile
-     * now" in Settings).
+     * Returns Pair<updated, justLocked>:
+     *   updated    — true if the profile was recomputed
+     *   justLocked — true if THIS call caused the
+     *               unlocked→locked transition (so the
+     *               caller can log it exactly once).
      */
-    fun recomputeEnrollmentProfile(agentId: String, minSamples: Int = 16, cooldownMs: Long = 5000L): Boolean {
+    fun recomputePrimaryProfileIfReady(minSamples: Int = 16, cooldownMs: Long = 5000L): Pair<Boolean, Boolean> {
+        if (profileLocked) return Pair(false, false)
         val now = System.currentTimeMillis()
-        if (now - enrollmentLastUpdateMs < cooldownMs) {
-            // Throttled — but if we don't have an existing
-            // enrollment yet, allow an immediate first
-            // recompute.
-            if (enrollments.containsKey(agentId)) return false
+        if (now - enrollmentLastUpdateMs < cooldownMs && primaryProfile != null) {
+            return Pair(false, false)
         }
         val snapshot: List<FloatArray>
         synchronized(enrollmentBuffer) {
-            if (enrollmentBuffer.size < minSamples) return false
+            if (enrollmentBuffer.size < minSamples) return Pair(false, false)
             snapshot = enrollmentBuffer.toList()
         }
+        primaryProfile = averageAndNormalize(snapshot)
+        enrollmentLastUpdateMs = now
+        val locked = tryLockPrimaryProfile()
+        Log.i(tag, "Recomputed primary speaker profile from ${snapshot.size} samples (cumulative $enrollmentSamplesTotal, confirmedWakes=$confirmedWakeFires, justLocked=$locked)")
+        return Pair(true, locked)
+    }
+
+    /**
+     * v3.10.23: check auto-lock thresholds; if met,
+     * lock + persist. Returns true iff THIS call caused
+     * the unlocked→locked transition.
+     */
+    private fun tryLockPrimaryProfile(): Boolean {
+        if (profileLocked) return false
+        if (primaryProfile == null) return false
+        val enoughSamples = enrollmentSamplesTotal >= PROFILE_LOCK_SAMPLES
+        val enoughWakes = confirmedWakeFires >= PROFILE_LOCK_WAKE_FIRES
+        if (!enoughSamples && !enoughWakes) return false
+        profileLocked = true
+        persistPrimaryProfile()
+        Log.i(tag, "Primary speaker profile LOCKED (samples=$enrollmentSamplesTotal, confirmedWakes=$confirmedWakeFires)")
+        return true
+    }
+
+    /**
+     * v3.10.23: average a list of 96-dim embeddings and
+     * L2-normalize. Pure function over the snapshot.
+     */
+    private fun averageAndNormalize(snapshot: List<FloatArray>): FloatArray {
         val avg = FloatArray(96)
         for (emb in snapshot) {
             for (i in 0 until 96) avg[i] += emb[i]
@@ -730,12 +851,83 @@ class OpenWakeWordDetector(private val context: Context) {
         for (i in 0 until 96) norm += avg[i] * avg[i]
         norm = Math.sqrt(norm)
         if (norm > 0.0) for (i in 0 until 96) avg[i] = (avg[i] / norm).toFloat()
-        enrollments[agentId] = avg
-        enrollmentSamplesByAgent[agentId] = enrollmentSamplesTotal
-        enrollmentLastUpdateMs = now
-        Log.i(tag, "Recomputed speaker profile for agent=$agentId from ${snapshot.size} samples (cumulative ${enrollmentSamplesTotal} samples)")
+        return avg
+    }
+
+    /**
+     * v3.10.23: serialize the primary profile to base64
+     * (raw little-endian float bytes) and write to
+     * SharedPreferences. Called automatically on lock.
+     */
+    fun persistPrimaryProfile(): Boolean {
+        val profile = primaryProfile ?: return false
+        val ctx = context ?: return false
+        val bytes = ByteArray(profile.size * 4)
+        for (i in profile.indices) {
+            val bits = java.lang.Float.floatToRawIntBits(profile[i])
+            bytes[i * 4 + 0] = (bits and 0xff).toByte()
+            bytes[i * 4 + 1] = ((bits shr 8) and 0xff).toByte()
+            bytes[i * 4 + 2] = ((bits shr 16) and 0xff).toByte()
+            bytes[i * 4 + 3] = ((bits shr 24) and 0xff).toByte()
+        }
+        val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        ctx.getSharedPreferences(PROFILE_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(PROFILE_PREFS_KEY, b64)
+            .apply()
         return true
     }
+
+    /**
+     * v3.10.23: restore the primary profile from
+     * SharedPreferences on cold start so the user
+     * doesn't have to re-teach the app. Sets
+     * profileLocked=true since the stored profile was
+     * already considered "learned".
+     */
+    fun loadPersistedPrimaryProfile(): Boolean {
+        val ctx = context ?: return false
+        val prefs = ctx.getSharedPreferences(PROFILE_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        val b64 = prefs.getString(PROFILE_PREFS_KEY, null) ?: return false
+        return try {
+            val bytes = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
+            if (bytes.size != 96 * 4) return false
+            val profile = FloatArray(96)
+            for (i in 0 until 96) {
+                val bits = (bytes[i * 4 + 0].toInt() and 0xff) or
+                    ((bytes[i * 4 + 1].toInt() and 0xff) shl 8) or
+                    ((bytes[i * 4 + 2].toInt() and 0xff) shl 16) or
+                    ((bytes[i * 4 + 3].toInt() and 0xff) shl 24)
+                profile[i] = java.lang.Float.intBitsToFloat(bits)
+            }
+            primaryProfile = profile
+            profileLocked = true
+            Log.i(tag, "Restored primary speaker profile from SharedPreferences (96 dims)")
+            true
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to decode stored profile, ignoring: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * v3.10.23: serialize the primary profile to base64.
+     * Debug / future use — no current JS consumer.
+     */
+    fun getPrimaryProfileBase64(): String? {
+        val profile = primaryProfile ?: return null
+        val bytes = ByteArray(profile.size * 4)
+        for (i in profile.indices) {
+            val bits = java.lang.Float.floatToRawIntBits(profile[i])
+            bytes[i * 4 + 0] = (bits and 0xff).toByte()
+            bytes[i * 4 + 1] = ((bits shr 8) and 0xff).toByte()
+            bytes[i * 4 + 2] = ((bits shr 16) and 0xff).toByte()
+            bytes[i * 4 + 3] = ((bits shr 24) and 0xff).toByte()
+        }
+        return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+    }
+
+    fun getConfirmedWakeFires(): Int = confirmedWakeFires
 
     private fun loadInterpreter(assetPath: String): Interpreter {
         val afd = context.assets.openFd(assetPath)
