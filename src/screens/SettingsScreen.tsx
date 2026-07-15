@@ -125,6 +125,10 @@ import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
 // v3.10.24: shared global speaker-profile bar (full
 // variant) at the top of the Voice mode section.
 import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
+// v3.10.25: shared "Test send" panel. Same hook + UI
+// as wake/exit — Send lives in the global Voice mode
+// section here, so its test button does too.
+import ClassifierTestPanel from '../components/ClassifierTest';
 import { saveSendPhrase, loadSendModelInfo } from '../services/VoiceSettings';
 import {
   getPermissions,
@@ -1469,6 +1473,15 @@ export default function SettingsScreen({
                 </Text>
               </View>
             )}
+
+            {/* v3.10.25: per-page classifier test. Send
+                lives in the global Voice mode section
+                (shared across companions), so its test
+                button sits here too. Tap "✉️ Test send",
+                say the trained send word, see the peak
+                score. Same shared ClassifierTestPanel
+                as wake + exit. */}
+            <ClassifierTestPanel kind="send" />
 
             {/* v3.9.8 — your-turn cue sound. Plays after the
                 desktop's audio response finishes and we're
