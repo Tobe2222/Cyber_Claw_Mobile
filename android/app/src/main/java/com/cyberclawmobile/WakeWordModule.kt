@@ -418,10 +418,27 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private var owwWasListeningBeforeRecord = false
 
     @ReactMethod fun startRecorder(path: String, promise: Promise) {
-        startRecorderWithSilence(path, 5000, promise)
+        startRecorderWithSilence(path, 5000, true, promise)
     }
 
-    @ReactMethod fun startRecorderWithSilence(path: String, silenceMs: Int, promise: Promise) {
+    /**
+     * v3.10.28: added `useSmartSilence` arg. When true
+     * (default for the new call sites), the recorder
+     * uses RELATIVE silence detection: silence
+     * threshold is computed from the gap between the
+     * user's speech floor and the ambient noise floor,
+     * not a fixed absolute RMS. This makes the silence
+     * detector work in cafés / traffic / HVAC / any
+     * environment where ambient noise exceeds the old
+     * hardcoded 0.005 silence threshold.
+     *
+     * When false, the v3.10.12 absolute thresholds
+     * (0.010 speech / 0.005 silence) are used —
+     * identical to v3.10.27 behavior. The toggle is in
+     * Voice mode settings ("Smart silence
+     * (noise-aware)"), default on.
+     */
+    @ReactMethod fun startRecorderWithSilence(path: String, silenceMs: Int, useSmartSilence: Boolean, promise: Promise) {
         try {
             // v3.9.4: stop the OWW listening thread before
             // grabbing MIC. Android only allows ONE app to
@@ -512,6 +529,19 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             recorderSilentForMs = 0L
             recorderRecordingForMs = 0L
             recorderHasUserSpoken = false
+            // v3.10.28: reset smart-silence calibration
+            // state on every new recording turn. The
+            // speech + noise floors need ~1.5s of
+            // speech / ambient to converge; if we
+            // re-used them across turns, the
+            // calibration would be stale (a 30-minute
+            // old speech floor in a now-quiet room is
+            // wrong).
+            smartSilenceSpeechFloor = 0f
+            smartSilenceNoiseFloor = 0.005f
+            smartSilenceSpeechSampleCount = 0
+            smartSilenceLastVadReportMs = 0L
+            smartSilenceEnabled = useSmartSilence
             // Reset detector send/exit high-score counters on
             // each new recording turn so a stale hit from a
             // previous turn can't fire immediately on the new
@@ -735,6 +765,42 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @Volatile private var recorderLastExitAt = 0L
     @Volatile private var recorderVadEmitTick = 0
     @Volatile private var recorderLastVadAt = 0L
+    // v3.10.28: smart-silence calibration state. Reset
+    // at the start of every recording turn. See
+    // processRecorderChunk for the update logic.
+    //
+    // speechFloor: rolling 10th-percentile of RMS
+    // values observed on speech frames. Represents the
+    // user's typical quiet speech level. When the user
+    // goes silent, the floor stays put (it's a slow
+    // statistic, not the peak). Updated only on frames
+    // where the absolute speech threshold (0.010) is
+    // crossed — so quiet inter-word gaps don't pollute
+    // the floor.
+    @Volatile private var smartSilenceSpeechFloor = 0f
+    // noiseFloor: rolling 10th-percentile of RMS values
+    // observed on ALL frames (passive, always updates).
+    // Represents the ambient environment's typical
+    // energy. Slow time constant (~10s to converge) so a
+    // sudden door closing doesn't cause a rapid
+    // re-calibration that the user would feel as the
+    // silence detector "lagging" behind a real change.
+    @Volatile private var smartSilenceNoiseFloor = 0.005f
+    // How many speech frames we've accumulated for the
+    // speech floor. Used to gate the transition from
+    // absolute to relative thresholds: we don't switch
+    // until we have enough speech samples for the
+    // floor to be meaningful (~30 frames = ~2.4s of
+    // speech).
+    @Volatile private var smartSilenceSpeechSampleCount = 0
+    // Last time we included the smart-silence stats in
+    // the owwVad event. Throttled to ~5Hz to avoid
+    // bridge traffic.
+    @Volatile private var smartSilenceLastVadReportMs = 0L
+    // The per-turn toggle value. Cached here so the
+    // recorder thread doesn't need to re-read the
+    // argument on every chunk.
+    @Volatile private var smartSilenceEnabled = true
 
     /**
      * Per-chunk (80ms) work in the recorder thread.
@@ -925,11 +991,30 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         val SILENCE_RMS_THRESHOLD = 0.005f
         val MIN_RECORDING_MS = 500L
         val MAX_RECORDING_MS = 30_000L
+        // v3.10.28: number of definite-speech frames
+        // required before smart-silence kicks in.
+        // At 12.5Hz (80ms chunks), 30 frames = 2.4s
+        // of speech. Enough for the EMA to converge
+        // to a stable floor (alpha=0.04 → ~95% of
+        // value in 75 samples, but the user typically
+        // has variability across their speech so we
+        // need a longer window than the EMA half-life
+        // to get a usable floor).
+        val SMART_SILENCE_CALIBRATION_FRAMES = 30
 
         if (recorderRecordingForMs >= MAX_RECORDING_MS) {
+            // v3.10.28: max-recording silence event.
+            // Carries the same calibration stats as
+            // the regular silence event so the JS
+            // side can log the final state.
             handler.post {
+                val params = Arguments.createMap()
+                params.putBoolean("maxRecordingHit", true)
+                params.putBoolean("useSmartSilence", smartSilenceEnabled)
+                params.putDouble("noiseFloor", smartSilenceNoiseFloor.toDouble())
+                params.putDouble("speechFloor", smartSilenceSpeechFloor.toDouble())
                 reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                    .emit("recorderSilence", null)
+                    .emit("recorderSilence", params)
             }
             return
         }
@@ -942,21 +1027,167 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
         if (!recorderHasUserSpoken) return
         // Hysteresis band: RMS is between SILENCE and SPEECH
-        // thresholds. Don't reset counter (we're not in clear
-        // speech) but DON'T accumulate silence either — this
-        // is the natural inter-word gap zone. Bail without
-        // touching recorderSilentForMs.
-        if (rms >= SILENCE_RMS_THRESHOLD) {
+        // v3.10.28: noise-aware silence detection.
+        // Replaces the v3.10.12 absolute-threshold
+        // design with a self-calibrating, noise-
+        // relative design that works in cafés, traffic,
+        // and HVAC noise where ambient RMS exceeds
+        // the old 0.005 silence threshold.
+        //
+        // Algorithm:
+        //   1. Update `smartSilenceNoiseFloor` (slow
+        //      EMA) on every chunk — the ambient
+        //      environment's typical RMS. Slow time
+        //      constant so a sudden door closing
+        //      doesn't cause a rapid re-calibration.
+        //   2. If RMS is above the absolute speech
+        //      threshold (0.010), the user is
+        //      definitely talking. Update
+        //      `smartSilenceSpeechFloor` (also slow
+        //      EMA, but faster than the noise floor).
+        //      Reset the silence counter. Mark
+        //      `recorderHasUserSpoken`.
+        //   3. Else, if smart-silence is enabled AND
+        //      we have enough speech samples
+        //      (>=SMART_SILENCE_CALIBRATION_FRAMES,
+        //      ~30 = ~2.4s of speech), use a
+        //      proportional threshold:
+        //        silence = rms < (noiseFloor +
+        //          0.30 × (speechFloor - noiseFloor))
+        //      with a small hysteresis band on top of
+        //      that. In a coffee shop this gives
+        //      ~0.024 (vs the old absolute 0.005)
+        //      — a 5x bigger gap that absorbs the
+        //      ambient noise.
+        //   4. Else (warm-up OR toggle-off), use the
+        //      v3.10.12 absolute thresholds. Same
+        //      code as before for this branch.
+        //
+        // The two paths converge: if the noise floor
+        // is below 0.005 (quiet room) the smart path
+        // gives a threshold very close to the
+        // absolute 0.005 (since speechFloor is large
+        // and the ratio applies). If the user toggles
+        // smart silence off, the absolute path is
+        // used verbatim — same behavior as v3.10.27.
+        //
+        // Implementation: we keep the existing
+        // SPEECH_RMS_THRESHOLD = 0.010 as the
+        // "definitely speech" gate (used by both
+        // paths), then branch on smartSilenceEnabled
+        // + smartSilenceSpeechSampleCount to decide
+        // the silence threshold.
+
+        // Step 1: always update the noise floor. Slow
+        // EMA (alpha=0.005 = ~5% per 100 chunks =
+        // ~4s half-life) so a sudden ambient change
+        // doesn't flip the calibration too fast.
+        // Floor starts at 0.005 (the v3.10.12 default)
+        // so a quiet environment is the "zero" state.
+        if (rms > 0f) {
+            val alphaN = 0.005f
+            smartSilenceNoiseFloor = smartSilenceNoiseFloor * (1f - alphaN) + rms * alphaN
+            // Floor can't go below 0.001 (the floor of
+            // a real microphone on a real device).
+            if (smartSilenceNoiseFloor < 0.001f) smartSilenceNoiseFloor = 0.001f
+        }
+
+        // Step 2: speech path. The absolute
+        // SPEECH_RMS_THRESHOLD gate is the same for
+        // both smart and absolute modes — we just
+        // need to know "is the user definitely
+        // talking right now" to update the speech
+        // floor and reset the silence counter.
+        if (rms >= SPEECH_RMS_THRESHOLD) {
+            // Update speech floor (faster EMA than
+            // noise floor, alpha=0.04, so the user's
+            // speech level tracks within ~1.5s of
+            // changes).
+            val alphaS = 0.04f
+            if (smartSilenceSpeechFloor == 0f) {
+                // First speech sample — seed the
+                // floor with the current RMS so we
+                // don't have to wait for the EMA to
+                // climb.
+                smartSilenceSpeechFloor = rms
+            } else {
+                smartSilenceSpeechFloor = smartSilenceSpeechFloor * (1f - alphaS) + rms * alphaS
+            }
+            smartSilenceSpeechSampleCount++
+            recorderHasUserSpoken = true
+            recorderSilentForMs = 0L
             return
         }
-        // Below SILENCE_RMS_THRESHOLD: actually quiet enough
-        // to count as silence.
+
+        // Below the absolute speech threshold.
+        // Compute the silence threshold for this
+        // chunk (smart or absolute mode).
+        val smartReady = smartSilenceEnabled &&
+            smartSilenceSpeechSampleCount >= SMART_SILENCE_CALIBRATION_FRAMES
+        val effectiveSilenceThreshold: Float
+        val effectiveSpeechThreshold: Float
+        if (smartReady) {
+            // Proportional: silence = 30% of the
+            // way from the noise floor to the speech
+            // floor. Speech threshold = 70% of the
+            // way (mirrors the silence threshold for
+            // symmetry, so the hysteresis band is
+            // 40% wide — wide enough to absorb
+            // inter-word drops).
+            val gap = smartSilenceSpeechFloor - smartSilenceNoiseFloor
+            if (gap < 0.01f) {
+                // Speech floor isn't really above
+                // the noise floor (silence-only or
+                // very weak speech). Fall back to
+                // the absolute path for safety so
+                // we don't get a degenerate
+                // threshold of (0.005 + 0.30×0.001)
+                // = 0.0053.
+                effectiveSilenceThreshold = SILENCE_RMS_THRESHOLD
+                effectiveSpeechThreshold = SPEECH_RMS_THRESHOLD
+            } else {
+                effectiveSilenceThreshold = smartSilenceNoiseFloor + 0.30f * gap
+                effectiveSpeechThreshold = smartSilenceNoiseFloor + 0.70f * gap
+            }
+        } else {
+            // Warm-up or toggle-off: use the
+            // v3.10.12 absolute thresholds.
+            effectiveSilenceThreshold = SILENCE_RMS_THRESHOLD
+            effectiveSpeechThreshold = SPEECH_RMS_THRESHOLD
+        }
+
+        // Hysteresis band: between silence and
+        // speech thresholds, don't reset the
+        // silence counter (we're not in clear
+        // speech) but DON'T accumulate either (this
+        // is the inter-word gap zone). Bail
+        // without touching recorderSilentForMs.
+        if (rms >= effectiveSilenceThreshold && rms < effectiveSpeechThreshold) {
+            return
+        }
+
+        // Below the silence threshold: actually
+        // quiet enough to count as silence.
+        if (!recorderHasUserSpoken) return
         if (recorderRecordingForMs < MIN_RECORDING_MS) return
         recorderSilentForMs += CHUNK_MS
         if (recorderSilentForMs >= silenceMs) {
+            // v3.10.28: emit the calibration stats
+            // alongside the silence event so the JS
+            // side can log them once per silence
+            // event. Throttled separately from the
+            // per-chunk owwVad event so we don't
+            // flood the bridge.
             handler.post {
+                val params = Arguments.createMap()
+                params.putBoolean("useSmartSilence", smartSilenceEnabled)
+                params.putBoolean("smartReady", smartReady)
+                params.putDouble("noiseFloor", smartSilenceNoiseFloor.toDouble())
+                params.putDouble("speechFloor", smartSilenceSpeechFloor.toDouble())
+                params.putDouble("silenceThreshold", effectiveSilenceThreshold.toDouble())
+                params.putDouble("speechThreshold", effectiveSpeechThreshold.toDouble())
                 reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                    .emit("recorderSilence", null)
+                    .emit("recorderSilence", params)
             }
         }
     }

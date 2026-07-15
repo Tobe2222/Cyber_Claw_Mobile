@@ -184,6 +184,17 @@ export default function SettingsScreen({
 
   // ── Wake Word ─────────────────────────────────────────────────
   const [bgListening, setBgListening] = useState(true);
+  // v3.10.28: smart-silence toggle. Default ON.
+  // When ON (default), the recorder uses RELATIVE
+  // silence detection: silence threshold is computed
+  // from the gap between the user's speech level and
+  // the ambient noise floor, not a fixed absolute RMS.
+  // Works in cafés / traffic / HVAC. When OFF, the
+  // v3.10.12 absolute thresholds are used (back to
+  // the pre-v3.10.28 behavior). AsyncStorage key is
+  // `cyberclaw-smart-silence` (read in
+  // SimpleAudioRecorder.start).
+  const [smartSilence, setSmartSilence] = useState<boolean>(true);
   // v3.4.7: fgThreshold/bgThreshold state + UI removed.
   // The Match Thresholds UI control was a low-level knob for
   // the v3.1 sample-matching wake detector. Since v3.1.95 we
@@ -599,6 +610,10 @@ export default function SettingsScreen({
   useEffect(() => {
     checkPermissions();
     AsyncStorage.getItem('cyberclaw-bg-listening').then(v => { if (v === 'false') setBgListening(false); });
+    // v3.10.28: hydrate the smart-silence toggle.
+    // Default ON; only the explicit "false" value
+    // switches it off.
+    AsyncStorage.getItem('cyberclaw-smart-silence').then(v => { if (v === 'false') setSmartSilence(false); });
     // v3.4.7: removed fgThreshold/bgThreshold hydration.
     // Their UI was removed; AsyncStorage keys are still
     // read by HomeScreen/WakeModeScreen with sane defaults.
@@ -1390,6 +1405,25 @@ export default function SettingsScreen({
                 they talk — same colors and animation so
                 they read as the same indicator. */}
             <VoiceEnrollmentBar variant="full" />
+
+            {/* v3.10.28: smart-silence toggle. The
+                noise-aware silence detector calibrates
+                the silence threshold from the gap
+                between the user's speech level and the
+                ambient noise floor, so it works in
+                cafés / traffic / HVAC noise where
+                ambient RMS exceeds the old hardcoded
+                0.005 silence threshold. Default ON. */}
+            <Toggle
+              title="🤫 Smart silence (noise-aware)"
+              sub="Calibrates the silence threshold from the gap between your speech and the ambient noise. Works in cafés, traffic, HVAC. Default ON."
+              value={smartSilence}
+              onValueChange={async (val) => {
+                setSmartSilence(val);
+                await AsyncStorage.setItem('cyberclaw-smart-silence', String(val));
+              }}
+            />
+
             <SubTitle>✉️ Manual send voice message</SubTitle>
             <Hint>Backup commit word for voice-mode turns. The primary trigger is silence-detection (the VAD's silence countdown) or gibberish-detection (VAD noise floor). When those miss — e.g. the silence threshold doesn't trip because the audio cuts off mid-word, or the VAD reads low noise as speech — saying this word commits the turn to the LLM by hand. Independent of the exit phrase — send keeps the conversation going, exit closes voice mode. Shared across all companions.</Hint>
             <Label>Send word</Label>

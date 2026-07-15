@@ -18,8 +18,16 @@
  */
 
 import { NativeModules, NativeEventEmitter } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { WakeWordModule } = NativeModules;
+
+// v3.10.28: AsyncStorage key for the smart-silence
+// user toggle. Read on every recorder start (not at
+// app boot) so the user can change it in Voice mode
+// settings and the next recording turn picks up the
+// new value without an app restart.
+const SMART_SILENCE_KEY = 'cyberclaw-smart-silence';
 
 interface SimpleAudioRecorderListener {
   (event: 'silence' | 'error', message?: string): void;
@@ -36,13 +44,47 @@ export class SimpleAudioRecorder {
     // Set up native event listeners (shared with WakeWordModule)
     if (WakeWordModule) {
       this.emitter = new NativeEventEmitter(WakeWordModule);
-      
-      // Listen for silence events from native module
-      this.emitter.addListener('recorderSilence', () => {
+
+      // Listen for silence events from native module.
+      // v3.10.28: payload now carries smart-silence
+      // calibration stats (noise floor, speech floor,
+      // current thresholds) so the JS side can log
+      // them. Backward-compatible: if the payload
+      // is null (older native builds), we just
+      // don't log.
+      this.emitter.addListener('recorderSilence', (payload: any) => {
         this.silenceDetected = true;
+        this.lastSilenceEvent = payload || null;
         this.emit('silence');
       });
     }
+  }
+
+  // v3.10.28: cache of the most recent silence
+  // event payload (null for older native builds).
+  // Exposed via getLastSilenceStats() so the
+  // caller can log it next to the existing
+  // "silence detected after Xms" message.
+  private lastSilenceEvent: any = null;
+  getLastSilenceStats(): {
+    useSmartSilence: boolean;
+    smartReady: boolean;
+    noiseFloor: number;
+    speechFloor: number;
+    silenceThreshold: number;
+    speechThreshold: number;
+    maxRecordingHit: boolean;
+  } | null {
+    if (!this.lastSilenceEvent) return null;
+    return {
+      useSmartSilence: !!this.lastSilenceEvent.useSmartSilence,
+      smartReady: !!this.lastSilenceEvent.smartReady,
+      noiseFloor: Number(this.lastSilenceEvent.noiseFloor) || 0,
+      speechFloor: Number(this.lastSilenceEvent.speechFloor) || 0,
+      silenceThreshold: Number(this.lastSilenceEvent.silenceThreshold) || 0,
+      speechThreshold: Number(this.lastSilenceEvent.speechThreshold) || 0,
+      maxRecordingHit: !!this.lastSilenceEvent.maxRecordingHit,
+    };
   }
 
   /**
@@ -60,12 +102,27 @@ export class SimpleAudioRecorder {
     try {
       this.recordingPath = filepath;
       this.silenceDetected = false;
-      
+      this.lastSilenceEvent = null;
+
       if (!WakeWordModule?.startRecorderWithSilence) {
         throw new Error('WakeWordModule not available');
       }
 
-      await WakeWordModule.startRecorderWithSilence(filepath, silenceTimeoutMs);
+      // v3.10.28: read the smart-silence toggle from
+      // AsyncStorage. Default ON (true) — the
+      // relative-threshold design is strictly better
+      // than the v3.10.12 absolute-threshold design
+      // in every environment we can think of (quiet
+      // room, café, traffic, HVAC). Users who want
+      // the old behavior can flip the toggle off in
+      // Voice mode settings.
+      let useSmartSilence = true;
+      try {
+        const stored = await AsyncStorage.getItem(SMART_SILENCE_KEY);
+        if (stored === 'false') useSmartSilence = false;
+      } catch (_) {}
+
+      await WakeWordModule.startRecorderWithSilence(filepath, silenceTimeoutMs, useSmartSilence);
       this.isRecording = true;
     } catch (error: any) {
       this.isRecording = false;

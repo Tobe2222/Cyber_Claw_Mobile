@@ -1336,6 +1336,24 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         silenceFiredRef.current = true;
         addVoiceLog(`⏳ Silence detected (${silenceMs}ms)...`);
         addLogEntry(`Wake/Voice Mode: silence detected after ${silenceMs}ms`, 'info');
+        // v3.10.28: surface the smart-silence
+        // calibration stats so the user can see
+        // what the detector was working with.
+        // Useful for diagnosing "why did it cut me
+        // off here?" reports in noisy environments.
+        try {
+          const stats = recorder.getLastSilenceStats?.();
+          if (stats) {
+            const mode = stats.useSmartSilence
+              ? (stats.smartReady ? 'smart-calibrated' : 'smart-warming')
+              : 'absolute';
+            addLogEntry(
+              `Wake/Voice Mode: silence mode=${mode} noise=${(stats.noiseFloor * 100 | 0) / 100} speech=${(stats.speechFloor * 100 | 0) / 100} threshold=${(stats.silenceThreshold * 100 | 0) / 100}` +
+                (stats.maxRecordingHit ? ' (max-recording limit hit)' : ''),
+              'info',
+            );
+          }
+        } catch (_) {}
         setVoiceStatus('silence_countdown');
         let count = 5;
         const tick = setInterval(async () => {
