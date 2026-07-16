@@ -208,6 +208,17 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // idle user gets a clear "I'm giving up, please come
   // back" exit instead of an infinite loop.
   const MAX_CONSECUTIVE_EMPTY_ROUNDS = 3;
+  // v3.10.33 — extracted from inside onAudioResponse so
+  // the first-turn greeting path can reuse it. See the
+  // long comment in onAudioResponse for the full history
+  // (1500 → 2500 → 4000 across v3.10.8 / v3.10.9). The
+  // first-turn settle matters for the same reason — the
+  // audio HAL buffer drain delay — but the FIRST turn
+  // was missing this protection entirely before v3.10.33,
+  // so the recorder would pick up the tail of the
+  // greeting audio as "speech" and start the silence
+  // window from there.
+  const RESPONSE_SETTLE_DELAY_MS = 4000;
   // v3.6.0 — guards against double-fire when two end-of-
   // turn triggers (silence timer + send word) race for the
   // same recording. Set true the moment stopAndSendRecording
@@ -709,6 +720,34 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
 
         addLogEntry('🎤 Voice Mode: starting first recording turn', 'info');
         addVoiceLog('🎤 Listening...');
+        // v3.10.33: settle + cue before the first recording
+        // turn, matching the multi-turn loop's afterPlayback
+        // (RESPONSE_SETTLE_DELAY_MS = 4000ms then
+        // playTurnCueAndWait()). Without this, the recorder
+        // started immediately after the greeting's native TTS
+        // resolved, but the audio HAL still had ~100-300ms of
+        // buffered audio on the speakers. The recorder picked
+        // up that tail, marked it as speech, and the silence
+        // detector waited a full silenceMs (6000ms) before
+        // firing — by which point the user had either started
+        // talking over the tail (got cut off mid-sentence by
+        // the silence window) or hadn't spoken at all (empty
+        // round, potentially triggering the 3-round exit or a
+        // gibberish loop). Tobe reported this exact symptom on
+        // v3.10.32: "after the companion said hi it turned to
+        // response shortly after which gave me no room for my
+        // turn". The settle + cue give the speaker buffer
+        // time to drain AND the user a clear audio signal
+        // that the mic is about to be live.
+        try {
+          await new Promise((resolve) =>
+            setTimeout(resolve, RESPONSE_SETTLE_DELAY_MS),
+          );
+          await playTurnCueAndWait();
+        } catch (_) {
+          // settle/cue is best-effort; the recording turn
+          // must still start even if they fail.
+        }
         setVoiceStatus('listening');
         // Mark busy so onAudioResponse's afterPlayback doesn't
         // think we're idle. startRecordingTurn sets/clears this
@@ -1591,7 +1630,10 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       // to mentally prepare, the mic has time to release
       // from the playback's audio focus, and the silence
       // window starts fresh from a quiet room.
-      const RESPONSE_SETTLE_DELAY_MS = 4000;
+      // (The constant itself is declared at module scope so
+      // the first-turn greeting path can reuse it; see
+      // RESPONSE_SETTLE_DELAY_MS above MAX_CONSECUTIVE_
+      // EMPTY_ROUNDS.)
       // v3.10.9: bumped from 1500ms to 2500ms. Tobe's
       // v3.10.8 report: "the cue sound interrupts the
       // companion speech at its end." MediaPlayer's

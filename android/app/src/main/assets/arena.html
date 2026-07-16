@@ -46,6 +46,13 @@ body.wake-mode #ctrlLeft{display:none!important}
 .ctrlBtn:active{background:rgba(247,147,26,0.25)}
 .ctrlBtn.active{border-color:#4ade80;color:#4ade80}
 body.wake-mode #ctrlRight{display:none!important}
+/* v3.10.33: hide the status overlay in wake/voice mode.
+   The home arena keeps it for error surfacing (catalog
+   load failures, JS errors, promise rejections). Wake
+   mode / voice mode has its own status overlay (YOUR
+   TURN / Responding / etc.) and the arena status div
+   would just be visual noise on top of it. */
+body.wake-mode #status{display:none!important}
 #status{
   position:absolute;top:8px;left:0;right:0;
   text-align:center;
@@ -414,9 +421,19 @@ body.wake-mode #ctrlRight{display:none!important}
       notifyRN({ type: 'arena_load_failed', error: 'bad catalog shape' });
       return;
     }
-    setStatus('Arena ready', 'ok');
+    // v3.10.33: removed the "Arena ready" status overlay.
+    // Tobe reported it appeared briefly in BOTH the home
+    // arena AND the wake/voice mode (which loads the same
+    // arena.html with ?mode=wake) and felt like a noisy
+    // "log text" he didn't want on screen. The success
+    // path now silently notifies React Native without
+    // touching the status div; error paths (catalog load
+    // failure, setAgents failure, JS errors, promise
+    // rejections) still surface in the status div so
+    // failures remain visible. The catalog readiness is
+    // already covered by the `arena_loaded` event the
+    // RN side listens for.
     notifyRN({ type: 'arena_loaded', count: catalog.companions.length });
-    setTimeout(() => { if (statusEl.textContent === 'Arena ready') { statusEl.textContent = ''; statusEl.className = ''; } }, 2500);
   }
 
   function loadImage(url) {

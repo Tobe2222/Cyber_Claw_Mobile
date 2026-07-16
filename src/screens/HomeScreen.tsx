@@ -2105,12 +2105,27 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onAgentHistory = (msg: any) => {
       if (!msg?.agentId) return;
       const aid = msg.agentId;
+      // v3.10.33: defend against legacy desktop shape.
+      // Until v3.2.9 the desktop's mobile-request-agent-history
+      // handler sent messages in the internal
+      // `chatHistoryByAgent` shape: {type, text, name, emoji,
+      // ts} — which has NO `isUser` field. The mobile's
+      // renderMessage guard rejects messages where
+      // `typeof item.isUser !== 'boolean'`, so the whole
+      // history rendered as empty <View /> bubbles. Tobe's
+      // report: "the voice mode conversation is not in the
+      // chat". If a desktop older than v3.2.9 returns that
+      // shape (e.g. someone updates only the mobile), infer
+      // isUser from `type === 'user'` and agentName from
+      // `name` as a fallback. New desktops (v3.2.9+) already
+      // send the normalized shape and these fallbacks are
+      // no-ops.
       const loaded: ChatMessage[] = (Array.isArray(msg.messages) ? msg.messages : []).map((m: any) => ({
         id: `hist-${m.ts}-${Math.random()}`,
         text: m.text,
-        isUser: m.isUser,
-        agentId: m.agentId || aid,
-        agentName: m.agentName,
+        isUser: typeof m.isUser === 'boolean' ? m.isUser : (m.type === 'user'),
+        agentId: m.agentId || m.name || aid,
+        agentName: m.agentName || m.name || null,
         ts: m.ts,
       }));
       addLogEntry(`← Loaded ${loaded.length} messages for ${aid}`, 'info');
