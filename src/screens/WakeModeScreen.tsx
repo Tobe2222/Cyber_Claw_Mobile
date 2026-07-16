@@ -184,6 +184,14 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // is sent, cleared when a chat/audio_response event arrives
   // (or when voice mode exits).
   const transcribingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // v3.10.34: thinking-state timer. Fires
+  // DEFAULT_WORKING_DELAY_MS (1500ms) after audio is sent.
+  // If still pending when the desktop responds (chat or
+  // audio_response arrives), it's cleared and the working
+  // cue/speech cancel fires. If it fires while still
+  // pending, status flips to 'thinking' and the working
+  // cue + speech sequence plays.
+  const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // v3.6.0 — flag tracking whether the active recording
   // turn has crossed the speech-activity threshold at least
   // once. Used by stopAndSendRecording to drop "gibberish"
@@ -208,17 +216,30 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // idle user gets a clear "I'm giving up, please come
   // back" exit instead of an infinite loop.
   const MAX_CONSECUTIVE_EMPTY_ROUNDS = 3;
-  // v3.10.33 — extracted from inside onAudioResponse so
-  // the first-turn greeting path can reuse it. See the
-  // long comment in onAudioResponse for the full history
-  // (1500 → 2500 → 4000 across v3.10.8 / v3.10.9). The
-  // first-turn settle matters for the same reason — the
-  // audio HAL buffer drain delay — but the FIRST turn
-  // was missing this protection entirely before v3.10.33,
-  // so the recorder would pick up the tail of the
-  // greeting audio as "speech" and start the silence
-  // window from there.
-  const RESPONSE_SETTLE_DELAY_MS = 4000;
+  // v3.10.34 — dropped from 4000ms back to 1500ms. The
+  // 4s value was added in v3.10.9 to mask the audio HAL
+  // buffer drain delay (MediaPlayer's OnCompletionListener
+  // fires when the player's internal buffer is drained,
+  // but the speakers still have 100-300ms of buffered
+  // audio). v3.10.18 added `queueIfPlaying=true` to the
+  // turn-cue so it uses MediaPlayer.setNextMediaPlayer
+  // and the cue waits natively for the response audio to
+  // actually finish on the speakers. With that "smart"
+  // chain in place, the JS-side settle delay only needs
+  // to mask the speaker-buffer drain (100-300ms); the
+  // user's perception of the response-to-recorder gap
+  // now matches the cue duration, not (settle + cue).
+  //
+  // Tobe (post v3.10.33): "Alright lets reset the delay
+  // and add working/thinking status". The visual flip
+  // to YOUR TURN now happens IMMEDIATELY on
+  // audioPlayerFinished (not deferred by the settle),
+  // so the user sees "your turn to talk" the moment the
+  // companion finishes — the recorder just opens a beat
+  // later (after settle + cue). The 1.5s settle is the
+  // shortest masking window that comfortably clears the
+  // 100-300ms HAL drain under all conditions.
+  const RESPONSE_SETTLE_DELAY_MS = 1500;
   // v3.6.0 — guards against double-fire when two end-of-
   // turn triggers (silence timer + send word) race for the
   // same recording. Set true the moment stopAndSendRecording
@@ -582,6 +603,137 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     } catch (_) {}
   }, []);
 
+  // v3.10.34: working cue + speech during LLM processing.
+  // Called from stopAndSendRecording AFTER the audio
+  // is sent and `workingDelayMs` has elapsed without
+  // the desktop having responded. Reads the user's
+  // WORKING_CUE_KEY (a non-verbal sound id, same WAV
+  // options as the turn cue) and the user's
+  // WORKING_SPEECH_KEY (a verbal phrase TTS-rendered
+  // via Android TTS). The cancelWorkingCue function
+  // (returned alongside via getCancelableWorkingCue
+  // below) stops both mid-flight if chat/audio_response
+  // arrives.
+  //
+  // Returns a promise that resolves when the cue
+  // finishes (or after a 4s safety cap). Caller is
+  // responsible for clearing the cancelWorkingCue
+  // when the response finally lands.
+  const cancelWorkingCueRef = useRef<(() => void) | null>(null);
+  // Ref-captured latest speak function so the cancel
+  // logic can stop the in-flight TTS cleanly.
+  const speakRef = useRef<((text: string) => Promise<void>) | null>(null);
+  speakRef.current = speak;
+  // Reset any in-flight working cue when called.
+  const cancelWorkingCue = useCallback(() => {
+    if (cancelWorkingCueRef.current) {
+      try { cancelWorkingCueRef.current(); } catch (_) {}
+      cancelWorkingCueRef.current = null;
+    }
+  }, []);
+  const playWorkingCueAndSpeak = useCallback(async (): Promise<void> => {
+    try {
+      const VS = require('../services/VoiceSettings');
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const [rawCue, rawSpeech, rawDelay] = await Promise.all([
+        AsyncStorage.getItem(VS.WORKING_CUE_KEY),
+        AsyncStorage.getItem(VS.WORKING_SPEECH_KEY),
+        AsyncStorage.getItem(VS.WORKING_SPEECH_DELAY_KEY),
+      ]);
+      const cue: string = rawCue || VS.DEFAULT_WORKING_CUE;
+      const speech: string = rawSpeech || VS.DEFAULT_WORKING_SPEECH;
+      const delayMs = (() => {
+        const parsed = rawDelay ? parseInt(rawDelay, 10) : NaN;
+        if (!isNaN(parsed)) {
+          return Math.max(VS.MIN_WORKING_SPEECH_DELAY_MS, Math.min(VS.MAX_WORKING_SPEECH_DELAY_MS, parsed));
+        }
+        return VS.DEFAULT_WORKING_DELAY_MS;
+      })();
+      if ((cue === 'off' || !cue) && (!speech || speech.trim() === '')) {
+        // Nothing configured — silently no-op so the
+        // 'thinking' status is still shown visually but
+        // no audio plays.
+        return;
+      }
+      addLogEntry(`🧠 Working cue=${cue} speech="${speech}" delay=${delayMs}ms`, 'debug');
+      let cueCancelled = false;
+      const cancelFn = () => { cueCancelled = true; };
+      cancelWorkingCueRef.current = cancelFn;
+      // Run the cue sound + the speech TTS in parallel.
+      // Both have cancel gates so a fast response can
+      // stop them mid-flight.
+      const cuePromise = (async () => {
+        if (cue === 'off' || !cue) return;
+        const path = `file:///android_asset/sounds/working-${cue}.wav`;
+        let cueFinished = false;
+        const cueSub = wakeWordEmitter?.addListener('audioPlayerFinished', () => {
+          cueFinished = true;
+        });
+        WakeWordModule?.startPlayer?.(path, false)?.catch((e: any) => {
+          addLogEntry(`Working cue play failed: ${e?.message || e}`, 'warn');
+          cueFinished = true;
+        });
+        await new Promise<void>((resolve) => {
+          const start = Date.now();
+          const tick = setInterval(() => {
+            if (cueCancelled || cueFinished || Date.now() - start > 4000) {
+              clearInterval(tick);
+              resolve();
+              try { cueSub?.remove?.(); } catch (_) {}
+            }
+          }, 50);
+        });
+      })();
+      const speechPromise = (async () => {
+        if (!speech || speech.trim() === '') return;
+        // Wait delayMs first (default 1500) — if the
+        // response lands in that window, cancelWorkingCue
+        // wins and TTS never starts.
+        await new Promise<void>((resolve) => {
+          const start = Date.now();
+          const tick = setInterval(() => {
+            if (cueCancelled || Date.now() - start >= delayMs) {
+              clearInterval(tick);
+              resolve();
+            }
+          }, 50);
+        });
+        if (cueCancelled) return;
+        // TTS-render the working speech via the same
+        // Android TTS engine the greetings + exit replies
+        // use. The voice is Android's default (different
+        // from the companion's voice) — fast (typically
+        // 200-400ms for a short phrase), no network, but
+        // audibly distinct. The user accepted this in the
+        // design discussion; chime-only is the alternative.
+        try {
+          await speakRef.current?.(speech);
+        } catch (e: any) {
+          // TTS engine missing or refused — fall back
+          // to silence. The visual 'thinking' status is
+          // still up.
+          addLogEntry(`Working speech TTS failed: ${e?.message || e}`, 'warn');
+        }
+      })();
+      await Promise.race([
+        Promise.all([cuePromise, speechPromise]),
+        new Promise<void>((resolve) => {
+          const tick = setInterval(() => {
+            if (cueCancelled) {
+              clearInterval(tick);
+              resolve();
+            }
+          }, 50);
+        }),
+      ]);
+      if (cancelWorkingCueRef.current === cancelFn) {
+        cancelWorkingCueRef.current = null;
+      }
+    } catch (e: any) {
+      addLogEntry(`Working cue/speech sequence failed: ${e?.message || e}`, 'warn');
+    }
+  }, []);
+
   // v3.2.20 — clear the transcribing-timeout on unmount so a
   // stale timer can't fire after the user has already left
   // voice mode.
@@ -591,6 +743,15 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         clearTimeout(transcribingTimeoutRef.current);
         transcribingTimeoutRef.current = null;
       }
+      // v3.10.34: also clear the thinking-state timer
+      // and cancel any in-flight working cue on unmount.
+      // Without this, a stale working cue could fire
+      // after the user has already exited voice mode.
+      if (thinkingTimerRef.current) {
+        clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+      }
+      cancelWorkingCue();
     };
   }, []);
 
@@ -1195,6 +1356,40 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       lastWsStateRef.current = syncClient.state || 'unknown';
       lastSendErrorRef.current = null;
 
+      // v3.10.34: thinking-state + working-cue trigger.
+      // If the desktop hasn't replied with a chat or
+      // audio_response event by `workingDelayMs` (default
+      // 1500ms), flip the status to 'thinking' and play
+      // the user's working cue + speech. Cancelled by
+      // onChat or onAudioResponse via `cancelWorkingCue()`.
+      // Resolution: status 'transcribing' → status
+      // 'thinking' (with audio cue) if no fast response,
+      // → status 'responding' (via onChat) when chat
+      // arrives, → status 'listening' (via afterPlayback)
+      // when audio completes.
+      if (voiceMode) {
+        cancelWorkingCue();
+        // Read workingDelayMs fresh here so a settings
+        // change mid-conversation takes effect on the next
+        // turn. The 1500ms minimum prevents a thinking
+        // status from flashing on fast responses.
+        const thinkingThresholdMs = 1500; // matches DEFAULT_WORKING_DELAY_MS
+        thinkingTimerRef.current = setTimeout(async () => {
+          if (!wakeWordBusyRef.current) return; // already cleared
+          // Only flip if status is still 'transcribing' —
+          // a chat/audio_response may have flipped it to
+          // 'responding' first.
+          setVoiceStatus((prev) =>
+            prev === 'transcribing' ? 'thinking' : prev,
+          );
+          addVoiceLog('🧠 Thinking...');
+          addLogEntry(`🧠 Thinking state active (>${thinkingThresholdMs}ms since send)`, 'info');
+          // Fire the working cue + speech. Returns when
+          // both finish OR cancelWorkingCue is called.
+          await playWorkingCueAndSpeak();
+        }, thinkingThresholdMs);
+      }
+
       // v3.2.20 — transcribing timeout. If the desktop
       // doesn't respond within 30s (network stall, STT
       // hang, LLM outage, etc), give up and either start
@@ -1253,6 +1448,17 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // YOUR TURN during the gap between "retrying"
           // and the next recording window opening.
           setVoiceStatus('retrying');
+          // v3.10.34: cancel any in-flight working cue
+          // /speech — the retrying state takes over from
+          // thinking now that the desktop is genuinely
+          // stalled. Without this cancel, the working
+          // speech TTS could keep playing over the
+          // "Retrying..." overlay, which sounds broken.
+          cancelWorkingCue();
+          if (thinkingTimerRef.current) {
+            clearTimeout(thinkingTimerRef.current);
+            thinkingTimerRef.current = null;
+          }
           // Keep resetVoiceStatus behavior for safety
           // (e.g. startRecordingTurn fails and we leave
           // the state inconsistent). resetVoiceStatus
@@ -1552,6 +1758,17 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         clearTimeout(transcribingTimeoutRef.current);
         transcribingTimeoutRef.current = null;
       }
+      // v3.10.34: clear the thinking-state timer and
+      // cancel any in-flight working cue/speech. The
+      // desktop responded faster than workingDelayMs
+      // (or right at the threshold), so the working
+      // cue shouldn't fire. The status will be set to
+      // 'responding' below by the existing line.
+      if (thinkingTimerRef.current) {
+        clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+      }
+      cancelWorkingCue();
       // Treat any non-user text as a wake-mode response
       addLogEntry(`💬 Wake Mode response: "${msg.text?.substring(0, 60)}..."`, 'received');
       addVoiceLog(`🔊 "${msg.text?.substring(0, 40)}..."`);
@@ -1566,6 +1783,18 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         clearTimeout(transcribingTimeoutRef.current);
         transcribingTimeoutRef.current = null;
       }
+      // v3.10.34: also clear the thinking-state timer
+      // and cancel working cue/speech. audio_response
+      // usually follows chat within milliseconds, but
+      // we want the cancel to be defensive — if chat
+      // and audio_response land in quick succession,
+      // this guarantees the cancel fires at the first
+      // event.
+      if (thinkingTimerRef.current) {
+        clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+      }
+      cancelWorkingCue();
       // v3.2.25 — gibberish filter. If the LLM response is
       // suspiciously short AND has no terminal punctuation,
       // treat it as a nonsense reply and close voice mode
@@ -1678,10 +1907,28 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       const afterPlayback = async () => {
         if (afterPlaybackFired) return;
         afterPlaybackFired = true;
-        // Wait for the response to settle before starting
-        // the next recording turn. This prevents the
-        // multi-turn loop from treating the post-response
-        // silence as "user done talking".
+        // v3.10.34: flip the visual to YOUR TURN
+        // IMMEDIATELY. The audio has finished playing;
+        // the user should see "your turn" right now, not
+        // after a 4s settle. The settle + cue + recorder
+        // still run sequentially below — the visual flip
+        // just lets the user start preparing to talk (or
+        // already start talking once the recorder opens),
+        // even if the audio HAL buffer is still draining
+        // for that final ~200ms. The cue sound fires
+        // BEFORE startRecordingTurn and waits natively
+        // for the response audio to drain (queueIfPlaying
+        // =true in WakeWordModule.startPlayer); the
+        // settle delay only masks what queueIfPlaying
+        // didn't catch (typically 100-300ms).
+        setVoiceStatus('listening');
+        addVoiceLog('🎤 Your turn...');
+        addLogEntry('🎤 Voice Mode: audio done, YOUR TURN (settle + cue + recorder)', 'info');
+        // Settle: brief mask for the audio HAL buffer
+        // drain. Kept short (1500ms) because the queue-
+        // if-playing path in playTurnCueAndWait handles
+        // most of the actual drain timing; this is the
+        // slack for edge cases.
         await new Promise((resolve) => setTimeout(resolve, RESPONSE_SETTLE_DELAY_MS));
 
         // v3.9.8 — play the user's chosen turn-cue sound
@@ -1696,6 +1943,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         // no-response retry path so the user gets the
         // cue on EVERY transition to a new recording
         // turn, not just after successful responses.
+        //
+        // v3.10.34: playTurnCueAndWait uses
+        // queueIfPlaying=true (MediaPlayer.setNextMediaPlayer)
+        // so the cue waits natively behind any still-
+        // playing response audio. The cue is awaited
+        // before opening the recorder.
         await playTurnCueAndWait();
 
         if (voiceMode) {
@@ -1706,15 +1959,10 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           // since the previous turn cleared it on send.
           // Recording continues until silence/exit-phrase
           // triggers the next send.
-          // v3.2.24 — reset voiceStatus to 'listening' so the
-          // overlay shows YOUR TURN (green). Previously the
-          // 'responding' status from onChat would persist
-          // through the next turn, showing "Responding..." when
-          // the user had already moved on. Fix: explicitly
-          // clear to 'listening' here, before kicking off the
-          // next recording turn.
-          setVoiceStatus('listening');
-          addVoiceLog('🎤 Listening for next turn...');
+          // v3.10.34: status was already flipped to
+          // 'listening' (YOUR TURN) above; startRecordingTurn
+          // will internally flip to 'recording' when the
+          // mic is actually live.
           addLogEntry('🔁 Voice Mode: starting next recording turn', 'info');
           try {
             await startRecordingTurnRef.current?.();
@@ -1723,9 +1971,16 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           }
           return;
         }
-        // Wake Mode path (unchanged): restart the wake listener.
+        // Wake Mode path: restart the wake listener.
+        // v3.10.34: status was already flipped to
+        // 'listening' above (the leading
+        // `setVoiceStatus('listening')` inside the
+        // multi-turn block runs for voice mode too, but
+        // in wake mode we set it here first to mirror
+        // the same visual flip ordering).
         wakeWordBusyRef.current = false;
-        setVoiceStatus('listening');
+        // Status already set at the top of afterPlayback;
+        // no need to set it again.
         addVoiceLog('Wake listening...');
         try {
           // v3.1.67: per-companion matcher on listener
@@ -2237,6 +2492,7 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           voiceStatus === 'listening' && voiceMode ? styles.voiceStatusYourTurn :
           voiceStatus === 'recording' ? styles.voiceStatusRecording :
           voiceStatus === 'responding' ? styles.voiceStatusResponding :
+          voiceStatus === 'thinking' ? styles.voiceStatusThinking :
           voiceStatus === 'retrying' ? styles.voiceStatusRetrying :
           null,
         ]}>
@@ -2245,6 +2501,14 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
            voiceStatus === 'recording' ? '🔴 Recording...' :
            voiceStatus === 'silence_countdown' ? '⏳ Sending...' :
            voiceStatus === 'transcribing' ? '📝 Transcribing...' :
+           // v3.10.34: thinking state shown while the LLM
+           // is processing — between user-sent-audio and
+           // the desktop's chat/audio_response event.
+           // Distinct color (cyan/violet) so it reads as
+           // "still working, not yet responding". The
+           // working cue + speech fire alongside this
+           // state after workingDelayMs.
+           voiceStatus === 'thinking' ? '🧠 Thinking...' :
            voiceStatus === 'responding' ? '💬 Responding...' :
            // v3.10.7: retrying state shown between no-
            // response timeout and the next recording
@@ -2362,6 +2626,19 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     fontStyle: 'italic',
+  },
+  voiceStatusThinking: {
+    // v3.10.34: cyan/violet, between 'responding' and
+    // 'retrying'. Distinct from all other states (green,
+    // red, amber, yellow) — conveys "the LLM is actively
+    // processing your request, hang on". The working cue
+    // plays alongside this state. The cancel-on-response
+    // logic in onChat/audio_response drops back to
+    // 'responding' when the desktop answers, so the user
+    // never sees both at once.
+    color: '#a78bfa',  // violet-300
+    fontSize: 18,
+    fontWeight: '700',
   },
   voiceLogOverlay: {
     position: 'absolute',

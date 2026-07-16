@@ -244,6 +244,13 @@ export default function SettingsScreen({
   // after the desktop finishes its response. State only —
   // persisted to AsyncStorage via updateVoiceTurnCue().
   const [voiceTurnCue, setVoiceTurnCue] = useState<string>('off');
+  // v3.10.34 — working / thinking sound + speech. Plays
+  // during the LLM processing gap. Defaults match
+  // DEFAULT_WORKING_CUE / DEFAULT_WORKING_SPEECH /
+  // DEFAULT_WORKING_DELAY_MS in VoiceSettings.ts.
+  const [voiceWorkingCue, setVoiceWorkingCue] = useState<string>('off');
+  const [voiceWorkingSpeech, setVoiceWorkingSpeech] = useState<string>('Working on it...');
+  const [voiceWorkingDelayMs, setVoiceWorkingDelayMs] = useState<number>(1500);
   // v3.8.3: trained-model info for the active send word.
   // Mirrors the wake trainer's getSavedWakeModels badge —
   // shows the user that a .tflite is actually installed on
@@ -663,6 +670,21 @@ export default function SettingsScreen({
         setVoiceTurnCue(v);
       }
     });
+    // v3.10.34: hydrate the working cue + speech + delay.
+    // Each defaults to the matching DEFAULT_* in
+    // VoiceSettings.ts if the user has never set a value.
+    AsyncStorage.getItem('cyberclaw-voice-working-cue').then(v => {
+      if (v && ['off', 'bird', 'bell', 'ding', 'chime'].includes(v)) {
+        setVoiceWorkingCue(v);
+      }
+    });
+    AsyncStorage.getItem('cyberclaw-voice-working-speech').then(v => {
+      if (v !== null && v.trim() !== '') setVoiceWorkingSpeech(v);
+    });
+    AsyncStorage.getItem('cyberclaw-voice-working-delay-ms').then(v => {
+      const n = v ? parseInt(v, 10) : NaN;
+      if (!isNaN(n) && n >= 800 && n <= 5000) setVoiceWorkingDelayMs(n);
+    });
     // v3.8.3 → v3.8.7: hydrate the trained-model info.
     // The original (v3.8.3) version called loadSendModelInfo
     // inline here with the stale initial voiceSendPhrase
@@ -841,6 +863,32 @@ export default function SettingsScreen({
     setVoiceTurnCue(cue);
     try {
       await AsyncStorage.setItem('cyberclaw-voice-turn-cue', cue);
+    } catch (_) {}
+  };
+
+  // v3.10.34: working / thinking settings. Each persists
+  // to AsyncStorage immediately so the next voice-mode
+  // session picks up the new value without waiting for
+  // a save button (consistent with updateVoiceTurnCue
+  // pattern above).
+  const updateVoiceWorkingCue = async (cue: string) => {
+    if (!['off', 'bird', 'bell', 'ding', 'chime'].includes(cue)) return;
+    setVoiceWorkingCue(cue);
+    try {
+      await AsyncStorage.setItem('cyberclaw-voice-working-cue', cue);
+    } catch (_) {}
+  };
+  const saveVoiceWorkingSpeech = async () => {
+    const trimmed = voiceWorkingSpeech.trim().slice(0, 60);
+    try {
+      await AsyncStorage.setItem('cyberclaw-voice-working-speech', trimmed);
+    } catch (_) {}
+  };
+  const saveVoiceWorkingDelay = async (ms: number) => {
+    const clamped = Math.max(800, Math.min(5000, Math.round(ms)));
+    setVoiceWorkingDelayMs(clamped);
+    try {
+      await AsyncStorage.setItem('cyberclaw-voice-working-delay-ms', String(clamped));
     } catch (_) {}
   };
 
@@ -1551,6 +1599,70 @@ export default function SettingsScreen({
                   active={(voiceTurnCue || 'off') === opt}
                   label={opt.charAt(0).toUpperCase() + opt.slice(1)}
                   onPress={() => updateVoiceTurnCue(opt)}
+                />
+              ))}
+            </View>
+
+            {/* v3.10.34 — working / thinking cue + speech.
+                Plays while the desktop LLM is processing
+                the user's audio (between user-sent-audio
+                and the desktop's chat/audio_response event).
+                Fills the gap where the user otherwise just
+                sees "Thinking..." with no audio feedback.
+                Three settings:
+                  - workingCue: short non-verbal sound (same
+                    WAV options as the your-turn cue).
+                    'off' to suppress.
+                  - workingSpeech: the verbal phrase TTS-
+                    rendered via Android TTS. Configure
+                    with whatever words feel natural
+                    ("Working on it...", "Let me think...",
+                    "Digging...", etc.). Empty disables the
+                    speech; the visual 'Thinking' overlay
+                    still shows.
+                  - workingDelayMs: how long to wait after
+                    the user finishes speaking before
+                    firing the cue + speech. Default 1500ms
+                    so quick responses don't get a working
+                    cue interrupting them. The state is
+                    ALWAYS shown visually ('Thinking...')
+                    on any response that takes > delay. */}
+            <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
+            <SubTitle>🧠 Working / thinking status</SubTitle>
+            <Hint>Audio + visual cue during the gap between you finishing your turn and the LLM responding. Sits above the response audio so you know the desktop is working on a longer answer.</Hint>
+            <Label>Working sound</Label>
+            <View style={styles.optionRow}>
+              {['off', 'bird', 'bell', 'ding', 'chime'].map(opt => (
+                <OptionBtn
+                  key={opt}
+                  active={(voiceWorkingCue || 'off') === opt}
+                  label={opt.charAt(0).toUpperCase() + opt.slice(1)}
+                  onPress={() => updateVoiceWorkingCue(opt)}
+                />
+              ))}
+            </View>
+            <Label>Working speech (TTS-rendered)</Label>
+            <Hint>Spoken via Android TTS. Different voice from the companion's. Use whatever phrase feels natural; blank to disable speech (sound + visual still play).</Hint>
+            <TextInput
+              style={styles.input}
+              value={voiceWorkingSpeech}
+              onChangeText={setVoiceWorkingSpeech}
+              onBlur={saveVoiceWorkingSpeech}
+              placeholder="Working on it..."
+              placeholderTextColor="#666"
+              maxLength={60}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Label>Trigger delay (ms)</Label>
+            <Hint>How long to wait after you stop speaking before the working cue + speech fire. Default 1500ms — short enough to feel responsive, long enough that quick responses don't get interrupted. Range 800-5000.</Hint>
+            <View style={styles.optionRow}>
+              {[800, 1500, 2500, 5000].map(ms => (
+                <OptionBtn
+                  key={ms}
+                  active={(voiceWorkingDelayMs || 1500) === ms}
+                  label={`${ms}`}
+                  onPress={() => saveVoiceWorkingDelay(ms)}
                 />
               ))}
             </View>

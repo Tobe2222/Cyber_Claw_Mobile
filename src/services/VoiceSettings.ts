@@ -128,6 +128,44 @@ export const TURN_CUE_OPTIONS = ['off', 'bird', 'bell', 'ding', 'chime'] as cons
 export type TurnCueId = typeof TURN_CUE_OPTIONS[number];
 
 /**
+ * v3.10.34: 'working' / 'thinking' cue + speech while the
+ * LLM is processing. Tobe (post v3.10.33): "It seems that
+ * the companion response actually has a delay now, its
+ * still in responding some seconds after the sound
+ * sentence is finished... Working response where the user
+ * can input 'working' or 'digging' or whatever he
+ * wants."
+ *
+ * Two related settings, distinct UX purposes:
+ *   - WORKING_CUE: a short non-verbal sound (same WAV
+ *     options as TURN_CUE, e.g. 'chime') that plays once
+ *     when the LLM is taking longer than
+ *     DEFAULT_WORKING_DELAY_MS to respond. Gives the user
+ *     audio feedback that the desktop pipeline is alive
+ *     without committing to a verbal phrase (which uses
+ *     Android TTS — different voice from the companion's).
+ *   - WORKING_SPEECH: the verbal phrase the user chooses
+ *     (default 'Working on it...'). TTS-rendered via the
+ *     same Android TTS engine the greetings + exit replies
+ *     use. Plays once AFTER the cue, only if the LLM is
+ *     still working when WORKING_SPEECH_DELAY_MS has
+ *     passed since the cue (so quick responses don't get
+ *     a spoken phrase interrupting the actual answer).
+ */
+export const WORKING_CUE_KEY = 'cyberclaw-voice-working-cue';
+export const DEFAULT_WORKING_CUE = 'off';
+export const WORKING_CUE_OPTIONS = ['off', 'bird', 'bell', 'ding', 'chime'] as const;
+export type WorkingCueId = typeof WORKING_CUE_OPTIONS[number];
+
+export const WORKING_SPEECH_KEY = 'cyberclaw-voice-working-speech';
+export const DEFAULT_WORKING_SPEECH = 'Working on it...';
+export const MAX_WORKING_SPEECH_LENGTH = 60;
+export const MIN_WORKING_SPEECH_DELAY_MS = 800;
+export const MAX_WORKING_SPEECH_DELAY_MS = 5000;
+export const WORKING_SPEECH_DELAY_KEY = 'cyberclaw-voice-working-delay-ms';
+export const DEFAULT_WORKING_DELAY_MS = 1500;
+
+/**
  * v3.10.1: migrate the legacy turn-cue key
  * (cyberc…-turn-cue, with the ellipsis as a typo'd
  * abbreviation) to the canonical key
@@ -243,6 +281,15 @@ export type VoiceSettings = {
   silenceMs: number;
   exitPhrase: string;
   sendPhrase: string;
+  // v3.10.34: working cue + speech during LLM processing.
+  // workingCue is the non-verbal sound id (same WAV options
+  // as turnCue). workingSpeech is the user-configurable
+  // phrase. workingDelayMs is the wait-after-user-speech
+  // before the cue fires (so quick responses don't get a
+  // working cue interrupting them).
+  workingCue: WorkingCueId;
+  workingSpeech: string;
+  workingDelayMs: number;
 };
 
 /**
@@ -301,7 +348,45 @@ export async function loadVoiceSettings(companionId?: string): Promise<VoiceSett
       if (trimmed) sendPhrase = trimmed;
     }
   } catch (_) {}
-  return { silenceMs, exitPhrase, sendPhrase };
+  // v3.10.34: working cue + speech + delay. Each is
+  // independent and read with a sane default fallback so a
+  // bad/corrupt value can't break the loop.
+  let workingCue: WorkingCueId = DEFAULT_WORKING_CUE;
+  let workingSpeech = DEFAULT_WORKING_SPEECH;
+  let workingDelayMs = DEFAULT_WORKING_DELAY_MS;
+  try {
+    const rawCue = await AsyncStorage.getItem(WORKING_CUE_KEY);
+    if (rawCue && (WORKING_CUE_OPTIONS as readonly string[]).includes(rawCue)) {
+      workingCue = rawCue as WorkingCueId;
+    }
+  } catch (_) {}
+  try {
+    const rawSpeech = await AsyncStorage.getItem(WORKING_SPEECH_KEY);
+    if (rawSpeech !== null) {
+      const trimmed = rawSpeech.trim().slice(0, MAX_WORKING_SPEECH_LENGTH);
+      if (trimmed) workingSpeech = trimmed;
+    }
+  } catch (_) {}
+  try {
+    const rawDelay = await AsyncStorage.getItem(WORKING_SPEECH_DELAY_KEY);
+    if (rawDelay !== null) {
+      const parsed = parseInt(rawDelay, 10);
+      if (!isNaN(parsed)) {
+        workingDelayMs = Math.max(
+          MIN_WORKING_SPEECH_DELAY_MS,
+          Math.min(MAX_WORKING_SPEECH_DELAY_MS, parsed),
+        );
+      }
+    }
+  } catch (_) {}
+  return {
+    silenceMs,
+    exitPhrase,
+    sendPhrase,
+    workingCue,
+    workingSpeech,
+    workingDelayMs,
+  };
 }
 
 export async function saveSilenceMs(companionId: string, ms: number): Promise<void> {
@@ -330,6 +415,35 @@ export async function saveSendPhrase(phrase: string): Promise<string> {
   const sanitized = phrase.trim().toLowerCase().slice(0, MAX_PHRASE_LENGTH);
   await AsyncStorage.setItem(SEND_PHRASE_KEY, sanitized);
   return sanitized;
+}
+
+/**
+ * v3.10.34: persist the working cue sound id, the user's
+ * working speech phrase, and the working delay. Each
+ * clamped / validated to its allowed range; an invalid
+ * value is rejected (function throws) rather than silently
+ * written. Settings UI calls these on every change.
+ */
+export async function saveWorkingCue(cue: WorkingCueId): Promise<void> {
+  if (!(WORKING_CUE_OPTIONS as readonly string[]).includes(cue)) {
+    throw new Error(`Invalid working cue: ${cue}`);
+  }
+  await AsyncStorage.setItem(WORKING_CUE_KEY, cue);
+}
+
+export async function saveWorkingSpeech(phrase: string): Promise<string> {
+  const sanitized = phrase.trim().slice(0, MAX_WORKING_SPEECH_LENGTH);
+  await AsyncStorage.setItem(WORKING_SPEECH_KEY, sanitized);
+  return sanitized;
+}
+
+export async function saveWorkingDelayMs(ms: number): Promise<number> {
+  const clamped = Math.max(
+    MIN_WORKING_SPEECH_DELAY_MS,
+    Math.min(MAX_WORKING_SPEECH_DELAY_MS, Math.round(ms)),
+  );
+  await AsyncStorage.setItem(WORKING_SPEECH_DELAY_KEY, String(clamped));
+  return clamped;
 }
 
 /**
