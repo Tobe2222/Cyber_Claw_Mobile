@@ -330,23 +330,69 @@ function appendAgentMessage(
     // lag the mobile-side timestamp by several seconds
     // (network + STT + IPC round-trip).
     //
-    // Two-stage dedupe:
-    // 1. Same isUser AND same text within 10s — likely
-    //    a duplicate
-    // 2. Same text within 30s — defensive (catches the
-    //    case where isUser was set wrong somehow)
-    const dupWindowMs = 10000;
-    const dupWindowMsDefensive = 30000;
+    // v3.10.42 (Tobe's v3.10.38+ report): voice transcripts
+    // STILL doubled despite the 30s defensive window.
+    // Two distinct reasons:
+    //  1. The mobile's local voice-mode add uses
+    //     `text: msg.transcript` (raw transcript). The
+    //     desktop's `addChatMsg('user', msg.transcript)`
+    //     prepends `🎤 ` before pushing into the chat
+    //     history and broadcasting the event. Result:
+    //     mobile's local text (no prefix) vs the desktop
+    //     echo's text (with emoji prefix) — they differ
+    //     by exactly the prefix chars. Strict equality
+    //     misses.
+    //  2. Old sessions linger across desktop restarts.
+    //     The mobile's cyberclaw-chat-byagent cache
+    //     survives app restarts and includes old user
+    //     messages. The desktop's chatHistoryByAgent is
+    //     empty after restart, but agent_history requests
+    //     read the persisted localStorage history (which
+    //     has both the old messages with `ts = yesterday`
+    //     AND recent messages). A message with yesterday's
+    //     ts that now appears alongside a fresh ts from
+    //     after the restart passes the 30s window
+    //     because the ts diff is hours, not seconds.
+    //
+    // v3.10.42 fix: dedupe by NORMALIZED text. Strip
+    // leading non-alphanumeric chars (emojis, "[From X]"
+    // prefixes, whitespace) before comparing. Same text
+    // on both sides after normalization = duplicate,
+    // regardless of timestamps. Plus a 1-hour window
+    // for ts-tolerant cases (cross-restart).
+    const dupWindowMs = 60000;
+    const dupWindowMsCrossRestart = 60 * 60 * 1000;  // 1h
+    const normalize = (s: string) =>
+      (s || '').replace(/^[^\w[\(]+/, '').trim();
+    const normalizedText = normalize(msg.text);
+    const matchingText = (m: ChatMessage) =>
+      normalize(m.text) === normalizedText;
+    // Stage 1: same text + same isUser + within 60s —
+    // likely a within-session echo duplicate.
     if (list.some(m =>
-      m.text === msg.text &&
+      matchingText(m) &&
       m.isUser === msg.isUser &&
       Math.abs(m.ts - msg.ts) < dupWindowMs
     )) {
       return prev;
     }
+    // Stage 2: same text + same isUser + within 1h —
+    // catches cross-restart cases where mobile ts
+    // (yesterday) and desktop-rebroadcast ts (boot time)
+    // differ by minutes.
     if (list.some(m =>
-      m.text === msg.text &&
-      Math.abs(m.ts - msg.ts) < dupWindowMsDefensive
+      matchingText(m) &&
+      m.isUser === msg.isUser &&
+      Math.abs(m.ts - msg.ts) < dupWindowMsCrossRestart
+    )) {
+      return prev;
+    }
+    // Stage 3: same normalized text anywhere in history
+    // — final defensive dedupe. Normalization strips
+    // emoji prefixes so the mobile-local vs desktop-echo
+    // pair dedupes correctly.
+    if (list.some(m =>
+      matchingText(m)
     )) {
       return prev;
     }
