@@ -686,18 +686,20 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       })();
       const speechPromise = (async () => {
         if (!speech || speech.trim() === '') return;
-        // Wait delayMs first (default 1500) — if the
-        // response lands in that window, cancelWorkingCue
-        // wins and TTS never starts.
-        await new Promise<void>((resolve) => {
-          const start = Date.now();
-          const tick = setInterval(() => {
-            if (cueCancelled || Date.now() - start >= delayMs) {
-              clearInterval(tick);
-              resolve();
-            }
-          }, 50);
-        });
+        // v3.10.37: dropped the 1500ms delay before
+        // speaking. v3.10.34 had a delayMs wait here so
+        // the speech wouldn't interrupt fast LLM responses
+        // — but the gate also meant ANY sub-1.5s response
+        // would suppress the speech entirely, defeating
+        // the user's intent. Tobe (v3.10.36 report): "It
+        // should say what i inputted, just like it says
+        // the greeting." Greeting plays immediately and
+        // unconditionally; the working speech should
+        // match. If the LLM response arrives mid-speech,
+        // cancelWorkingCue() (called from onChat /
+        // onAudioResponse) will stop the in-flight TTS.
+        // A truncated spoken phrase is acceptable — the
+        // non-verbal cue always plays to completion.
         if (cueCancelled) return;
         // TTS-render the working speech via the same
         // Android TTS engine the greetings + exit replies
@@ -1391,38 +1393,47 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       lastWsStateRef.current = syncClient.state || 'unknown';
       lastSendErrorRef.current = null;
 
-      // v3.10.34: thinking-state + working-cue trigger.
-      // If the desktop hasn't replied with a chat or
-      // audio_response event by `workingDelayMs` (default
-      // 1500ms), flip the status to 'thinking' and play
-      // the user's working cue + speech. Cancelled by
-      // onChat or onAudioResponse via `cancelWorkingCue()`.
-      // Resolution: status 'transcribing' → status
-      // 'thinking' (with audio cue) if no fast response,
-      // → status 'responding' (via onChat) when chat
-      // arrives, → status 'listening' (via afterPlayback)
-      // when audio completes.
+      // v3.10.37: thinking-state + working-cue trigger.
+      // **Always fires immediately on send** (was: 1500ms
+      // delay gate in v3.10.34). Tobe's report on
+      // v3.10.36: "It did not say working with sound when
+      // it started working, which it should, it should
+      // say what i inputted, just like it says the
+      // greeting." The 1500ms gate meant that ANY
+      // response landing within 1.5s would cancel the
+      // cue before it even started — the assistant was
+      // too fast for the cue to play. Tobe's mental
+      // model is the greeting: it's instant, plays
+      // always, no timing. The working cue should match.
+      //
+      // Dropping the gate means the cue plays on EVERY
+      // voice-mode turn, even if the LLM responds
+      // quickly. The `cancelWorkingCue()` call below
+      // (from onChat / onAudioResponse / retrying path /
+      // unmount) still kills the cue + speech mid-flight
+      // when the response arrives. Quick responses =
+      // truncated working speech (acceptable — the
+      // non-verbal cue always plays to its full duration
+      // since the cue WAV is short, ≤800ms).
+      //
+      // Also: status flips to 'thinking' immediately,
+      // bypassing the 'transcribing' intermediate state
+      // for voice-mode turns. The user just finished
+      // their turn and sent audio; showing 'thinking'
+      // immediately reads as "your turn is over, I'm
+      // working on it" — that's Tobe's preferred UX.
+      // Wake-mode (non-voiceMode) keeps the old
+      // 'transcribing' state since that path is a
+      // different flow (wake word + send word).
       if (voiceMode) {
         cancelWorkingCue();
-        // Read workingDelayMs fresh here so a settings
-        // change mid-conversation takes effect on the next
-        // turn. The 1500ms minimum prevents a thinking
-        // status from flashing on fast responses.
-        const thinkingThresholdMs = 1500; // matches DEFAULT_WORKING_DELAY_MS
-        thinkingTimerRef.current = setTimeout(async () => {
-          if (!wakeWordBusyRef.current) return; // already cleared
-          // Only flip if status is still 'transcribing' —
-          // a chat/audio_response may have flipped it to
-          // 'responding' first.
-          setVoiceStatus((prev) =>
-            prev === 'transcribing' ? 'thinking' : prev,
-          );
-          addVoiceLog('🧠 Thinking...');
-          addLogEntry(`🧠 Thinking state active (>${thinkingThresholdMs}ms since send)`, 'info');
-          // Fire the working cue + speech. Returns when
-          // both finish OR cancelWorkingCue is called.
-          await playWorkingCueAndSpeak();
-        }, thinkingThresholdMs);
+        setVoiceStatus('thinking');
+        addVoiceLog('🧠 Thinking...');
+        addLogEntry('🧠 Thinking state active immediately on send', 'info');
+        // Fire the cue + speech in the background. The
+        // function itself manages internal cancellation;
+        // we don't need to track its completion here.
+        void playWorkingCueAndSpeak();
       }
 
       // v3.2.20 — transcribing timeout. If the desktop
@@ -2507,52 +2518,64 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         />
       </View>
 
-      {/* Voice status overlay (top) */}
+      {/* Voice status overlay (top)
+          v3.10.37: Tobe's design ask — the status cycle
+          shows "listening" through the cycle text, and a
+          SEPARATE big green "YOUR TURN" overlay appears
+          below the cycle when it's actually time for the
+          user to talk. Previous v3.10.34 layout had a
+          single text element that swapped through several
+          states ("Responding...", "Thinking...", "YOUR
+          TURN"...) which felt visually noisy. The new
+          layout:
+            - small cycle-status text at the top
+              (🎧 Listening / 🧠 Thinking / 💬 Responding /
+               ⏳ Retrying / 🔴 Recording / etc) — drives
+              the user's understanding of the cycle
+              progression
+            - BIG GREEN "🎤 YOUR TURN" overlay rendered
+              BELOW the cycle text, visible only when
+              voiceMode && status === 'listening'
+              (i.e. recorder is hot and the user can speak)
+          This way the user sees both: "the system is in
+          the LISTENING phase" (small text) AND "this is
+          your moment to talk" (big green text). The two
+          pieces of info are distinct visual layers rather
+          than competing for the same space. */}
       <View style={styles.voiceStatusOverlay} pointerEvents="none">
+        {/* Cycle-status text — always small, color-coded
+            by current state. */}
         <Text style={[
           styles.voiceStatusText,
-          // v3.2.24: YOUR TURN (green, big) when waiting
-          // for the user. Responding (orange) when AI is
-          // talking. Recording (red, big) when user is
-          // actively talking. The user must instantly see
-          // whether to talk or to wait.
-          //
-          // v3.10.7: added 'retrying' status (yellow).
-          // Shows during the gap between "no response,
-          // retrying" and the next recording window
-          // opening, so the overlay doesn't flash
-          // YOUR TURN during the retry (Tobe's report:
-          // "if its trying again it should not be your
-          // turn"). Maps to voiceStatusRetrying style.
-          voiceStatus === 'listening' && voiceMode ? styles.voiceStatusYourTurn :
-          voiceStatus === 'recording' ? styles.voiceStatusRecording :
-          voiceStatus === 'responding' ? styles.voiceStatusResponding :
-          voiceStatus === 'thinking' ? styles.voiceStatusThinking :
-          voiceStatus === 'retrying' ? styles.voiceStatusRetrying :
-          null,
+          voiceStatus === 'recording' ? styles.voiceStatusCycleRecording :
+          voiceStatus === 'responding' ? styles.voiceStatusCycleResponding :
+          voiceStatus === 'thinking' ? styles.voiceStatusCycleThinking :
+          voiceStatus === 'retrying' ? styles.voiceStatusCycleRetrying :
+          voiceStatus === 'silence_countdown' ? styles.voiceStatusCycleCountdown :
+          voiceStatus === 'transcribing' ? styles.voiceStatusCycleTranscribing :
+          voiceStatus === 'greeting' ? styles.voiceStatusCycleGreeting :
+          styles.voiceStatusCycleListening,
         ]}>
-          {voiceStatus === 'greeting' ? '🔊 Greeting... (say wake word to continue)' :
-           voiceStatus === 'listening' ? (voiceMode ? '🎤 YOUR TURN' : '🎧 Listening for wake word...') :
-           voiceStatus === 'recording' ? '🔴 Recording...' :
-           voiceStatus === 'silence_countdown' ? '⏳ Sending...' :
-           voiceStatus === 'transcribing' ? '📝 Transcribing...' :
-           // v3.10.34: thinking state shown while the LLM
-           // is processing — between user-sent-audio and
-           // the desktop's chat/audio_response event.
-           // Distinct color (cyan/violet) so it reads as
-           // "still working, not yet responding". The
-           // working cue + speech fire alongside this
-           // state after workingDelayMs.
-           voiceStatus === 'thinking' ? '🧠 Thinking...' :
-           voiceStatus === 'responding' ? '💬 Responding...' :
-           // v3.10.7: retrying state shown between no-
-           // response timeout and the next recording
-           // window opening. Yellow + hourglass so it
-           // visually reads as "waiting, not yet ready
-           // for you to talk".
-           voiceStatus === 'retrying' ? '⏳ Retrying...' :
-           voiceMode ? '🎤 YOUR TURN' : '🎧 Listening for wake word...'}
+          {voiceStatus === 'greeting' ? '🔊 Greeting...' :
+           voiceStatus === 'listening' ? (voiceMode ? '🎧 Listening' : '🎧 Listening for wake word...') :
+           voiceStatus === 'recording' ? '🔴 Recording' :
+           voiceStatus === 'silence_countdown' ? '⏳ Sending' :
+           voiceStatus === 'transcribing' ? '📝 Transcribing' :
+           voiceStatus === 'thinking' ? '🧠 Thinking' :
+           voiceStatus === 'responding' ? '💬 Responding' :
+           voiceStatus === 'retrying' ? '⏳ Retrying' :
+           (voiceMode ? '🎧 Listening' : '🎧 Listening for wake word...')}
         </Text>
+        {/* Big green "YOUR TURN" sub-overlay — visible
+            only when voiceMode && status === 'listening'.
+            Distinct visual layer from the cycle text so
+            the user's eye reads both: "the cycle is in
+            listening phase" + "your moment is now". */}
+        {voiceMode && voiceStatus === 'listening' && (
+          <Text style={styles.voiceStatusYourTurn}>
+            🎤 YOUR TURN
+          </Text>
+        )}
       </View>
 
       {/* Voice log overlay (bottom) — v3.1.89 shows last 5 lines */}
@@ -2627,13 +2650,59 @@ const styles = StyleSheet.create({
   // where the user needs to know instantly whether to
   // talk, wait, or watch.
   voiceStatusYourTurn: {
-    // Green, big. THIS is the most important visual —
-    // the user is waiting too long, not realizing it's
-    // their turn.
+    // v3.10.37: BIG green, separate visual layer from
+    // the cycle text. Renders BELOW the cycle status
+    // when voiceMode && status === 'listening'.
+    // Tobe's design: "we could have the status cycle say
+    // 'listening' Instead of 'your turn', but have your
+    // turn additionaly but kind of separately in big
+    // green but right under the cycle status." This is
+    // that — big, loud, exclusively for the "your turn
+    // is NOW" signal.
     color: '#10b981',
     fontSize: 28,
     fontWeight: '900',
     letterSpacing: 1,
+    marginTop: 4,
+    textShadowColor: '#000',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  // v3.10.37: cycle text styles. Smaller (16pt) than
+  // YOUR TURN (28pt) so the two layers read as distinct
+  // pieces of information. Color-coded by state but with
+  // similar sizing so the cycle reads as one coherent
+  // flow. Tobe: "the status cycle say 'listening'
+  // Instead of 'your turn'" — the cycle text always
+  // shows the cycle name; the big YOUR TURN text shows
+  // the action prompt.
+  voiceStatusCycleListening: {
+    color: '#10b981',  // green, identical to YOUR TURN
+                        // so they feel like the same state
+                        // even though they're two layers
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  voiceStatusCycleRecording: {
+    color: '#ef4444', fontSize: 16, fontWeight: '700',
+  },
+  voiceStatusCycleResponding: {
+    color: '#fbbf24', fontSize: 16, fontWeight: '600',
+  },
+  voiceStatusCycleThinking: {
+    color: '#a78bfa', fontSize: 16, fontWeight: '700',
+  },
+  voiceStatusCycleRetrying: {
+    color: '#fbbf24', fontSize: 16, fontWeight: '600', fontStyle: 'italic',
+  },
+  voiceStatusCycleCountdown: {
+    color: '#fbbf24', fontSize: 16, fontWeight: '600',
+  },
+  voiceStatusCycleTranscribing: {
+    color: '#fbbf24', fontSize: 16, fontWeight: '600',
+  },
+  voiceStatusCycleGreeting: {
+    color: '#f7931a', fontSize: 16, fontWeight: '600',
   },
   voiceStatusRecording: {
     // Red, big. When the user is being recorded.

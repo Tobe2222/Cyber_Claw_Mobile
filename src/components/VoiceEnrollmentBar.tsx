@@ -205,34 +205,55 @@ export default function VoiceEnrollmentBar({ variant = 'full' }: { variant?: Var
   const samplePct = Math.min(1, status.samplesTotal / LOCK_THRESHOLD_SAMPLES);
   const wakePct = Math.min(1, status.confirmedWakeFires / LOCK_THRESHOLD_WAKES);
   const activePct = Math.min(1, status.activeContributions / LOCK_THRESHOLD_SAMPLES);
+  // v3.10.37: tie the bar fill to the same combined
+  // count the label displays. Previously the bar
+  // filled on max(samplePct, wakePct, activePct) but
+  // the label showed "+${activeContributions}" — so a
+  // user with 0 passive + 200 active would see
+  // "0+200/1000" with an empty bar. Now both the bar
+  // and the label reflect combinedCount.
+  const combinedPct = Math.min(1, (status.samplesTotal + status.activeContributions) / LOCK_THRESHOLD_SAMPLES);
   const progress = status.profileLocked
     ? 1
-    : Math.max(samplePct, wakePct, activePct);
+    : Math.max(samplePct, wakePct, activePct, combinedPct);
 
-  // Combined count for the label so the user sees the
-  // total progress. The passive count (from OWW) drives
-  // the actual lock; the active contributions (from
-  // voice-mode turns) are shown alongside so the user
-  // knows their chats are being counted. The bar fills
-  // on the higher of the two metrics, so a user with
-  // either 1000 passive OR ~20 voice turns (=1000
-  // contributions) sees the bar fully fill. A chatty
-  // user gets fast visual progress; a quiet user gets
-  // the same lock semantics as before.
+  // v3.10.37: combined display per Tobe's report:
+  // "the learning bar says 0+50/1000 ... it should
+  // just say 1/1000 if it uses 1 sample to analyze my
+  // voice currently". The "+50" looked like an error,
+  // not a value add. We now show a single combined
+  // count where:
+  //   - 1 voice-mode turn ≈ 1 'pseudo-sample' for display
+  //     (matching the +50 increment per turn)
+  //   - 1 OWW sample ≈ 1 native sample
+  //   - the bar fills on max(samplesTotal, activeContrib
+  //     utions) so each axis individually can drive fill
+  //
+  // The COMBINED total number shown is samplesTotal +
+  // activeContributions — both increase together so the
+  // user sees the bar moving (1, 51, 101, ...) instead
+  // of two separate numbers. The denominator is still
+  // LOCK_THRESHOLD_SAMPLES (1000) so the bar fills with
+  // ~20 voice turns OR ~1000 OWW samples, same as before.
+  const combinedCount = status.samplesTotal + status.activeContributions;
   const showActive = status.activeContributions > 0;
   // Label is the same content for both variants; the
   // COMPACT pill is a shorter version (just count
   // + threshold, no "Learning your voice" prefix).
+  // v3.10.37: dropped the "+ N voice turns" suffix —
+  // the combined count is now in the main fraction so
+  // the label reads as "Learning X/Y" without parenthesized
+  // breakdowns. A small "🎤 N chats" badge remains in
+  // the full variant for users who want to see the
+  // contributions are working.
   const fullLabel = status.profileLocked
     ? `✓ Voice profile locked (${status.samplesTotal} samples)`
     : showActive
-      ? `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES} samples + ${status.activeContributions} voice turns`
-      : `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES} samples`;
+      ? `🎙 Learning your voice — ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}   🎤 ${status.activeContributions} chats`
+      : `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES}`;
   const compactLabel = status.profileLocked
     ? `Voice locked`
-    : showActive
-      ? `Learning ${status.samplesTotal}+${status.activeContributions}/${LOCK_THRESHOLD_SAMPLES}`
-      : `Learning ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES}`;
+    : `Learning ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}`;
 
   return (
     <BarShell
