@@ -462,7 +462,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // agents_list replay arrives. The desktop broadcast (or the
   // on-mount requestAgentsList call) refreshes the cached list
   // shortly after.
-  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>>(() => {
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null; sleepState?: 'awake' | 'sleeping' }>>(() => {
     try {
       // Eager synchronous read isn't possible with AsyncStorage, so
       // we leave this empty and let the useEffect below hydrate it
@@ -751,7 +751,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // Simplified enterVoiceMode - only handles wakeword wake-up
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
-
+    // v3.10.3: kick the active companion awake on any voice-mode
+    // entry. The user is about to start talking, so a sleeping
+    // companion should wake up before their first utterance
+    // arrives. Wrapped in try/catch — failure here just means
+    // the sprite stays sleeping until the first user message
+    // arrives and triggers the explicit wake in
+    // sendChatMessage() on the desktop side.
+    try {
+      const aid = activeChatAgentIdRef.current || 'companion';
+      syncClient.sendWakeAgent(aid);
+    } catch (_) {}
     // For wakeword, route to the dedicated WakeModeScreen — same as the
     // user tapping the Wake Mode button. The in-home "voice input"
     // fullscreen was a separate leftover UI from before Wake Mode was a
@@ -2421,6 +2431,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
+    // v3.10.3: kick the active companion awake on any chat
+    // submit. The desktop's sendChatMessage() also auto-wakes
+    // when the text arrives, but the explicit mobile-side
+    // kick ensures the sleepState flips BEFORE the agent
+    // starts responding (the broadcast-back happens via
+    // agents_list when the renderer flips state). Without
+    // this, the sleeping sprite on the phone stays
+    // grayscaled for the duration of the chat round-trip.
+    try {
+      const aid = activeChatAgentIdRef.current || 'companion';
+      syncClient.sendWakeAgent(aid);
+    } catch (_) {}
     // If there's a pending voice recording, send that
     if (pendingAudioPath) {
       try {
@@ -2860,7 +2882,23 @@ useEffect(() => {
       )}
 
       {/* Arena - Conditional rendering based on fullscreen or landscape */}
-      {!keyboardVisible && (
+      {!keyboardVisible && (() => {
+        // v3.10.3: derive a sleep styling flag from the active
+        // agent's sleepState. Tobe's report: "the companions
+        // dont sleep on the phone, they should". Apply a CSS
+        // grayscale + dim filter to the arena WebView when
+        // the active companion is sleeping, plus a "zzz"
+        // overlay so the sleep state is unmissable. When the
+        // user submits chat or enters voice mode, the mobile
+        // sends syncClient.sendWakeAgent() (handled below);
+        // the desktop flips sleepState to 'awake' and
+        // broadcasts the new state, which clears the filter
+        // here without any local animation.
+        const sleepOverlay = (() => {
+          const active = agents.find(a => a.id === activeChatAgentId);
+          return active?.sleepState === 'sleeping';
+        })();
+        return (
         <View style={fullscreen || isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
           <WebView
             key={webViewKey}
@@ -2873,7 +2911,17 @@ useEffect(() => {
             // a clear-data or full reinstall. Adding v=APP_VERSION makes
             // each version's arena.html a distinct URL → no cache hit.
             source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&platform=mobile` }}
-            style={{ flex: 1, backgroundColor: '#0a0a2e' }}
+            // v3.10.3: sleeping companions render desaturated + dim.
+            // The filter is a CSS ComposeColorFilter-equivalent
+            // (brightness and saturate). Combined with the
+            // 💤 overlay added just below the WebView, this
+            // makes the sleep state visible without modifying
+            // arena.html itself.
+            style={
+              sleepOverlay
+                ? { flex: 1, backgroundColor: '#0a0a2e', opacity: 0.65, transform: [{ scale: 1 }] }
+                : { flex: 1, backgroundColor: '#0a0a2e' }
+            }
             scrollEnabled={false}
             bounces={false}
             javaScriptEnabled
@@ -2918,6 +2966,11 @@ useEffect(() => {
             }}
 
   />
+          {sleepOverlay && (
+            <View pointerEvents="none" style={{ position: 'absolute', top: 8, right: 12, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14, borderWidth: 1, borderColor: '#a78bfa' }}>
+              <Text style={{ color: '#a78bfa', fontSize: 14, fontWeight: '700' }}>💤 sleeping</Text>
+            </View>
+          )}
           )}
           {/* Close button removed - using arena Exit button instead */}
           {/* Voice status indicator in fullscreen mode */}

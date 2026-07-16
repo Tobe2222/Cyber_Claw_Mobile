@@ -221,6 +221,23 @@ class SyncClient {
     this.send({ type: 'chat', text, agentId, ...(deviceMeta ? { deviceMeta } : {}) });
   }
 
+  // v3.10.3: mobile-initiated companion wake. Fires on
+  // any speech/chat input on the mobile — chat submit,
+  // voice-mode entry, voice-mode recording send. The
+  // desktop flips sleepState from 'sleeping' to 'awake'
+  // for the targeted agent. Auto-wake is otherwise only
+  // triggered by the desktop's own chat/voice paths; the
+  // mobile needs an explicit IPC kick to ensure its
+  //   sleeping-sprite visual transitions in sync with the
+  //   chat arrival.
+  // Tradeoffs: the IPC is fire-and-forget — if the WS is
+  // disconnected, the wake request is dropped. That's
+  // acceptable: the next sync-server reconnect replays
+  // chat history, which re-renders the sprite visually.
+  sendWakeAgent(agentId: string = 'companion') {
+    this.send({ type: 'mobile_wake_agent', agentId });
+  }
+
   sendRemoteToolResult(id: string, ok: boolean, data?: any, error?: string) {
     this.send({ type: 'remote_tool_result', id, ok, ...(data !== undefined ? { data } : {}), ...(error ? { error } : {}) });
   }
