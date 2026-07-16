@@ -1347,6 +1347,41 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
       addLogEntry(`Wake Mode: audio sent for transcription (trigger=${triggerReason})`, 'sent');
       addVoiceLog(triggerReason === 'send' ? '📤 Send word → sent' : '📏 Sent, waiting...');
 
+      // v3.10.35: bump the active-enrollment counter.
+      // The native OWW detector only ticks
+      // enrollmentSamplesTotal when its OWN mic loop is
+      // active (i.e. wake-listener running, quiet room
+      // ambient speech captured). While the user is in
+      // voice mode, the recorder owns the mic and OWW
+      // is paused — the user's actual speech never
+      // reaches the OWW profiling path. Result:
+      // VoiceEnrollmentBar stays at 0/1000 even after
+      // hours of voice-mode chats.
+      //
+      // Fix: each voice-mode turn with confirmed speech
+      // (this branch runs only when speechDetectedDuring
+      // RecordingRef.current === true) bumps a JS-side
+      // 'active contributions' counter in AsyncStorage.
+      // The bar reads both counts (native passive + JS
+      // active) and shows the combined contribution.
+      // The actual lock threshold still requires the
+      // native embeddings + confirmed wakes — the active
+      // counter is UX feedback so the user can see their
+      // voice-mode chats are being honored. Bumped every
+      // successful turn; a typical 1.5s utterance counts
+      // as 50 contributions (matching ~40 passive OWW
+      // frames), so ~20 turns = 1000 = "full bar" for
+      // active-only users.
+      if (voiceMode) {
+        try {
+          const key = 'cyberclaw-voice-enrollment-active';
+          const raw = await AsyncStorage.getItem(key);
+          const cur = raw ? parseInt(raw, 10) : 0;
+          const next = (isNaN(cur) ? 0 : cur) + 50;
+          await AsyncStorage.setItem(key, String(next));
+        } catch (_) {}
+      }
+
       // v3.10.29: reset the per-turn WS error tracking
       // so the transcribing timeout reads the state
       // for THIS turn, not a stale one from a

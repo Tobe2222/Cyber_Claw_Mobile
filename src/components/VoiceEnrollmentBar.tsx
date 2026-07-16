@@ -46,17 +46,22 @@ import {
   Easing,
   NativeModules,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { WakeWordModule } = NativeModules;
 
 type SpeakerStatus = {
   samplesTotal: number;
+  activeContributions: number;
   bufferSize: number;
   hasEnrollment: boolean;
   profileLocked: boolean;
   confirmedWakeFires: number;
   matchScore: number | null;
 };
+
+const ACTIVE_CONTRIBUTIONS_KEY = 'cyberclaw-voice-enrollment-active';
+const ACTIVE_CONTRIBUTION_PER_TURN = 50;
 
 // Native-side thresholds. Mirrored here for the UI math
 // only — the native side is the single source of truth
@@ -124,21 +129,29 @@ export default function VoiceEnrollmentBar({ variant = 'full' }: { variant?: Var
     return () => loop.stop();
   }, [status?.profileLocked, pulse]);
 
-  // Poll native status.
+  // Poll native status + the JS-side active-contributions
+  // counter (v3.10.35). Both feeds are merged into a single
+  // status object so the rest of the rendering pipeline
+  // doesn't need to know about the persistence split.
   useEffect(() => {
     cancelledRef.current = false;
     const tick = async () => {
       if (cancelledRef.current) return;
       try {
-        const s = await WakeWordModule?.getSpeakerStatus?.();
-        if (!cancelledRef.current && s) {
+        const [nativeResult, activeRaw] = await Promise.all([
+          WakeWordModule?.getSpeakerStatus?.(),
+          AsyncStorage.getItem(ACTIVE_CONTRIBUTIONS_KEY).catch(() => null),
+        ]);
+        const activeCount = activeRaw ? parseInt(activeRaw, 10) : 0;
+        if (!cancelledRef.current && nativeResult) {
           setStatus({
-            samplesTotal: s.samplesTotal ?? 0,
-            bufferSize: s.bufferSize ?? 0,
-            hasEnrollment: !!s.hasEnrollment,
-            profileLocked: !!s.profileLocked,
-            confirmedWakeFires: s.confirmedWakeFires ?? 0,
-            matchScore: typeof s.matchScore === 'number' ? s.matchScore : null,
+            samplesTotal: nativeResult.samplesTotal ?? 0,
+            activeContributions: !isNaN(activeCount) ? activeCount : 0,
+            bufferSize: nativeResult.bufferSize ?? 0,
+            hasEnrollment: !!nativeResult.hasEnrollment,
+            profileLocked: !!nativeResult.profileLocked,
+            confirmedWakeFires: nativeResult.confirmedWakeFires ?? 0,
+            matchScore: typeof nativeResult.matchScore === 'number' ? nativeResult.matchScore : null,
           });
         }
       } catch (_) {}
@@ -171,19 +184,55 @@ export default function VoiceEnrollmentBar({ variant = 'full' }: { variant?: Var
 
   // Compute progress % as the max of the two
   // thresholds' ratios.
+  //
+  // v3.10.35: also include the active voice-mode
+  // contributions in the combined progress. The bar
+  // is the user's primary feedback signal that their
+  // chats are contributing to the profile — without
+  // this, voice-mode users see a stuck 0/1000 bar
+  // even after many chats because the OWW listening
+  // path never runs while the recorder owns the mic.
+  //
+  // The actual profile lock still requires the
+  // native embeddings + confirmed wakes (via
+  // tryLockPrimaryProfile in OpenWakeWordDetector).
+  // The active contributions are UX feedback only:
+  // they fill the bar visually but don't unlock
+  // anything. profileLocked stays false until the
+  // native prerequisites are met, so the chip
+  // stays in the 'learning' state with the
+  // non-locked styling.
   const samplePct = Math.min(1, status.samplesTotal / LOCK_THRESHOLD_SAMPLES);
   const wakePct = Math.min(1, status.confirmedWakeFires / LOCK_THRESHOLD_WAKES);
-  const progress = status.profileLocked ? 1 : Math.max(samplePct, wakePct);
+  const activePct = Math.min(1, status.activeContributions / LOCK_THRESHOLD_SAMPLES);
+  const progress = status.profileLocked
+    ? 1
+    : Math.max(samplePct, wakePct, activePct);
 
+  // Combined count for the label so the user sees the
+  // total progress. The passive count (from OWW) drives
+  // the actual lock; the active contributions (from
+  // voice-mode turns) are shown alongside so the user
+  // knows their chats are being counted. The bar fills
+  // on the higher of the two metrics, so a user with
+  // either 1000 passive OR ~20 voice turns (=1000
+  // contributions) sees the bar fully fill. A chatty
+  // user gets fast visual progress; a quiet user gets
+  // the same lock semantics as before.
+  const showActive = status.activeContributions > 0;
   // Label is the same content for both variants; the
   // COMPACT pill is a shorter version (just count
   // + threshold, no "Learning your voice" prefix).
   const fullLabel = status.profileLocked
     ? `✓ Voice profile locked (${status.samplesTotal} samples)`
-    : `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES} samples`;
+    : showActive
+      ? `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES} samples + ${status.activeContributions} voice turns`
+      : `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES} samples`;
   const compactLabel = status.profileLocked
     ? `Voice locked`
-    : `Learning ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES}`;
+    : showActive
+      ? `Learning ${status.samplesTotal}+${status.activeContributions}/${LOCK_THRESHOLD_SAMPLES}`
+      : `Learning ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES}`;
 
   return (
     <BarShell
