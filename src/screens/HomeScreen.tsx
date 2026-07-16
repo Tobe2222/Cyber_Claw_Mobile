@@ -2340,6 +2340,25 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
   }, [onOpenVoiceMode]);
 
+  // v3.10.36: extracted from the companion tab's onPress
+  // handler so the cross-agent banner can also call it.
+  // The banner shows above the chat input when another
+  // agent has unread messages — tapping it switches to
+  // that agent's tab, exactly the same effect as
+  // tapping the tab itself.
+  const switchToAgent = useCallback((aid: string) => {
+    setActiveChatAgentId(aid);
+    setMessages(messagesByAgent[aid] || []);
+    setChatUnreadByAgent(prev => ({ ...prev, [aid]: 0 }));
+    try { syncClient.requestAgentHistory(aid); } catch (_) {}
+    try {
+      webViewRef.current?.injectJavaScript(
+        `window.Arena && window.Arena.setActive(${JSON.stringify(aid)}); true;`,
+      );
+    } catch (_) {}
+    AsyncStorage.setItem('cyberclaw-arena-comp', aid).catch(() => {});
+  }, [messagesByAgent]);
+
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
       { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
@@ -2944,39 +2963,7 @@ useEffect(() => {
               <TouchableOpacity
                 key={a.id}
                 style={[styles.companionTab, isActive && styles.companionTabActive]}
-                onPress={() => {
-                  // Switch active companion: update the visible
-                  // `messages` view to this companion's history, clear
-                  // their unread counter, request a fresh history in
-                  // case anything changed on the desktop, AND swap the
-                  // arena sprite so the WebView above shows this
-                  // companion (the arena previously stayed on
-                  // whichever companion the WebView was last
-                  // initialised with, so the tab and the arena
-                  // disagreed).
-                  setActiveChatAgentId(a.id);
-                  setMessages(messagesByAgent[a.id] || []);
-                  setChatUnreadByAgent(prev => ({ ...prev, [a.id]: 0 }));
-                  try { syncClient.requestAgentHistory(a.id); } catch (_) {}
-                  // v3.1.27: inject `setCompanion(id)` into the
-                  // WebView to swap the active sprite in place.
-                  // The v3.1.26 version bumped `webViewKey` to
-                  // force a full reload; combined with the
-                  // desktop echoing companionId back via the
-                  // sync server, this caused a reload ping-pong
-                  // every few seconds (visible in the Log tab
-                  // v3.1.31: the new multi-companion arena takes
-                  // an `id` and looks the sprite up itself. No
-                  // need to send the sprite id — the WebView
-                  // already has the full agents list from the
-                  // last agents_list broadcast.
-                  try {
-                    webViewRef.current?.injectJavaScript(
-                      `window.Arena && window.Arena.setActive(${JSON.stringify(a.id)}); true;`,
-                    );
-                  } catch (_) {}
-                  AsyncStorage.setItem('cyberclaw-arena-comp', a.id).catch(() => {});
-                }}
+                onPress={() => switchToAgent(a.id)}
               >
                 {/* v3.1.47: companion tab no longer shows the robot emoji
                     fallback when a.emoji is missing. The companion name is
@@ -3174,6 +3161,48 @@ useEffect(() => {
                 })}
               </View>
             )}
+            {/* v3.10.36: cross-agent chat banner. Shows above
+                the input row when OTHER agents have unread
+                messages (unread > 0 for an agentId !=
+                activeChatAgentId). One banner per unread
+                agent; tapping switches to that agent's tab
+                via switchToAgent() (same effect as tapping
+                the companion tab itself — loads messages,
+                clears unread, swaps arena sprite, requests
+                fresh history). See styles.crossAgentBanner
+                for visual styling. Closes the v3.10.35 Tobe
+                report: "I noticed when receiving a new
+                message that it did not appear in the chat
+                but clawsuu had a red sign meaning he has
+                sent a new message. Clicked that red and it
+                appeared in the chat. This should just appear
+                in the chat automatically, and it should
+                appear an update button in the chat at the
+                bottom if we must". */}
+            {activeTab === 'chat' && agents
+              .filter(a => a.id !== activeChatAgentId && (chatUnreadByAgent[a.id] || 0) > 0)
+              .map((a) => {
+                const lastMsg = (messagesByAgent[a.id] || []).slice(-1)[0];
+                const preview = lastMsg?.text
+                  ? (lastMsg.text.length > 48 ? lastMsg.text.substring(0, 45) + '…' : lastMsg.text)
+                  : '(no preview)';
+                const unreadCount = chatUnreadByAgent[a.id] || 0;
+                return (
+                  <TouchableOpacity
+                    key={a.id}
+                    style={styles.crossAgentBanner}
+                    onPress={() => switchToAgent(a.id)}
+                  >
+                    <Text style={styles.crossAgentBannerEmoji}>{a.emoji || a.icon || '💬'}</Text>
+                    <Text style={styles.crossAgentBannerText} numberOfLines={1}>
+                      {a.name} — {unreadCount} new {unreadCount === 1 ? 'message' : 'messages'}
+                      {'\n'}
+                      <Text style={styles.crossAgentBannerPreview}>&ldquo;{preview}&rdquo;</Text>
+                    </Text>
+                    <Text style={styles.crossAgentBannerAction}>View →</Text>
+                  </TouchableOpacity>
+                );
+              })}
             <View style={styles.inputContainer}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
@@ -3720,6 +3749,69 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 16,
+    overflow: 'hidden',
+  },
+  // v3.10.36: cross-companion chat banner. Shown above
+  // the input row when OTHER agents have new messages
+  // (unread > 0 for an agentId != activeChatAgentId). The
+  // companion tab bar already shows a per-agent unread
+  // badge, but the user has to LOOK at the tab bar to know
+  // — they don't necessarily when their focus is on the
+  // chat they're typing in. Tobe's report (v3.10.35): "I
+  // noticed when receiving a new message that it did not
+  // appear in the chat but clawsuu had a red sign meaning
+  // he has sent a new message. Clicked that red and it
+  // appeared in the chat. This should just appear in
+  // the chat automatically, and it should appear an
+  // update button in the chat at the bottom if we must".
+  //
+  // We render an inline banner above the chat input. Tapping
+  // jumps to that agent's tab (same behavior as the
+  // companion tab onPress — loads messages, clears unread,
+  // swaps arena sprite, requests fresh history). One
+  // banner per agent with unread; stacked vertically when
+  // more than one. Keyboard-aware: shrinks to a single
+  // line per banner so it doesn't dominate the bottom of
+  // the screen.
+  crossAgentBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(247, 147, 26, 0.12)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(247, 147, 26, 0.4)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(247, 147, 26, 0.4)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginHorizontal: 12,
+    marginVertical: 4,
+    borderRadius: 10,
+  },
+  crossAgentBannerEmoji: {
+    fontSize: 22,
+    marginRight: 10,
+  },
+  crossAgentBannerText: {
+    flex: 1,
+    color: '#f7931a',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  crossAgentBannerPreview: {
+    color: '#ddd',
+    fontSize: 12,
+    fontWeight: '400',
+    fontStyle: 'italic',
+  },
+  crossAgentBannerAction: {
+    color: '#0a0a0a',
+    backgroundColor: '#f7931a',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: '700',
+    marginLeft: 8,
     overflow: 'hidden',
   },
   voiceModeBtnText: {

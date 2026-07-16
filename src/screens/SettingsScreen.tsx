@@ -884,6 +884,30 @@ export default function SettingsScreen({
       await AsyncStorage.setItem('cyberclaw-voice-working-speech', trimmed);
     } catch (_) {}
   };
+  // v3.10.36: debounced auto-save for the working
+  // speech text input. The previous v3.10.34 version
+  // saved only on blur (`onBlur={saveVoiceWorkingSpeech}`),
+  // which meant typing a new phrase and pressing Back
+  // could lose the change if the TextInput didn't lose
+  // focus first. Tobe reported "there is no way to save
+  // the new working text". The debounced save mirrors
+  // the wake-greeting pattern (`persistReadyPhrase`
+  // below) — 600ms after the last keystroke the value
+  // is committed to AsyncStorage. The visible "Saved at
+  // HH:MM:SS" hint confirms the save so the user gets
+  // immediate feedback without needing a Save button.
+  const workingSpeechSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [workingSpeechSavedAt, setWorkingSpeechSavedAt] = useState<number | null>(null);
+  const persistWorkingSpeech = (v: string) => {
+    if (workingSpeechSaveTimer.current) clearTimeout(workingSpeechSaveTimer.current);
+    workingSpeechSaveTimer.current = setTimeout(async () => {
+      const trimmed = v.trim().slice(0, 60);
+      try {
+        await AsyncStorage.setItem('cyberclaw-voice-working-speech', trimmed);
+        setWorkingSpeechSavedAt(Date.now());
+      } catch (_) {}
+    }, 600);
+  };
   const saveVoiceWorkingDelay = async (ms: number) => {
     const clamped = Math.max(800, Math.min(5000, Math.round(ms)));
     setVoiceWorkingDelayMs(clamped);
@@ -1124,15 +1148,25 @@ export default function SettingsScreen({
   }
 
   // ── Main settings render ─────────────────────────────────────
+  // v3.10.36: header (← Back + title) pulled OUT of the
+  // ScrollView so it stays anchored at the top during scroll.
+  // Previously the header was the first child of the
+  // ScrollView, which meant scrolling the long settings page
+  // moved the back button off-screen and the user lost the
+  // anchor. Tobe: "the back button on pages should always
+  // follow along in the top when the user scrolls."
+  // Trade-off: the header now stays in place (good for
+  // navigation) but loses the parallax-of-content feeling.
+  // Acceptable; navigation reliability wins.
   return (
     <>
+    <View style={styles.fixedTopHeader}>
+      <TouchableOpacity onPress={onBack}>
+        <Text style={styles.backBtn}>← Back</Text>
+      </TouchableOpacity>
+      <Text style={styles.title}>Settings</Text>
+    </View>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backBtn}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Settings</Text>
-      </View>
 
       {/* ── 🔗 Connection ────────────────────────────────────── */}
       <Section title="🔗 Connection" desc="Connect to your desktop CyberClaw to sync your companion.">
@@ -1646,7 +1680,7 @@ export default function SettingsScreen({
             <TextInput
               style={styles.input}
               value={voiceWorkingSpeech}
-              onChangeText={setVoiceWorkingSpeech}
+              onChangeText={(v) => { setVoiceWorkingSpeech(v); persistWorkingSpeech(v); }}
               onBlur={saveVoiceWorkingSpeech}
               placeholder="Working on it..."
               placeholderTextColor="#666"
@@ -1654,6 +1688,11 @@ export default function SettingsScreen({
               autoCapitalize="none"
               autoCorrect={false}
             />
+            <Text style={styles.hintSmall}>
+              {workingSpeechSavedAt
+                ? `✅ Saved at ${new Date(workingSpeechSavedAt).toLocaleTimeString()}`
+                : 'Saves automatically as you type.'}
+            </Text>
             <Label>Trigger delay (ms)</Label>
             <Hint>How long to wait after you stop speaking before the working cue + speech fire. Default 1500ms — short enough to feel responsive, long enough that quick responses don't get interrupted. Range 800-5000.</Hint>
             <View style={styles.optionRow}>
@@ -2187,8 +2226,25 @@ const styles = StyleSheet.create({
   // The old v3.1.91 header block had paddingTop:34 on
   // Android but that header was removed in v3.4.x and the
   // padding was lost on the new section-based layout.
-  content: { padding: 16, paddingTop: 50 },
+  content: { padding: 16, paddingTop: 12 },
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingTop: Platform.OS === 'android' ? 34 : 10 },
+  // v3.10.36: pinned header above the ScrollView so the
+  // back button + title stay in place while the user
+  // scrolls the long settings content below. Background
+  // color matches the page so the header blends in (it
+  // overlays the top of the content visually). Border-
+  // bottom gives a subtle separator so it's clearly its
+  // own region.
+  fixedTopHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: Platform.OS === 'android' ? 34 : 10,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: '#0a0a0a',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1f1f1f',
+  },
   backBtn: { color: '#f7931a', fontSize: 16 },
   title: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginLeft: 16 },
   // v3.1.75: orange section border for better visual distinction
@@ -2205,6 +2261,7 @@ const styles = StyleSheet.create({
   // Section blocks (each with its own orange border).
   label: { color: '#ccc', fontSize: 14, marginBottom: 6, marginTop: 8 },
   hint: { color: '#666', fontSize: 12, marginTop: 4, marginBottom: 8, lineHeight: 16 },
+  hintSmall: { color: '#10b981', fontSize: 11, marginTop: 4, fontStyle: 'italic' },
   savedHint: { color: '#4caf50', fontSize: 12, marginTop: 6 },
   input: { backgroundColor: '#1a1a2e', color: '#e0e0e0', borderRadius: 8, padding: 12, fontSize: 16, borderWidth: 1, borderColor: '#333' },
   button: { backgroundColor: '#f7931a', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12 },
