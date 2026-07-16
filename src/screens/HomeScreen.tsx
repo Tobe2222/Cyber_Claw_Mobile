@@ -3272,7 +3272,17 @@ useEffect(() => {
         {activeTab === 'log' && (
           <>
             <View style={styles.wakeDebugBar}>
-              <Text style={styles.wakeDebugText} numberOfLines={1}>Mic: {wakeDebug}</Text>
+              {/* v3.10.39: renamed 'Mic:' prefix to 'Wake:'.
+                  The wakeDebug stream catches EVERY wake-module
+                  emit (mic init, OWW load, sample-match event,
+                  TTS init, recorder WAV write, etc.), so
+                  prefixing it 'Mic:' was misleading — the only
+                  mic-specific error was one of several possible
+                  states. 'Wake:' labels the underlying stream
+                  accurately. Tobe noticed v3.10.38 showed
+                  'Mic: error: TTS init failed' which made no
+                  sense for a wake-debug label. */}
+              <Text style={styles.wakeDebugText} numberOfLines={1}>Wake: {wakeDebug}</Text>
             </View>
             <FlatList
               ref={logRef}

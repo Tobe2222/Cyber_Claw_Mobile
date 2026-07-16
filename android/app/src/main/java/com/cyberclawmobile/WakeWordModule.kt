@@ -3160,30 +3160,67 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             return
         }
         // Engine doesn't exist or init hasn't finished:
-        // (re)create it.
-        tts?.shutdown()
-        ttsVoicesReady = false
-        tts = TextToSpeech(reactContext) { status ->
-            ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) {
-                tts?.language = Locale.US
-                tts?.setSpeechRate(0.95f)
-                tts?.setPitch(1.1f)
-                emitDebug("info", "TTS init OK, calling onReady")
-                onReady(tts!!)
-            } else {
-                // v3.1.83: notify the caller of init failure
-                // instead of silently swallowing it. Previously
-                // getTts only called onReady on success, so if
-                // the system TTS service was busy/unavailable
-                // at cold start, speakText's promise never
-                // resolved AND never rejected, and the JS
-                // catch + WebView speechSynthesis fallback
-                // never ran. The greeting was silently dropped.
-                emitDebug("error", "TTS init failed: status=$status")
-                onError("TTS init failed: status=$status")
+        // (re)create it. v3.10.39: wrap the bind in a
+        // single-attempt retry — the Android TTS service
+        // often returns status=-1 (ERROR) on the very
+        // first bind at cold start while the system service
+        // is still spinning up. Retrying once after a
+        // short delay (~1000ms) catches that race; if the
+        // second attempt also fails, give up and let the
+        // JS-side WebView speechSynthesis fallback run.
+        var attempt = 0
+        // The JS-side fallback timer is anchored to the
+        // FIRST bind attempt's start time, not the per-
+        // attempt time. If both attempts fail within 1s
+        // each, total bound time is 2s; the JS-side 3.5s
+        // fallback timer covers it (Tobe's v3.10.34 default).
+        fun attemptBind() {
+            attempt++
+            tts?.shutdown()
+            ttsVoicesReady = false
+            tts = TextToSpeech(reactContext) { status ->
+                ttsReady = status == TextToSpeech.SUCCESS
+                if (ttsReady) {
+                    tts?.language = Locale.US
+                    tts?.setSpeechRate(0.95f)
+                    tts?.setPitch(1.1f)
+                    emitDebug("info", "TTS init OK (attempt $attempt), calling onReady")
+                    onReady(tts!!)
+                } else {
+                    // v3.1.83: notify the caller of init failure
+                    // instead of silently swallowing it. Previously
+                    // getTts only called onReady on success, so if
+                    // the system TTS service was busy/unavailable
+                    // at cold start, speakText's promise never
+                    // resolved AND never rejected, and the JS
+                    // catch + WebView speechSynthesis fallback
+                    // never ran. The greeting was silently dropped.
+                    emitDebug("error", "TTS init failed (attempt $attempt): status=$status")
+                    if (attempt < 2) {
+                        // v3.10.39: retry once after 1000ms
+                        // — the Android TTS service often
+                        // returns ERROR on the very first
+                        // bind at cold start while the
+                        // system service is still spinning up.
+                        // A second try after a brief delay
+                        // catches that race. The retry's
+                        // onError is suppressed — we only
+                        // bubble up to the caller after the
+                        // second attempt completes.
+                        handler.postDelayed({
+                            attemptBind()
+                        }, 1000L)
+                    } else {
+                        // Second attempt also failed —
+                        // surface the error to the caller
+                        // (JS-side WebView speechSynthesis
+                        // fallback will take over).
+                        onError("TTS init failed: status=$status")
+                    }
+                }
             }
         }
+        attemptBind()
     }
 
     @ReactMethod fun speakText(text: String, promise: Promise) {
