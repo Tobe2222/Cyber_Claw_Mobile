@@ -200,6 +200,25 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // STT pipeline. Reset to false at the start of each
   // recording turn.
   const speechDetectedDuringRecordingRef = useRef<boolean>(false);
+  // v3.10.38: sustained-speech counters for the JS
+  // side. The native recorder-side counter (`recorder
+  // SpeechFrameCount` in WakeWordModule.kt) requires
+  // 5 consecutive above-threshold chunks (≈400ms) to
+  // trip the silence-window gate. The JS owwVad
+  // listener mirrors this — requires MIN_JS_SPEECH
+  // _EVENTS (3) consecutive above-threshold owwVad
+  // events (throttled to ~5Hz, so ≈600ms of sustained
+  // speech) before flipping speechDetectedDuring
+  // RecordingRef true. Without these guards, a single
+  // ambient-noise chunk (cough, click, audio cue
+  // bleed, mic rustle) was enough to mark speech
+  // detected, prime the silence window, send a
+  // low-content audio on the next turn, and rapid-
+  // fire another LLM response — Tobe's
+  // v3.10.37 "jumps back to responding" symptom.
+  // Reset at every startRecordingTurn to start fresh.
+  const speechEventsRunRef = useRef<number>(0);
+  const lastSpeechEventAtRef = useRef<number>(0);
   // v3.10.15: counter for consecutive recording turns
   // where no speech was detected. See the gibberish gate
   // below and MAX_CONSECUTIVE_EMPTY_ROUNDS. Reset to 0
@@ -1379,7 +1398,26 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           const key = 'cyberclaw-voice-enrollment-active';
           const raw = await AsyncStorage.getItem(key);
           const cur = raw ? parseInt(raw, 10) : 0;
-          const next = (isNaN(cur) ? 0 : cur) + 50;
+          // v3.10.38: increment by 1 per turn (was 50 in
+          // v3.10.35). Tobe's report (v3.10.37): "it
+          // should count 1 by 1 for the learning bar."
+          // The 50-per-turn was chosen initially to make
+          // the bar fill at a similar rate to the OWW
+          // passive counter (~80ms chunks would give
+          // ~50 passive samples per typical utterance),
+          // but reading "0+50" felt like an error — the
+          // user wants to see discrete turns accumulate,
+          // not a pseudo-sample metric.
+          //
+          // With 1-per-turn the bar fills in ~1000
+          // voice-mode turns for chatty users (vs ~20
+          // before). That's a lot of conversations, but
+          // the bar is a long-term progress indicator
+          // and chatty users expect to see it move
+          // meaningfully per turn. Could revisit in v4 to
+          // add a per-companion calibration that weights
+          // turns by audio length.
+          const next = (isNaN(cur) ? 0 : cur) + 1;
           await AsyncStorage.setItem(key, String(next));
         } catch (_) {}
       }
@@ -1601,6 +1639,15 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     const vad = getVAD({ sampleRate: 16000, frameSize: 512, silenceThreshold: 0.02 });
     resetVAD();
     speechDetectedDuringRecordingRef.current = false;
+    // v3.10.38: also reset the sustained-speech run
+    // counters on every new turn. Without this, a run
+    // from the previous turn (now stopped) would
+    // carry over and the first threshold-crossing event
+    // in the new turn might be the third in a chain,
+    // flipping speechDetectedTooEarly=true. Reset both
+    // refs to fresh state.
+    speechEventsRunRef.current = 0;
+    lastSpeechEventAtRef.current = 0;
     // v3.10.9: reset silence-fired so the new turn can
     // fire the countdown if it sees silence. Without this
     // a turn that ends on a paused-countdown (e.g. user
@@ -2279,19 +2326,40 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
     if (!wakeWordEmitter) return;
     const emitter = getWakeWordEmitter();
     if (!emitter) return;
+    const MIN_JS_SPEECH_EVENTS = 3;
+    const SPEECH_EVENT_RUN_MAX_GAP_MS = 1500;
     const sub = emitter.addListener('owwVad', (e: { rms: number; zcr: number }) => {
-      // First speech in this recording turn — mark the
-      // gate as passed. Subsequent RMS samples are
-      // ignored here.
+      const now = Date.now();
+      // v3.10.38: sustained-speech guard mirrors the
+      // native counter. A single owwVad event crossing
+      // the speech threshold only increments the run
+      // counter; speechDetectedDuringRecordingRef only
+      // flips true after MIN_JS_SPEECH_EVENTS (3)
+      // consecutive above-threshold events. Frames in
+      // the hysteresis band (0.005-0.015 RMS) preserve
+      // the run — only definite silence (rms < 0.005)
+      // breaks it. See CHANGES_3.10.38.md for the
+      // symptom this guards against (Tobe's
+      // v3.10.37 "jumps back to responding" report).
       if (!speechDetectedDuringRecordingRef.current && e.rms > 0.015 && e.zcr > 0.02) {
-        speechDetectedDuringRecordingRef.current = true;
-        // v3.10.15: reset the empty-rounds counter —
-        // the user is actually speaking now, so the
-        // gibberish-gate exit path doesn't apply.
-        // Without this, a user who talks then goes
-        // silent for 3 rounds would exit even though
-        // they were active earlier in the session.
-        consecutiveEmptyRoundsRef.current = 0;
+        if (now - lastSpeechEventAtRef.current > SPEECH_EVENT_RUN_MAX_GAP_MS) {
+          speechEventsRunRef.current = 0;
+        }
+        lastSpeechEventAtRef.current = now;
+        speechEventsRunRef.current++;
+        if (speechEventsRunRef.current >= MIN_JS_SPEECH_EVENTS) {
+          speechDetectedDuringRecordingRef.current = true;
+          // v3.10.15: reset the empty-rounds counter —
+          // the user is actually speaking now, so the
+          // gibberish-gate exit path doesn't apply.
+          // Without this, a user who talks then goes
+          // silent for 3 rounds would exit even though
+          // they were active earlier in the session.
+          consecutiveEmptyRoundsRef.current = 0;
+        }
+      } else if (e.rms < 0.005) {
+        speechEventsRunRef.current = 0;
+        lastSpeechEventAtRef.current = 0;
       }
       // v3.10.9: speech-resume detection during the
       // silence countdown. The silence countdown runs

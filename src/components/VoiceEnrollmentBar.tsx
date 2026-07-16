@@ -61,7 +61,7 @@ type SpeakerStatus = {
 };
 
 const ACTIVE_CONTRIBUTIONS_KEY = 'cyberclaw-voice-enrollment-active';
-const ACTIVE_CONTRIBUTION_PER_TURN = 50;
+const ACTIVE_CONTRIBUTION_PER_TURN = 1;  // v3.10.38: was 50, now 1 per turn (Tobe: 'should count 1 by 1')
 
 // Native-side thresholds. Mirrored here for the UI math
 // only — the native side is the single source of truth

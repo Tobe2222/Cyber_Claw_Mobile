@@ -552,6 +552,17 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             recorderLastExitAt = 0L
             recorderVadEmitTick = 0
             recorderLastVadAt = 0L
+            // v3.10.38: reset the sustained-speech counter
+            // on every new recording turn. Without this,
+            // a sustained-speech streak from the previous
+            // turn (now stopped) would carry over and the
+            // first non-speech chunk in the new turn
+            // wouldn't reset it (it'd already be at 0 by
+            // virtue of recorderHasUserSpoken being false,
+            // but the counter is only reset by my new
+            // explicit line — not by the older path).
+            // Reset explicitly for clarity.
+            recorderSpeechFrameCount = 0
 
             isRecorderActive = true
 
@@ -759,6 +770,25 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @Volatile private var recorderSilentForMs = 0L
     @Volatile private var recorderRecordingForMs = 0L
     @Volatile private var recorderHasUserSpoken = false
+    // v3.10.38: sustained-speech frame counter. A single
+    // 80ms chunk above SPEECH_RMS_THRESHOLD now only
+    // increments this counter; recorderHasUserSpoken
+    // only flips true after MIN_RECORDER_SPEECH_FRAMES
+    // consecutive speech chunks (= sustained speech
+    // before silence can fire). Tobe's v3.10.36 report
+    // (recurring in v3.10.37 testing): "On the second my
+    // turn it still jumped to responding for some reason,
+    // no sending and transcribing." Likely cause: a
+    // brief ambient noise (cough, table click, mic
+    // rustle, audio cue bleed) at the start of a turn
+    // crossed RMS 0.010 for a single chunk, marked
+    // recorderHasUserSpoken=true, and primed the silence
+    // window. The 6s silence window then fired on a
+    // low-content audio, the LLM responded quickly, and
+    // the cycle continued. The minimum-frames guard
+    // ensures clicks/transients don't trip the speech
+    // flag — only sustained user intent to speak does.
+    @Volatile private var recorderSpeechFrameCount = 0
     @Volatile private var recorderSendHighScoreFrames = 0
     @Volatile private var recorderExitHighScoreFrames = 0
     @Volatile private var recorderLastSendAt = 0L
@@ -991,6 +1021,17 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         val SILENCE_RMS_THRESHOLD = 0.005f
         val MIN_RECORDING_MS = 500L
         val MAX_RECORDING_MS = 30_000L
+        // v3.10.38: minimum consecutive speech frames
+        // before recorderHasUserSpoken flips true. At
+        // 12.5Hz (80ms chunks), 5 frames = 400ms of
+        // sustained above-threshold audio. A typical
+        // user utterance (a syllable cluster) is
+        // 200-400ms; clicks/coughs/transients are
+        // <80ms. Requiring 5 frames filters out the
+        // transient noise that was causing premature
+        // silence-window firing on the second turn of
+        // multi-turn loops (Tobe's v3.10.36 report).
+        val MIN_RECORDER_SPEECH_FRAMES = 5
         // v3.10.28: number of definite-speech frames
         // required before smart-silence kicks in.
         // At 12.5Hz (80ms chunks), 30 frames = 2.4s
@@ -1020,11 +1061,39 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
         // Speech band: above SPEECH_RMS_THRESHOLD, we're
         // confident the user is talking. Reset silence counter.
+        // v3.10.38: sustained-speech guard. A single chunk
+        // crossing threshold now only increments
+        // recorderSpeechFrameCount; recorderHasUserSpoken
+        // only flips true after MIN_RECORDER_SPEECH_FRAMES
+        // (5, = 400ms) consecutive speech chunks. Clicks /
+        // coughs / audio cue bleeds / background rustles
+        // shorter than ~400ms don't trip the flag. This was
+        // the root cause of Tobe's "on the second my turn
+        // it jumped to responding for some reason, no
+        // sending and transcribing" report — a single
+        // ambient-noise chunk early in the recording turn
+        // was enough to mark recorderHasUserSpoken=true,
+        // primed the silence window, and a low-content
+        // audio got sent producing an instant LLM response
+        // that cycled the multi-turn loop without the user
+        // actually speaking.
         if (rms >= SPEECH_RMS_THRESHOLD) {
-            recorderHasUserSpoken = true
-            recorderSilentForMs = 0L
+            recorderSpeechFrameCount++
+            if (recorderSpeechFrameCount >= MIN_RECORDER_SPEECH_FRAMES) {
+                recorderHasUserSpoken = true
+                recorderSilentForMs = 0L
+            }
             return
         }
+        // Non-speech frame: reset the run-length counter
+        // (any gap breaks the streak). Note: this is
+        // ANDed with the smart-silence hysteresis logic
+        // below — the counter only resets for definite
+        // non-speech frames, which preserves the spirit of
+        // the v3.10.28 hysteresis band where RMS in the
+        // gap between silence and speech thresholds
+        // doesn't count either way.
+        recorderSpeechFrameCount = 0
         if (!recorderHasUserSpoken) return
         // Hysteresis band: RMS is between SILENCE and SPEECH
         // v3.10.28: noise-aware silence detection.
