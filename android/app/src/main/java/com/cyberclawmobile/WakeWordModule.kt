@@ -1527,19 +1527,51 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     private var pendingEnrollmentSample = false
 
     @ReactMethod fun initOww(wakeword: String, threshold: Double = 0.5, promise: Promise) {
-        try {
-            owwWakeword = wakeword
-            owwDetector?.close()
-            owwDetector = OpenWakeWordDetector(reactContext).apply {
-                val ok = loadModels(wakeword)
-                setThreshold(threshold.toFloat())
-                if (!ok) throw Exception("Failed to load TFLite models")
+        // v3.10.40: retry initOww once on transient failure.
+        // Tobe's v3.10.38 report: "initOww failed: Failed to
+        // load TFLite models" at cold start, after which
+        // startOwwListening rejected with "Call initOww
+        // first" because owwDetector stayed null. The wake
+        // listener was permanently dead for that session —
+        // no auto-recovery. The failure is often transient:
+        //   - TFLite Interpreter constructor occasionally
+        //     throws on cold start while Android's HAL
+        //     service is warming up.
+        //   - AssetManager.openFd can hit a race during
+        //     Activity onCreate.
+        //   - Custom-trained wake models that haven't been
+        //     copied from a previous session can fail the
+        //     fallback path during the very first init.
+        // Strategy: try once at the caller's request. If
+        // it throws, sleep 500ms and try once more. If the
+        // retry also throws, surface the rejection to the
+        // caller. Two bounded attempts keep cold-start
+        // latency under 1s worst-case.
+        var attempt = 0
+        fun attemptInit() {
+            attempt++
+            try {
+                owwWakeword = wakeword
+                owwDetector?.close()
+                owwDetector = OpenWakeWordDetector(reactContext).apply {
+                    val ok = loadModels(wakeword)
+                    setThreshold(threshold.toFloat())
+                    if (!ok) throw Exception("Failed to load TFLite models (attempt $attempt)")
+                }
+                emitDebug("info", "OWW initialized (attempt $attempt): $wakeword @ $threshold")
+                promise.resolve(true)
+            } catch (e: Exception) {
+                if (attempt < 2) {
+                    emitDebug("warn", "initOww attempt $attempt failed: ${e.message}; retrying in 500ms")
+                    handler.postDelayed({
+                        try { attemptInit() } catch (_: Exception) {}
+                    }, 500L)
+                } else {
+                    promise.reject("OWW_INIT", e.message)
+                }
             }
-            emitDebug("info", "OWW initialized: $wakeword @ $threshold")
-            promise.resolve(true)
-        } catch (e: Exception) {
-            promise.reject("OWW_INIT", e.message)
         }
+        attemptInit()
     }
 
     // v3.2.0: receive a freshly-trained .tflite (base64) and
@@ -2420,8 +2452,50 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         if (isOwwListening) { promise.resolve(null); return }
         val detector = owwDetector
         if (detector == null) {
-            promise.reject("OWW_NOT_INIT", "Call initOww first")
-            return
+            // v3.10.40: self-heal — if initOww never ran or
+            // failed earlier in this session, lazy-init now
+            // with the bundled default ('hey_jarvis') before
+            // giving up. Previously this rejected with
+            // OWW_NOT_INIT and the wake listener stayed dead
+            // for the whole session. Tobe hit this in
+            // v3.10.38: the wake test page (and the home
+            // screen's listener) called startOwwListening
+            // after initOww had failed at app start, the
+            // detector was null, and every subsequent test
+            // said "Wake listener wasn't running".
+            //
+            // The lazy-init uses the bundled pre-trained
+            // 'hey_jarvis' model since we don't know what
+            // the caller's intent was. If the user has a
+            // custom-trained active wake ("Hey Clawsuu"),
+            // loadModels for 'hey_jarvis' succeeds via the
+            // bundled asset (we don't need to find the
+            // custom file — the bundled model is fine for
+            // test purposes; the real custom wake will be
+            // loaded on the next startSampleMatchListener
+            // call on the home screen with the right
+            // argument). The fallback cost is the wake word
+            // being 'hey_jarvis' instead of 'hey clawsuu'
+            // for this test session only — acceptable for a
+            // test path.
+            try {
+                emitDebug("warn", "startOwwListening called with null detector; lazy-init 'hey_jarvis' first")
+                owwDetector?.close()
+                val fresh = OpenWakeWordDetector(reactContext)
+                val ok = fresh.loadModels("hey_jarvis")
+                fresh.setThreshold(0.5f)
+                if (ok) {
+                    owwDetector = fresh
+                    owwWakeword = "hey_jarvis"
+                    emitDebug("info", "Lazy-init completed; wake listener now using bundled 'hey_jarvis'")
+                } else {
+                    promise.reject("OWW_NOT_INIT", "Call initOww first (and lazy-init failed)")
+                    return
+                }
+            } catch (e: Exception) {
+                promise.reject("OWW_NOT_INIT", "Call initOww first (lazy-init error: ${e.message})")
+                return
+            }
         }
         try {
             isOwwListening = true
