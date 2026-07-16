@@ -2450,8 +2450,14 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod fun startOwwListening(promise: Promise) {
         if (isOwwListening) { promise.resolve(null); return }
-        val detector = owwDetector
-        if (detector == null) {
+        // v3.10.40: removed `val detector = owwDetector` capture
+        // at the top — after the lazy-init block below was
+        // added, the captured value was stale (the lazy-init
+        // could reassign owwDetector = fresh). The OWW thread
+        // below re-reads owwDetector directly with a null-safe
+        // early-out so we always use the freshly-assigned
+        // detector whether the lazy-init ran or not.
+        if (owwDetector == null) {
             // v3.10.40: self-heal — if initOww never ran or
             // failed earlier in this session, lazy-init now
             // with the bundled default ('hey_jarvis') before
@@ -2519,6 +2525,24 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             rec.startRecording()
 
             owwThread = Thread {
+                // v3.10.40 fix: re-read owwDetector from the field
+                // (NOT the captured `val detector` from earlier)
+                // AFTER the lazy-init block above has had a chance
+                // to populate it. The captured local val holds the
+                // pre-lazy-init value (which can still be null if
+                // the lazy-init failed — in which case we'd reject
+                // earlier and never get here). Reading the field
+                // ensures we use the freshly-assigned detector when
+                // the lazy-init path took the recovery branch.
+                // The `?: return@Thread` early-out keeps the null
+                // case safe — if somehow owwDetector is null when
+                // we got here, the loop never starts and the
+                // MicThread is shut down by the parent function's
+                // later cleanup path. Better than a NPE.
+                val detector = owwDetector ?: run {
+                    Log.e("WakeWord", "OWW listener thread started with null detector; aborting")
+                    return@Thread
+                }
                 val readBuf = ShortArray(bufferSize / 2)
                 val chunkBuf = ShortArray(chunkSamples)
                 var chunkFill = 0
