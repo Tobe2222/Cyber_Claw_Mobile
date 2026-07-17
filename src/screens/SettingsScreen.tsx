@@ -1323,71 +1323,24 @@ export default function SettingsScreen({
               companions can have different silence). "Wake
               listening" makes the section's scope clear and
               is shorter than "Companion listening". */}
-          <Section title="🎧 Wake listening" desc="The master background-listening toggle for the wake word. Per-companion voice settings (engine, voice, silence) live in each companion's detail page.">
+          {/* v3.10.47: removed the standalone 🎧 Wake listening
+              Section. Tobe asked for the Background listening
+              toggle to live at the top of the 🎙️ Voice mode
+              section instead — it's a global mic behavior
+              control, sits naturally alongside Smart silence
+              (also global mic behavior) and the speaker-profile
+              bar (global cross-companion). Per-companion
+              wake/exit training already lives in the 🐾
+              Companions section via the wake/exit cards.
 
-            {/* Master Background listening toggle. The
-                grouped sub-controls below (audio buffer,
-                silence timeout) only do anything when this
-                is on; they configure HOW background
-                listening works. v3.4.7: match thresholds
-                UI removed (the TFLite ML detector doesn't
-                need user tuning). */}
-            <Toggle
-              title="🎧 Background listening"
-              sub="Keep the microphone active in the background. The app wakes on your phrase."
-              value={bgListening}
-              onValueChange={async (val) => {
-                setBgListening(val);
-                await AsyncStorage.setItem('cyberclaw-bg-listening', String(val));
-                if (val) {
-                  const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
-                  const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
-                  try { await BackgroundService?.start?.(phrase); } catch {}
-                  Alert.alert('✅ Enabled', 'Background listening is on. App will wake on your phrase.');
-                } else {
-                  try { await BackgroundService?.stop?.(); } catch {}
-                  Alert.alert('🔕 Disabled', 'Background listening is off.');
-                }
-              }}
-            />
-
-            {/* v3.4.5: the redundant "Background listening —
-                details" SubTitle was removed. Now that the
-                group has its own "🎧 Wake listening"
-                GroupTitle above, the controls below read as
-                naturally belonging to the same group without
-                needing a second header. Kept the Hint.
-
-                v3.7.2: the silence timeout was removed from
-                this section. It's now per-companion, in
-                each companion's Voice sub-page
-                (CompanionSettingsScreen). This section is
-                now just the master toggle. */}
-            <Hint>When on, the app keeps the microphone active in the background and wakes on your phrase. Per-companion voice settings (engine, voice, silence) live in each companion's detail page.</Hint>
-
-            {/* v3.6.0: send word was added here, and v3.6.2
-                moved it to the bottom of the 🐾 Companions
-                section. Send is per-user (one send word
-                across all companions, like the wake word),
-                not per-companion — but it conceptually
-                belongs with the other "voice mode send
-                behaviour" controls in the Companions group
-                rather than with the microphone listening
-                group. See the new "Send word" block inside
-                the 🐾 Companions Section.
-
-                v3.4.7: removed the Match Thresholds UI.
-                The fgThreshold/bgThreshold sliders were a
-                v3.1 sample-matching detector knob. Since
-                v3.1.95 we use the openWakeWord TFLite ML
-                detector (~95% accurate out of the box);
-                Tobe confirmed the threshold UI is no longer
-                needed. Existing user-tuned values in
-                AsyncStorage are still respected by the
-                detector (HomeScreen/WakeModeScreen read
-                them directly). New users get the defaults
-                (0.55 FG / 0.65 BG). */}
-          </Section>
+              Removing this section also collapses the
+              duplicate "Wake listening" description that
+              was confusingly close to the 🎤 Wake settings
+              cards just above it (both called themselves
+              "wake listening" but meant different things —
+              the cards were navigation, the section was the
+              master toggle). The toggle is now first under
+              🎙️ Voice mode with its hint intact. */}
 
           {/* v3.4.7: split "Voice mode" into TWO separate
               Sections, each with its own orange border.
@@ -1477,6 +1430,42 @@ export default function SettingsScreen({
             the settings/shortcuts inside the page.
           */}
           <Section title="🎙️ Voice mode" desc="Voice-mode behaviour shared across every companion. Per-companion settings (engine, voice picker, silence timeout) live in each companion's detail page.">
+            {/* v3.10.47: Background listening toggle moved
+                to the top of the Voice mode section. Was
+                previously in its own 🎧 Wake listening
+                section above (between Wake settings
+                cards and Companions), which sat close
+                enough to the 🎤 Wake settings cards that
+                both called themselves "wake listening"
+                with different meanings (one was
+                navigation, one was the master toggle).
+                Tobe: "i think we could put that setting
+                in the top of the voice mode section."
+                The toggle controls global mic behavior
+                so it sits naturally next to the other
+                global voice-mode controls (Smart
+                silence, VoiceEnrollmentBar). The Hint
+                below the toggle is preserved verbatim. */}
+            <Toggle
+              title="🎧 Background listening"
+              sub="Keep the microphone active in the background. The app wakes on your phrase."
+              value={bgListening}
+              onValueChange={async (val) => {
+                setBgListening(val);
+                await AsyncStorage.setItem('cyberclaw-bg-listening', String(val));
+                if (val) {
+                  const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
+                  const phrase = settingsRaw ? (JSON.parse(settingsRaw).wakeWord || 'hey clawsuu') : 'hey clawsuu';
+                  try { await BackgroundService?.start?.(phrase); } catch {}
+                  Alert.alert('✅ Enabled', 'Background listening is on. App will wake on your phrase.');
+                } else {
+                  try { await BackgroundService?.stop?.(); } catch {}
+                  Alert.alert('🔕 Disabled', 'Background listening is off.');
+                }
+              }}
+            />
+            <Hint>When on, the app keeps the microphone active in the background and wakes on your phrase. Per-companion voice settings (engine, voice, silence) live in each companion's detail page.</Hint>
+
             {/* v3.10.24: global speaker-profile progress
                 bar. The bar lives here at the top of the
                 Voice mode section because it's a
