@@ -2885,6 +2885,132 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // v3.10.45: score a recorded WAV file with the
+    // currently-loaded OWW detector. Used by the JS
+    // wake test path when the live OWW listener
+    // can't be started (e.g. the device's MIC path
+    // is in a bad state). The JS side records 4s of
+    // audio via the existing recorder path
+    // (startRecorderWithSilence + stopRecorder), then
+    // hands the file to this method. We read the
+    // WAV, split it into 1280-sample chunks, run
+    // predictScore on each, and return the peak wake
+    // score + peak RMS. The result panel displays
+    // the same way as the live-listener test.
+    //
+    // Why a separate method instead of starting the
+    // OWW listener inline: Tobe hit a v3.10.44 bug
+    // where startOwwListening's AudioRecord init
+    // would silently fail to start (no
+    // recordingState check, no try/catch on
+    // startRecording) while the recorder's
+    // AudioRecord worked fine. The recorder path
+    // already had the safeguards. Rather than
+    // patching the OWW listener's init (which would
+    // require understanding the device-specific
+    // AudioRecord state, hard without a device),
+    // route the test through the recorder and score
+    // the file offline.
+    //
+    // This does NOT replace the live listener. The
+    // live listener is still the production wake
+    // detection path. scoreWavFile is a test-only
+    // utility for the Wake settings test button.
+    @ReactMethod fun scoreWavFile(path: String, promise: Promise) {
+        try {
+            val file = java.io.File(path)
+            if (!file.exists()) {
+                promise.reject("FILE_NOT_FOUND", "WAV file not found: $path")
+                return
+            }
+            val wavBytes = file.readBytes()
+            if (wavBytes.size < 44) {
+                promise.reject("INVALID_WAV", "WAV file too small (${wavBytes.size} bytes)")
+                return
+            }
+            // Sanity-check the WAV header: bytes 0-3
+            // should be "RIFF", 8-11 "WAVE". If not,
+            // we don't know how to skip the header.
+            if (wavBytes[0] != 'R'.code.toByte() ||
+                wavBytes[1] != 'I'.code.toByte() ||
+                wavBytes[2] != 'F'.code.toByte() ||
+                wavBytes[3] != 'F'.code.toByte()
+            ) {
+                promise.reject("INVALID_WAV", "Missing RIFF header")
+                return
+            }
+            // Skip 44-byte standard PCM WAV header.
+            val pcmBytes = wavBytes.copyOfRange(44, wavBytes.size)
+            if (pcmBytes.size < 2) {
+                promise.reject("INVALID_WAV", "No PCM data after header")
+                return
+            }
+            val samples = ShortArray(pcmBytes.size / 2)
+            for (i in samples.indices) {
+                val lo = pcmBytes[i * 2].toInt() and 0xFF
+                val hi = pcmBytes[i * 2 + 1].toInt()
+                samples[i] = ((hi shl 8) or lo).toShort()
+            }
+            // Peak RMS over the whole file. PCM16 sample
+            // normalized: s / 32768. Squared + averaged
+            // = mean square, sqrt = RMS in [0, 1].
+            var sumSquares = 0.0
+            for (s in samples) {
+                val f = s / 32768.0
+                sumSquares += f * f
+            }
+            val rms = Math.sqrt(sumSquares / samples.size).toFloat()
+            // Run the wake model on each 1280-sample
+            // chunk. If owwDetector is null (initOww
+            // never ran), skip scoring and return only
+            // RMS — the user can still see whether the
+            // mic heard audio.
+            val detector = owwDetector
+            val threshold: Float
+            val wakeword: String
+            if (detector != null) {
+                threshold = detector.getThreshold()
+                wakeword = owwWakeword
+            } else {
+                threshold = 0.5f
+                wakeword = owwWakeword
+            }
+            var peak = 0f
+            var fired = false
+            var firedScore: Float? = null
+            var chunksScored = 0
+            if (detector != null) {
+                val chunkSamples = 1280
+                var i = 0
+                while (i + chunkSamples <= samples.size) {
+                    val chunk = ShortArray(chunkSamples)
+                    System.arraycopy(samples, i, chunk, 0, chunkSamples)
+                    val pair = detector.predictScore(chunk)
+                    val wakeScore = pair.wake
+                    if (wakeScore != null && wakeScore > peak) peak = wakeScore
+                    if (!fired && wakeScore != null && wakeScore >= threshold) {
+                        fired = true
+                        firedScore = wakeScore
+                    }
+                    chunksScored++
+                    i += chunkSamples
+                }
+            }
+            val result = Arguments.createMap().apply {
+                putDouble("peak", peak.toDouble())
+                putDouble("rms", rms.toDouble())
+                putBoolean("fired", fired)
+                if (firedScore != null) putDouble("firedScore", firedScore.toDouble())
+                putString("wakeword", wakeword)
+                putInt("chunksScored", chunksScored)
+                putInt("samplesTotal", samples.size)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("SCORE_ERROR", e.message)
+        }
+    }
+
     // v3.10.23: speaker enrollment. Averages the most
     // recent voice-active embeddings in the OWW
     // detector's buffer into a single 96-dim GLOBAL

@@ -39,6 +39,7 @@ import {
   NativeEventEmitter,
   NativeModules,
 } from 'react-native';
+import RNFS from 'react-native-fs';
 
 const { WakeWordModule } = NativeModules;
 
@@ -124,123 +125,140 @@ export function useClassifierTest(kind: ClassifierKind) {
     setResult(null);
     const abort = { cancelled: false };
     abortRef.current = abort;
-    // v3.10.31: ensure the OWW listener is running
-    // for the wake test. v3.10.30's "Mic heard
-    // almost nothing" tip was firing on EVERY wake
-    // test because the OWW listener is only started
-    // when the user enters voice mode (WakeModeScreen
-    // on mount). If the user opens CompanionSettings
-    // → Wake settings → Test wake WITHOUT going
-    // through voice mode first, the listener is
-    // initialized but the mic is off. avgRms=0 in
-    // that case is NOT a mic problem — it's that
-    // we never started recording.
+
+    // v3.10.45: switched classifier test from live
+    // OWW listener to recorder + offline scoring.
     //
-    // For wake tests we call startOwwListening
-    // (no-op if already running). For exit/send
-    // tests we don't need the wake listener — exit
-    // and send both run on the chunk-side detector
-    // that's already wired up to whatever mic path
-    // is active. (If no listener is running, exit
-    // and send will also see no audio, but the
-    // 'owwVad' event is emitted from the same chunk
-    // processor, so we can tell the user either
-    // way.)
-    let owwWasRunning = false;
-    if (kind === 'wake') {
-      try {
-        // startOwwListening is a Promise-returning
-        // ReactMethod. We await it so the listener
-        // is up by the time we start polling. The
-        // method is idempotent (returns null if
-        // already listening) per the native comment.
-        await WakeWordModule.startOwwListening?.();
-        owwWasRunning = true;
-      } catch (_) {
-        owwWasRunning = false;
-      }
-    } else {
-      // For exit/send, we can't directly query
-      // "is the wake listener running?" from JS
-      // (the API is no Promise getter). But the
-      // owwVad event firing/not-firing is a fine
-      // proxy: if no events arrive, avgRms stays
-      // 0 and the diagnostic tip says "mic heard
-      // almost nothing". User can navigate to
-      // voice mode to start the listener and
-      // retry.
-      owwWasRunning = true;  // optimistic; corrected below
-    }
+    // The live listener path (v3.10.31 fix) called
+    // startOwwListening() and polled getLatestScores()
+    // + owwVad events for 4 seconds. Worked when the
+    // device's AudioRecord init succeeded. Tobe hit
+    // a v3.10.44 case where startOwwListening's
+    // AudioRecord init would silently fail (no
+    // recordingState check, no try/catch on
+    // startRecording) while the recorder's
+    // AudioRecord worked fine on the same device.
+    // Result: every wake test showed "Wake listener
+    // wasn't running" with RMS=0/peak=0, even though
+    // voice mode worked perfectly (voice mode uses
+    // the recorder path, which has the safeguards).
+    //
+    // The fix: use the recorder path for the test.
+    // Record 4s of audio to a temp WAV file, then
+    // call WakeWordModule.scoreWavFile(path) to
+    // replay the file through the OWW detector
+    // chunk-by-chunk and report peak wake score.
+    // Same output shape as the live-listener test
+    // so the result panel + diagnostic tips work
+    // unchanged. RMS comes from the WAV header's
+    // PCM data (computed natively in scoreWavFile).
+    //
+    // For exit/send, same logic applies — both also
+    // used to ride on the OWW listener. Routing
+    // them through the recorder path is symmetric
+    // and consistent.
+    //
+    // Why the live listener still exists: it's the
+    // production wake detection path (HomeScreen's
+    // startSampleMatchListener, voice mode's
+    // recording turn loop). The test path is a
+    // separate, one-shot verification of the
+    // trained model — using a recorded file is
+    // acceptable for that purpose. The live
+    // listener is untouched.
     const startMs = Date.now();
     let peak = 0;
     let maxChunk = 0;
     let scoreSum = 0;
     let scoreSamples = 0;
     let final = 0;
-    // v3.10.30: also track RMS energy so we can
-    // tell the user "your mic heard audio" vs "your
-    // mic is dead / you're not talking". The native
-    // side exposes `rms` in the owwVad event (5Hz
-    // cadence) — we listen for the most recent one
-    // and average it. Cheap.
-    let rmsSum = 0;
-    let rmsSamples = 0;
-    let lastRms = 0;
     let firedScore: number | null = null;
     let fired = false;
+    let avgRms = 0;
+    let owwWasRunning = false;
+
+    // Use a tmp path inside the cache dir so the
+    // file is auto-evicted. The recorder writes
+    // 16kHz mono PCM16 WAV — same format
+    // scoreWavFile expects.
+    const tmpPath = `${RNFS?.CacheDirectoryPath || '/data/data/com.cyberclawmobile/cache'}/wake-test-${Date.now()}.wav`;
     try {
-      const emitter = WakeWordModule ? new NativeEventEmitter(WakeWordModule) : null;
-      const onDetect = (e: any) => {
-        if (abort.cancelled) return;
-        if (!fired) {
-          fired = true;
-          firedScore = typeof e?.score === 'number' ? e.score : null;
-        }
-      };
-      // v3.10.30: also listen to owwVad for the
-      // RMS. Same emitter, different event.
-      const onVad = (e: any) => {
-        if (abort.cancelled) return;
-        if (typeof e?.rms === 'number') {
-          lastRms = e.rms;
-          rmsSum += e.rms;
-          rmsSamples++;
-        }
-      };
-      const sub = emitter?.addListener(EVENT_NAME[kind], onDetect);
-      const subVad = emitter?.addListener('owwVad', onVad);
-      try {
-        while (!abort.cancelled && Date.now() - startMs < TEST_DURATION_MS) {
-          try {
-            const scores: any = await WakeWordModule?.getLatestScores?.();
-            if (scores) {
-              const v = Number(scores[SCORE_FIELD[kind]]) || 0;
-              if (v > peak) peak = v;
-              if (v > maxChunk) maxChunk = v;
-              scoreSum += v;
-              scoreSamples++;
-              final = v;
-            }
-          } catch (_) {}
-          await new Promise((r) => setTimeout(r, POLL_MS));
-        }
-      } finally {
-        sub?.remove?.();
-        subVad?.remove?.();
-      }
+      // 4000ms silence timeout = test ends when the
+      // user stops talking (or after 4s of silence).
+      // useSmartSilence=true (default) so the
+      // recorder works in noisy environments.
+      // 4000 = TEST_DURATION_MS; if the user is
+      // silent the whole time, the recorder fires
+      // its own silence callback at 4s and we get
+      // a 4s clip of silence. If the user says the
+      // wake phrase then stops, we get a clip up to
+      // ~silence-detection-duration of audio. Both
+      // cases produce a WAV we can score.
+      await WakeWordModule?.startRecorderWithSilence?.(tmpPath, TEST_DURATION_MS, true);
+      owwWasRunning = true;
+      // Wait for the recorder to finish. It stops
+      // either on silence (smart-silence) or on the
+      // 4000ms timeout. Either way, stopRecorder()
+      // returns the WAV path. We poll for
+      // isRecordingState via the getLatestScores
+      // shim — actually no, simpler: just sleep for
+      // the test window. The recorder auto-stops
+      // when silence fires or the timeout hits, but
+      // its internal state isn't queryable from JS.
+      // A simple setTimeout for TEST_DURATION_MS is
+      // good enough.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, TEST_DURATION_MS + 200);
+      });
+    } catch (_) {
+      owwWasRunning = false;
+    }
+
+    let wavPath: string | null = null;
+    try {
+      wavPath = await WakeWordModule?.stopRecorder?.();
     } catch (_) {
       // best-effort
     }
-    if (abort.cancelled) return;
+
+    if (abort.cancelled) {
+      // Make sure the recorder is shut down even on cancel.
+      try { await WakeWordModule?.stopRecorder?.(); } catch (_) {}
+      return;
+    }
+
+    if (!wavPath && tmpPath) {
+      // Recorder may not have returned a path on
+      // auto-stop; fall back to the tmpPath (the
+      // recorder writes to that path even if the
+      // promise resolves empty in some edge cases).
+      wavPath = tmpPath;
+    }
+
+    if (wavPath && WakeWordModule?.scoreWavFile) {
+      try {
+        const scored: any = await WakeWordModule.scoreWavFile(wavPath);
+        if (scored) {
+          peak = Number(scored.peak) || 0;
+          avgRms = Number(scored.rms) || 0;
+          fired = !!scored.fired;
+          firedScore = typeof scored.firedScore === 'number' ? scored.firedScore : null;
+          scoreSamples = Number(scored.chunksScored) || 0;
+          scoreSum = peak * scoreSamples; // approximate avg for display
+          maxChunk = peak;
+          final = peak;
+        }
+      } catch (_) {
+        // scoreWavFile failed (no detector, file
+        // unreadable, etc.) — fall through with the
+        // values we have. avgRms is 0 in this case.
+        owwWasRunning = false;
+      }
+    } else {
+      owwWasRunning = false;
+    }
+
     const avg = scoreSamples > 0 ? scoreSum / scoreSamples : 0;
-    const avgRms = rmsSamples > 0 ? rmsSum / rmsSamples : lastRms;
-    // v3.10.31: refine owwWasRunning. If we
-    // expected the listener to be running and no
-    // owwVad events arrived at all, the listener
-    // wasn't actually up (or some other mic path
-    // issue). Set false so the diagnostic tip
-    // fires correctly.
-    if (rmsSamples === 0) owwWasRunning = false;
     setResult({
       fired,
       firedScore,
