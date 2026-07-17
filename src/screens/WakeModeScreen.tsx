@@ -476,12 +476,33 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
               // v3.10.48: prompt to install (once per
               // session). The native install activity
               // opens the system TTS picker.
+              // v3.10.49: copy now includes engine
+              // recommendations. Stock Android Pixel
+              // users typically have Google TTS
+              // preinstalled — they'd never see this
+              // prompt. Users on degoogled ROMs
+              // (GrapheneOS, CalyxOS, LineageOS without
+              // microG) need to install one
+              // themselves. Per the GrapheneOS usage
+              // guide (grapheneos.org/usage) the two
+              // community-recommended engines are
+              // RHVoice (more natural voices, good for
+              // assistant replies) and eSpeak NG
+              // (lighter, supports Direct Boot). For
+              // our short "Working..." cue we don't
+              // need boot-time speech, so RHVoice is
+              // the better pick when both are
+              // available. The hint is included in the
+              // Alert body so the user knows what to
+              // pick from the system picker / F-Droid
+              // without having to leave the app and
+              // research.
               const wm = (NativeModules as any).WakeWordModule;
               if (wm?.installTtsData && !ttsInstallPromptedRef.current) {
                 ttsInstallPromptedRef.current = true;
                 Alert.alert(
                   'No TTS engine',
-                  'CyberClaw needs a Text-to-Speech engine for spoken responses. Your device doesn\u2019t have one installed. Open the system installer?',
+                  'CyberClaw needs a Text-to-Speech engine for spoken responses. On stock Android use Google TTS. On GrapheneOS or other degoogled ROMs install RHVoice (recommended, more natural) or eSpeak NG from F-Droid. Open the system installer?',
                   [
                     { text: 'Later', style: 'cancel' },
                     { text: 'Install', onPress: () => { wm.installTtsData().catch(() => {}); } },
