@@ -300,14 +300,27 @@ export function useClassifierTest(
         if (wakewordToScore && WakeWordModule?.initOww) {
           try {
             await WakeWordModule.initOww(wakewordToScore, 0.5);
-          } catch (_) {
-            // initOww failed — leave the existing
-            // detector in place. scoreWavFile will use
-            // whatever's loaded (likely 'hey_jarvis').
-            // The peak will be lower than it should be
-            // but RMS still reports the mic level, so
-            // the diagnostic tip can still distinguish
-            // "mic dead" from "model mismatch".
+          } catch (e: any) {
+            // v3.10.51: don't silently swallow. Log
+            // the error so the test's log tab shows
+            // what failed. Without this, a failed
+            // initOww leaves the detector in a
+            // half-initialized state (melspec + embedding
+            // but no wake classifier) and the diagnostic
+            // tip can only say 'Loaded model: hey_jarvis'
+            // without explaining WHY. The log entry
+            // makes it clear that initOww was attempted
+            // but failed.
+            try {
+              const { addLogEntry } = require('./HomeScreen');
+              addLogEntry(
+                `⚠️ initOww('${wakewordToScore}', 0.5) failed: ${e?.message || e}. Test will score against the previously-loaded model.`,
+                'warn',
+              );
+            } catch (_) {
+              // addLogEntry not available — fine, the
+              // diagnostic tip already surfaces this.
+            }
           }
         }
         const scored: any = await WakeWordModule.scoreWavFile(wavPath);
@@ -368,7 +381,30 @@ export function useClassifierTest(
       durationMs: Date.now() - startMs,
     });
     setRunning(false);
-  }, [kind]);
+  }, [kind, options?.wakeword]);
+  // v3.10.51: added options?.wakeword to the deps.
+  // Previously the deps were [kind] only, which meant
+  // `start` was the SAME function reference for the
+  // entire component lifetime. It captured the
+  // options object from the FIRST render — before
+  // useEffect had a chance to populate
+  // activeWakeDirect. As a result, options.wakeword
+  // was undefined at capture time, and the test path
+  // skipped initOww entirely. The detector stayed on
+  // the bundled 'hey_jarvis' (or whatever was loaded
+  // at app start). Tobe's diagnostic on v3.10.50
+  // surfaced this perfectly: 'Loaded model: hey_jarvis'
+  // meant the JS never re-init'd the detector.
+  //
+  // Adding options?.wakeword to the deps makes start
+  // re-create when the wakeword changes. The hook's
+  // consumer (CompanionSettingsScreen) passes
+  // { wakeword: activeWakeDirect?.phrase }; on the
+  // first render activeWakeDirect is null, so
+  // options.wakeword = undefined; on the second
+  // render (after useEffect populated it), it's the
+  // real phrase. start re-creates and the test path
+  // sees the new wakeword.
 
   return { running, result, start, abort };
 }
