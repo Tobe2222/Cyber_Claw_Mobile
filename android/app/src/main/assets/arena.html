@@ -433,6 +433,21 @@ body.wake-mode #status{display:none!important}
     // failures remain visible. The catalog readiness is
     // already covered by the `arena_loaded` event the
     // RN side listens for.
+    //
+    // v3.10.46: ALSO clear the static "Loading arena..."
+    // text on success. v3.10.33 removed the success-path
+    // setStatus write but left the static text in the
+    // HTML's #status div, so the home arena shows
+    // "Loading arena..." in gray indefinitely until
+    // something else writes to #status (an error path).
+    // The static text was meant to be replaced by the
+    // "Arena ready" success message; with that removed,
+    // there's nothing to overwrite it on the home screen
+    // (wake/voice mode hides #status via CSS anyway).
+    // Clearing it on success keeps error surfacing intact
+    // (errors still call setStatus with their message)
+    // while making the success path visually clean.
+    setStatus('');
     notifyRN({ type: 'arena_loaded', count: catalog.companions.length });
   }
 

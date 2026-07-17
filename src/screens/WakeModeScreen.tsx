@@ -2543,9 +2543,20 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
           very top. Sits ABOVE the voice-status overlay
           so it stays visible while the user talks.
           pointerEvents="none" so it never eats taps
-          intended for the WebView below. */}
+          intended for the WebView below.
+          v3.10.46: pass mode="active-only" so the bar
+          ticks 1-per-voice-mode-turn with a 20-turn
+          threshold. Default mode="combined" would show
+          the passive OWW count (samplesTotal), which
+          accumulates before voice mode started and
+          makes the bar look pre-filled when the user
+          enters voice mode (Tobe: "100 is not correct,
+          it should be 1 for each sample"). Voice mode
+          pauses the OWW listener (recorder owns the
+          mic) so passive samples don't accumulate
+          here — only active voice-mode turns do. */}
       <View style={styles.enrollmentBarCompact} pointerEvents="none">
-        <VoiceEnrollmentBar variant="compact" />
+        <VoiceEnrollmentBar variant="compact" mode="active-only" />
       </View>
       {/* v3.10.32: wrap the WebView in a marginTop
           container so the companion sprite is visually

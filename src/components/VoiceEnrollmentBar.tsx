@@ -71,9 +71,36 @@ const LOCK_THRESHOLD_SAMPLES = 1000;
 const LOCK_THRESHOLD_WAKES = 5;
 const POLL_INTERVAL_MS = 2000;
 
-type Variant = 'full' | 'compact';
+// v3.10.46: active-only threshold for compact bar in
+// voice mode. The compact bar shows on the voice-mode
+// screen and on the Settings screen. Voice mode pauses
+// the OWW listener (recorder owns the mic) so passive
+// samples don't accumulate there. Showing the combined
+// count (passive + active) in voice mode is misleading:
+// a user entering voice mode sees e.g. "100/1000" even
+// though they haven't done a single voice-mode turn yet
+// — the 100 came from passive OWW accumulation BEFORE
+// voice mode started. Tobe (v3.10.45): "the bar in voice
+// mode says 100/1000 now for some reason. 100 is not
+// correct, it should be 1 for each sample."
+//
+// Fix: in 'active-only' mode (used by WakeModeScreen),
+// the count and bar fill reflect only activeContributions
+// (1 per voice-mode turn), with a smaller threshold
+// (ACTIVE_LOCK_THRESHOLD = 20 turns). Full mode + compact
+// mode in Settings keep the combined view.
+const ACTIVE_LOCK_THRESHOLD = 20;
 
-export default function VoiceEnrollmentBar({ variant = 'full' }: { variant?: Variant }) {
+type Variant = 'full' | 'compact';
+type Mode = 'combined' | 'active-only';
+
+export default function VoiceEnrollmentBar({
+  variant = 'full',
+  mode = 'combined',
+}: {
+  variant?: Variant;
+  mode?: Mode;
+}) {
   const [status, setStatus] = useState<SpeakerStatus | null>(null);
   const cancelledRef = useRef(false);
 
@@ -213,9 +240,25 @@ export default function VoiceEnrollmentBar({ variant = 'full' }: { variant?: Var
   // "0+200/1000" with an empty bar. Now both the bar
   // and the label reflect combinedCount.
   const combinedPct = Math.min(1, (status.samplesTotal + status.activeContributions) / LOCK_THRESHOLD_SAMPLES);
+  // v3.10.46: in 'active-only' mode (voice-mode
+  // compact bar), the count and fill reflect ONLY
+  // activeContributions with a smaller threshold
+  // (ACTIVE_LOCK_THRESHOLD = 20 turns). Showing the
+  // combined count in voice mode is misleading —
+  // voice mode pauses the OWW listener so passive
+  // samples don't accumulate there, but the combined
+  // count would still include pre-voice-mode passive
+  // samples from earlier sessions. The user sees
+  // "100/1000" even after one turn because the 100
+  // came from BEFORE voice mode. Show only the
+  // discrete-turn count in voice mode.
+  const activeOnlyPct = Math.min(1, status.activeContributions / ACTIVE_LOCK_THRESHOLD);
+  const displayProgress = mode === 'active-only'
+    ? activeOnlyPct
+    : Math.max(samplePct, wakePct, activePct, combinedPct);
   const progress = status.profileLocked
     ? 1
-    : Math.max(samplePct, wakePct, activePct, combinedPct);
+    : displayProgress;
 
   // v3.10.37: combined display per Tobe's report:
   // "the learning bar says 0+50/1000 ... it should
@@ -246,14 +289,25 @@ export default function VoiceEnrollmentBar({ variant = 'full' }: { variant?: Var
   // breakdowns. A small "🎤 N chats" badge remains in
   // the full variant for users who want to see the
   // contributions are working.
+  //
+  // v3.10.46: in 'active-only' mode (voice-mode
+  // compact bar), label shows only activeContributions
+  // with the smaller ACTIVE_LOCK_THRESHOLD denominator.
+  // Users in voice mode see a bar that ticks 1-per-turn
+  // from 0 toward 20, matching the discrete-turn model
+  // Tobe expects ("it should count 1 by 1").
   const fullLabel = status.profileLocked
     ? `✓ Voice profile locked (${status.samplesTotal} samples)`
-    : showActive
-      ? `🎙 Learning your voice — ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}   🎤 ${status.activeContributions} chats`
-      : `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES}`;
+    : mode === 'active-only'
+      ? `🎙 Learning your voice — ${status.activeContributions}/${ACTIVE_LOCK_THRESHOLD}`
+      : showActive
+        ? `🎙 Learning your voice — ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}   🎤 ${status.activeContributions} chats`
+        : `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES}`;
   const compactLabel = status.profileLocked
     ? `Voice locked`
-    : `Learning ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}`;
+    : mode === 'active-only'
+      ? `Learning ${status.activeContributions}/${ACTIVE_LOCK_THRESHOLD}`
+      : `Learning ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}`;
 
   return (
     <BarShell
