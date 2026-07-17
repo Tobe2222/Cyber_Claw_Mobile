@@ -190,6 +190,19 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // is sent, cleared when a chat/audio_response event arrives
   // (or when voice mode exits).
   const transcribingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // v3.10.50: late-response flag. Set when a chat or
+  // audio_response arrives from the desktop — used by
+  // the no-response retry path to decide whether to open
+  // a new recording turn or to defer to the late response.
+  // Without this flag, the retry path can fire startRecording
+  // Turn AFTER a late response has already set the status to
+  // 'responding', causing the user to briefly see YOUR TURN
+  // (during startRecordingTurn's setVoiceStatus('listening'))
+  // followed immediately by the response audio — a confusing
+  // cycle bounce. With the flag, the retry path checks
+  // this ref synchronously before opening the recorder and
+  // bails out if a response is already in flight.
+  const lateResponseReceivedRef = useRef<boolean>(false);
   // v3.10.34: thinking-state timer. Fires
   // DEFAULT_WORKING_DELAY_MS (1500ms) after audio is sent.
   // If still pending when the desktop responds (chat or
@@ -1302,6 +1315,15 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   const stopAndSendRecording = useCallback(async (triggerReason: 'silence' | 'send') => {
     if (stopInFlightRef.current) return;
     stopInFlightRef.current = true;
+    // v3.10.50: reset the late-response flag for this new
+    // turn. The previous turn's flag (set by onChat or
+    // onAudioResponse) is no longer relevant — we want
+    // the retry path to check afresh for THIS turn's
+    // response. Without this reset, a late response from
+    // a previous turn could suppress the retry on this
+    // turn even though the desktop hasn't actually
+    // responded yet.
+    lateResponseReceivedRef.current = false;
     const recorder = getSimpleAudioRecorder();
     // v3.9.6 — always clear the silence listener + countdown
     // interval at the top of stopAndSendRecording. Covers all
@@ -1617,7 +1639,61 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
             // successful-response path (via afterPlayback);
             // on a no-response retry there was no cue
             // because audioPlayerFinished never fired.
+            //
+            // v3.10.50: GRACE PERIOD. Before opening
+            // the recorder (and especially before
+            // playing the cue), check whether a late
+            // response already arrived. The desktop
+            // pipeline occasionally takes >30s (LLM
+            // outage, slow STT, etc). When it finally
+            // responds, the late response can race
+            // with the retry: retry sets 'retrying'
+            // status, then onChat flips it to
+            // 'responding' and onAudioResponse starts
+            // playback. Without this check, the retry
+            // would also play the cue, open the
+            // recorder (YOUR TURN flashes briefly),
+            // then the response audio would interrupt
+            // the recorder — a confusing cycle
+            // bounce where the user sees:
+            //   ...thinking → 'no response, retrying'
+            //   → YOUR TURN (cue plays, recorder opens)
+            //   → responding (response audio plays)
+            //   → audio finishes → YOUR TURN (cue again)
+            // The 'YOUR TURN' that appears DURING
+            // response audio is the visual bug.
+            //
+            // Fix: synchronously check lateResponse
+            // ReceivedRef before playing the cue. If
+            // true, the response is already in flight
+            // (status 'responding'); don't open the
+            // recorder at all. afterPlayback will
+            // handle the YOUR TURN transition when
+            // the response audio actually finishes.
+            // The 'retrying' status set just above
+            // will be visually overwritten by
+            // 'responding' (already set by onChat), so
+            // the user sees a smooth transition from
+            // thinking → responding (audio plays) →
+            // listening (YOUR TURN).
+            if (lateResponseReceivedRef.current) {
+              addLogEntry('🔁 Retry path aborted — late response arrived', 'debug');
+              // Don't reset the flag here; let it stay
+              // true so any further 'transcribing
+              // timeout' that may have already queued
+              // (e.g. a second timeout from a previous
+              // turn) also bails. The flag is reset
+              // at the start of the next stopAndSendRecording.
+              return;
+            }
             playTurnCueAndWait().then(() => {
+              // Re-check after the cue — the cue takes
+              // ~1-2s and a late response can arrive
+              // during that window. If so, abort.
+              if (lateResponseReceivedRef.current) {
+                addLogEntry('🔁 Retry path aborted — late response arrived during cue', 'debug');
+                return;
+              }
               startRecordingTurnRef.current?.()
                 .then(() => {
                   // startRecordingTurn sets 'listening'
@@ -1916,6 +1992,16 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         clearTimeout(thinkingTimerRef.current);
         thinkingTimerRef.current = null;
       }
+      // v3.10.50: late-response flag. Set when ANY
+      // assistant message arrives (chat text or
+      // audio_response — both are handled in their
+      // respective branches below). The no-response
+      // retry path checks this before opening a new
+      // recording turn; if a response is already in
+      // flight, the retry bails out and lets the
+      // response audio play cleanly without the
+      // user seeing a flash of YOUR TURN.
+      lateResponseReceivedRef.current = true;
       cancelWorkingCue();
       // Treat any non-user text as a wake-mode response
       addLogEntry(`💬 Wake Mode response: "${msg.text?.substring(0, 60)}..."`, 'received');
@@ -1931,6 +2017,13 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
         clearTimeout(transcribingTimeoutRef.current);
         transcribingTimeoutRef.current = null;
       }
+      // v3.10.50: late-response flag (paired with
+      // onChat branch above). When both chat text and
+      // audio_response arrive, the FIRST one to fire
+      // sets the flag; the second is a no-op. The
+      // retry path checks this synchronously before
+      // opening a new recording window.
+      lateResponseReceivedRef.current = true;
       // v3.10.34: also clear the thinking-state timer
       // and cancel working cue/speech. audio_response
       // usually follows chat within milliseconds, but

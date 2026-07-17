@@ -83,6 +83,17 @@ export type ClassifierTestResult = {
   // being dead. The result panel now says
   // "OWW listener wasn't running" when false.
   owwWasRunning: boolean;
+  // v3.10.50: which wake model was loaded when the
+  // test ran. Used by the diagnostic tip to tell
+  // the user 'Loaded model: hey_jarvis' (the bundled
+  // default) vs 'Loaded model: hey clawsuu' (the
+  // user's trained wake). Peak=0 with the wrong model
+  // is expected (the model doesn't recognize the
+  // user's phrase); peak=0 with the right model is a
+  // genuine miss. Without this field the user can't
+  // distinguish the two.
+  loadedWakeword: string;
+  detectorLoaded: boolean;
   final: number;
   durationMs: number;
 };
@@ -179,6 +190,17 @@ export function useClassifierTest(
     let fired = false;
     let avgRms = 0;
     let owwWasRunning = false;
+    // v3.10.50: track which model the detector was
+    // actually using when scoring. Used by the result
+    // panel's diagnostic tip to tell the user
+    // 'Loaded model: hey_jarvis' vs 'Loaded model: hey
+    // clawsuu' so a peak=0 result can be diagnosed
+    // without logcat. If the detector was null at
+    // score time, detectorLoaded=false; if it was
+    // loaded but with a different wakeword than the
+    // user's active one, the loadedWakeword differs.
+    let loadedWakeword = '';
+    let detectorLoaded = false;
 
     // Use a tmp path inside the cache dir so the
     // file is auto-evicted. The recorder writes
@@ -298,6 +320,28 @@ export function useClassifierTest(
           scoreSum = peak * scoreSamples; // approximate avg for display
           maxChunk = peak;
           final = peak;
+          // v3.10.50: surface diagnostic info from the
+          // native side. The result object now includes
+          // `loadedWakeword` (the wakeword the detector
+          // is currently using) and `detectorLoaded`
+          // (boolean). This lets the result panel tell
+          // the user WHICH model the test actually
+          // scored against — without this, peak=0
+          // always reads as 'model never matched'
+          // even when the wrong model was loaded. Tobe
+          // hit peak=0 in v3.10.48 testing where the
+          // detector may have stayed on 'hey_jarvis'
+          // despite initOww being called with the
+          // active phrase; this field would have
+          // shown that. We attach the loaded wakeword
+          // to the result object so the diagnostic
+          // tip can include it.
+          (scored as any).__loadedWakeword = scored.loadedWakeword;
+          (scored as any).__detectorLoaded = scored.detectorLoaded;
+          // Also save it in a local var so we can
+          // pick it up below when building the result.
+          loadedWakeword = String(scored.loadedWakeword || '');
+          detectorLoaded = !!scored.detectorLoaded;
         }
       } catch (_) {
         // scoreWavFile failed (no detector, file
@@ -318,6 +362,8 @@ export function useClassifierTest(
       maxChunk,
       avgRms,
       owwWasRunning,
+      loadedWakeword,
+      detectorLoaded,
       final,
       durationMs: Date.now() - startMs,
     });
@@ -475,7 +521,29 @@ function diagnosticTip(r: ClassifierTestResult, fallback: string): string {
     return '⚠️ Mic heard almost nothing. Check mic permission, speak louder, or hold the phone closer.';
   }
   if (r.peak < 0.05) {
-    return '⚠️ Mic heard you, but the model never matched. The wake phrase in the trained model may differ from what you said — try again with the exact phrase, or retrain with cleaner samples.';
+    // v3.10.50: distinguish 'model never matched the
+    // right phrase' from 'wrong model loaded'. Tobe
+    // hit peak=0 in v3.10.48 where the detector was
+    // probably still on 'hey_jarvis' (bundled default)
+    // despite the test calling initOww with the
+    // active phrase. The diagnostic tip should tell
+    // the user WHICH model scored the audio so they
+    // can see at a glance whether the right model
+    // was loaded. If loadedWakeword is set and
+    // matches the active phrase, it's a genuine
+    // miss (retrain needed). If loadedWakeword is
+    // 'hey_jarvis' or empty, the test scored against
+    // the wrong model.
+    const loadedLabel = r.loadedWakeword
+      ? ` Loaded model: ${r.loadedWakeword}.`
+      : ' Detector not loaded.';
+    if (r.loadedWakeword === 'hey_jarvis') {
+      return `⚠️ Mic heard you, but the test scored against the bundled 'hey_jarvis' model instead of your trained wake phrase. The active wake binding may be missing — open the Wake sub-page and verify the trained phrase is selected.${loadedLabel}`;
+    }
+    if (r.loadedWakeword && r.loadedWakeword !== 'hey_jarvis') {
+      return `⚠️ Mic heard you, but the loaded model (${r.loadedWakeword}) didn\u2019t match what you said. Try again with the exact phrase, or retrain with cleaner samples.${loadedLabel}`;
+    }
+    return `⚠️ Mic heard you, but the model never matched. The wake phrase in the trained model may differ from what you said — try again with the exact phrase, or retrain with cleaner samples.${loadedLabel}`;
   }
   if (r.peak < 0.30) {
     return '⚠️ Model saw something but not enough. Try a clearer pronunciation, or retrain with 6 fresh samples in a quiet room.';

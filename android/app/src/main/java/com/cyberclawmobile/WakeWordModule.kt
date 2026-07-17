@@ -3004,6 +3004,25 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 putString("wakeword", wakeword)
                 putInt("chunksScored", chunksScored)
                 putInt("samplesTotal", samples.size)
+                // v3.10.50: diagnostic info so the JS
+                // can surface what model was actually
+                // loaded. Tobe hit peak=0 in v3.10.48
+                // despite the JS test path calling
+                // initOww(wakeword, 0.5) — the
+                // diagnostic tip said 'model never
+                // matched' but didn't tell us WHICH
+                // model was loaded. Including the
+                // current detector's wakeword here
+                // lets the JS side say 'Loaded model:
+                // hey_jarvis' vs 'Loaded model: hey
+                // clawsuu' so the user can tell at a
+                // glance whether initOww took effect.
+                // The wakeword arg above is the value
+                // passed to scoreWavFile; the new
+                // fields are the detector's actual
+                // state after initOww ran.
+                putString("loadedWakeword", owwWakeword)
+                putBoolean("detectorLoaded", detector != null)
             }
             promise.resolve(result)
         } catch (e: Exception) {
