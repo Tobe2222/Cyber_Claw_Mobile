@@ -196,39 +196,22 @@ export default function CompanionSettingsScreen({
     path?: string;
   } | null>(null);
 
-  // v3.10.25: "Test wake" now uses the shared
-  // `useClassifierTest` hook from
-  // src/components/ClassifierTest.tsx. Same 4s
-  // listening window, same 80ms poll cadence, same
-  // owwWakeDetected listener for the "fired" flag.
-// The hook handles wake/exit/send consistently —
-// the wake page only renders the wake peak (Tobe's
-// v3.10.25 feedback: wake test should not show exit
-// or send). The exit and send pages have their own
-// panels (added in v3.10.25 too).
-  //
-  // v3.10.48: pass activeWakeDirect.phrase as the
-  // wakeword so scoreWavFile re-inits the OWW
-  // detector with the right model before scoring.
-  // Without this, scoreWavFile uses the bundled
-  // 'hey_jarvis' (hardcoded at app start by
-  // HomeScreen's startSampleMatchListener since
-  // v3.2.0) and a custom-trained wake like "Hey
-  // Clawsuu" never matches — peak stays 0 even
-  // when the user says the right phrase. Tobe hit
-  // this in v3.10.47 testing (RMS 0.094, peak 0,
-  // listener running, diagnostic: 'model never
-  // matched'). The wakeword param solves it
-  // cleanly: initOww(phrase, 0.5) before scoreWavFile
-  // loads the right model from the wake-set registry.
-  // If activeWakeDirect is null (no active wake
-  // bound), the hook falls back to whatever the
-  // detector already has loaded.
-const {
-  running: wakeTestRunning,
-  result: wakeTestResult,
-  start: handleTestWake,
-} = useClassifierTest('wake', { wakeword: activeWakeDirect?.phrase });
+// v3.10.25: 'Test wake' was extracted into a shared
+  // useClassifierTest hook. The wake sub-page now
+  // renders <ClassifierTestPanel kind='wake'
+  // wakeword={activeWakeDirect?.phrase} /> directly
+  // (see below). The companion-level hook here was
+  // REMOVED in v3.10.52 because it shadowed the
+  // panel's hook and produced an unused
+  // handleTestWake function. The shadowing was the
+  // root cause of the v3.10.50 'Loaded model:
+  // hey_jarvis' diagnostic — the panel called the
+  // hook without options, so the test path's initOww
+  // was never invoked. The companion-level hook had
+  // the right options but wasn't wired to the panel's
+  // button. Both fixed by deleting the companion-level
+  // call and threading wakeword through the panel's
+  // own props.
 
   // v3.10.23: speaker enrollment was removed from
   // CompanionSettingsScreen. The user voice profile
@@ -1089,7 +1072,7 @@ const {
                   pages now (Exit page → ClassifierTestPanel
                   kind="exit"; Send section → kind="send").
                 */}
-                <ClassifierTestPanel kind="wake" />
+                <ClassifierTestPanel kind="wake" wakeword={activeWakeDirect?.phrase} />
 
                 {/*
                   v3.10.23: speaker enrollment UI removed.

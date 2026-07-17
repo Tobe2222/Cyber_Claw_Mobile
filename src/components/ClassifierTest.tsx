@@ -443,12 +443,29 @@ export function ClassifierTestPanel({
   kind,
   labelOverride,
   hintOverride,
+  wakeword,
 }: {
   kind: ClassifierKind;
   labelOverride?: string;
   hintOverride?: string;
+  // v3.10.52: pass wakeword through to the hook.
+  // Previously the panel called useClassifierTest(kind)
+  // WITHOUT options, so the test path's initOww was
+  // never invoked and the detector kept whatever
+  // model was loaded at app start (typically the
+  // bundled 'hey_jarvis' from HomeScreen's init).
+  // The companion-level hook at
+  // CompanionSettingsScreen.tsx:213 does pass
+  // wakeword correctly — but the wake sub-page
+  // renders ClassifierTestPanel directly, not the
+  // companion-level hook's start function. So the
+  // panel needed its own wakeword prop. Caller
+  // (CompanionSettingsScreen wake sub-page) now
+  // passes activeWakeDirect?.phrase down to the
+  // panel.
+  wakeword?: string;
 }) {
-  const { running, result, start } = useClassifierTest(kind);
+  const { running, result, start } = useClassifierTest(kind, { wakeword });
   const c = COPY[kind];
   return (
     <View>
