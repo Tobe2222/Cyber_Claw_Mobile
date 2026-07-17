@@ -206,11 +206,29 @@ export default function CompanionSettingsScreen({
 // v3.10.25 feedback: wake test should not show exit
 // or send). The exit and send pages have their own
 // panels (added in v3.10.25 too).
+  //
+  // v3.10.48: pass activeWakeDirect.phrase as the
+  // wakeword so scoreWavFile re-inits the OWW
+  // detector with the right model before scoring.
+  // Without this, scoreWavFile uses the bundled
+  // 'hey_jarvis' (hardcoded at app start by
+  // HomeScreen's startSampleMatchListener since
+  // v3.2.0) and a custom-trained wake like "Hey
+  // Clawsuu" never matches — peak stays 0 even
+  // when the user says the right phrase. Tobe hit
+  // this in v3.10.47 testing (RMS 0.094, peak 0,
+  // listener running, diagnostic: 'model never
+  // matched'). The wakeword param solves it
+  // cleanly: initOww(phrase, 0.5) before scoreWavFile
+  // loads the right model from the wake-set registry.
+  // If activeWakeDirect is null (no active wake
+  // bound), the hook falls back to whatever the
+  // detector already has loaded.
 const {
   running: wakeTestRunning,
   result: wakeTestResult,
   start: handleTestWake,
-} = useClassifierTest('wake');
+} = useClassifierTest('wake', { wakeword: activeWakeDirect?.phrase });
 
   // v3.10.23: speaker enrollment was removed from
   // CompanionSettingsScreen. The user voice profile

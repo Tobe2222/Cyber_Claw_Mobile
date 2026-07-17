@@ -296,18 +296,33 @@ export default function VoiceEnrollmentBar({
   // Users in voice mode see a bar that ticks 1-per-turn
   // from 0 toward 20, matching the discrete-turn model
   // Tobe expects ("it should count 1 by 1").
+  //
+  // v3.10.48: cap the displayed count at the threshold
+  // so the label reads "X/Y" where X ≤ Y. Tobe hit
+  // "Learning 101/20" in v3.10.47 because the bar
+  // fill was capped (Math.min(1, ...)) but the label
+  // showed the raw count. The bar was at 100% but the
+  // label said "101/20" which looked like an overflow
+  // bug. Fix: cap the display value with Math.min so
+  // the label never shows a numerator larger than the
+  // denominator. The actual native
+  // enrollmentSamplesTotal continues to accumulate
+  // uncapped — only the UI display is capped.
+  const activeCapped = Math.min(status.activeContributions, ACTIVE_LOCK_THRESHOLD);
+  const combinedCapped = Math.min(combinedCount, LOCK_THRESHOLD_SAMPLES);
+  const samplesCapped = Math.min(status.samplesTotal, LOCK_THRESHOLD_SAMPLES);
   const fullLabel = status.profileLocked
     ? `✓ Voice profile locked (${status.samplesTotal} samples)`
     : mode === 'active-only'
-      ? `🎙 Learning your voice — ${status.activeContributions}/${ACTIVE_LOCK_THRESHOLD}`
+      ? `🎙 Learning your voice — ${activeCapped}/${ACTIVE_LOCK_THRESHOLD}`
       : showActive
-        ? `🎙 Learning your voice — ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}   🎤 ${status.activeContributions} chats`
-        : `🎙 Learning your voice — ${status.samplesTotal}/${LOCK_THRESHOLD_SAMPLES}`;
+        ? `🎙 Learning your voice — ${combinedCapped}/${LOCK_THRESHOLD_SAMPLES}   🎤 ${status.activeContributions} chats`
+        : `🎙 Learning your voice — ${samplesCapped}/${LOCK_THRESHOLD_SAMPLES}`;
   const compactLabel = status.profileLocked
     ? `Voice locked`
     : mode === 'active-only'
-      ? `Learning ${status.activeContributions}/${ACTIVE_LOCK_THRESHOLD}`
-      : `Learning ${combinedCount}/${LOCK_THRESHOLD_SAMPLES}`;
+      ? `Learning ${activeCapped}/${ACTIVE_LOCK_THRESHOLD}`
+      : `Learning ${combinedCapped}/${LOCK_THRESHOLD_SAMPLES}`;
 
   return (
     <BarShell

@@ -106,7 +106,10 @@ const EVENT_NAME: Record<ClassifierKind, string> = {
 const TEST_DURATION_MS = 4000;
 const POLL_MS = 80;
 
-export function useClassifierTest(kind: ClassifierKind) {
+export function useClassifierTest(
+  kind: ClassifierKind,
+  options?: { wakeword?: string }
+) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ClassifierTestResult | null>(null);
   const abortRef = useRef<{ cancelled: boolean } | null>(null);
@@ -237,6 +240,54 @@ export function useClassifierTest(kind: ClassifierKind) {
 
     if (wavPath && WakeWordModule?.scoreWavFile) {
       try {
+        // v3.10.48: re-init the OWW detector with the
+        // user's ACTIVE wake phrase before scoring. The
+        // detector was init'd at app start by HomeScreen
+        // with the bundled 'hey_jarvis' (hardcoded since
+        // v3.2.0). When the user has trained a custom
+        // wake ("Hey Clawsuu"), scoreWavFile would score
+        // the recorded audio against the wrong model and
+        // report peak=0 even when the user said the
+        // right phrase. Tobe hit this in v3.10.47: peak
+        // 0%, RMS 0.094, listener running — proving mic
+        // works but model mismatch was hidden in the
+        // wake-test path.
+        //
+        // If a wakeword is passed via options, initOww
+        // here. initOww is idempotent — it replaces the
+        // current detector and uses the bundled asset
+        // (for 'hey_jarvis' et al.) or the wake-set
+        // registry lookup (for custom-trained phrases
+        // like 'hey clawsuu' — see
+        // OpenWakeWordDetector.findWakeModelByPhrase).
+        // For exit/send tests, the wakeword doesn't
+        // affect scoring (we read wake/exit/send
+        // scores per kind), but re-initing here is
+        // harmless — the detector reloads its
+        // classifiers and the test still scores the
+        // right one.
+        //
+        // We DON'T restore the original detector after
+        // the test. The detector stays re-init'd with
+        // the right wake model, which is what the user
+        // wants anyway. HomeScreen's startSampleMatch
+        // Listener calls initOww('hey_jarvis', ...) on
+        // its own when it remounts, so restoring is
+        // not necessary.
+        const wakewordToScore = options?.wakeword;
+        if (wakewordToScore && WakeWordModule?.initOww) {
+          try {
+            await WakeWordModule.initOww(wakewordToScore, 0.5);
+          } catch (_) {
+            // initOww failed — leave the existing
+            // detector in place. scoreWavFile will use
+            // whatever's loaded (likely 'hey_jarvis').
+            // The peak will be lower than it should be
+            // but RMS still reports the mic level, so
+            // the diagnostic tip can still distinguish
+            // "mic dead" from "model mismatch".
+          }
+        }
         const scored: any = await WakeWordModule.scoreWavFile(wavPath);
         if (scored) {
           peak = Number(scored.peak) || 0;

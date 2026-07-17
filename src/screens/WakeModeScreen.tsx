@@ -18,7 +18,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, BackHandler, StatusBar,
-  NativeModules, NativeEventEmitter, AppState, Platform,
+  NativeModules, NativeEventEmitter, AppState, Platform, Alert,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -160,6 +160,12 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
   // resumes so the next silence period can fire again.
   const silenceFiredRef = useRef<boolean>(false);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
+  // v3.10.48: guard so the no-TTS-engine install Alert
+  // prompts at most once per voice-mode session. Reset
+  // on remount (new session). Without this guard a
+  // user with a missing TTS engine would see the
+  // Alert on every turn.
+  const ttsInstallPromptedRef = useRef<boolean>(false);
   const wakeWordBusyRef = useRef(false);
   const appStateRef = useRef<string>(AppState.currentState);
   const exitRef = useRef(onExit);
@@ -446,6 +452,19 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
             // — the most common cause on stripped Android
             // skins or devices where the user uninstalled
             // the default engine.
+            //
+            // v3.10.48: also offer to launch the system
+            // TTS install activity (Google TTS / eSpeak
+            // NG). Previously the log said 'install one'
+            // but the user had to leave the app and find
+            // the install flow themselves. Now the Alert
+            // has an Install button that calls
+            // WakeWordModule.installTtsData() which
+            // launches the system intent directly.
+            // Only shown ONCE per voice-mode session
+            // (ttsInstallPromptedRef guards repeat
+            // prompts) so a user who dismisses the
+            // dialog isn't nagged on every turn.
             const code = err?.code || '';
             if (code === 'TTS_INIT_FAILED' && /status=-1/.test(err?.message || '')) {
               addVoiceLog('🔊 ❌ no TTS engine — install one');
@@ -454,6 +473,21 @@ export default function WakeModeScreen({ companionId, agents, onExit, voiceMode 
               // these devices. Just resolve immediately
               // so the listener can start.
               done('no-tts-engine');
+              // v3.10.48: prompt to install (once per
+              // session). The native install activity
+              // opens the system TTS picker.
+              const wm = (NativeModules as any).WakeWordModule;
+              if (wm?.installTtsData && !ttsInstallPromptedRef.current) {
+                ttsInstallPromptedRef.current = true;
+                Alert.alert(
+                  'No TTS engine',
+                  'CyberClaw needs a Text-to-Speech engine for spoken responses. Your device doesn\u2019t have one installed. Open the system installer?',
+                  [
+                    { text: 'Later', style: 'cancel' },
+                    { text: 'Install', onPress: () => { wm.installTtsData().catch(() => {}); } },
+                  ],
+                );
+              }
               return;
             }
             addVoiceLog(`🔊 native failed: ${err?.message || err}`);
