@@ -928,6 +928,23 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
           recognizes the phrase on this device.
         </Text>
 
+        {/* v3.10.53: volume diversity hint. The trainer's openWakeWord
+            pipeline now uses a symmetric ±18dB Gain augmentation range
+            (desktop v3.2.13+), so trained models can be volume-invariant
+            — but they need positives at varied volumes to learn from.
+            Suggesting "whisper / normal / shout" prompts the user to
+            produce human-curated diversity rather than relying solely
+            on the augmentation to cover the volume space. Especially
+            helps with: whispering late at night, calling to the phone
+            from across the room, shouting over background noise. */}
+        {!isTrainingInProgress && !isFinished && samples.length < REQUIRED_SAMPLES && (
+          <Text style={styles.hint}>
+            Tip: vary your volume across the {REQUIRED_SAMPLES} samples — try a
+            whisper, a normal voice, and a shout. The trained model will then
+            recognize you whether you whisper or call from across the room.
+          </Text>
+        )}
+
         {!isTrainingInProgress && !isFinished && (
           <View style={styles.phraseRow}>
             <Text style={styles.label}>Wake phrase</Text>
