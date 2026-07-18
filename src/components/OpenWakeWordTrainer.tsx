@@ -183,6 +183,25 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
   // value. Otherwise default to `hey ${companionName}`
   // — the existing behavior for first-time training.
   const [wakePhrase, setWakePhrase] = useState(presetPhrase ?? `hey ${companionName}`);
+  // v3.10.54: wakePhraseRef is kept in sync with the
+  // wakePhrase state on every render, so async callbacks
+  // registered via useRef (like _onModel below) can read
+  // the LATEST typed phrase at fire time. Before this
+  // fix, the _onModel handler was captured by useRef on
+  // the FIRST render — when wakePhrase was either '' (if
+  // the user tapped "Train new wake phrase" with no
+  // preset) or the placeholder default ('hey clawsuu').
+  // When training completed, _onModel called
+  // setWakeModelFromBase64(companionId, base64,
+  // wakePhrase) with that STALE initial value, so the
+  // native side stored an empty phrase → setId fallback
+  // to 'wake-<timestamp>' → activeWakeDirect.phrase
+  // empty → UI showed the setId instead of the user's
+  // typed name. Tobe hit this on 2026-07-18:
+  // 'Its name is still not the same as i set it to, i
+  // called it Hey clawsuu.'
+  const wakePhraseRef = useRef(wakePhrase);
+  wakePhraseRef.current = wakePhrase;
   const [samples, setSamples] = useState<string[]>([]);  // absolute paths
   // v3.8.2: optional user-recorded near-miss clips. Each
   // entry is { path, phrase } where `phrase` is what the user
@@ -695,10 +714,17 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     setProgress(98);
     setStatusMsg('Activating on this device...');
     try {
+      // v3.10.54: read wakePhrase from wakePhraseRef, NOT
+      // the captured-in-closure wakePhrase variable. The
+      // latter was the initial value at the time _onModel
+      // was first created (via useRef); if the user typed
+      // a new phrase after opening the trainer, the typed
+      // text never reached this callback. See wakePhraseRef
+      // declaration above for the full bug writeup.
       const savedPath: string = await WakeWordModule.setWakeModelFromBase64(
         companionId,
         msg.base64,
-        wakePhrase,
+        wakePhraseRef.current,
       );
       setStage('complete');
       setProgress(100);
@@ -764,7 +790,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
           // after a training completion, the user
           // hasn't started talking yet.
           try { await BackgroundService.stop(); } catch (_) {}
-          try { await BackgroundService.start(wakePhrase); } catch (_) {}
+          try { await BackgroundService.start(wakePhraseRef.current); } catch (_) {}
         }
       } catch (_) {
         // best-effort. The training itself succeeded;
