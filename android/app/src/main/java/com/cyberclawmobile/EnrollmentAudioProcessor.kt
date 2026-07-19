@@ -282,7 +282,7 @@ class EnrollmentAudioProcessor private constructor(private val appContext: Conte
      */
     fun clearProfile() {
         synchronized(lock) {
-            detector.clearPrimaryProfileAndCounters()
+            detector.clearPrimaryProfile()
         }
     }
 
