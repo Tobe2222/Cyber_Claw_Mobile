@@ -1030,14 +1030,21 @@ export default function CompanionSettingsScreen({
                       phrase all became the same string —
                       and v3.10.5's panel showed it twice
                       (once big in white, once small in
-                      green). Hide the setId line when it
-                      would just repeat the phrase above.
+                      green).
+
+                      v3.10.55: removed the setId line
+                      entirely. Tobe reported (2026-07-19)
+                      that the setId is redundant with the
+                      Wake Sets manager, which already
+                      shows it as the primary identifier
+                      for each set. Showing it twice
+                      (here + in the manager) is noise.
+                      The displayName + .tflite path are
+                      the only useful fields on this panel
+                      — displayName for human recognition,
+                      path for debugging ("does the file
+                      actually exist on disk?").
                     */}
-                    {activeWakeDirect.setId !== (activeWakeDirect.displayName || activeWakeDirect.phrase) ? (
-                      <Text style={styles.activeWakeSetId}>
-                        {activeWakeDirect.setId}
-                      </Text>
-                    ) : null}
                     {activeWakeDirect.path ? (
                       <Text style={styles.activeWakePath} numberOfLines={1}>
                         {activeWakeDirect.path}
