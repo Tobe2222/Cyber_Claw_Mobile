@@ -45,6 +45,22 @@ class CyberClawService : Service() {
     private var bgOwwBuffer = ShortArray(4096)
     private var bgOwwBufferFill: Int = 0
     private var bgOwwHighFrames: Int = 0
+
+    // v3.10.64: strict mode. When true AND the speaker
+    // profile is locked, Vosk processing is skipped
+    // entirely (only the OWW TFLite classifier is
+    // used). Battery saver for users who don't need
+    // Vosk's text-matching reliability and want to
+    // drop the ~50MB RAM + ~10% CPU it consumes.
+    //
+    // Default: false (Vosk runs alongside OWW; both
+    // gated by the speaker profile — the security
+    // guarantee is preserved in either mode).
+    //
+    // Reads the SharedPreferences key
+    // "cyberclaw-bg-strict-mode" set by the JS UI
+    // (Wake Settings > "Strict mode" toggle).
+    @Volatile private var strictMode: Boolean = false
     // Match WakeWordModule.kt's HIGH_SCORE_RUN = 3.
     // 3 consecutive 80ms frames above threshold means
     // the wake word has been detected.
@@ -99,6 +115,16 @@ class CyberClawService : Service() {
             // Both paths check the speaker gate via
             // EnrollmentAudioProcessor (v3.10.60).
             initBgOwwDetector()
+            // v3.10.64: read strict mode from SharedPreferences
+            // (set by the JS UI). When strict mode is on AND
+            // the profile is locked, Vosk processing is
+            // skipped in the listen loop below. Default off.
+            try {
+                val strict = getSharedPreferences("cyberclaw_settings", MODE_PRIVATE)
+                    .getBoolean("bg_strict_mode", false)
+                strictMode = strict
+                Log.i("CyberClawService", "Strict mode: $strict")
+            } catch (_: Exception) {}
             startWakeListening()
         } catch (e: Exception) {
             Log.e("CyberClawService", "Vosk init failed", e)
@@ -208,6 +234,16 @@ class CyberClawService : Service() {
                 // continues below as the text-based
                 // fallback path.
                 processBgOwwChunk(buf, read, enrollment)
+                // v3.10.64: strict mode. When on AND the
+                // speaker profile is locked, skip Vosk
+                // processing entirely. Battery saver —
+                // drops ~10% CPU + ~50MB RAM that Vosk
+                // consumes on continuous BG listening.
+                // OWW TFLite + speaker gate is sufficient
+                // for the locked user.
+                if (strictMode && enrollment.isProfileLocked()) {
+                    continue
+                }
                 for (i in 0 until read) {
                     byteBuf[i * 2] = (buf[i].toInt() and 0xFF).toByte()
                     byteBuf[i * 2 + 1] = (buf[i].toInt() shr 8 and 0xFF).toByte()

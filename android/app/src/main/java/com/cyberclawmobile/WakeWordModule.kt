@@ -3283,6 +3283,38 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // v3.10.64: strict mode toggle. When on AND the
+    // speaker profile is locked, CyberClawService skips
+    // Vosk processing (only OWW TFLite runs). Battery
+    // saver — drops ~10% CPU + ~50MB RAM.
+    //
+    // Stored in SharedPreferences("cyberclaw_settings").
+    // CyberClawService reads this on init.
+    private val STRICT_MODE_PREFS = "cyberclaw_settings"
+    private val STRICT_MODE_KEY = "bg_strict_mode"
+
+    @ReactMethod fun getBgStrictMode(promise: Promise) {
+        try {
+            val v = reactContext.getSharedPreferences(STRICT_MODE_PREFS, android.content.Context.MODE_PRIVATE)
+                .getBoolean(STRICT_MODE_KEY, false)
+            promise.resolve(v)
+        } catch (e: Exception) {
+            promise.reject("STRICT_MODE_GET_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun setBgStrictMode(enabled: Boolean, promise: Promise) {
+        try {
+            reactContext.getSharedPreferences(STRICT_MODE_PREFS, android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(STRICT_MODE_KEY, enabled)
+                .apply()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("STRICT_MODE_SET_ERROR", e.message)
+        }
+    }
+
     /**
      * v3.10.23: recompute the primary profile from the
      * current enrollment buffer. If auto-lock thresholds

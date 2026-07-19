@@ -305,6 +305,62 @@ export default function ActiveEnrollmentPanel() {
           <Text style={styles.retrainBtnText}>🎤 Re-train voice</Text>
         </TouchableOpacity>
       )}
+
+      {/* Strict mode toggle — visible always (not just
+          when locked). Strict mode drops Vosk once the
+          profile is locked, saving battery. The toggle
+          is informational even before lock. */}
+      <StrictModeToggle locked={status?.profileLocked ?? false} />
+    </View>
+  );
+}
+
+/**
+ * v3.10.64: strict mode toggle. When enabled AND the
+ * speaker profile is locked, the BG service skips
+ * Vosk processing entirely (only OWW TFLite runs).
+ * Saves ~10% CPU + ~50MB RAM during continuous BG
+ * listening.
+ *
+ * Settings persist via NativeModules.WakeWordModule
+ * .setBgStrictMode / .getBgStrictMode. CyberClawService
+ * reads the SharedPreferences value on init.
+ */
+function StrictModeToggle({ locked }: { locked: boolean }) {
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    WakeWordModule?.getBgStrictMode?.()
+      .then((v: boolean) => setEnabled(!!v))
+      .catch(() => {});
+  }, []);
+
+  const toggle = useCallback(async () => {
+    const next = !enabled;
+    try {
+      await WakeWordModule?.setBgStrictMode?.(next);
+      setEnabled(next);
+    } catch (_) {}
+  }, [enabled]);
+
+  return (
+    <View style={styles.strictRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.strictTitle}>Strict mode</Text>
+        <Text style={styles.strictHint}>
+          {locked
+            ? 'Drop Vosk once your profile is locked. Saves battery.'
+            : 'Available once your profile is locked.'}
+        </Text>
+      </View>
+      <TouchableOpacity
+        style={[styles.toggle, enabled && styles.toggleOn, !locked && styles.toggleDisabled]}
+        onPress={toggle}
+        disabled={!locked}
+        activeOpacity={0.7}
+      >
+        <View style={[styles.toggleKnob, enabled && styles.toggleKnobOn]} />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -495,5 +551,48 @@ const styles = StyleSheet.create({
     color: '#ccc',
     fontSize: 13,
     fontWeight: '500',
+  },
+  // v3.10.64: strict mode toggle styles.
+  strictRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#1f1f1f',
+  },
+  strictTitle: {
+    color: '#eee',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  strictHint: {
+    color: '#888',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  toggle: {
+    width: 44,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#333',
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleOn: {
+    backgroundColor: '#27ae60',
+  },
+  toggleDisabled: {
+    opacity: 0.4,
+  },
+  toggleKnob: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#888',
+  },
+  toggleKnobOn: {
+    backgroundColor: '#fff',
+    transform: [{ translateX: 20 }],
   },
 });

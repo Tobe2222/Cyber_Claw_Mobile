@@ -815,6 +815,68 @@ class OpenWakeWordDetector(private val context: Context) {
         confirmedWakeFires++
     }
 
+    /**
+     * v3.10.64: continuous learning — blend the recent
+     * embeddings into the locked profile so it adapts to
+     * gradual voice changes (cold, sore throat, ambient
+     * noise drift).
+     *
+     * Each confirmed wake fire adds the last K=8 embeddings
+     * (~640ms of audio) to the blend. The blend ratio is
+     * small (default 0.05) so the profile changes
+     * gradually — the user's core voice is preserved,
+     * with each wake gently nudging the profile toward
+     * the current voice state.
+     *
+     * Math:
+     *   newProfile = normalize(avg(recentEmbeddings))
+     *   blendedProfile = normalize(
+     *       (1 - blendRatio) * currentProfile +
+     *        blendRatio * newProfile
+     *   )
+     *
+     * Only meaningful when the profile is locked. If the
+     * profile isn't locked yet, returns false and the
+     * caller should not invoke this method.
+     *
+     * Returns true if the profile was updated.
+     */
+    fun updateProfileWithRecentEmbedding(blendRatio: Float = 0.05f, recentK: Int = 8): Boolean {
+        if (!profileLocked) return false
+        val profile = primaryProfile ?: return false
+        // Snapshot recent embeddings
+        val snapshot: List<FloatArray>
+        synchronized(embeddingHistory) {
+            val n = Math.min(recentK, embeddingHistory.size)
+            if (n == 0) return false
+            snapshot = embeddingHistory.toList().takeLast(n)
+        }
+        // Average them
+        val avg = FloatArray(96)
+        for (emb in snapshot) {
+            for (i in 0 until 96) avg[i] += emb[i]
+        }
+        val n = snapshot.size.toFloat()
+        for (i in 0 until 96) avg[i] /= n
+        // Blend with current profile
+        val blended = FloatArray(96)
+        val keepOld = 1f - blendRatio
+        for (i in 0 until 96) {
+            blended[i] = keepOld * profile[i] + blendRatio * avg[i]
+        }
+        // Re-normalize (L2)
+        var norm = 0.0
+        for (v in blended) norm += v * v
+        norm = Math.sqrt(norm)
+        if (norm < 1e-9) return false
+        val invNorm = (1.0 / norm).toFloat()
+        for (i in 0 until 96) blended[i] *= invNorm
+        primaryProfile = blended
+        persistPrimaryProfile()
+        Log.i(tag, "Profile updated via continuous learning (blendRatio=$blendRatio, samples=$n)")
+        return true
+    }
+
     // v3.10.21: passive enrollment accumulator. Called
     // from WakeWordModule whenever an audio chunk is
     // classified as voice-active (rms > SPEECH_THRESHOLD

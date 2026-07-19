@@ -227,10 +227,23 @@ class EnrollmentAudioProcessor private constructor(private val appContext: Conte
      * when a wake fires AND the audio was voice-active
      * — used as one of the conditions for the profile
      * to lock.
+     *
+     * v3.10.64: also triggers continuous learning —
+     * blends the recent embeddings (last ~640ms of
+     * audio) into the locked profile so it adapts
+     * to gradual voice changes. Small blend ratio
+     * (0.05) so the profile changes gradually.
      */
     fun markConfirmedWake() {
         synchronized(lock) {
             detector.noteConfirmedWakeFire()
+            // Continuous learning: if profile is locked,
+            // nudge it toward the recent audio. If not
+            // locked, the regular enrollment path will
+            // pick up the new samples through passive
+            // accumulation; updateProfileWithRecentEmbedding
+            // returns false silently in that case.
+            detector.updateProfileWithRecentEmbedding(0.05f)
         }
     }
 
@@ -304,6 +317,25 @@ class EnrollmentAudioProcessor private constructor(private val appContext: Conte
     fun forceLockProfile(minSamples: Int = 50): Boolean {
         return synchronized(lock) {
             detector.forceLockProfile(minSamples)
+        }
+    }
+
+    /**
+     * v3.10.64: continuous learning — blend the recent
+     * embeddings into the locked profile so it adapts
+     * to gradual voice changes. Called automatically by
+     * WakeWordModule after each confirmed wake fire
+     * (in markConfirmedWake below).
+     *
+     * Only meaningful when the profile is locked; if
+     * not yet locked, returns false silently (the
+     * regular enrollment path handles new profiles).
+     *
+     * Returns true if the profile was updated.
+     */
+    fun updateProfileWithRecentEmbedding(blendRatio: Float = 0.05f): Boolean {
+        return synchronized(lock) {
+            detector.updateProfileWithRecentEmbedding(blendRatio)
         }
     }
 
