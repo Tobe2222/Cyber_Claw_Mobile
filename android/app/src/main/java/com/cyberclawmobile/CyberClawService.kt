@@ -31,6 +31,28 @@ class CyberClawService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var wakePhrase = DEFAULT_PHRASE
 
+    // v3.10.61: OWW TFLite classifier running in the
+    // BG service alongside Vosk. Provides the trained
+    // model as the PRIMARY detector in BG (Vosk stays
+    // as fallback). Both gated by the speaker profile.
+    //
+    // Loaded from the most-recently-active wake set in
+    // SharedPreferences on init. If the user hasn't
+    // trained a wake phrase, this stays null and Vosk
+    // is the sole detector.
+    private var bgOwwDetector: OpenWakeWordDetector? = null
+    private var bgOwwThreshold: Float = 0.5f
+    private var bgOwwBuffer = ShortArray(4096)
+    private var bgOwwBufferFill: Int = 0
+    private var bgOwwHighFrames: Int = 0
+    // Match WakeWordModule.kt's HIGH_SCORE_RUN = 3.
+    // 3 consecutive 80ms frames above threshold means
+    // the wake word has been detected.
+    private val BG_OWW_HIGH_SCORE_RUN = 3
+    // Same cooldown as the foreground OWW thread.
+    private val BG_OWW_DETECTION_COOLDOWN_MS = 2000L
+    @Volatile private var bgOwwLastWakeAt: Long = 0L
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -71,9 +93,69 @@ class CyberClawService : Service() {
         }
         try {
             voskModel = Model(modelDir.absolutePath)
+            // v3.10.61: also load the user's trained
+            // wake TFLite for OWW-primary detection in BG.
+            // Runs alongside Vosk (which is fallback).
+            // Both paths check the speaker gate via
+            // EnrollmentAudioProcessor (v3.10.60).
+            initBgOwwDetector()
             startWakeListening()
         } catch (e: Exception) {
             Log.e("CyberClawService", "Vosk init failed", e)
+        }
+    }
+
+    /**
+     * v3.10.61: load the most-recently-active wake
+     * set's .tflite into a fresh OpenWakeWordDetector
+     * for BG detection. Scans SharedPreferences for
+     * active_<agentId> bindings, picks the one with
+     * the latest meta.json createdAt. Falls back to
+     * bundled hey_jarvis if no custom wake set exists
+     * (so OWW always has a wake classifier loaded —
+     * bundled jarvis just won't match user-trained
+     * phrases, which is fine — Vosk still catches them).
+     */
+    private fun initBgOwwDetector() {
+        try {
+            val det = OpenWakeWordDetector(applicationContext)
+            // Try custom-trained model first
+            val prefs = getSharedPreferences("wake_models", MODE_PRIVATE)
+            var bestPath: String? = null
+            var bestTime = 0L
+            for ((key, _) in prefs.all) {
+                if (!key.startsWith("active_")) continue
+                val setId = prefs.getString(key, null) ?: continue
+                val metaFile = File(File(filesDir, "wake_models/$setId"), "meta.json")
+                if (!metaFile.exists()) continue
+                val createdAt = try {
+                    org.json.JSONObject(metaFile.readText()).optLong("createdAt", 0)
+                } catch (_: Exception) { 0L }
+                if (createdAt > bestTime) {
+                    val tflite = File(File(filesDir, "wake_models/$setId"), "model.tflite")
+                    if (tflite.exists()) {
+                        bestTime = createdAt
+                        bestPath = tflite.absolutePath
+                    }
+                }
+            }
+            val ok = if (bestPath != null) {
+                Log.i("CyberClawService", "BG OWW loading custom model: $bestPath")
+                det.setWakewordModelFromFile(bestPath!!)
+            } else {
+                Log.i("CyberClawService", "BG OWW no custom model, loading bundled hey_jarvis")
+                det.loadModels("hey_jarvis")
+            }
+            if (ok) {
+                det.setThreshold(bgOwwThreshold)
+                bgOwwDetector = det
+                Log.i("CyberClawService", "BG OWW initialized (threshold=$bgOwwThreshold)")
+            } else {
+                Log.w("CyberClawService", "BG OWW init failed — Vosk will be the sole detector")
+                det.close()
+            }
+        } catch (e: Exception) {
+            Log.e("CyberClawService", "BG OWW init exception: ${e.message}", e)
         }
     }
 
@@ -116,6 +198,16 @@ class CyberClawService : Service() {
                 // Push to enrollment pipeline. Cheap (melspec
                 // + embedding only, no classifier inference).
                 enrollment.processAudio(buf, read)
+                // v3.10.61: also push to the BG OWW
+                // detector. Buffers internally and emits
+                // 1280-sample chunks for classification.
+                // If the trained model fires above
+                // threshold (with HIGH_SCORE_RUN = 3
+                // consecutive frames), the speaker gate
+                // is checked and openApp() fires. Vosk
+                // continues below as the text-based
+                // fallback path.
+                processBgOwwChunk(buf, read, enrollment)
                 for (i in 0 until read) {
                     byteBuf[i * 2] = (buf[i].toInt() and 0xFF).toByte()
                     byteBuf[i * 2 + 1] = (buf[i].toInt() shr 8 and 0xFF).toByte()
@@ -129,6 +221,79 @@ class CyberClawService : Service() {
             }
             recognizer.close()
         }.also { it.isDaemon = true; it.start() }
+    }
+
+    /**
+     * v3.10.61: process audio through the BG OWW TFLite
+     * classifier. Buffers incoming audio into 1280-sample
+     * chunks (matching OWW's natural frame size), runs
+     * predictScore on each, and fires openApp() if the
+     * wake score crosses threshold for HIGH_SCORE_RUN
+     * consecutive frames AND the speaker gate passes.
+     *
+     * Vosk continues as a fallback — both paths check the
+     * same EnrollmentAudioProcessor gate, so security is
+     * symmetric.
+     */
+    private fun processBgOwwChunk(samples: ShortArray, count: Int, enrollment: EnrollmentAudioProcessor) {
+        val det = bgOwwDetector ?: return
+        synchronized(this) {
+            // Grow buffer if needed
+            if (bgOwwBuffer.size < bgOwwBufferFill + count) {
+                var newSize = bgOwwBuffer.size * 2
+                while (newSize < bgOwwBufferFill + count) newSize *= 2
+                val newBuf = ShortArray(newSize)
+                System.arraycopy(bgOwwBuffer, 0, newBuf, 0, bgOwwBufferFill)
+                bgOwwBuffer = newBuf
+            }
+            System.arraycopy(samples, 0, bgOwwBuffer, bgOwwBufferFill, count)
+            bgOwwBufferFill += count
+
+            // Emit 1280-sample chunks
+            var processed = 0
+            while (bgOwwBufferFill - processed >= 1280) {
+                val chunk = ShortArray(1280)
+                System.arraycopy(bgOwwBuffer, processed, chunk, 0, 1280)
+                processed += 1280
+                val scores = try {
+                    det.predictScore(chunk)
+                } catch (e: Exception) {
+                    Log.w("CyberClawService", "BG OWW predictScore failed: ${e.message}")
+                    null
+                }
+                val wakeScore = scores?.wake
+                if (wakeScore != null && wakeScore >= bgOwwThreshold) {
+                    bgOwwHighFrames++
+                    if (bgOwwHighFrames >= BG_OWW_HIGH_SCORE_RUN) {
+                        val now = System.currentTimeMillis()
+                        if (now - bgOwwLastWakeAt >= BG_OWW_DETECTION_COOLDOWN_MS) {
+                            // Speaker gate check (same as Vosk path)
+                            if (enrollment.shouldSuppressWake()) {
+                                val score = enrollment.getMatchScore() ?: 0f
+                                Log.i("CyberClawService", "BG OWW wake suppressed by speaker gate (match=${"%.2f".format(score)} < 0.50)")
+                                bgOwwHighFrames = 0
+                                continue
+                            }
+                            // Genuine wake — bump the confirmed counter and open
+                            enrollment.markConfirmedWake()
+                            bgOwwLastWakeAt = now
+                            Log.i("CyberClawService", "BG OWW wake fired (score=${"%.2f".format(wakeScore)})")
+                            handler.post { openApp() }
+                            return
+                        }
+                        bgOwwHighFrames = 0
+                    }
+                } else {
+                    bgOwwHighFrames = 0
+                }
+            }
+            // Shift remaining samples
+            if (processed > 0) {
+                val remaining = bgOwwBufferFill - processed
+                System.arraycopy(bgOwwBuffer, processed, bgOwwBuffer, 0, remaining)
+                bgOwwBufferFill = remaining
+            }
+        }
     }
 
     private fun checkWakeWord(json: String) {
@@ -238,6 +403,9 @@ class CyberClawService : Service() {
         stopWakeListening()
         voskModel?.close()
         voskModel = null
+        // v3.10.61: also close the BG OWW detector.
+        try { bgOwwDetector?.close() } catch (_: Exception) {}
+        bgOwwDetector = null
     }
 
     private fun updateNotification(title: String, text: String) {
