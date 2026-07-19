@@ -57,10 +57,24 @@ import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import syncClient from '../services/SyncClient';
+import { base64ToInt16Array } from '../services/AudioUtils';
 
 const { WakeWordModule, BackgroundService } = NativeModules;
 
-const REQUIRED_SAMPLES = 6;  // 6 is a sweet spot for the synthetic-amplified pipeline
+const REQUIRED_SAMPLES = 12;  // v3.10.59: bumped from 6 → 12. The desktop's
+                              // synthetic-amplified pipeline can work with 6
+                              // samples, but 12 gives a stronger acoustic
+                              // foundation for the TFLite to learn from —
+                              // especially across varied volumes, paces, and
+                              // mic positions. Tobe's 6-sample training
+                              // (2026-07-19) produced a model that scored 0%
+                              // against his voice in production while the
+                              // wake still fired reliably via Vosk text
+                              // matching. More samples = more reliable TFLite
+                              // output = better OWW primary detection.
+                              // The training pipeline can still finish in
+                              // under 5 minutes with 12 samples — the desktop
+                              // GPU does the heavy lifting.
 // v3.8.2: optional near-miss recording. Recommended 3
 // (the script does an 80/20 train/test split so 2-3
 // near-misses is enough to test that the model rejects
@@ -203,6 +217,11 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
   const wakePhraseRef = useRef(wakePhrase);
   wakePhraseRef.current = wakePhrase;
   const [samples, setSamples] = useState<string[]>([]);  // absolute paths
+  // v3.10.59: per-sample RMS values, computed after
+  // recording. Used by the per-sample volume hint and
+  // the cross-sample consistency check. Index-aligned
+  // with `samples`.
+  const [sampleRms, setSampleRms] = useState<number[]>([]);
   // v3.8.2: optional user-recorded near-miss clips. Each
   // entry is { path, phrase } where `phrase` is what the user
   // said (just for their reference — the model gets the
@@ -561,6 +580,27 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     const path = await recordOne();
     if (path) {
       setSamples((s) => [...s, path]);
+      // v3.10.59: compute RMS from the WAV file so we can
+      // give the user volume-consistency feedback. Skip
+      // silently on read failure — the sample is still
+      // usable, just no RMS hint for it.
+      try {
+        const b64 = await RNFS.readFile(path, 'base64');
+        const pcm = base64ToInt16Array(b64);
+        if (pcm.length > 0) {
+          let sumSq = 0;
+          for (let i = 0; i < pcm.length; i++) {
+            const s = pcm[i] / 32768;
+            sumSq += s * s;
+          }
+          const rms = Math.sqrt(sumSq / pcm.length);
+          setSampleRms((r) => [...r, rms]);
+        } else {
+          setSampleRms((r) => [...r, NaN]);
+        }
+      } catch (_) {
+        setSampleRms((r) => [...r, NaN]);
+      }
     }
   }, [samples.length, wakePhrase, recordOne]);
 
@@ -599,6 +639,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       }
       return [];
     });
+    setSampleRms([]);
   }, []);
 
   // ----- progress event handlers (refs so the cleanup useEffect can reach them) -----
@@ -1050,6 +1091,55 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
         {!isTrainingInProgress && !isFinished && (
           <View style={styles.recordCard}>
             <Text style={styles.label}>Samples recorded: {samples.length} / {REQUIRED_SAMPLES}</Text>
+            {/* v3.10.59: per-sample volume hint. Show each
+                recorded sample's RMS next to the counter so the
+                user can see if their volume is consistent
+                across recordings. NaN = RMS read failed.
+                Volume categories match the OpenWakeWord
+                trainer's recommended ranges: quiet
+                (<0.02), good (0.02-0.20), loud (>0.20). */}
+            {sampleRms.length > 0 && (
+              <View style={styles.sampleRmsRow}>
+                {sampleRms.map((r, i) => {
+                  let color = '#888';
+                  let label = `#${i + 1}`;
+                  if (!isNaN(r)) {
+                    if (r < 0.02) { color = '#e67e22'; label = `#${i + 1} (quiet)`; }
+                    else if (r > 0.20) { color = '#e67e22'; label = `#${i + 1} (loud)`; }
+                    else { color = '#27ae60'; label = `#${i + 1} (${r.toFixed(3)})`; }
+                  } else {
+                    color = '#999';
+                    label = `#${i + 1} (?)`;
+                  }
+                  return (
+                    <Text key={i} style={[styles.sampleRmsChip, { color, borderColor: color }]}>{label}</Text>
+                  );
+                })}
+              </View>
+            )}
+            {/* v3.10.59: cross-sample consistency check. Show
+                the coefficient of variation (std/mean) of the
+                per-sample RMS values once at least 4 samples
+                are recorded. CV < 0.3 = consistent (good for
+                matching production conditions); 0.3-0.7 =
+                moderate variation (fine — desktop pipeline
+                handles it); > 0.7 = highly variable (training
+                conditions likely differ from production). */}
+            {sampleRms.filter(r => !isNaN(r)).length >= 4 && (
+              <Text style={styles.consistencyHint}>
+                {(() => {
+                  const valid = sampleRms.filter(r => !isNaN(r));
+                  const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+                  if (mean <= 0) return '';
+                  const variance = valid.reduce((a, b) => a + (b - mean) ** 2, 0) / valid.length;
+                  const std = Math.sqrt(variance);
+                  const cv = std / mean;
+                  if (cv < 0.3) return `✓ Volume consistency: good (CV ${cv.toFixed(2)})`;
+                  if (cv < 0.7) return `⚠️ Volume varies a bit (CV ${cv.toFixed(2)}) — that's fine, just don't whisper some and shout others`;
+                  return `⚠️ Volume is highly variable (CV ${cv.toFixed(2)}) — try to match how you'll say it in real use`;
+                })()}
+              </Text>
+            )}
             <Animated.View style={[styles.recordBtn, { transform: [{ scale: pulseAnim }] }]}>
               <TouchableOpacity
                 style={styles.recordInner}
@@ -1300,6 +1390,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#1f1f1f',
+  },
+  // v3.10.59: per-sample RMS chip row. Shows the volume
+  // category for each recorded sample as a small bordered
+  // chip so the user can see consistency at a glance.
+  sampleRmsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  sampleRmsChip: {
+    fontSize: 11,
+    marginHorizontal: 3,
+    marginVertical: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  // v3.10.59: cross-sample consistency hint shown once
+  // 4+ samples have been recorded. Gives a friendly
+  // summary of whether the recordings are consistent
+  // enough for reliable training.
+  consistencyHint: {
+    fontSize: 11,
+    color: '#bbb',
+    marginTop: 8,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
   recordBtn: { marginVertical: 16 },
   recordInner: {
