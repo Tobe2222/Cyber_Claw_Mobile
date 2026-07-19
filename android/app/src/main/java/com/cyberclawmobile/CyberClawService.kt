@@ -100,9 +100,22 @@ class CyberClawService : Service() {
         listenThread = Thread {
             val buf = ShortArray(bufferSize / 2)
             val byteBuf = ByteArray(bufferSize)
+            // v3.10.60: bootstrap speaker enrollment from
+            // the BG audio stream. We push every PCM chunk
+            // into EnrollmentAudioProcessor.processAudio,
+            // which buffers and emits 1280-sample chunks
+            // to the embedding-only detector. Voice-active
+            // chunks accumulate into the profile. Without
+            // this, the profile only ever grows from the
+            // OWW thread's chunks — which never run if
+            // the user never opened voice mode.
+            val enrollment = EnrollmentAudioProcessor.getInstance(applicationContext)
             while (wakeListening) {
                 val read = rec.read(buf, 0, buf.size)
                 if (read <= 0) continue
+                // Push to enrollment pipeline. Cheap (melspec
+                // + embedding only, no classifier inference).
+                enrollment.processAudio(buf, read)
                 for (i in 0 until read) {
                     byteBuf[i * 2] = (buf[i].toInt() and 0xFF).toByte()
                     byteBuf[i * 2 + 1] = (buf[i].toInt() shr 8 and 0xFF).toByte()
@@ -151,6 +164,21 @@ class CyberClawService : Service() {
             // truthy-short-text case but worth a guard).
             if (heardWords.size >= targetWords.size - 1 && heardWords.isNotEmpty()) {
                 Log.d("CyberClawService", "Wake phrase detected in service: $text")
+                // v3.10.60: speaker gate. If a profile is
+                // locked AND the recent audio doesn't match
+                // the enrolled speaker, suppress the wake.
+                // Returns false if no profile is set yet (the
+                // system has to work before it can learn),
+                // which is the right default for new users.
+                val enrollment = EnrollmentAudioProcessor.getInstance(applicationContext)
+                if (enrollment.shouldSuppressWake()) {
+                    val score = enrollment.getMatchScore() ?: 0f
+                    Log.i("CyberClawService", "Vosk wake suppressed by speaker gate (match=${"%.2f".format(score)} < 0.50)")
+                    return
+                }
+                // Wake is genuine — bump the confirmed-wake
+                // counter so the profile can lock faster.
+                enrollment.markConfirmedWake()
                 handler.post { openApp() }
             }
         }

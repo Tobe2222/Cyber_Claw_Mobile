@@ -460,6 +460,96 @@ class OpenWakeWordDetector(private val context: Context) {
     fun sendNameOrEmpty(): String = sendName ?: ""
 
     /**
+     * v3.10.60: load melspec + embedding interpreters ONLY.
+     * No wake/exit/send classifier is loaded. Used by
+     * EnrollmentAudioProcessor for the speaker-enrollment
+     * pipeline on the BG service (Vosk) path, which
+     * doesn't need a wake classifier — it has Vosk for
+     * that.
+     *
+     * Sets `embeddingOnly` flag which gates `computeEmbedding`
+     * and disables classifier inference in `predictScore`
+     * (the latter returns null scores when no classifiers
+     * are loaded, so this is mostly a semantic marker for
+     * "the embedding pipeline is the only thing wired up").
+     */
+    fun loadEmbeddingOnly(): Boolean {
+        return try {
+            melspecInterpreter = loadInterpreter("openwakeword/melspectrogram.tflite")
+            embeddingInterpreter = loadInterpreter("openwakeword/embedding_model.tflite")
+            melspecHistory.clear()
+            Log.i(tag, "Loaded embedding-only mode (melspec + embedding, no classifiers)")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to load embedding models: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * v3.10.60: run melspec + embedding only, return the
+     * 96-dim embedding. Cheaper than predictScore (no
+     * classifier inference). Used by EnrollmentAudioProcessor.
+     *
+     * The embedding is also stashed into `embeddingHistory`
+     * (same as predictScore) so subsequent
+     * `accumulateLatestEmbedding()` can add it to the
+     * enrollment buffer, and `matchRecentSpeaker()` can
+     * compute cosine similarity against the profile.
+     */
+    fun computeEmbedding(pcm16: ShortArray): FloatArray? {
+        if (pcm16.size != 1280) {
+            Log.w(tag, "computeEmbedding: expected 1280 samples, got ${pcm16.size}")
+            return null
+        }
+        val mel = melspecInterpreter ?: return null
+        val emb = embeddingInterpreter ?: return null
+        try {
+            // Step 1: PCM16 -> normalized float [-1, 1]
+            // (mirror predictScore steps 1-3, skip step 4)
+            val melInput = ArrayList<FloatArray>(maxHistory + 1)
+            for (old in melspecHistory) melInput.add(old)
+            melInput.add(FloatArray(1280) { i -> pcm16[i] / 32768.0f })
+            while (melInput.size > maxHistory + 1) melInput.removeAt(0)
+
+            val melInputArr = Array(1) { Array(melInput.size) { FloatArray(1280) } }
+            for ((i, frame) in melInput.withIndex()) {
+                for (j in 0 until 1280) {
+                    melInputArr[0][i][j] = frame[j]
+                }
+            }
+
+            val melOutput = Array(1) { Array(melInput.size) { FloatArray(32) } }
+            mel.run(melInputArr, melOutput)
+
+            val lastMel = FloatArray(32)
+            System.arraycopy(melOutput[0][melOutput[0].size - 1], 0, lastMel, 0, 32)
+
+            // Step 3: embedding
+            val embInputArr = Array(1) { Array(1) { FloatArray(32) } }
+            System.arraycopy(lastMel, 0, embInputArr[0][0], 0, 32)
+
+            val embOutput = Array(1) { Array(1) { FloatArray(96) } }
+            emb.run(embInputArr, embOutput)
+
+            val embedding = embOutput[0][0]
+
+            // Stash into embeddingHistory for matchRecentSpeaker
+            // and accumulateLatestEmbedding (same as predictScore).
+            synchronized(embeddingHistory) {
+                embeddingHistory.addLast(embedding.copyOf())
+                while (embeddingHistory.size > embeddingHistoryMax) {
+                    embeddingHistory.removeFirst()
+                }
+            }
+            return embedding
+        } catch (e: Exception) {
+            Log.e(tag, "computeEmbedding failed: ${e.message}", e)
+            return null
+        }
+    }
+
+    /**
      * Run inference on a chunk of 1280 PCM16 samples (80ms at 16kHz).
      * Returns a TripleScores with optional wake / exit / send scores.
      * Any field can be null if the corresponding classifier isn't
