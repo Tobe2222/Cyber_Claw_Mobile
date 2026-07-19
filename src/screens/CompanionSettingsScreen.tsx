@@ -1039,17 +1039,23 @@ export default function CompanionSettingsScreen({
                       shows it as the primary identifier
                       for each set. Showing it twice
                       (here + in the manager) is noise.
-                      The displayName + .tflite path are
-                      the only useful fields on this panel
-                      — displayName for human recognition,
-                      path for debugging ("does the file
-                      actually exist on disk?").
+
+                      v3.10.57: also removed the .tflite
+                      path line. The path is
+                      `wake_models/<setId>/model.tflite`,
+                      which embeds the setId as a
+                      substring — so the setId was still
+                      visible after v3.10.55 (just as part
+                      of the path text). Tobe reported
+                      (2026-07-19) that this is also
+                      confusing. The path was debug-only
+                      ("does the file exist on disk?") and
+                      isn't useful on this panel — the
+                      Wake Sets manager shows the path as
+                      the primary identifier per set.
+                      Active-wake panel is now: displayName
+                      + Test wake button. Nothing else.
                     */}
-                    {activeWakeDirect.path ? (
-                      <Text style={styles.activeWakePath} numberOfLines={1}>
-                        {activeWakeDirect.path}
-                      </Text>
-                    ) : null}
                   </View>
                 </View>
                 {/*
