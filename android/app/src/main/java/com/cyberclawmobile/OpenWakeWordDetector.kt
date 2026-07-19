@@ -927,7 +927,34 @@ class OpenWakeWordDetector(private val context: Context) {
     }
 
     /**
-     * v3.10.23: average a list of 96-dim embeddings and
+     * v3.10.62: force-lock the profile regardless of
+     * sample count. Used by the active-enrollment UI
+     * where the user explicitly records 30s of voice
+     * and we want the profile locked immediately after,
+     * without waiting for PROFILE_LOCK_SAMPLES (1000)
+     * or PROFILE_LOCK_WAKE_FIRES.
+     *
+     * Requires at least `minSamples` accumulated
+     * (default 50) to ensure the averaged profile is
+     * statistically meaningful. Returns true iff this
+     * call caused the unlocked→locked transition.
+     */
+    fun forceLockProfile(minSamples: Int = 50): Boolean {
+        if (profileLocked) return false
+        val snapshot: List<FloatArray>
+        synchronized(enrollmentBuffer) {
+            if (enrollmentBuffer.size < minSamples) return false
+            snapshot = enrollmentBuffer.toList()
+        }
+        primaryProfile = averageAndNormalize(snapshot)
+        profileLocked = true
+        persistPrimaryProfile()
+        Log.i(tag, "Primary speaker profile FORCE-LOCKED via active enrollment (${snapshot.size} samples)")
+        return true
+    }
+
+    /**
+     * v3.10.62: average a list of 96-dim embeddings and
      * L2-normalize. Pure function over the snapshot.
      */
     private fun averageAndNormalize(snapshot: List<FloatArray>): FloatArray {

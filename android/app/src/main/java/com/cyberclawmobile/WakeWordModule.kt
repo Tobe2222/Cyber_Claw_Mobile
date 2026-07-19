@@ -3158,31 +3158,128 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     //    profile (null if no profile)
     @ReactMethod fun getSpeakerStatus(promise: Promise) {
         try {
-            val det = owwDetector
-            if (det == null) {
-                promise.resolve(Arguments.createMap().apply {
-                    putInt("samplesTotal", 0)
-                    putInt("bufferSize", 0)
-                    putBoolean("hasEnrollment", false)
-                    putBoolean("profileLocked", false)
-                    putInt("confirmedWakeFires", 0)
-                    putNull("matchScore")
-                })
-                return
-            }
+            val enrollment = EnrollmentAudioProcessor.getInstance(reactContext)
             val result = Arguments.createMap().apply {
-                putInt("samplesTotal", det.getEnrollmentSamplesTotal().toInt())
-                putInt("bufferSize", det.getEnrollmentBufferSize())
-                putBoolean("hasEnrollment", det.hasPrimaryProfile())
-                putBoolean("profileLocked", det.isProfileLocked())
-                putInt("confirmedWakeFires", det.getConfirmedWakeFires())
-                val score = det.matchRecentSpeaker()
+                putInt("samplesTotal", enrollment.getEnrollmentSampleCount().toInt())
+                putBoolean("hasEnrollment", enrollment.hasProfile())
+                putBoolean("profileLocked", enrollment.isProfileLocked())
+                val score = enrollment.getMatchScore()
                 if (score != null) putDouble("matchScore", score.toDouble())
                 else putNull("matchScore")
             }
             promise.resolve(result)
         } catch (e: Exception) {
             promise.reject("STATUS_ERROR", e.message)
+        }
+    }
+
+    // v3.10.62: active enrollment — dedicated 30s
+    // recording pass that locks the profile faster than
+    // waiting for natural accumulation (~30s of voice-
+    // active audio). The user taps a button, reads a
+    // paragraph for 30s, and the profile is force-locked.
+    //
+    // We use a fresh AudioRecord (separate from the
+    // OWW thread's and CyberClawService's) so the
+    // active enrollment can run even while the app is
+    // in the foreground with no other wake detection
+    // happening. Battery cost is bounded (30s + cooldown).
+    @Volatile private var activeEnrollmentRunning = false
+    @Volatile private var activeEnrollmentStartMs = 0L
+    @Volatile private var activeEnrollmentDurationMs = 30000L
+    private var activeEnrollmentRecorder: android.media.AudioRecord? = null
+    private var activeEnrollmentThread: Thread? = null
+
+    @ReactMethod fun startActiveEnrollment(durationMs: Int, promise: Promise) {
+        if (activeEnrollmentRunning) {
+            promise.reject("ALREADY_RUNNING", "Active enrollment already in progress")
+            return
+        }
+        try {
+            val sampleRate = 16000
+            val chunkSamples = 1280  // 80ms at 16kHz
+            val bufferSize = android.media.AudioRecord.getMinBufferSize(
+                sampleRate,
+                android.media.AudioFormat.CHANNEL_IN_MONO,
+                android.media.AudioFormat.ENCODING_PCM_16BIT
+            ).coerceAtLeast(chunkSamples * 2)
+            val rec = android.media.AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                android.media.AudioFormat.CHANNEL_IN_MONO,
+                android.media.AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+            if (rec.state != android.media.AudioRecord.STATE_INITIALIZED) {
+                promise.reject("RECORDER_INIT_FAILED", "AudioRecord failed to initialize")
+                return
+            }
+            rec.startRecording()
+            activeEnrollmentRecorder = rec
+            activeEnrollmentStartMs = System.currentTimeMillis()
+            activeEnrollmentDurationMs = (durationMs.coerceIn(5000, 120000)).toLong()
+            activeEnrollmentRunning = true
+
+            val enrollment = EnrollmentAudioProcessor.getInstance(reactContext)
+            activeEnrollmentThread = Thread {
+                val buf = ShortArray(chunkSamples)
+                try {
+                    while (activeEnrollmentRunning &&
+                           System.currentTimeMillis() - activeEnrollmentStartMs < activeEnrollmentDurationMs) {
+                        val read = rec.read(buf, 0, buf.size)
+                        if (read <= 0) continue
+                        enrollment.processAudio(buf, read)
+                    }
+                } catch (e: Exception) {
+                    Log.w("WakeWord", "Active enrollment read error: ${e.message}")
+                } finally {
+                    try { rec.stop() } catch (_: Exception) {}
+                    try { rec.release() } catch (_: Exception) {}
+                    activeEnrollmentRecorder = null
+                    activeEnrollmentRunning = false
+                }
+            }.also { it.isDaemon = true; it.start() }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("START_ACTIVE_ENROLL_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun stopActiveEnrollment(promise: Promise) {
+        try {
+            activeEnrollmentRunning = false
+            try { activeEnrollmentThread?.join(1500) } catch (_: Exception) {}
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("STOP_ACTIVE_ENROLL_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod fun isActiveEnrollmentRunning(promise: Promise) {
+        promise.resolve(activeEnrollmentRunning)
+    }
+
+    @ReactMethod fun forceLockSpeakerProfile(promise: Promise) {
+        try {
+            val enrollment = EnrollmentAudioProcessor.getInstance(reactContext)
+            // Require at least 50 voice-active samples
+            // (the default minSamples in forceLockProfile).
+            // If the user spoke too quietly or the room
+            // was too noisy, we surface a clear error
+            // instead of locking a garbage profile.
+            val count = enrollment.getEnrollmentSampleCount()
+            if (count < 50) {
+                promise.reject("TOO_FEW_SAMPLES", "Need at least 50 voice-active samples (have $count). Try again in a quieter room or speak more.")
+                return
+            }
+            val ok = enrollment.forceLockProfile(50)
+            if (ok) {
+                promise.resolve(true)
+            } else {
+                promise.reject("LOCK_FAILED", "Could not lock profile")
+            }
+        } catch (e: Exception) {
+            promise.reject("FORCE_LOCK_ERROR", e.message)
         }
     }
 

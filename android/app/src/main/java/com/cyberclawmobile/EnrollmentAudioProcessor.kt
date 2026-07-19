@@ -287,6 +287,27 @@ class EnrollmentAudioProcessor private constructor(private val appContext: Conte
     }
 
     /**
+     * v3.10.62: force-lock the profile regardless of
+     * sample count. Called by the active-enrollment UI
+     * after a 30-second recording pass completes, so
+     * the speaker gate activates immediately without
+     * waiting for PROFILE_LOCK_SAMPLES (1000).
+     *
+     * Requires at least 50 voice-active samples (the
+     * default in the detector's forceLockProfile). If
+     * fewer than 50 samples were accumulated during the
+     * recording, the lock fails and the caller should
+     * show "couldn't lock, try again in a quieter room".
+     *
+     * Returns true iff this call caused the lock.
+     */
+    fun forceLockProfile(minSamples: Int = 50): Boolean {
+        return synchronized(lock) {
+            detector.forceLockProfile(minSamples)
+        }
+    }
+
+    /**
      * Release the detector's native resources. Call
      * when the app is shutting down (rarely needed —
      * the singleton persists for the app lifetime).

@@ -58,6 +58,7 @@ import {
 // is `export function ClassifierTestPanel(...)` with
 // no default export.
 import { ClassifierTestPanel, useClassifierTest } from '../components/ClassifierTest';
+import ActiveEnrollmentPanel from '../components/ActiveEnrollmentPanel';
 // v3.7.1: syncClient for the desktop "Test voice" button.
 import syncClient from '../services/SyncClient';
 // v3.10.23: addLogEntry import removed. The speaker-enrollment
@@ -1086,6 +1087,19 @@ export default function CompanionSettingsScreen({
                   kind="exit"; Send section → kind="send").
                 */}
                 <ClassifierTestPanel kind="wake" wakeword={activeWakeDirect?.phrase} />
+
+                {/*
+                  v3.10.62: re-introduce the speaker
+                  enrollment UI, this time as an explicit
+                  "Train my voice (30s)" button. The
+                  passive accumulation path (v3.10.23)
+                  still runs in the background for users
+                  who don't want a dedicated session, but
+                  most users prefer the explicit, fast
+                  path: read a paragraph for 30s, profile
+                  locks immediately, gate activates.
+                */}
+                <ActiveEnrollmentPanel />
 
                 {/*
                   v3.10.23: speaker enrollment UI removed.
