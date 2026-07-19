@@ -3620,20 +3620,77 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     // (Google TTS, Samsung TTS, etc.) and lets the user
     // install one. Returns true if the install activity
     // was successfully launched.
+    //
+    // v3.10.58: ACTION_INSTALL_TTS_DATA is deprecated in
+    // API 29+ and silently does nothing on modern
+    // Android (Tobe tested 2026-07-19: 'clicked install
+    // but nothing happened'). The fix opens the Play
+    // Store directly for the Google TTS engine
+    // ('com.google.android.tts'), which is the
+    // universally recommended TTS package on stock
+    // Android. On degoogled ROMs (GrapheneOS, CalyxOS,
+    // LineageOS without microG) Play Store isn't
+    // installed, so we fall back to F-Droid (search
+    // for RHVoice or eSpeak NG). As a last resort,
+    // try the deprecated system installer.
     @ReactMethod fun installTtsData(promise: Promise) {
+        // 1. Play Store for Google TTS. This is what
+        //    ~99% of users want on stock Android.
         try {
-            val intent = android.content.Intent(
+            val playStoreIntent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("market://details?id=com.google.android.tts")
+            )
+            playStoreIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            reactContext.startActivity(playStoreIntent)
+            promise.resolve("play_store")
+            return
+        } catch (_: Exception) {
+            // Play Store not installed (degoogled ROM).
+            // Fall through.
+        }
+        // 2. Browser fallback for Play Store (in case
+        //    the market:// scheme isn't handled but the
+        //    https:// is).
+        try {
+            val webIntent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.tts")
+            )
+            webIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            reactContext.startActivity(webIntent)
+            promise.resolve("play_store_web")
+            return
+        } catch (_: Exception) {
+            // No browser either. Fall through.
+        }
+        // 3. F-Droid for degoogled ROMs. User can
+        //    search for RHVoice (recommended) or
+        //    eSpeak NG (fallback).
+        try {
+            val fdroidIntent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("market://details?id=org.fdroid.fdroid")
+            )
+            fdroidIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            reactContext.startActivity(fdroidIntent)
+            promise.resolve("fdroid")
+            return
+        } catch (_: Exception) {
+            // F-Droid not installed either. Fall through.
+        }
+        // 4. Last resort: the deprecated system
+        //    installer. On modern Android this might
+        //    do nothing, but it's better than failing
+        //    silently with no UI feedback.
+        try {
+            val sysIntent = android.content.Intent(
                 android.speech.tts.TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA
             )
-            intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-            // ACTION_INSTALL_TTS_DATA is deprecated in API 29+
-            // but still works. Use it as a best-effort.
-            // We use reactContext (the application context) to
-            // start the activity — FLAG_ACTIVITY_NEW_TASK is
-            // already set above so this is safe even from a
-            // non-Activity context.
-            reactContext.startActivity(intent)
-            promise.resolve(true)
+            sysIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            reactContext.startActivity(sysIntent)
+            promise.resolve("system")
+            return
         } catch (e: Exception) {
             promise.reject("TTS_INSTALL_ERROR", e.message)
         }
