@@ -2470,30 +2470,80 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             // detector was null, and every subsequent test
             // said "Wake listener wasn't running".
             //
-            // The lazy-init uses the bundled pre-trained
-            // 'hey_jarvis' model since we don't know what
-            // the caller's intent was. If the user has a
-            // custom-trained active wake ("Hey Clawsuu"),
-            // loadModels for 'hey_jarvis' succeeds via the
-            // bundled asset (we don't need to find the
-            // custom file — the bundled model is fine for
-            // test purposes; the real custom wake will be
-            // loaded on the next startSampleMatchListener
-            // call on the home screen with the right
-            // argument). The fallback cost is the wake word
-            // being 'hey_jarvis' instead of 'hey clawsuu'
-            // for this test session only — acceptable for a
-            // test path.
+            // The lazy-init target phrase is resolved
+            // below: we first scan SharedPreferences for
+            // an active custom-trained wake set and use
+            // that phrase (so the wake test exercises
+            // the user's actual trained model, not the
+            // bundled jarvis one). If no active set
+            // exists, we fall back to the bundled
+            // 'hey_jarvis' as a last resort.
+            //
+            // v3.10.55: Try to find an active custom-trained wake
+            // set BEFORE falling back to the bundled
+            // 'hey_jarvis' model. Without this, the wake
+            // test button (which also calls startOwwListening)
+            // would lazy-init with the bundled jarvis model
+            // and score the user's custom phrase against the
+            // wrong classifier — producing 0% on every test
+            // even when the mic and detector are healthy.
+            // Tobe hit this on 2026-07-19: "0% on 4 tries"
+            // with avgRms 0.065 (mic working, model wrong).
+            // Scan the wake_models SharedPreferences for any
+            // active_<agentId> entry; if found, use that
+            // agent's wake phrase as the lazy-init target so
+            // the test exercises the user's actual trained
+            // model.
+            //
+            // Tie-breaking: if multiple agents have active wake
+            // sets, pick the first key alphabetically. This is
+            // deterministic and good enough — the test isn't
+            // multi-agent aware anyway, and at worst we test
+            // a different agent's model (still better than
+            // testing the bundled jarvis classifier against
+            // a custom phrase). The "right" agentId should be
+            // passed in via initOww before this fallback ever
+            // runs, so the multi-agent case is rare.
+            var lazyInitWakeword = "hey_jarvis"
             try {
-                emitDebug("warn", "startOwwListening called with null detector; lazy-init 'hey_jarvis' first")
+                val prefs = reactContext.getSharedPreferences(
+                    "wake_models", android.content.Context.MODE_PRIVATE
+                )
+                val activeKey = prefs.all.keys
+                    .filter { it.startsWith("active_") }
+                    .sorted()
+                    .firstOrNull()
+                if (activeKey != null) {
+                    val setId = prefs.getString(activeKey, null)
+                    if (setId != null) {
+                        val meta = readMetaForWakeSet(setId)
+                        if (meta?.phrase != null && meta.phrase.isNotBlank()) {
+                            lazyInitWakeword = meta.phrase
+                            emitDebug(
+                                "info",
+                                "Lazy-init using active wake set for $activeKey: '${meta.phrase}'"
+                            )
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // best-effort: if SharedPreferences read fails,
+                // fall through to bundled hey_jarvis as before
+            }
+            try {
+                if (lazyInitWakeword == "hey_jarvis") {
+                    emitDebug("warn", "startOwwListening called with null detector; lazy-init 'hey_jarvis' first")
+                } else {
+                    emitDebug("warn", "startOwwListening called with null detector; lazy-init '$lazyInitWakeword' (from active wake set)")
+                }
                 owwDetector?.close()
                 val fresh = OpenWakeWordDetector(reactContext)
-                val ok = fresh.loadModels("hey_jarvis")
+                val ok = fresh.loadModels(lazyInitWakeword)
                 fresh.setThreshold(0.5f)
                 if (ok) {
                     owwDetector = fresh
-                    owwWakeword = "hey_jarvis"
-                    emitDebug("info", "Lazy-init completed; wake listener now using bundled 'hey_jarvis'")
+                    owwWakeword = lazyInitWakeword
+                    emitDebug("info", "Lazy-init completed; wake listener now using '$lazyInitWakeword'")
                 } else {
                     promise.reject("OWW_NOT_INIT", "Call initOww first (and lazy-init failed)")
                     return
