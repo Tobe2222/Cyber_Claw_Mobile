@@ -28,6 +28,13 @@ class CyberClawService : Service() {
     private var audioRecord: AudioRecord? = null
     private var listenThread: Thread? = null
     @Volatile private var wakeListening = false
+    // v3.10.66: monitor thread that re-acquires the mic
+    // after the enrollment panel yields it. Without this,
+    // BG listening stays paused indefinitely after the
+    // user finishes a voice-enrollment session. We poll
+    // cheaply (every 500ms) and only re-init when the
+    // service is supposed to be running.
+    @Volatile private var enrollmentMonitorThread: Thread? = null
     private val handler = Handler(Looper.getMainLooper())
     private var wakePhrase = DEFAULT_PHRASE
 
@@ -126,9 +133,46 @@ class CyberClawService : Service() {
                 Log.i("CyberClawService", "Strict mode: $strict")
             } catch (_: Exception) {}
             startWakeListening()
+            // v3.10.66: spawn a monitor thread that watches
+            // the enrollment coordinator and re-acquires
+            // the mic after `stopActiveEnrollment` flips
+            // the flag back to false. Without this, the
+            // BG service stays paused forever after one
+            // active-enrollment session.
+            startEnrollmentMonitor()
         } catch (e: Exception) {
             Log.e("CyberClawService", "Vosk init failed", e)
         }
+    }
+
+    /**
+     * v3.10.66: poll the EnrollmentCoordinator flag, and
+     * when it goes back to false (active enrollment just
+     * ended), re-acquire the mic and resume BG wake
+     * listening. Cheap 500ms poll on a daemon thread.
+     */
+    private fun startEnrollmentMonitor() {
+        if (enrollmentMonitorThread?.isAlive == true) return
+        enrollmentMonitorThread = Thread {
+            while (isRunning) {
+                try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+                if (!wakeListening && !EnrollmentCoordinator.isActive && isRunning) {
+                    Log.i("CyberClawService", "Enrollment ended — resuming BG wake listening")
+                    try {
+                        // Only re-init if we previously
+                        // yielded. If wakeListening is
+                        // already true, the foreground
+                        // listener has the mic and we
+                        // shouldn't fight.
+                        if (audioRecord == null) {
+                            startWakeListening()
+                        }
+                    } catch (e: Exception) {
+                        Log.w("CyberClawService", "BG resume failed: ${e.message}")
+                    }
+                }
+            }
+        }.also { it.isDaemon = true; it.name = "BG-EnrollmentMonitor"; it.start() }
     }
 
     /**
@@ -219,6 +263,19 @@ class CyberClawService : Service() {
             // the user never opened voice mode.
             val enrollment = EnrollmentAudioProcessor.getInstance(applicationContext)
             while (wakeListening) {
+                // v3.10.66: actively yield the mic to the
+                // enrollment panel. Without this, BG service
+                // holds the AudioRecord on MIC, the panel's
+                // AudioRecord reads 0 bytes silently, and
+                // "Voice-active samples" stays at 0.
+                if (EnrollmentCoordinator.isActive) {
+                    Log.i("CyberClawService", "Yielding mic to active enrollment — pausing BG listening")
+                    try { rec.stop() } catch (_: Exception) {}
+                    try { rec.release() } catch (_: Exception) {}
+                    audioRecord = null
+                    wakeListening = false
+                    break
+                }
                 val read = rec.read(buf, 0, buf.size)
                 if (read <= 0) continue
                 // Push to enrollment pipeline. Cheap (melspec
@@ -436,6 +493,11 @@ class CyberClawService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        // v3.10.66: stop the enrollment monitor thread
+        // along with the rest of the service. The next
+        // isRunning check in the loop will exit it.
+        try { enrollmentMonitorThread?.interrupt() } catch (_: Exception) {}
+        enrollmentMonitorThread = null
         stopWakeListening()
         voskModel?.close()
         voskModel = null

@@ -125,6 +125,7 @@ import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
 // v3.10.24: shared global speaker-profile bar (full
 // variant) at the top of the Voice mode section.
 import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
+import ActiveEnrollmentPanel from '../components/ActiveEnrollmentPanel';
 // v3.10.25: shared "Test send" panel. Same hook + UI
 // as wake/exit — Send lives in the global Voice mode
 // section here, so its test button does too.
@@ -1483,6 +1484,35 @@ export default function SettingsScreen({
                 for) so the user can see the count
                 tick up as they use voice mode. */}
             <VoiceEnrollmentBar variant="compact" />
+
+            {/*
+              v3.10.66: explicit speaker-enrollment panel,
+              moved from each companion's wake settings
+              (where it was duplicated N times). The
+              speaker profile is device-wide (one user's
+              voice, one profile), so the panel belongs
+              in a single place. The compact bar above
+              shows live progress; this card is the
+              dedicated 30-second enrollment session.
+
+              Active enrollment holds the mic for 30s.
+              While it's running, BG wake listening is
+              paused (EnrollmentCoordinator gates the
+              AudioRecord). After "Stop early" or the
+              natural 30s end, BG listening resumes
+              automatically — the panel doesn't need a
+              "restart wake" button.
+
+              Strict-mode toggle now lives inside the
+              panel (v3.10.62). Toggling it while the
+              profile is locked causes BG wake to use
+              OWW-TFLite only (Vosk processing skipped).
+              Battery saver when you're not expecting
+              spontaneous wake fires.
+            */}
+            <SubTitle>🗣️ Train my voice</SubTitle>
+            <Hint>Lock the speaker profile in ~30 seconds. After it's locked, wake fires are gated to your voice — other speakers won't trigger the app. Works across all companions (the profile is device-wide).</Hint>
+            <ActiveEnrollmentPanel />
 
             {/* v3.10.28: smart-silence toggle. The
                 noise-aware silence detector calibrates

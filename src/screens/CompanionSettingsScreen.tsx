@@ -58,8 +58,10 @@ import {
 // is `export function ClassifierTestPanel(...)` with
 // no default export.
 import { ClassifierTestPanel, useClassifierTest } from '../components/ClassifierTest';
-import ActiveEnrollmentPanel from '../components/ActiveEnrollmentPanel';
-// v3.7.1: syncClient for the desktop "Test voice" button.
+
+// v3.10.66: removed — speaker enrollment moved to global
+// Settings screen 🎙️ Voice mode section. The import is no
+// longer needed here.// v3.7.1: syncClient for the desktop "Test voice" button.
 import syncClient from '../services/SyncClient';
 // v3.10.23: addLogEntry import removed. The speaker-enrollment
 // callbacks that referenced it (v3.10.19/v3.10.21) are gone in
@@ -1099,7 +1101,16 @@ export default function CompanionSettingsScreen({
                   path: read a paragraph for 30s, profile
                   locks immediately, gate activates.
                 */}
-                <ActiveEnrollmentPanel />
+                {/*
+                  v3.10.66: enrollment panel moved to the
+                  global Settings screen (under 🎙️ Voice
+                  mode). It's a device-wide concept — your
+                  voice, not your companion's voice. It
+                  belongs in a single place, not N places
+                  (one per companion). The passive
+                  accumulator that runs in BG while wake
+                  listening is unchanged.
+                */}
 
                 {/*
                   v3.10.23: speaker enrollment UI removed.
@@ -1121,74 +1132,25 @@ export default function CompanionSettingsScreen({
                 </Text>
               </View>
             )}
+            {/*
+              v3.10.65: removed the redundant "Wake phrases" list
+              (SubTitle + Hint + WakePhrasePicker). The active wake
+              is already shown up top in the "Currently active wake"
+              panel; the two buttons below ("Train new wake phrase"
+              / "Manage wake sets") cover every action you'd want
+              to do with a non-active set — activate, retrain,
+              rename, delete, push, pull. The list was duplicate
+              information (same data as the active panel) AND it
+              sat between the active panel and the buttons that
+              do things, which made the screen read as if the
+              list WAS the actions. Tobe flagged it.
 
-            <SubTitle>Wake phrases</SubTitle>
-            <Hint>
-              {/*
-                v3.10.5: rewrote the stale "Tap 🎙 to
-                retrain, 🗑 to delete" hint. The picker
-                rows below render retrain + delete
-                buttons inline only when rows exist;
-                when empty, this section just points
-                at the manager. Don't promise an
-                interaction that may not be there.
-              */}
-              Trained wake phrases for {companion.name}. Use "Manage wake sets" below to retrain, rename, or delete.
-            </Hint>
-            <WakePhrasePicker
-              companions={[companion]}
-              savedModels={savedWakeModels}
-              activeCompanionId={activeWakeCompanionId}
-              onSelect={(selectedCid) => {
-                setActiveWakeCompanionId(selectedCid);
-                AsyncStorage.setItem('cyberclaw-active-wake-companion', selectedCid);
-                const entry = savedWakeModels[selectedCid];
-                if (entry?.phrase) {
-                  AsyncStorage.getItem('cyberclaw-audio-settings').then(raw => {
-                    const settings = raw ? JSON.parse(raw) : {};
-                    settings.wakeWord = entry.phrase;
-                    AsyncStorage.setItem('cyberclaw-audio-settings', JSON.stringify(settings));
-                  });
-                }
-              }}
-              onRetrain={(rcid, phrase) => {
-                // v3.10.0: pushed as a route instead of
-                // inline-expand. The back button on the
-                // trainer pops back to this page.
-                onPushWakeTrainer({
-                  companionId: rcid,
-                  companionName: companion.name,
-                  presetPhrase: phrase,
-                });
-              }}
-              onDelete={(rcid) => {
-                Alert.alert(
-                  'Delete wake model?',
-                  `Removes the trained wake word for ${companion.name}. You can re-train it later.`,
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Delete',
-                      style: 'destructive',
-                      onPress: async () => {
-                        try {
-                          await AsyncStorage.removeItem(`cyberclaw-wake-samples-${rcid}`);
-                          setSavedWakeModels(prev => {
-                            const next = { ...prev };
-                            delete next[rcid];
-                            return next;
-                          });
-                          if (activeWakeCompanionId === rcid) {
-                            setActiveWakeCompanionId(null);
-                            await AsyncStorage.removeItem('cyberclaw-active-wake-companion');
-                          }
-                        } catch (_) {}
-                      },
-                    },
-                  ],
-                );
-              }}
-            />
+              v3.10.66: also folded in — the same screen got the
+              "ActiveEnrollmentPanel" removed and parked in the
+              global Settings screen. Wake sets / enrollment are
+              both device-wide concepts now and only the active-
+              per-companion stuff stays here.
+            */}
             <TouchableOpacity
               style={[styles.trainBtn, { borderColor: '#3b82f6' }]}
               onPress={() => {

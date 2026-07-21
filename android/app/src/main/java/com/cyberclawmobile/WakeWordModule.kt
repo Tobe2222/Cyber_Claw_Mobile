@@ -202,6 +202,18 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     }
 
     private fun startVoskListening() {
+        // v3.10.66: refuse to start if active enrollment is
+        // recording. We're the same AudioRecord-on-MIC
+        // resource — without this guard, our open would
+        // succeed but read() would return 0 (BG service has
+        // the mic), making the foreground listener useless
+        // AND starving the enrollment. JS side will show
+        // "listening didn't start — speaker enrollment in
+        // progress", which is much clearer than "wake
+        // doesn't fire" later.
+        if (EnrollmentCoordinator.isActive) {
+            throw IOException("Cannot start wake listener: active speaker enrollment is recording")
+        }
         stopAudioRecord()
 
         val sampleRate = 16000
@@ -3195,6 +3207,13 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             promise.reject("ALREADY_RUNNING", "Active enrollment already in progress")
             return
         }
+        // v3.10.66: gate the mic before opening our recorder.
+        // Without this, CyberClawService's BG listener (and our
+        // own foreground Vosk listener, if running) hold the
+        // AudioRecord on MIC — our new AudioRecord reads 0 bytes
+        // and the enrollment shows "Voice-active samples: 0"
+        // indefinitely even though the UI says "running".
+        EnrollmentCoordinator.begin()
         try {
             val sampleRate = 16000
             val chunkSamples = 1280  // 80ms at 16kHz
@@ -3241,6 +3260,10 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             }.also { it.isDaemon = true; it.start() }
             promise.resolve(true)
         } catch (e: Exception) {
+            // v3.10.66: re-open the mic on failure so a
+            // broken AudioRecord doesn't leave the system
+            // gated forever.
+            EnrollmentCoordinator.end()
             promise.reject("START_ACTIVE_ENROLL_ERROR", e.message)
         }
     }
@@ -3249,8 +3272,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         try {
             activeEnrollmentRunning = false
             try { activeEnrollmentThread?.join(1500) } catch (_: Exception) {}
+            // v3.10.66: ungate the mic so BG / foreground
+            // listeners can resume. They check the flag on
+            // their own and re-open their AudioRecord when
+            // it flips back to false.
+            EnrollmentCoordinator.end()
             promise.resolve(true)
         } catch (e: Exception) {
+            // Defensive: even on error, ungate. We never
+            // want the mic stuck in "gated" state.
+            EnrollmentCoordinator.end()
             promise.reject("STOP_ACTIVE_ENROLL_ERROR", e.message)
         }
     }
