@@ -461,6 +461,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // the chat, such that one can Click them and look at them
   // also, like discord does".
   const [fullscreenAttachment, setFullscreenAttachment] = useState<{ uri: string; type: string; name: string } | null>(null);
+  // v3.10.72: feed picker modal. Opens when the
+  // arena's 🍖 button (lower-left) posts {type:'feed'}
+  // to the React Native side. Lists the same 7 treats
+  // the desktop's feed-menu shows (apple / hamburger /
+  // meat / fish / cake / cookie / berry) and calls
+  // window.Arena.dropTreat(type) on tap, plus sends
+  // an IPC to the desktop so the AI text reply can
+  // match the visual reaction.
+  const [feedModalOpen, setFeedModalOpen] = useState(false);
 
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
@@ -1061,6 +1070,37 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         } else {
           addLogEntry('📜 Arena Quests ignored — no handler', 'debug');
         }
+      }
+      if (msg.type === 'feed') {
+        // v3.10.72: arena feed button (bottom-left, new).
+        // Opens the treat-picker Modal. Mirrors the desktop
+        // toggleFeedMenu() in src/js/app.js:4797 which shows
+        // the #feed-menu div.
+        addLogEntry('🍖 Arena feed → opening treat picker', 'debug');
+        setFeedModalOpen(true);
+      }
+      if (msg.type === 'treat_placed') {
+        // v3.10.72: arena forwarded a treat_drop success.
+        // Forward to desktop so the AI can react ("I just
+        // gave you X. What do you think?"). Tobe's
+        // screenshot in v3.10.70 had no companion reply
+        // for treats because there was no path at all —
+        // this is the new path.
+        syncClient.send(JSON.stringify({
+          type: 'arena_treat_placed',
+          treat: msg.treat,
+        }));
+      }
+      if (msg.type === 'treat_eaten') {
+        // v3.10.72: companion ate a treat. Forward to
+        // desktop so the AI can react ("Yum, that was
+        // good. Thanks!"). Mirrors the desktop's
+        // promptCompanionEat(eatenType) callback that
+        // fires from inside the seek-and-eat logic.
+        syncClient.send(JSON.stringify({
+          type: 'arena_treat_eaten',
+          treat: msg.treat,
+        }));
       }
     } catch {}
   }, [closeFullscreen, onOpenQuests]);
@@ -2513,6 +2553,40 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     ]);
   }, []);
 
+  // v3.10.72: treats list. Mirrors TREAT_EMOJIS in
+  // desktop src/js/app.js:4790 + the actual 7 entries
+  // in src/index.html:122. We add foods only (no
+  // toys) per Tobe's request: "introduce the food/
+  // treats on the mobile end also". The desktop has
+  // toys too (⚽ ⚾ 🧶 etc.) but those need physics and
+  // a play menu — out of scope for v3.10.72.
+  const FEED_TREATS: Array<{ type: string; emoji: string; label: string }> = [
+    { type: 'apple', emoji: '🍎', label: 'Apple' },
+    { type: 'hamburger', emoji: '🍔', label: 'Burger' },
+    { type: 'meat', emoji: '🍖', label: 'Meat' },
+    { type: 'fish', emoji: '🐟', label: 'Fish' },
+    { type: 'cake', emoji: '🍰', label: 'Cake' },
+    { type: 'cookie', emoji: '🍪', label: 'Cookie' },
+    { type: 'berry', emoji: '🫐', label: 'Berries' },
+  ];
+
+  // v3.10.72: drop a treat on the arena. Called from
+  // the feed picker Modal. Injects JS into the WebView
+  // to call window.Arena.dropTreat(type), which places
+  // the treat at canvas center + emits the
+  // {type:'treat_placed'} message back to RN, which
+  // forwards to desktop as arena_treat_placed so the
+  // AI can react.
+  const placeTreat = useCallback((treatType: string) => {
+    setFeedModalOpen(false);
+    if (!webViewRef.current) return;
+    const safe = treatType.replace(/[^a-z-]/g, '');
+    if (safe !== treatType) return;
+    const js = `window.Arena.dropTreat('${safe}'); true;`;
+    webViewRef.current.injectJavaScript(js);
+    addLogEntry(`🍖 Placed treat: ${treatType}`, 'info');
+  }, []);
+
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
     // v3.10.3: kick the active companion awake on any chat
@@ -3555,6 +3629,53 @@ useEffect(() => {
           )}
         </TouchableOpacity>
       </Modal>
+
+      {/* v3.10.72: feed picker Modal. Opens when the
+          arena's 🍖 button (bottom-left) sends
+          {type:'feed'}. Lists the same 7 treats the
+          desktop's feed-menu shows (apple / burger /
+          meat / fish / cake / cookie / berries).
+          Tapping a treat closes the modal, calls
+          placeTreat() which injects JS into the
+          WebView's window.Arena.dropTreat API. The
+          WebView then emits treat_placed back, which
+          we forward to the desktop. */}
+      <Modal
+        visible={feedModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFeedModalOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.feedModalBackdrop}
+          activeOpacity={1}
+          onPress={() => setFeedModalOpen(false)}
+        >
+          <View style={styles.feedModalSheet}>
+            <View style={styles.feedModalHeader}>
+              <Text style={styles.feedModalTitle}>🍖 Treats</Text>
+              <TouchableOpacity
+                style={styles.feedModalClose}
+                onPress={() => setFeedModalOpen(false)}
+              >
+                <Text style={styles.feedModalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.feedModalGrid}>
+              {FEED_TREATS.map((t) => (
+                <TouchableOpacity
+                  key={t.type}
+                  style={styles.feedModalItem}
+                  onPress={() => placeTreat(t.type)}
+                >
+                  <Text style={styles.feedModalItemEmoji}>{t.emoji}</Text>
+                  <Text style={styles.feedModalItemLabel}>{t.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -3803,6 +3924,77 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 22,
     fontWeight: '600',
+  },
+  // v3.10.72: feed picker Modal styles. Mirrors the
+  // desktop's feed-menu CSS in src/css/layout.css:898
+  // but adapted for mobile — sheet at the bottom of
+  // the screen instead of a small popover.
+  feedModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+  },
+  feedModalSheet: {
+    backgroundColor: '#0a0a0e',
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 32,
+  },
+  feedModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  feedModalTitle: {
+    color: '#f7931a',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  feedModalClose: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    backgroundColor: '#1a1a28',
+  },
+  feedModalCloseText: {
+    color: '#f7931a',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  feedModalGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  feedModalItem: {
+    width: '23%',
+    aspectRatio: 1,
+    backgroundColor: '#1a1a28',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+  },
+  feedModalItemEmoji: {
+    fontSize: 32,
+  },
+  feedModalItemLabel: {
+    color: '#888',
+    fontSize: 10,
+    marginTop: 2,
+    textAlign: 'center',
   },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
   emptyChatText: { color: '#555', fontSize: 14, textAlign: 'center' },

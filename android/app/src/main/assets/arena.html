@@ -63,8 +63,48 @@ body.wake-mode #status{display:none!important}
 }
 #status.error{color:#f7931a}
 #status.ok{color:#4ade80}
-/* v3.1.48: debug overlay removed (Tobe asked). Kept getDebug()
-   exposed on window.Arena for ad-hoc inspection via RN. */
+/* v3.10.72: feed/play arena buttons in the bottom-left.
+     Mirrors the desktop's #arena-feed-btn /
+     #arena-play-btn in src/css/layout.css:889.
+     Hidden in wake/voice mode (the arena is fullscreen
+     for those). */
+#ctrlBottomLeft{
+  position:absolute;bottom:6px;left:6px;
+  display:flex;gap:4px;z-index:20;pointer-events:all;
+}
+body.wake-mode #ctrlBottomLeft{display:none!important}
+.ctrlBtnSmall{
+  background:rgba(0,0,0,0.72);
+  border:1px solid rgba(247,147,26,0.45);
+  color:#f7931a;
+  font-size:14px;
+  width:36px;height:36px;
+  border-radius:6px;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
+.ctrlBtnSmall:active{background:rgba(247,147,26,0.25)}
+/* v3.10.72: companion-reply speech-bubble overlay (mirror
+     of the desktop's emoji overlay). Shown above the
+     companion when something interesting just happened
+     (treat eaten, treat placed, etc). */
+.companionEmojiOverlay{
+  position:absolute;
+  pointer-events:none;
+  z-index:15;
+  font-size:18px;
+  text-shadow:0 1px 2px rgba(0,0,0,0.8);
+  animation:emojiPop 0.3s ease-out;
+}
+@keyframes emojiPop{
+  0%{transform:scale(0.5);opacity:0}
+  60%{transform:scale(1.15);opacity:1}
+  100%{transform:scale(1);opacity:1}
+}
+/* v3.10.72: feeding UI placeholder. The actual React
+     Modal lives in HomeScreen.tsx — the WebView only
+     needs the canvas-rendered treats and the
+     dropTreat API. */
 </style>
 </head>
 <body>
@@ -98,6 +138,18 @@ body.wake-mode #status{display:none!important}
 <div id="ctrlLeft">
   <button class="ctrlBtn" id="questsBtn" title="Open Quests for the active companion"
     onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'quests'})); } catch(e) {}">📜 Quests</button>
+</div>
+<!-- v3.10.72: bottom-left arena feed button. Posts
+     {type:'feed'} which HomeScreen handles by opening
+     a treat-picker Modal. Tapping a treat in the
+     Modal calls window.Arena.dropTreat(type) which
+     places the treat at the canvas center; the active
+     companion walks over and eats it. Mirrors the
+     desktop's #arena-feed-btn / #feed-menu flow in
+     src/css/layout.css:889 and src/js/app.js:4782. -->
+<div id="ctrlBottomLeft">
+  <button class="ctrlBtnSmall" id="feedBtn" title="Feed companion"
+    onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'feed'})); } catch(e) {}">🍖</button>
 </div>
 <script>
 'use strict';
@@ -396,6 +448,36 @@ body.wake-mode #status{display:none!important}
   // is wrong for the WebView container's size).
   let explicitCanvasW = null;
   let explicitCanvasH = null;
+
+  // v3.10.72: treats system (food). The desktop has a
+  // much richer treats + toys system
+  // (src/js/pixel-arena.js:295) but the mobile arena
+  // stripped both at v3.1.93 ("let's just try to remove
+  // wake mode temporarily"). Tobe asked on 2026-07-22
+  // to bring the food/treats back "just like it is on
+  // desktop". Mobile gets the treats (food) only for
+  // now — no toys, no drag-to-place (tap-to-place at
+  // canvas center is the natural mobile flow).
+  //
+  // Each treat: { x, y, type, emoji, age, graceTimer }.
+  // Mirrors the desktop's dropTreat shape minus the
+  // toy-specific fields (vx, vy, radius, bouncePhase).
+  const TREATS = {
+    apple: '🍎', hamburger: '🍔', meat: '🍖',
+    fish: '🐟', cake: '🍰', cookie: '🍪', berry: '🫐',
+  };
+  let treats = [];
+  let companionEmoji = null; // { emoji, timer }
+  // Treat lifetime: 60s on desktop. On mobile the arena
+  // is smaller so a treat is harder to miss — but we
+  // still want old treats to fade so the arena doesn't
+  // accumulate. 60s is the same.
+  const TREAT_MAX_AGE_MS = 60000;
+  // Grace period: companion ignores treats for the
+  // first 500ms after they're placed, so the treat
+  // gets a visible "land" moment before the companion
+  // rushes over.
+  const TREAT_GRACE_MS = 500;
 
   function setStatus(text, cls) {
     statusEl.textContent = text;
@@ -723,6 +805,21 @@ body.wake-mode #status{display:none!important}
   }
 
   function update(dt) {
+    // v3.10.72: tick treats + companionEmoji timer.
+    // Treats age out at 60s (matches desktop in
+    // src/js/pixel-arena.js:977). Decrementing graceTimer
+    // here means the companion can't start seeking
+    // until the treat has been on the ground for at
+    // least TREAT_GRACE_MS.
+    for (const t of treats) {
+      t.age += dt;
+      if (t.graceTimer > 0) t.graceTimer = Math.max(0, t.graceTimer - dt);
+    }
+    while (treats.length && treats[0].age >= TREAT_MAX_AGE_MS) treats.shift();
+    if (companionEmoji && companionEmoji.timer > 0) {
+      companionEmoji.timer -= dt;
+      if (companionEmoji.timer <= 0) companionEmoji = null;
+    }
     for (const c of companions) {
       // v3.1.60: centered mode (wake/voice). Skip the state
       // machine, position updates, and bounce — the companion
@@ -742,7 +839,81 @@ body.wake-mode #status{display:none!important}
         c.direction = 0;  // face camera
       } else {
         c.stateTimer -= dt;
-        if (c.stateTimer <= 0) pickState(c);
+
+        // v3.10.72: treat-seeking. If there's a treat
+        // within range AND the grace period has elapsed,
+        // walk toward it. If close enough (<30px from
+        // companion center), eat it: remove from treats,
+        // play happy emoji, briefly lock to idle so the
+        // user sees the "nom nom" moment. Mirrors the
+        // desktop's seek-and-eat logic in
+        // src/js/pixel-arena.js:636-687.
+        //
+        // The seek overrides pickState this frame —
+        // pickState doesn't run if a seek is active.
+        // We use the existing `c.state = 'walk'` and
+        // short stateTimer to keep the animation state
+        // machine coherent without forking the AI.
+        let seeking = false;
+        if (c.isActive && treats.length) {
+          const edible = treats.find(t => t.graceTimer <= 0);
+          if (edible) {
+            const [fw, fh] = c.data.frameSize;
+            const dw = fw * c.scale;
+            const dh = fh * c.scale;
+            const compCX = c.x + dw / 2;
+            const compCY = c.y + dh / 2;
+            const dx = (edible.x + 14) - compCX;
+            const dy = (edible.y + 14) - compCY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 30) {
+              // Eat! Remove the treat, set happy
+              // emoji overlay, force idle for 1.5s so
+              // the user sees the nom-nom pose.
+              const idx = treats.indexOf(edible);
+              if (idx >= 0) treats.splice(idx, 1);
+              c.state = 'idle';
+              c.animation = 'idle';
+              c.vx = 0;
+              c.vy = 0;
+              c.stateTimer = 1500;
+              companionEmoji = { emoji: '😋', timer: 2500 };
+              // Notify RN so the desktop can post
+              // "I just ate an apple, give a happy
+              // reaction" via promptCompanionReaction.
+              notifyRN({ type: 'treat_eaten', treat: edible.type });
+              // Hearts after the nom.
+              setTimeout(() => {
+                if (companionEmoji) return;
+                companionEmoji = { emoji: '❤️', timer: 1500 };
+              }, 2500);
+              seeking = true;
+            } else {
+              // Walk toward the treat. We set vx/vy
+              // directly (overriding pickState's
+              // velocity) and a short stateTimer so
+              // pickState doesn't run again mid-walk.
+              const speed = 0.035;
+              c.state = 'walk';
+              c.animation = 'walk';
+              c.vx = (dx / dist) * speed;
+              c.vy = (dy / dist) * speed;
+              if (Math.abs(dx) > Math.abs(dy)) {
+                c.direction = dx < 0 ? 2 : 3; // left/right
+              } else {
+                c.direction = dy < 0 ? 1 : 0; // up/down
+              }
+              c.stateTimer = 200;
+              seeking = true;
+            }
+          }
+        }
+        // pickState only fires if the timer expired AND
+        // we're not currently seeking a treat. The seek
+        // sets stateTimer to a positive value (200) so
+        // even when the previous timer was <= 0, the
+        // seek takes priority this frame.
+        if (c.stateTimer <= 0 && !seeking) pickState(c);
 
         // Apply velocity in both axes
         c.x += c.vx * dt;
@@ -959,13 +1130,79 @@ body.wake-mode #status{display:none!important}
 
   function render() {
     drawBackground();
+    // v3.10.72: draw treats on the ground before
+    // companions so the sprite overlaps the treat when
+    // it walks over (matches desktop draw order in
+    // src/js/pixel-arena.js:984).
+    for (const t of treats) drawTreat(t);
     for (const c of companions) {
       // v3.1.46: shadows removed (Tobe asked for cleaner look).
       // drawShadow(c);
       drawCompanion(c);
       drawName(c);
     }
+    // v3.10.72: update the companionEmoji overlay
+    // position. We update the DOM overlay (not canvas)
+    // because small emojis look better at native DOM
+    // resolution. The overlay sits above the active
+    // companion's head.
+    updateCompanionEmojiOverlay();
     // v3.1.48: drawDebug() call removed.
+  }
+
+  // v3.10.72: draw a single treat emoji on the canvas.
+  // We use fillText with a large font rather than an
+  // emoji sprite because the mobile arena doesn't ship
+  // the desktop's emoji atlas and DOM-emojis are
+  // visually consistent with the rest of the app.
+  function drawTreat(t) {
+    // Subtle "landed" animation: alpha ramps from 0
+    // to 1 over the first 200ms, then stays at 1.
+    const fadeMs = 200;
+    if (t.age < fadeMs) {
+      ctx.globalAlpha = t.age / fadeMs;
+    } else {
+      ctx.globalAlpha = 1;
+    }
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(t.emoji, t.x + 14, t.y + 14);
+    ctx.globalAlpha = 1;
+  }
+
+  // v3.10.72: position the companionEmoji DOM overlay
+  // above the active companion's head. When no emoji
+  // is set or the timer expired, hide it. The overlay
+  // uses absolute positioning in the WebView, so we
+  // convert canvas coordinates to viewport coordinates
+  // (canvas is 100% width/height of the WebView so
+  // they're the same here).
+  function updateCompanionEmojiOverlay() {
+    if (!companionEmoji || companionEmoji.timer <= 0) {
+      emojiOverlay.style.display = 'none';
+      return;
+    }
+    // Position above the active companion's head.
+    // If no active companion, center horizontally
+    // and float near the bottom (rare — usually the
+    // active companion is always set in the home
+    // screen).
+    const active = companions.find(c => c.id === activeId) || companions[0];
+    if (!active) {
+      emojiOverlay.style.display = 'none';
+      return;
+    }
+    const [fw, fh] = active.data.frameSize;
+    const dw = fw * active.scale;
+    const dh = fh * active.scale;
+    const headX = active.x + dw / 2;
+    const headY = active.y - 6;
+    emojiOverlay.style.left = `${headX}px`;
+    emojiOverlay.style.top = `${headY}px`;
+    emojiOverlay.style.transform = 'translate(-50%, -100%)';
+    emojiOverlay.textContent = companionEmoji.emoji;
+    emojiOverlay.style.display = 'block';
   }
 
   function loop(ts) {
@@ -1149,6 +1386,60 @@ body.wake-mode #status{display:none!important}
     for (const c of companions) c.isActive = (c.id === activeId);
   }
 
+  // v3.10.72: drop a treat at the canvas center. The
+  // mobile arena doesn't support drag-to-place (no
+  // mouse, just touch taps), so tapping a treat in the
+  // picker Modal places it at the center and the
+  // companion walks over. Mirrors the desktop's
+  // arena.dropTreat() in src/js/pixel-arena.js:295
+  // but simplified — no toy vs food distinction (we
+  // only ship food/treats, not toys), no physics.
+  //
+  // The companionEmoji overlay shows 🤩 briefly so the
+  // user gets immediate feedback that the treat landed
+  // and the companion is excited. Mirrors
+  // arena.companionEmoji = { emoji: '🤩', timer: 3000 }
+  // on the desktop's toggleFeedMenu() path.
+  function dropTreat(treatType) {
+    const emoji = TREATS[treatType];
+    if (!emoji) {
+      console.warn('[Arena] unknown treat type:', treatType);
+      return false;
+    }
+    // Canvas-center drop. Use a slightly forward (lower)
+    // y so the treat lands on the grass band where the
+    // companion walks (0.70*h to h). 0.85*h feels like
+    // "in front of the companion" on a small arena.
+    const cx = canvas.width / 2 - 14;
+    const cy = canvas.height * 0.85 - 14;
+    treats.push({
+      x: cx, y: cy,
+      type: treatType,
+      emoji,
+      age: 0,
+      graceTimer: TREAT_GRACE_MS,
+    });
+    companionEmoji = { emoji: '🤩', timer: 3000 };
+    // Notify RN so the React side can post a
+    // 'treat_placed' IPC to the desktop. The
+    // desktop will call promptCompanionReaction
+    // ("I just gave you an apple. What do you
+    // think?") so the AI text reply matches the
+    // visual reaction.
+    notifyRN({ type: 'treat_placed', treat: treatType });
+    return true;
+  }
+
+  // v3.10.72: companionEmoji overlay DOM element. We
+  // use a div positioned absolutely inside the WebView
+  // rather than canvas drawing, because the emoji is
+  // 18-24px and we want it crisp (no canvas
+  // pixel-rendering artifact at small sizes).
+  const emojiOverlay = document.createElement('div');
+  emojiOverlay.className = 'companionEmojiOverlay';
+  emojiOverlay.style.display = 'none';
+  document.body.appendChild(emojiOverlay);
+
   // v3.1.62: runtime version of the ?onlyActive=true&centered=true
   // URL params. Called by HomeScreen when voice mode toggles
   // fullscreen, so the WebView doesn't need to be re-mounted
@@ -1246,6 +1537,7 @@ body.wake-mode #status{display:none!important}
     setBackground,
     setCentered,
     init,
+    dropTreat,  // v3.10.72: place a food/treat at canvas center
     getActiveId: () => activeId,
     getCompanionCount: () => companions.length,
     getBackground: () => currentBgId,
@@ -1260,6 +1552,8 @@ body.wake-mode #status{display:none!important}
         scale: c.scale, vx: c.vx, x: c.x, y: c.y,
         anims: c.loadResults,
       })),
+      treats: treats.map(t => ({ x: t.x, y: t.y, type: t.type, age: t.age })),
+      companionEmoji,
     }),
   };
 
