@@ -12,6 +12,7 @@ import {
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder, disposeSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import { getVAD, resetVAD } from '../services/SileroVAD';  // Voice Activity Detection
@@ -421,6 +422,13 @@ function appendAgentMessage(
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
 export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQuests, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onOpenQuests?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
+  // v3.10.70: read Android nav-bar inset so we can pad
+  // the chat input above it. Without this the input
+  // row sat ~48dp above the bottom of the screen with
+  // a visible dark gap (Tobe reported this on
+  // 2026-07-22). On iOS with a notch device, top
+  // inset is also used elsewhere; bottom is 0.
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
@@ -517,6 +525,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   useEffect(() => { chatAtBottomRef.current = chatAtBottom; }, [chatAtBottom]);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
+  // v3.10.70: mirror of activeTab so the chat-event
+  // handler can check whether the chat tab is the
+  // currently visible tab without a stale-closure
+  // bug. Used to decide whether to fire a system
+  // notification for a companion reply.
+  const activeTabRef = useRef<TabId>('chat');
   const isWakeWordStoppedRef = useRef<boolean>(true);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
   const wakeWordBusyRef = useRef(false); // true while recording/transcribing in wake mode
@@ -566,6 +580,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
   useEffect(() => { messagesByAgentRef.current = messagesByAgent; }, [messagesByAgent]);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
   // v3.1.63: inject setCentered(true) when voice mode
   // (fullscreen) is entered, setCentered(false) when exited.
@@ -1788,6 +1803,44 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       appendAgentMessage(incoming, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
       if (aid !== activeChatAgentIdRef.current) {
         setChatUnreadByAgent(prev => ({ ...prev, [aid]: (prev[aid] || 0) + 1 }));
+      }
+      // v3.10.70: fire a system notification when a
+      // companion replies and the user isn't actively
+      // watching the chat for that companion. Skips:
+      //   - User messages (isUser=true) — we don't ping
+      //     ourselves
+      //   - App is in foreground AND chat tab is active
+      //     AND agent matches — user can already see it
+      //   - Voice mode is open — the voice response is
+      //     playing through the audio system, a separate
+      //     notification would just clash
+      //   - Wake mode is open and idle — same logic as
+      //     voice mode: there's already audio
+      const isOwnReply = !msg.isUser;
+      if (isOwnReply) {
+        const isChatFocused =
+          appStateRef.current === 'active' &&
+          !fullscreenRef.current &&
+          !isWakeWordModeRef.current &&
+          activeTabRef.current === 'chat' &&
+          aid === activeChatAgentIdRef.current;
+        if (!isChatFocused) {
+          const agentName =
+            msg.agentName ||
+            (agents || []).find(x => x.id === aid)?.name ||
+            'Companion';
+          // Truncate to 140 chars to match the
+          // native-side preview cap.
+          const preview = msg.text.length > 140
+            ? msg.text.substring(0, 137) + '…'
+            : msg.text;
+          try {
+            NativeModules.NativeBackground?.notifyCompanionReply?.(
+              agentName,
+              preview,
+            );
+          } catch (_) {}
+        }
       }
       // In Wake Mode, only process messages that are responses to a wake word trigger
       // (wakeWordBusyRef=true). Random companion reactions should just go to normal chat.
@@ -3331,7 +3384,7 @@ useEffect(() => {
                   </TouchableOpacity>
                 );
               })}
-            <View style={styles.inputContainer}>
+            <View style={[styles.inputContainer, { paddingBottom: 8 + insets.bottom }]}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
               </TouchableOpacity>

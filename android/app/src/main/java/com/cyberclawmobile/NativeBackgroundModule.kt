@@ -12,7 +12,11 @@ import android.os.Looper
 import android.content.Intent
 import android.os.Build
 import android.app.KeyguardManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.view.WindowManager
+import androidx.core.app.NotificationCompat
 import kotlin.concurrent.thread
 
 /**
@@ -27,6 +31,11 @@ class NativeBackgroundModule(private val reactContext: ReactApplicationContext) 
     private const val SAMPLE_RATE = 16000
     private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
     private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+    // v3.10.70: notification channel for companion
+    // replies. Separate from the BG-listening and wake
+    // channels so the user can mute chat notifications
+    // independently.
+    private const val CHAT_CHANNEL_ID = "cyberclaw_chat"
   }
 
   private var isListening = false
@@ -54,6 +63,81 @@ class NativeBackgroundModule(private val reactContext: ReactApplicationContext) 
     Log.d(TAG, "showToast: $message")
     Handler(Looper.getMainLooper()).post {
       Toast.makeText(reactContext, message, Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  /**
+   * v3.10.70: post a system notification for a
+   * companion reply. JS decides when to call this
+   * (only when the user isn't actively looking at
+   * the chat for that companion). Title is the
+   * companion's name + emoji; body is a truncated
+   * preview of the reply text. Tapping the
+   * notification launches the app to the home
+   * screen (the existing chat-tap logic in
+   * CyberClawService handles foreground state).
+   *
+   * Uses a separate channel `cyberclaw_chat` so
+   * the user can mute chat notifications without
+   * affecting the BG-listening / wake channels.
+   */
+  @com.facebook.react.bridge.ReactMethod
+  fun notifyCompanionReply(agentName: String, text: String, promise: com.facebook.react.bridge.Promise) {
+    try {
+      val nm = reactContext.getSystemService(NotificationManager::class.java)
+        ?: throw IllegalStateException("NotificationManager not available")
+
+      // Channel created lazily on first call so
+      // pre-v3.10.70 installs that never call this
+      // method don't see the channel at all.
+      val channel = NotificationChannel(
+        CHAT_CHANNEL_ID,
+        "Companion replies",
+        NotificationManager.IMPORTANCE_DEFAULT,
+      ).apply {
+        description = "Notifications when a companion replies while you're not in chat"
+        enableVibration(true)
+      }
+      nm.createNotificationChannel(channel)
+
+      // Tap intent — bring the app to foreground.
+      val launchIntent = reactContext.packageManager
+        .getLaunchIntentForPackage(reactContext.packageName)
+        ?: Intent(reactContext, MainActivity::class.java)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+      val pendingIntent = PendingIntent.getActivity(
+        reactContext, 2001, launchIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+
+      // Truncate preview so the notification fits in
+      // the standard 1-2 lines of body text on
+      // Android 12+ (max ~150 chars before Android
+      // ellipsizes).
+      val preview = if (text.length > 140) text.substring(0, 137) + "…" else text
+
+      val notif = NotificationCompat.Builder(reactContext, CHAT_CHANNEL_ID)
+        .setContentTitle("$agentName replied")
+        .setContentText(preview)
+        .setSmallIcon(android.R.drawable.stat_notify_chat)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        .build()
+      // Unique ID per companion so multiple replies
+      // stack instead of replacing. Use a stable hash
+      // of the agent name so rapid replies from the
+      // same companion overwrite each other (most
+      // recent wins) but different companions keep
+      // their own notifications.
+      val notifId = 2000 + agentName.hashCode().and(0x7FFFFFFF) % 1000
+      nm.notify(notifId, notif)
+      promise.resolve(true)
+    } catch (e: Exception) {
+      Log.w(TAG, "notifyCompanionReply failed: ${e.message}")
+      promise.reject("NOTIFY_FAILED", e.message)
     }
   }
 
