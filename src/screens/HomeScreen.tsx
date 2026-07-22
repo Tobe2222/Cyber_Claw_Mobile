@@ -426,6 +426,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // bar lets the user switch between companions; each companion has
   // its own chat history on the desktop that we mirror locally.
   // `messages` above is a view of `messagesByAgent[activeChatAgentId]`.
+  const [isThinking, setIsThinking] = useState(false);
   const [messagesByAgent, setMessagesByAgent] = useState<Record<string, ChatMessage[]>>({});
   // v3.1.17: which companion's chat is currently shown. The
   // companion tab bar updates this when the user taps a tab.
@@ -456,7 +457,6 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  const [isThinking, setIsThinking] = useState(false);
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
@@ -3022,11 +3022,17 @@ useEffect(() => {
       )}
 
       {/* Thinking indicator - Hidden when fullscreen */}
-      {!fullscreen && isThinking && (
-        <View style={styles.thinkingBar}>
-          <Text style={styles.thinkingText}>💭 Clawsuu is thinking...</Text>
-        </View>
-      )}
+      {/* v3.10.69: removed. The orange "💭 Clawsuu is
+          thinking..." bar above the tabs duplicated the
+          chat-side status (chatStatusBar / chatVoiceStatus)
+          and used a hard-coded "Clawsuu" name even when
+          the user was chatting with Lamasuu. Tobe
+          reported it as redundant. The arena WebView's
+          sprite animation (driven by setArenaThinking in
+          the onTyping handler) is unchanged — the
+          companion still looks like it's thinking on
+          screen, just without the redundant React text
+          bar. */}
 
       {/* Tabs - Hidden when fullscreen or landscape */}
       {!fullscreen && !isLandscape && (
@@ -3537,11 +3543,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   settingsIcon: { fontSize: 16 },
-  thinkingBar: {
-    backgroundColor: '#1a1a0a', paddingHorizontal: 16, paddingVertical: 6,
-    borderBottomWidth: 1, borderBottomColor: '#333',
-  },
-  thinkingText: { color: '#f7931a', fontSize: 12, fontStyle: 'italic' },
   wakeDebugBar: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.85)', paddingHorizontal: 10, paddingVertical: 6,
