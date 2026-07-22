@@ -3186,7 +3186,19 @@ useEffect(() => {
 
       {/* Tab content - Hidden when fullscreen or landscape */}
       {!fullscreen && !isLandscape && (
-      <KeyboardAvoidingView style={styles.tabContent} behavior='padding'>
+      // v3.10.71: KeyboardAvoidingView on iOS only.
+      // Android's `adjustResize` (AndroidManifest.xml)
+      // already resizes the window when the keyboard
+      // opens, so the inputContainer (flex-end) gets
+      // pushed up automatically. The previous
+      // `behavior='padding'` on Android had a known bug
+      // where the padding sometimes wasn't fully
+      // subtracted after keyboard hide, leaving a
+      // visible gap below the input row (Tobe reported
+      // this on 2026-07-22). On iOS we keep the
+      // KeyboardAvoidingView because there's no native
+      // adjustResize equivalent.
+      <KeyboardAvoidingView style={styles.tabContent} behavior='padding' enabled={Platform.OS === 'ios'}>
         {activeTab === 'chat' && (
           <>
             {/* v3.4.8: wrapped FlatList in a flex:1 View so
