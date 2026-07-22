@@ -8,6 +8,7 @@ import {
   View, Text, TextInput, TouchableOpacity, FlatList, ScrollView, StyleSheet, Image,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert, Modal,
   NativeModules, StatusBar, NativeEventEmitter, BackHandler, AppState,
+  PanResponder,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -2560,6 +2561,32 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // treats on the mobile end also". The desktop has
   // toys too (⚽ ⚾ 🧶 etc.) but those need physics and
   // a play menu — out of scope for v3.10.72.
+  //
+  // v3.10.74: per-companion food preferences (Tobe
+  // asked on 2026-07-22: "Certain companions should
+  // prefer certain Foods"). The pickers below highlight
+  // preferred treats with a ⭐ star. We use a simple
+  // name-keyed heuristic: cat-like companions prefer
+  // fish, dog-like prefer meat, bird-like prefer
+  // berries, etc. Companion-specific overrides go
+  // here. The desktop could ship a more elaborate
+  // `favoriteFoods` field on each agent later; for
+  // now the heuristic works for the common cases.
+  const COMPANION_FOOD_PREFS: Record<string, string[]> = {
+    // default — matches companions we don't have a
+    // specific preference for. ⭐ on cookie + berry
+    // because those are the universally-loved
+    // "always a hit" treats.
+    default: ['cookie', 'berry'],
+    // Clawsuu — the cyber-cat, fish is canonical.
+    clawsuu: ['fish', 'meat', 'berry'],
+    // Lamasuu — the other companion, sweeter taste.
+    lamasuu: ['cake', 'cookie', 'berry'],
+    // Any cat-named companion prefers fish.
+    cat: ['fish', 'meat'],
+    dog: ['meat', '***'],
+    bird: ['berry', 'apple'],
+  };
   const FEED_TREATS: Array<{ type: string; emoji: string; label: string }> = [
     { type: 'apple', emoji: '🍎', label: 'Apple' },
     { type: 'hamburger', emoji: '🍔', label: 'Burger' },
@@ -2570,6 +2597,44 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     { type: 'berry', emoji: '🫐', label: 'Berries' },
   ];
 
+  // v3.10.74: resolve which treats are preferred for
+  // the currently active companion. Falls back to the
+  // default preferences if no override matches.
+  const getPreferredTreats = useCallback((): Set<string> => {
+    const activeId = (activeChatAgentIdRef.current || '').toLowerCase();
+    const activeName = (
+      (agentsRef.current || []).find((a) => a.id === activeChatAgentIdRef.current)?.name || ''
+    ).toLowerCase();
+    // exact id match first, then name match (contains),
+    // then default.
+    if (activeId && COMPANION_FOOD_PREFS[activeId]) {
+      return new Set(COMPANION_FOOD_PREFS[activeId]);
+    }
+    for (const [key, prefs] of Object.entries(COMPANION_FOOD_PREFS)) {
+      if (key === 'default') continue;
+      if (activeName.includes(key) || activeId.includes(key)) {
+        return new Set(prefs);
+      }
+    }
+    return new Set(COMPANION_FOOD_PREFS.default);
+  }, []);
+
+  // v3.10.74: drag-to-place state. When the user
+  // long-presses a treat, we enter drag mode: the
+  // modal hides, a drag overlay follows the finger,
+  // and on release we inject JS to drop the treat at
+  // the WebView-relative touch coordinates. Tobe asked
+  // for drag-and-drop on 2026-07-22 ("it should be drag
+  // and drop able also").
+  const [dragMode, setDragMode] = useState<null | {
+    treatType: string;
+    emoji: string;
+    x: number;
+    y: number;
+  }>(null);
+  const dragModeRef = useRef<typeof dragMode>(null);
+  useEffect(() => { dragModeRef.current = dragMode; }, [dragMode]);
+
   // v3.10.72: drop a treat on the arena. Called from
   // the feed picker Modal. Injects JS into the WebView
   // to call window.Arena.dropTreat(type), which places
@@ -2577,15 +2642,58 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // {type:'treat_placed'} message back to RN, which
   // forwards to desktop as arena_treat_placed so the
   // AI can react.
-  const placeTreat = useCallback((treatType: string) => {
+  //
+  // v3.10.74: also accepts optional (x, y) for the
+  // drag-to-place flow. x/y are WebView-relative touch
+  // coordinates (we inject them straight into the JS
+  // call; the WebView's dropTreat interprets them as
+  // canvas coords, which equals viewport coords for
+  // the full-screen mobile arena).
+  const placeTreat = useCallback((treatType: string, x?: number, y?: number) => {
     setFeedModalOpen(false);
+    setDragMode(null);
     if (!webViewRef.current) return;
     const safe = treatType.replace(/[^a-z-]/g, '');
     if (safe !== treatType) return;
-    const js = `window.Arena.dropTreat('${safe}'); true;`;
+    let js: string;
+    if (typeof x === 'number' && typeof y === 'number') {
+      js = `window.Arena.dropTreat('${safe}', ${Math.round(x)}, ${Math.round(y)}); true;`;
+    } else {
+      js = `window.Arena.dropTreat('${safe}'); true;`;
+    }
     webViewRef.current.injectJavaScript(js);
-    addLogEntry(`🍖 Placed treat: ${treatType}`, 'info');
+    addLogEntry(`🍖 Placed treat: ${treatType}${x != null ? ` at (${Math.round(x)}, ${Math.round(y)})` : ' (center)'}`, 'info');
   }, []);
+
+  // v3.10.74: drag-to-place handlers. After long-pressing
+  // a treat, we capture the finger with PanResponder and
+  // track position. On release, drop the treat at the
+  // last position.
+  const dragPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => dragModeRef.current !== null,
+      onMoveShouldSetPanResponder: () => dragModeRef.current !== null,
+      onPanResponderGrant: (e) => {
+        const mode = dragModeRef.current;
+        if (!mode) return;
+        setDragMode({ ...mode, x: e.nativeEvent.pageX, y: e.nativeEvent.pageY });
+      },
+      onPanResponderMove: (e, gesture) => {
+        const mode = dragModeRef.current;
+        if (!mode) return;
+        setDragMode({ ...mode, x: gesture.moveX, y: gesture.moveY });
+      },
+      onPanResponderRelease: (e) => {
+        const mode = dragModeRef.current;
+        if (!mode) return;
+        placeTreat(mode.treatType, mode.x, mode.y);
+        setDragMode(null);
+      },
+      onPanResponderTerminate: () => {
+        setDragMode(null);
+      },
+    }),
+  ).current;
 
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
@@ -3662,20 +3770,80 @@ useEffect(() => {
               </TouchableOpacity>
             </View>
             <View style={styles.feedModalGrid}>
-              {FEED_TREATS.map((t) => (
-                <TouchableOpacity
-                  key={t.type}
-                  style={styles.feedModalItem}
-                  onPress={() => placeTreat(t.type)}
-                >
-                  <Text style={styles.feedModalItemEmoji}>{t.emoji}</Text>
-                  <Text style={styles.feedModalItemLabel}>{t.label}</Text>
-                </TouchableOpacity>
-              ))}
+              {(() => {
+                const preferred = getPreferredTreats();
+                return FEED_TREATS.map((t) => {
+                  const isPreferred = preferred.has(t.type);
+                  return (
+                    <TouchableOpacity
+                      key={t.type}
+                      style={styles.feedModalItem}
+                      onPress={() => placeTreat(t.type)}
+                      // v3.10.74: long-press to enter drag-
+                      // to-place mode. The user can drag the
+                      // treat emoji to any spot on the arena.
+                      // The dragPanResponder on the parent
+                      // View captures the gesture and drops
+                      // the treat at the finger position.
+                      onLongPress={(e) => {
+                        const { pageX, pageY } = e.nativeEvent;
+                        setDragMode({ treatType: t.type, emoji: t.emoji, x: pageX, y: pageY });
+                        setFeedModalOpen(false);
+                      }}
+                      delayLongPress={200}
+                    >
+                      {/* v3.10.74: ⭐ marker for the active
+                          companion's preferred treats.
+                          Subtle visual hint so the user
+                          knows which is "their" favourite. */}
+                      {isPreferred && (
+                        <Text style={styles.feedModalItemStar}>⭐</Text>
+                      )}
+                      <Text style={styles.feedModalItemEmoji}>{t.emoji}</Text>
+                      <Text style={styles.feedModalItemLabel}>{t.label}</Text>
+                    </TouchableOpacity>
+                  );
+                });
+              })()}
             </View>
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* v3.10.74: drag-to-place overlay. When the user
+          long-presses a treat in the feed Modal, we set
+          `dragMode` and show this emoji that follows
+          their finger. The dragPanResponder tracks
+          position; on release we drop the treat at the
+          last finger position. The View is `pointerEvents=
+          'box-none'` so it doesn't block touches outside
+          the emoji circle (the WebView still receives
+          other touches). */}
+      {dragMode && (
+        <View
+          style={StyleSheet.absoluteFill}
+          pointerEvents="box-none"
+          {...dragPanResponder.panHandlers}
+        >
+          <View
+            style={[
+              styles.feedDragGhost,
+              { left: dragMode.x - 24, top: dragMode.y - 24 },
+            ]}
+            pointerEvents="none"
+          >
+            <Text style={styles.feedDragGhostEmoji}>{dragMode.emoji}</Text>
+          </View>
+          <View
+            style={styles.feedDragHint}
+            pointerEvents="none"
+          >
+            <Text style={styles.feedDragHintText}>
+              🖐 Drag to place · release to drop
+            </Text>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -3995,6 +4163,52 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 2,
     textAlign: 'center',
+  },
+  // v3.10.74: small ⭐ marker in the top-right of a
+  // preferred treat's cell. Indicates this is one of
+  // the active companion's favourites.
+  feedModalItemStar: {
+    position: 'absolute',
+    top: 2, right: 4,
+    fontSize: 11,
+  },
+  // v3.10.74: drag-to-place overlay styles. Shown
+  // while the user is dragging a treat emoji from
+  // the feed Modal to a position on the arena.
+  feedDragGhost: {
+    position: 'absolute',
+    width: 48, height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(247,147,26,0.18)',
+    borderWidth: 2,
+    borderColor: '#f7931a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  feedDragGhostEmoji: {
+    fontSize: 28,
+  },
+  feedDragHint: {
+    position: 'absolute',
+    bottom: 100,
+    left: 0, right: 0,
+    alignItems: 'center',
+  },
+  feedDragHintText: {
+    color: '#f7931a',
+    backgroundColor: 'rgba(10,10,14,0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    fontSize: 12,
+    fontWeight: '600',
+    borderWidth: 1,
+    borderColor: 'rgba(247,147,26,0.45)',
   },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
   emptyChatText: { color: '#555', fontSize: 14, textAlign: 'center' },

@@ -849,13 +849,27 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
         // desktop's seek-and-eat logic in
         // src/js/pixel-arena.js:636-687.
         //
-        // The seek overrides pickState this frame —
-        // pickState doesn't run if a seek is active.
-        // We use the existing `c.state = 'walk'` and
-        // short stateTimer to keep the animation state
-        // machine coherent without forking the AI.
+        // v3.10.74: removed `c.isActive` requirement.
+        // Tobe reported on 2026-07-22 that the
+        // companion didn't move to snacks he dropped.
+        // Root cause: the v3.10.72 logic only ran
+        // seek/eat for `c.isActive` companions, but on
+        // the home screen the user can drop a treat
+        // BEFORE tapping a companion tab — at that
+        // point activeId is null and no companion has
+        // `isActive = true`, so the treats were never
+        // pursued. The desktop doesn't filter by active
+        // either: it iterates all companions and the
+        // closest one eats. We do the same here.
+        //
+        // v3.10.74: skip companions that are far from
+        // the treat (let the active or closer companion
+        // claim it). Threshold 200px horizontal+vertical
+        // (L∞ distance) — well outside the 30px eat range,
+        // generous enough to cover the typical mobile
+        // arena size.
         let seeking = false;
-        if (c.isActive && treats.length) {
+        if (treats.length) {
           const edible = treats.find(t => t.graceTimer <= 0);
           if (edible) {
             const [fw, fh] = c.data.frameSize;
@@ -866,7 +880,9 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
             const dx = (edible.x + 14) - compCX;
             const dy = (edible.y + 14) - compCY;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < 30) {
+            if (Math.abs(dx) > 200 || Math.abs(dy) > 200) {
+              // Too far — let other companions try.
+            } else if (dist < 30) {
               // Eat! Remove the treat, set happy
               // emoji overlay, force idle for 1.5s so
               // the user sees the nom-nom pose.
@@ -1400,18 +1416,33 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
   // and the companion is excited. Mirrors
   // arena.companionEmoji = { emoji: '🤩', timer: 3000 }
   // on the desktop's toggleFeedMenu() path.
-  function dropTreat(treatType) {
+  function dropTreat(treatType, x, y) {
     const emoji = TREATS[treatType];
     if (!emoji) {
       console.warn('[Arena] unknown treat type:', treatType);
       return false;
     }
-    // Canvas-center drop. Use a slightly forward (lower)
-    // y so the treat lands on the grass band where the
-    // companion walks (0.70*h to h). 0.85*h feels like
-    // "in front of the companion" on a small arena.
-    const cx = canvas.width / 2 - 14;
-    const cy = canvas.height * 0.85 - 14;
+    // v3.10.74: drop at (x, y) if provided (drag-drop
+    // from React Native), otherwise center. React Native
+    // converts WebView-relative touch coords to canvas
+    // coords before calling, so we trust the values as
+    // already in canvas space.
+    let cx, cy;
+    if (typeof x === 'number' && typeof y === 'number') {
+      cx = x - 14; // center the emoji (28px wide) on x
+      cy = y - 14;
+    } else {
+      // Canvas-center drop. Use a slightly forward (lower)
+      // y so the treat lands on the grass band where the
+      // companion walks (0.70*h to h). 0.85*h feels like
+      // "in front of the companion" on a small arena.
+      cx = canvas.width / 2 - 14;
+      cy = canvas.height * 0.85 - 14;
+    }
+    // v3.10.74: clamp to canvas bounds so treats don't
+    // land off-screen.
+    cx = Math.max(0, Math.min(canvas.width - 28, cx));
+    cy = Math.max(0, Math.min(canvas.height - 28, cy));
     treats.push({
       x: cx, y: cy,
       type: treatType,

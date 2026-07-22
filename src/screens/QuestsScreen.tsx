@@ -258,10 +258,33 @@ export default function QuestsScreen({
     // sends `quests_update_failed` when the mutation
     // couldn't be applied (e.g. quest not found). Show an
     // error toast so the user knows the edit didn't take.
+    //
+    // v3.10.74: include the desktop's diagnostic info
+    // (the list of available quest ids, when provided) so
+    // Tobe can see "looking for X, available [a, b, c]"
+    // and we can pinpoint the id-mismatch bug without
+    // guessing. Also log the full msg to console for the
+    // dev menu / log tab.
     const failedHandler = (msg: any) => {
       const action = msg?.action || 'edit';
       const reason = msg?.error || 'unknown error';
-      setError(`Couldn't ${action.replace(/_/g, ' ')}: ${reason}`);
+      let detail = `Couldn't ${action.replace(/_/g, ' ')}: ${reason}`;
+      if (Array.isArray(msg?.available) && msg.available.length > 0) {
+        // Truncate the id list so the toast doesn't
+        // blow up. Show first 5 + total count.
+        const ids = msg.available.slice(0, 5).join(', ');
+        const more = msg.available.length > 5
+          ? `, +${msg.available.length - 5} more`
+          : '';
+        detail += ` · wanted "${msg.id}", desktop has [${ids}${more}]`;
+      }
+      setError(detail);
+      // v3.10.74: also surface the diagnostic in the
+      // console for the dev menu / log tab. addLogEntry
+      // is a HomeScreen helper not in scope here, but
+      // console.log gets picked up by the log tab via
+      // the WebView's console listener.
+      console.warn('[QuestsScreen] edit failed:', detail, msg);
     };
     syncClient.on?.('quests_update_failed', failedHandler);
 
@@ -802,7 +825,23 @@ function QuestEditorBody({
   const [name, setName] = useState(quest.name || '');
   const [description, setDescription] = useState(quest.description || '');
   const [status, setStatus] = useState<'active' | 'completed'>(quest.status || 'active');
-  const [active, setActive] = useState(!!quest.active);
+  // v3.10.74: goal list is now editable in the editor.
+  // Each entry is { text: string, completed: boolean }.
+  // We normalize string[] legacy entries on load. The
+  // editor renders one TextInput per goal with a remove
+  // button, plus an "Add step" button at the bottom.
+  // Tobe reported on 2026-07-22: "Still missing the
+  // steps" — the previous "Goal text editing lands in a
+  // future release" hint was correct but the feature is
+  // shipping now.
+  const [goals, setGoals] = useState<Array<{ text: string; completed: boolean }>>(() => {
+    if (!Array.isArray(quest.goals)) return [];
+    return quest.goals.map((g) =>
+      typeof g === 'string'
+        ? { text: g, completed: false }
+        : { text: g.text || '', completed: !!g.completed },
+    );
+  });
 
   return (
     <View style={styles.editorCard}>
@@ -856,23 +895,77 @@ function QuestEditorBody({
             </Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.editorFieldLabel}>Active</Text>
-        <TouchableOpacity
-          style={styles.editorActiveToggle}
-          onPress={() => setActive(!active)}
-        >
-          <Text style={styles.editorActiveToggleText}>
-            {active ? '⚡ This is the active quest' : '☆ Set as active quest'}
-          </Text>
-        </TouchableOpacity>
+        {/* v3.10.74: removed the "Active" toggle (the
+            double-active bug Tobe reported). The "this
+            is THE active quest" flag is now set
+            exclusively via the ☆ button on the card
+            list, not from inside the editor. Keeping a
+            redundant toggle inside the editor caused
+            confusion: V2 in the screenshot had status
+            "active" highlighted AND HIVE_CONTROL had
+            the ACTIVE badge — they meant different
+            things but looked the same. */}
         {!!quest.directory && (
           <Text style={styles.editorDirectoryHint}>
             📁 {quest.directory}
           </Text>
         )}
-        <Text style={styles.editorHint}>
-          Goal text editing lands in a future release. For now, tap a goal in the detail modal to mark it done.
-        </Text>
+
+        {/* v3.10.74: goal list editor. One TextInput per
+            step, plus remove + add buttons. The mobile
+            previously only let the user mark goals done
+            (via the detail modal tap-to-toggle) but
+            couldn't add/edit/delete step text. Tobe
+            reported the missing-steps bug 2026-07-22. */}
+        <View style={styles.editorGoalsHeader}>
+          <Text style={styles.editorFieldLabel}>Steps ({goals.length})</Text>
+          <TouchableOpacity
+            style={styles.editorGoalAddBtn}
+            onPress={() => setGoals((g) => [...g, { text: '', completed: false }])}
+          >
+            <Text style={styles.editorGoalAddBtnText}>+ Add step</Text>
+          </TouchableOpacity>
+        </View>
+        {goals.length === 0 && (
+          <Text style={styles.editorGoalsEmpty}>
+            No steps yet. Tap "+ Add step" to create the first one.
+          </Text>
+        )}
+        {goals.map((g, i) => (
+          <View key={i} style={styles.editorGoalRow}>
+            <TouchableOpacity
+              style={[
+                styles.editorGoalCheck,
+                g.completed && styles.editorGoalCheckCompleted,
+              ]}
+              onPress={() => setGoals((gs) =>
+                gs.map((gg, j) => (j === i ? { ...gg, completed: !gg.completed } : gg)),
+              )}
+            >
+              <Text style={styles.editorGoalCheckText}>
+                {g.completed ? '☑' : '☐'}
+              </Text>
+            </TouchableOpacity>
+            <TextInput
+              style={[
+                styles.editorGoalInput,
+                g.completed && styles.editorGoalInputCompleted,
+              ]}
+              value={g.text}
+              onChangeText={(text) => setGoals((gs) =>
+                gs.map((gg, j) => (j === i ? { ...gg, text } : gg)),
+              )}
+              placeholder="Step description"
+              placeholderTextColor="#666"
+            />
+            <TouchableOpacity
+              style={styles.editorGoalRemoveBtn}
+              onPress={() => setGoals((gs) => gs.filter((_, j) => j !== i))}
+            >
+              <Text style={styles.editorGoalRemoveBtnText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        ))}
       </ScrollView>
       <View style={styles.editorFooter}>
         {!isNew && (
@@ -893,11 +986,21 @@ function QuestEditorBody({
         <TouchableOpacity
           style={[styles.editorFooterBtn, styles.editorFooterBtnPrimary]}
           onPress={() => {
+            // v3.10.74: goals are now editable. We send
+            // the full array (preserving `completed`
+            // flags and order) and filter out empty
+            // entries so the user can save a step mid-
+            // typing without losing the rest. The
+            // desktop's onUpdateQuest strips `id`/`active`
+            // and accepts goals as-is.
+            const cleanedGoals = goals
+              .map((g) => ({ text: g.text.trim(), completed: g.completed }))
+              .filter((g) => g.text.length > 0);
             const updates: Record<string, any> = {
               name: name.trim() || quest.name,
               description: description.trim(),
               status,
-              active,
+              goals: cleanedGoals,
             };
             onSave(updates);
           }}
@@ -1644,6 +1747,86 @@ const styles = StyleSheet.create({
   editorActiveToggleText: {
     color: '#cfd2e0',
     fontSize: 13,
+  },
+  // v3.10.74: goal list editor styles. The mobile
+  // previously had no way to edit goal text — only
+  // tap-to-toggle in the detail modal. Tobe reported
+  // the missing-steps bug 2026-07-22.
+  editorGoalsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  editorGoalAddBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(247,147,26,0.45)',
+    backgroundColor: 'rgba(247,147,26,0.08)',
+  },
+  editorGoalAddBtnText: {
+    color: '#f7931a',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  editorGoalsEmpty: {
+    color: '#666',
+    fontSize: 12,
+    fontStyle: 'italic',
+    paddingVertical: 8,
+  },
+  editorGoalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    gap: 6,
+  },
+  editorGoalCheck: {
+    width: 28,
+    height: 28,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0a0a18',
+  },
+  editorGoalCheckCompleted: {
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16,185,129,0.15)',
+  },
+  editorGoalCheckText: {
+    color: '#cfd2e0',
+    fontSize: 14,
+  },
+  editorGoalInput: {
+    flex: 1,
+    backgroundColor: '#1a1a2e',
+    color: '#e0e0e0',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 13,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  editorGoalInputCompleted: {
+    color: '#666',
+    textDecorationLine: 'line-through',
+  },
+  editorGoalRemoveBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 4,
+    backgroundColor: '#1a1a28',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editorGoalRemoveBtnText: {
+    color: '#a55',
+    fontSize: 14,
   },
   editorDirectoryHint: {
     color: '#7a809a',
