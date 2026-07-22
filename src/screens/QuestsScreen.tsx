@@ -269,14 +269,24 @@ export default function QuestsScreen({
       const action = msg?.action || 'edit';
       const reason = msg?.error || 'unknown error';
       let detail = `Couldn't ${action.replace(/_/g, ' ')}: ${reason}`;
+      // v3.10.77: rich diagnostic info from the
+      // desktop. Shows id + name pairs so Tobe can
+      // see whether the id is genuinely unknown or
+      // just stale (e.g. "id=abc123 is for the
+      // CYBERHIVE_WEBSITE V2 quest on the desktop, but
+      // the mobile is asking for id=xyz789 which
+      // doesn't match").
       if (Array.isArray(msg?.available) && msg.available.length > 0) {
-        // Truncate the id list so the toast doesn't
-        // blow up. Show first 5 + total count.
-        const ids = msg.available.slice(0, 5).join(', ');
-        const more = msg.available.length > 5
-          ? `, +${msg.available.length - 5} more`
+        const entries = msg.available
+          .slice(0, 3)
+          .map((a: any) => `${a.name || '(unnamed)'} (${a.id})`)
+          .join(', ');
+        const more = msg.available.length > 3
+          ? `, +${msg.available.length - 3} more`
           : '';
-        detail += ` · wanted "${msg.id}", desktop has [${ids}${more}]`;
+        detail += ` · wanted id "${msg.id}"${msg.wantedName ? ` for "${msg.wantedName}"` : ''}, desktop has: ${entries}${more}`;
+      } else {
+        detail += ` · wanted id "${msg.id}", desktop has no quests`;
       }
       setError(detail);
       // v3.10.74: also surface the diagnostic in the
