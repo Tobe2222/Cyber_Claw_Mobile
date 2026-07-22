@@ -82,6 +82,16 @@ export default function QuestsScreen({
 }) {
   const [quests, setQuests] = useState<CompanionQuest[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  // v3.10.73: track whether at least one fresh broadcast
+  // from the desktop has been received. Without this, the
+  // user can tap ✏️ while the cache is still showing
+  // pre-broadcast data — the editor opens with a stale id
+  // that the desktop doesn't recognize, and Save fails
+  // with "quest not found". Tobe hit this on 2026-07-22.
+  // We render cards from cache for instant paint, but
+  // block edits (and show a hint) until the first
+  // broadcast arrives so the editor always uses fresh ids.
+  const [firstBroadcastReceived, setFirstBroadcastReceived] = useState(false);
   // v3.7.7: tapped quest shown in the detail modal. null = closed.
   const [detail, setDetail] = useState<CompanionQuest | null>(null);
   // v3.8.0: editor modal. null = closed, otherwise the
@@ -141,6 +151,12 @@ export default function QuestsScreen({
   // fixes this.
   useEffect(() => {
     let cancelled = false;
+    // v3.10.73: reset the first-broadcast-received flag
+    // on every mount of this screen. Otherwise the flag
+    // is sticky across navigations and a user who enters
+    // Quests a second time could land on stale-id data
+    // if the cache wasn't refreshed in the meantime.
+    setFirstBroadcastReceived(false);
     (async () => {
       try {
         // 1. Read new global cache (if any)
@@ -203,6 +219,13 @@ export default function QuestsScreen({
     const handler = (msg: any) => {
       const list: CompanionQuest[] = Array.isArray(msg?.quests) ? msg.quests : [];
       setQuests(list);
+      // v3.10.73: mark first-broadcast as received so the
+      // editor can be safely opened. Cache-only data has
+      // potentially stale ids that the desktop won't
+      // recognize (Tobe hit "Couldn't update quest: quest
+      // not found" on 2026-07-22). After this point the
+      // card data is canonical and edits will round-trip.
+      setFirstBroadcastReceived(true);
       AsyncStorage.setItem(CACHE_KEY, JSON.stringify(list)).catch(() => {});
       // v3.8.0: if the editor is open and the broadcast
       // includes a quest with the same id, the desktop has
@@ -353,7 +376,18 @@ export default function QuestsScreen({
               </Text>
             </View>
           ) : (
-            sorted.map((q) => {
+            <React.Fragment>
+              {/* v3.10.73: if the first desktop broadcast hasn't
+                  arrived yet (cache-only render), show a small
+                  hint explaining why edit buttons are dimmed.
+                  Stops users from tapping ✏️ into an editor with
+                  a stale id that the desktop doesn't recognize. */}
+              {!firstBroadcastReceived && (
+                <Text style={styles.syncingHint}>
+                  ⏳ Syncing with desktop… (edit buttons will unlock when sync completes)
+                </Text>
+              )}
+            {sorted.map((q) => {
               const isComplete = q.status === 'completed';
               const isActive = !!q.active;
               const goals = Array.isArray(q.goals) ? q.goals : [];
@@ -460,9 +494,17 @@ export default function QuestsScreen({
                   <View style={styles.cardActions}>
                     {!isActive && (
                       <TouchableOpacity
-                        style={styles.cardActionBtn}
+                        // v3.10.73: same staleness guard as
+                        // ✏️ — see comment above. set_quest_active
+                        // also fails if the desktop doesn't
+                        // recognize the id.
+                        style={[
+                          styles.cardActionBtn,
+                          !firstBroadcastReceived && styles.cardActionBtnDisabled,
+                        ]}
                         onPress={(e) => {
                           e?.stopPropagation?.();
+                          if (!firstBroadcastReceived) return;
                           handleSetActive(q.id);
                         }}
                       >
@@ -470,9 +512,20 @@ export default function QuestsScreen({
                       </TouchableOpacity>
                     )}
                     <TouchableOpacity
-                      style={styles.cardActionBtn}
+                      // v3.10.73: disable the ✏️ button
+                      // until the first broadcast arrives.
+                      // Otherwise the editor opens with a
+                      // stale id from the cache and Save
+                      // fails with "quest not found" because
+                      // the desktop doesn't recognize the
+                      // id. Tobe hit this on 2026-07-22.
+                      style={[
+                        styles.cardActionBtn,
+                        !firstBroadcastReceived && styles.cardActionBtnDisabled,
+                      ]}
                       onPress={(e) => {
                         e?.stopPropagation?.();
+                        if (!firstBroadcastReceived) return;
                         setEditorOpen({ ...q });
                       }}
                     >
@@ -480,9 +533,21 @@ export default function QuestsScreen({
                     </TouchableOpacity>
                     <View style={{ flex: 1 }} />
                     <TouchableOpacity
-                      style={[styles.cardActionBtn, styles.cardActionDelete]}
+                      // v3.10.73: same staleness guard as
+                      // ✏️ and ☆ (see comment above). delete_quest
+                      // with a stale id silently no-ops which
+                      // is even worse than the others — the
+                      // user clicks Delete, the confirmation
+                      // dialog appears, they confirm, and
+                      // nothing happens.
+                      style={[
+                        styles.cardActionBtn,
+                        styles.cardActionDelete,
+                        !firstBroadcastReceived && styles.cardActionBtnDisabled,
+                      ]}
                       onPress={(e) => {
                         e?.stopPropagation?.();
+                        if (!firstBroadcastReceived) return;
                         setConfirm({
                           title: 'Delete quest?',
                           message: `"${q.name}" will be removed from the desktop too. This can't be undone.`,
@@ -498,7 +563,8 @@ export default function QuestsScreen({
                   </View>
                 </TouchableOpacity>
               );
-            })
+            })}
+            </React.Fragment>
           )}
         </View>
 
@@ -1358,6 +1424,25 @@ const styles = StyleSheet.create({
   },
   cardActionDelete: {
     marginLeft: 'auto',
+  },
+  // v3.10.73: stale-id guard. When the first desktop
+  // broadcast hasn't arrived yet (cache-only render),
+  // the card action buttons dim so the user sees they
+  // can't safely edit yet.
+  cardActionBtnDisabled: {
+    opacity: 0.35,
+  },
+  // v3.10.73: small hint shown above the card list
+  // when no broadcast has been received from the
+  // desktop yet. Explains why edit/active/delete
+  // buttons are dimmed.
+  syncingHint: {
+    color: '#888',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 8,
+    fontStyle: 'italic',
   },
   cardActionText: {
     fontSize: 16,
