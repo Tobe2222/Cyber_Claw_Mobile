@@ -582,6 +582,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
+  // v3.10.79: sync the visible `messages` view to the
+  // active agent's bucket whenever activeChatAgentId
+  // changes. Tobe reported on 2026-07-22 that a new
+  // companion reply didn't appear in the chat until he
+  // manually clicked the red badge on the companion tab,
+  // even though his UI showed that companion tab as
+  // already active. The root cause was that some
+  // activeChatAgentId updates (e.g. the agents-list
+  // boot path) set the active agent without going
+  // through switchToAgent — leaving `messages` set to a
+  // stale agent's chat. This effect guarantees they
+  // stay in sync.
+  //
+  // We depend on `activeChatAgentId` only (NOT
+  // `messagesByAgent`) to avoid the loop where adding
+  // a message causes messagesByAgent to change,
+  // which re-runs this effect, which calls setMessages
+  // again with the same content. We use the ref to
+  // read the latest bucket without subscribing.
+  useEffect(() => {
+    if (activeChatAgentId == null) {
+      // No active agent — leave `messages` as-is, in
+      // case the user is in the middle of typing and we
+      // don't want to wipe the visible chat. The empty
+      // case is rare (only happens before the first
+      // agents list loads).
+      return;
+    }
+    const bucket = messagesByAgentRef.current[activeChatAgentId] || [];
+    setMessages(bucket);
+  }, [activeChatAgentId]);
+
   // v3.1.63: inject setCentered(true) when voice mode
   // (fullscreen) is entered, setCentered(false) when exited.
   // Tobe: "voice mode should have the same look as wake mode"

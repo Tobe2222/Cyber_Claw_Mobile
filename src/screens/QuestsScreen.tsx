@@ -487,6 +487,35 @@ export default function QuestsScreen({
                       {q.description}
                     </Text>
                   )}
+                  {/* v3.10.79: inline step list. Previously the card
+                     showed only the progress text + bar; users had
+                     to tap the card to see the actual steps in the
+                     detail modal. Tobe reported on 2026-07-22 that
+                     the steps should be visible inline so he doesn't
+                     have to tap each card to remember what's left.
+                     First 3 steps show by default; the rest fall in
+                     the detail modal. */}
+                  {goals.length > 0 && (
+                    <View style={styles.questSteps}>
+                      {goals.slice(0, 3).map((g, i) => (
+                        <Text
+                          key={i}
+                          style={[
+                            styles.questStepText,
+                            g.completed && styles.questStepCompleted,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {g.completed ? '☑' : '☐'}  {g.text}
+                        </Text>
+                      ))}
+                      {goals.length > 3 && (
+                        <Text style={styles.questStepMore}>
+                          +{goals.length - 3} more (tap card for full list)
+                        </Text>
+                      )}
+                    </View>
+                  )}
                   {goals.length > 0 && (
                     <View style={styles.questBar}>
                       <View
@@ -1304,6 +1333,26 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   questFill: { height: '100%', borderRadius: 2 },
+  // v3.10.79: inline step list on the card. Compact
+  // display so a 3-step quest fits without making the
+  // card feel crowded; longer lists fall back to "+N
+  // more (tap card)" hint.
+  questSteps: { marginTop: 4, marginBottom: 4 },
+  questStepText: {
+    color: '#cfd2e0',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  questStepCompleted: {
+    color: '#666',
+    textDecorationLine: 'line-through',
+  },
+  questStepMore: {
+    color: '#7a809a',
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
   questDir: { color: '#7a809a', fontSize: 11, marginTop: 4 },
   emptyHintBox: {
     paddingVertical: 16,
