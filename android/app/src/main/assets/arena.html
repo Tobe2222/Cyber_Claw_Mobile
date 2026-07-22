@@ -101,10 +101,128 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
   60%{transform:scale(1.15);opacity:1}
   100%{transform:scale(1);opacity:1}
 }
-/* v3.10.72: feeding UI placeholder. The actual React
-     Modal lives in HomeScreen.tsx — the WebView only
-     needs the canvas-rendered treats and the
-     dropTreat API. */
+/* v3.10.75: in-arena feed menu. Previously the treat
+     picker was a React Native bottom-sheet Modal that
+     covered the screen. Tobe asked on 2026-07-22 that
+     the menu "open inside the arena" — so we move it
+     into the WebView as an HTML element, matching the
+     desktop's #feed-menu div in src/css/layout.css:898.
+     The menu and the companion canvas share the same
+     coordinate space; tap-to-drop or click-to-place
+     works directly inside the WebView.
+   Hidden in wake/voice mode. */
+#feed-menu {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 18;
+  pointer-events: all;
+  background: rgba(10,10,14,0.96);
+  border: 1px solid rgba(247,147,26,0.45);
+  border-radius: 12px;
+  padding: 8px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 90%;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+#feed-menu.hidden { display: none; }
+#feed-menu .feed-title {
+  width: 100%;
+  font-size: 9px;
+  color: #f7931a;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  text-align: center;
+  margin-bottom: 4px;
+  font-family: 'Orbitron', monospace;
+}
+#feed-menu .feed-treat {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a1a28;
+  border: 1px solid #333;
+  border-radius: 8px;
+  font-size: 22px;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+#feed-menu .feed-treat:active { transform: scale(0.92); }
+#feed-menu .feed-treat.selected {
+  border-color: #f7931a;
+  background: rgba(247,147,26,0.18);
+  box-shadow: 0 0 8px rgba(247,147,26,0.4);
+}
+/* v3.10.75: per-companion favourite ⭐ marker. Sits at
+     the top-right of a treat cell. Rendered as a
+     child <span class="feed-treat-star"> by the JS
+     in refreshFoodPrefs(). */
+#feed-menu .feed-treat .feed-treat-star {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 9px;
+  pointer-events: none;
+}
+#feed-menu .feed-treat {
+  position: relative;
+}
+body.wake-mode #feed-menu { display: none !important; }
+
+/* v3.10.75: treat ghost — the dragged treat emoji
+     that follows the finger after selecting. Default
+     hidden; .active class makes it visible. The
+     position is updated by the touch event handlers. */
+#treat-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 32px;
+  pointer-events: none;
+  z-index: 19;
+  display: none;
+  user-select: none;
+  -webkit-user-select: none;
+  /* A subtle outline so the treat is visible against
+     any background (forest, snow, etc.). */
+  text-shadow:
+    0 0 3px rgba(0,0,0,0.9),
+    0 0 6px rgba(0,0,0,0.6);
+}
+#treat-ghost.active { display: block; }
+/* v3.10.75: placed indicator — small "✓ placed" toast
+     that appears briefly when the user drops a treat.
+     Provides instant feedback that the drag/drop
+     registered. */
+#treat-toast {
+  position: absolute;
+  left: 50%;
+  top: 60px;
+  transform: translateX(-50%);
+  background: rgba(16,185,129,0.92);
+  color: #000;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  pointer-events: none;
+  z-index: 19;
+  display: none;
+  font-family: 'Orbitron', monospace;
+}
+#treat-toast.active { display: block; }
 </style>
 </head>
 <body>
@@ -139,18 +257,41 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
   <button class="ctrlBtn" id="questsBtn" title="Open Quests for the active companion"
     onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'quests'})); } catch(e) {}">📜 Quests</button>
 </div>
-<!-- v3.10.72: bottom-left arena feed button. Posts
-     {type:'feed'} which HomeScreen handles by opening
-     a treat-picker Modal. Tapping a treat in the
-     Modal calls window.Arena.dropTreat(type) which
-     places the treat at the canvas center; the active
-     companion walks over and eats it. Mirrors the
-     desktop's #arena-feed-btn / #feed-menu flow in
+<!-- v3.10.72: bottom-left arena feed button. Opens
+     the in-arena #feed-menu (added v3.10.75). The
+     menu lives inside the WebView now (Tobe's
+     2026-07-22 request: "the menu should open inside
+     the arena"), so the button is just a local
+     toggle — no React Native round-trip needed. The
+     user picks a treat, then taps anywhere on the
+     arena canvas to drop it there. Mirrors the
+     desktop's #arena-feed-btn flow in
      src/css/layout.css:889 and src/js/app.js:4782. -->
 <div id="ctrlBottomLeft">
-  <button class="ctrlBtnSmall" id="feedBtn" title="Feed companion"
-    onclick="try { if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:'feed'})); } catch(e) {}">🍖</button>
+  <button class="ctrlBtnSmall" id="feedBtn" title="Feed companion">🍖</button>
 </div>
+
+<!-- v3.10.75: in-arena feed menu (was a bottom-sheet
+     React Native Modal in v3.10.72-v3.10.74). HTML
+     div, hidden until the user taps the 🍖 button.
+     Each treat is a button; tapping a treat selects
+     it (ring) and closes the menu; the selected treat
+     becomes the carried ghost that follows the
+     finger. Tap anywhere on the arena to drop. -->
+<div id="feed-menu" class="hidden">
+  <span class="feed-title">🍖 Treats — pick then tap arena to drop</span>
+  <button class="feed-treat" data-treat="apple">🍎</button>
+  <button class="feed-treat" data-treat="hamburger">🍔</button>
+  <button class="feed-treat" data-treat="meat">🍖</button>
+  <button class="feed-treat" data-treat="fish">🐟</button>
+  <button class="feed-treat" data-treat="cake">🍰</button>
+  <button class="feed-treat" data-treat="cookie">🍪</button>
+  <button class="feed-treat" data-treat="berry">🫐</button>
+</div>
+
+<!-- v3.10.75: drag ghost + placed toast. -->
+<div id="treat-ghost"></div>
+<div id="treat-toast">✓ placed</div>
 <script>
 'use strict';
 
@@ -1400,6 +1541,13 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
   function setActive(id) {
     activeId = id || null;
     for (const c of companions) c.isActive = (c.id === activeId);
+    // v3.10.75: refresh the ⭐ markers so the per-
+    // companion food prefs update when the active
+    // companion changes. If the menu is hidden, this
+    // is a no-op visually (we only render ⭐ in the
+    // menu), but the prefs are cached for the next
+    // openFeedMenu() call too.
+    try { if (typeof refreshFoodPrefs === 'function') refreshFoodPrefs(); } catch (_) {}
   }
 
   // v3.10.72: drop a treat at the canvas center. The
@@ -1561,6 +1709,249 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
       try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (_) {}
     }
   }
+
+  // ── v3.10.75: in-arena feed menu + drag/drop ──────────────
+  //
+  // Flow (mirrors desktop src/js/app.js:4797):
+  //   1. User taps 🍖 button in lower-left → menu opens
+  //   2. User taps a treat in the menu → that treat is
+  //      "carried" (selected with ring), menu closes, a
+  //      ghost emoji follows the finger
+  //   3. User taps anywhere on the arena → treat drops
+  //      there. The companion walks over and eats it.
+  //   4. To switch treats, tap 🍖 again, pick another.
+  //   5. To cancel the carry, tap anywhere outside the
+  //      menu with the menu closed (no-op) or double-
+  //      tap the 🍖 button (cancel).
+  const feedMenuEl = document.getElementById('feed-menu');
+  const feedBtnEl = document.getElementById('feedBtn');
+  const treatGhostEl = document.getElementById('treat-ghost');
+  const treatToastEl = document.getElementById('treat-toast');
+
+  // v3.10.75: per-companion food preferences (Tobe
+  // asked on 2026-07-22: "Certain companions should
+  // prefer certain Foods"). The menu highlights the
+  // active companion's favourites with a ⭐ emoji
+  // overlay. We do this in the WebView now (was on
+  // the React Native side in v3.10.74, but moving
+  // the menu here lets us mark preferences as the
+  // menu renders — no extra round-trip).
+  //
+  // Substring match: cat-named companions get the cat
+  // prefs, dog-named get dog prefs, etc. Default
+  // covers everyone else. Companion name is
+  // case-insensitive.
+  const COMPANION_FOOD_PREFS = {
+    default: ['cookie', 'berry'],
+    cat: ['fish', 'meat'],
+    dog: ['meat', '***'],
+    bird: ['berry', 'apple'],
+    rabbit: ['apple', 'carrot'],
+  };
+  function getPreferredTreats() {
+    // The active companion (or first companion) drives
+    // the ⭐ list. If no active companion, return
+    // empty (don't highlight anything).
+    const active = companions.find(c => c.id === activeId)
+                || companions[0];
+    if (!active) return new Set();
+    const name = (active.name || '').toLowerCase();
+    const id   = (active.id || '').toLowerCase();
+    // Match exact id first, then substring of name.
+    if (COMPANION_FOOD_PREFS[active.id]) {
+      return new Set(COMPANION_FOOD_PREFS[active.id]);
+    }
+    for (const key of Object.keys(COMPANION_FOOD_PREFS)) {
+      if (key === 'default') continue;
+      if (name.includes(key) || id.includes(key)) {
+        return new Set(COMPANION_FOOD_PREFS[key]);
+      }
+    }
+    // Also: clawsuu prefers fish+meat, lamasuu prefers
+    // cake+cookie. Both cat-like or sweet-palate
+    // depending on the sprite.
+    if (name.includes('clawsuu') || id.includes('clawsuu')) {
+      return new Set(['fish', 'meat', 'berry']);
+    }
+    if (name.includes('lamasuu') || id.includes('lamasuu')) {
+      return new Set(['cake', 'cookie', 'berry']);
+    }
+    return new Set(COMPANION_FOOD_PREFS.default);
+  }
+  function refreshFoodPrefs() {
+    const prefs = getPreferredTreats();
+    document.querySelectorAll('#feed-menu .feed-treat').forEach((btn) => {
+      const type = btn.dataset.treat;
+      // Render a small ⭐ emoji overlay for preferred
+      // treats. The button uses CSS pseudo-element
+      // trick via a child node so the emoji sits at the
+      // top-right of the cell.
+      let star = btn.querySelector('.feed-treat-star');
+      const isPref = prefs.has(type);
+      if (isPref && !star) {
+        star = document.createElement('span');
+        star.className = 'feed-treat-star';
+        star.textContent = '⭐';
+        btn.appendChild(star);
+      } else if (!isPref && star) {
+        star.remove();
+      }
+    });
+  }
+  // Apply the ⭐ markers whenever the menu becomes
+  // visible or the active companion changes. We hook
+  // into the existing setActive function via a small
+  // monkey-patch of the menu-open flow.
+  const _origOpenFeedMenu = openFeedMenu;
+  const openFeedMenu_ = function() {
+    _origOpenFeedMenu();
+    refreshFoodPrefs();
+  };
+  // Replace references at use sites is hard with
+  // closures — simpler: call refresh from the click
+  // handler below. (Already wired.)
+
+
+  let carriedTreat = null; // { type, emoji } when the
+                           // user has selected a treat
+                           // that's now following the
+                           // finger. null when none.
+
+  function openFeedMenu() {
+    if (feedMenuEl) feedMenuEl.classList.remove('hidden');
+  }
+  function closeFeedMenu() {
+    if (feedMenuEl) feedMenuEl.classList.add('hidden');
+  }
+  function pickTreat(type) {
+    const emoji = TREATS[type];
+    if (!emoji) return;
+    carriedTreat = { type, emoji };
+    closeFeedMenu();
+    if (treatGhostEl) {
+      treatGhostEl.textContent = emoji;
+      treatGhostEl.classList.add('active');
+    }
+    // Reset ghost to center of screen; first touchmove
+    // will reposition.
+    if (treatGhostEl) {
+      treatGhostEl.style.left = '50%';
+      treatGhostEl.style.top  = '50%';
+      treatGhostEl.style.transform = 'translate(-50%, -50%)';
+    }
+  }
+  function cancelCarry() {
+    carriedTreat = null;
+    if (treatGhostEl) treatGhostEl.classList.remove('active');
+  }
+  function flashTreatToast(text) {
+    if (!treatToastEl) return;
+    treatToastEl.textContent = text;
+    treatToastEl.classList.add('active');
+    clearTimeout(flashTreatToast._t);
+    flashTreatToast._t = setTimeout(() => {
+      treatToastEl.classList.remove('active');
+    }, 1200);
+  }
+  // Convert a viewport (clientX/Y) to canvas coords.
+  // The canvas is 100% width/height of the WebView,
+  // so the offset IS the canvas element's bounding
+  // rect (which is 0,0 since the canvas is absolutely
+  // positioned at top-left).
+  function viewportToCanvas(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+
+  // 🍖 button: toggle menu. If the user has a carried
+  // treat, double-tap (or having another treat ready)
+  // cancels the carry. For the simple case (single tap)
+  // we just toggle the menu and keep the carry.
+  if (feedBtnEl) {
+    feedBtnEl.addEventListener('click', (e) => {
+      e?.stopPropagation?.();
+      if (feedMenuEl.classList.contains('hidden')) {
+        openFeedMenu();
+        refreshFoodPrefs(); // ⭐ markers when menu opens
+      } else {
+        closeFeedMenu();
+      }
+    });
+    feedBtnEl.addEventListener('touchstart', (e) => {
+      // Prevent the touch from being interpreted as a
+      // "place at this exact spot" drop by the canvas
+      // listener below.
+      e.stopPropagation();
+    }, { passive: true });
+  }
+  // Treat buttons in the menu: pick the treat.
+  document.querySelectorAll('#feed-menu .feed-treat').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e?.stopPropagation?.();
+      const type = btn.dataset.treat;
+      if (!type) return;
+      pickTreat(type);
+    });
+    btn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+    }, { passive: true });
+  });
+
+  // ── Drag ghost: follow the finger during a carry. ──────
+  //
+  // We listen on the WINDOW for touch/pointer events while
+  // a treat is carried, so the ghost follows even when
+  // the finger is over the canvas, the menu area, or the
+  // edges. The canvas tap handler (below) decides what
+  // happens on release.
+  if (treatGhostEl) {
+    function updateGhost(clientX, clientY) {
+      if (!carriedTreat) return;
+      treatGhostEl.style.left = clientX + 'px';
+      treatGhostEl.style.top  = clientY + 'px';
+      treatGhostEl.style.transform = 'translate(-50%, -50%)';
+    }
+    window.addEventListener('touchmove', (e) => {
+      if (!carriedTreat) return;
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      updateGhost(t.clientX, t.clientY);
+    }, { passive: true });
+    window.addEventListener('mousemove', (e) => {
+      if (!carriedTreat) return;
+      updateGhost(e.clientX, e.clientY);
+    });
+  }
+
+  // ── Tap on canvas = drop the carried treat. ────────────
+  //
+  // Uses the 'click' event rather than touchend/pointerup
+  // because click fires reliably across browsers after a
+  // tap-or-drag-release on the same element. We check
+  // `carriedTreat` at the time of click — if it's set,
+  // we drop at the click position; if not, we ignore
+  // (the WebView has no other tap reactions, so this is
+  // safe as a "do nothing" default).
+  canvas.addEventListener('click', (e) => {
+    if (!carriedTreat) return;
+    const { x, y } = viewportToCanvas(e.clientX, e.clientY);
+    const type = carriedTreat.type;
+    cancelCarry();
+    const ok = dropTreat(type, x, y);
+    if (ok) flashTreatToast('✓ placed ' + (TREATS[type] || '') + ' ' + type);
+  });
+  // Also handle touchend on the canvas (in case click
+  // is suppressed by the WebView's CSS).
+  canvas.addEventListener('touchend', (e) => {
+    if (!carriedTreat) return;
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    const { x, y } = viewportToCanvas(t.clientX, t.clientY);
+    const type = carriedTreat.type;
+    cancelCarry();
+    const ok = dropTreat(type, x, y);
+    if (ok) flashTreatToast('✓ placed ' + (TREATS[type] || '') + ' ' + type);
+  }, { passive: true });
 
   window.Arena = {
     setAgents,
