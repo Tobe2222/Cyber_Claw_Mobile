@@ -33,6 +33,19 @@ class SyncClient {
   private _maxReconnectAttempts: number = 20; // ~100 seconds before "lost"
   private _isReconnecting: boolean = false;
   private _connectingPromise: Promise<void> | null = null;
+  // v3.10.68: the name the desktop paired us under
+  // (from auth_result.name). Used to prefix outgoing
+  // local messages with `[From: <name>]` so the dedupe
+  // check in HomeScreen matches the desktop's echo
+  // (which the desktop prefixes the same way in
+  // src/sync-server.js:320). Without this, the local
+  // plain text and the desktop-echo prefixed text
+  // look like different messages and both land in
+  // the chat — Tobe reported this as a duplicate bug.
+  private _deviceName: string = 'Android Phone';
+  getDeviceName(): string {
+    return this._deviceName;
+  }
 
   on(type: string, handler: MessageHandler) {
     if (!this.handlers.has(type)) this.handlers.set(type, []);
@@ -562,6 +575,12 @@ class SyncClient {
           this._isReconnecting = false;
           this._reconnectAttempts = 0;
           this.setState('connected');
+          // v3.10.68: cache the device name so outgoing
+          // local messages can prefix `[From: <name>]`
+          // to match the desktop's echo format.
+          if (msg.name) {
+            this._deviceName = msg.name;
+          }
           this.emit('authenticated', { name: msg.name });
           // Start keepalive ping every 10s to prevent Android killing idle WebSocket
           if (this.pingInterval) clearInterval(this.pingInterval);

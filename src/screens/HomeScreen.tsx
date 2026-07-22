@@ -362,8 +362,20 @@ function appendAgentMessage(
     // for ts-tolerant cases (cross-restart).
     const dupWindowMs = 60000;
     const dupWindowMsCrossRestart = 60 * 60 * 1000;  // 1h
+    // v3.10.68: also strip a leading `[From: ...]`
+    // prefix so the local-prefix and desktop-echo
+    // paths dedupe to the same normalized text. The
+    // v3.10.42 strip-prefix logic only handled
+    // leading non-word chars (emoji etc.) — it kept
+    // the `[` and everything after it as text. Now
+    // we recognize the bracketed source tag and drop
+    // the whole prefix. Keeps backwards-compat with
+    // old chat history that has the prefix attached.
     const normalize = (s: string) =>
-      (s || '').replace(/^[^\w[\(]+/, '').trim();
+      (s || '')
+        .replace(/^\[From:\s*[^\]]*\]\s*/, '')
+        .replace(/^[^\w[\(]+/, '')
+        .trim();
     const normalizedText = normalize(msg.text);
     const matchingText = (m: ChatMessage) =>
       normalize(m.text) === normalizedText;
@@ -2136,9 +2148,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // coordinated across both adds.
       const aid = activeChatAgentIdRef.current || 'companion';
       const localTs = Date.now();
+      // v3.10.68: match the typed-message prefix
+      // behavior — voice transcripts get the same
+      // `[From: <deviceName>] ` prefix so the desktop's
+      // echo dedupes correctly.
+      const deviceName = syncClient.getDeviceName?.() || 'Android Phone';
       const localUserMsg: ChatMessage = {
         id: `user-local-${localTs}-${Math.random().toString(36).slice(2, 6)}`,
-        text: msg.transcript,
+        text: `[From: ${deviceName}] ${msg.transcript}`,
         isUser: true,
         agentId: aid,
         ts: localTs,
@@ -2485,10 +2502,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // disappearing after send). Also wait for attachments to be
       // read as base64 BEFORE clearing them — otherwise the user
       // sees the previews vanish before they're sent.
+      // v3.10.68: prefix the local user message with
+      // `[From: <deviceName>] ` to match the desktop's
+      // echo format (sync-server.js:320 adds the same
+      // prefix on inbound `chat` messages from non-Desktop
+      // clients). Without this, the local plain text and
+      // the desktop-echo prefixed text look like
+      // different messages to the dedupe check and both
+      // land in the chat. Tobe reported this as a
+      // duplicate-bubble bug.
       const aid = activeChatAgentIdRef.current || 'companion';
+      const deviceName = syncClient.getDeviceName?.() || 'Android Phone';
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
-        text,
+        text: text ? `[From: ${deviceName}] ${text}` : text,
         isUser: true,
         agentId: aid,
         ts: Date.now(),
