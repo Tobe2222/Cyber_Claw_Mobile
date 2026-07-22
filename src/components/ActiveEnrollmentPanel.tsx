@@ -29,9 +29,23 @@ import {
   Alert,
   ScrollView,
 } from 'react-native';
-import { NativeModules } from 'react-native';
+import { NativeModules, NativeEventEmitter } from 'react-native';
 
-const { WakeWordModule } = NativeModules;
+const { WakeWordModule, NativeBackground } = NativeModules;
+
+// v3.10.67: native side emits `activeEnrollmentStopped`
+// whenever the 30s auto-stop fires (and also on manual
+// stop for consistency). We listen here so the panel
+// can show a Toast + clear timers even if the auto-stop
+// happens while the user is scrolled away.
+const enrollmentEvents = WakeWordModule
+  ? new NativeEventEmitter(WakeWordModule)
+  : null;
+
+function showEnrollmentToast(message: string) {
+  // Mirror the pattern HomeScreen uses for wake toasts.
+  NativeBackground?.showToast?.(message).catch(() => {});
+}
 
 const DEFAULT_DURATION_MS = 30000;
 const POLL_INTERVAL_MS = 500;
@@ -63,6 +77,7 @@ export default function ActiveEnrollmentPanel() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const tickTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Initial status fetch + post-action refresh
   const refreshStatus = useCallback(async () => {
@@ -97,10 +112,76 @@ export default function ActiveEnrollmentPanel() {
     return () => {
       if (pollTimer.current) clearInterval(pollTimer.current);
       if (tickTimer.current) clearInterval(tickTimer.current);
+      if (watchdogRef.current) {
+        clearTimeout(watchdogRef.current);
+        watchdogRef.current = null;
+      }
       // Best-effort: stop enrollment if leaving the panel
       WakeWordModule?.stopActiveEnrollment?.().catch(() => {});
     };
   }, []);
+
+  // v3.10.67: react to native-side `activeEnrollmentStopped`
+  // event. Fires both when the 30s auto-stop deadline
+  // elapses AND when a manual stop completes. We use it to:
+  //   1. Show a Toast so the user knows it stopped (the
+  //      original v3.10.62 panel had no notification, which
+  //      Tobe reported as a bug)
+  //   2. Clean up the JS-side tick/poll timers in case the
+  //      auto-stop fired without JS having a chance to call
+  //      stopEnrollment() itself
+  //   3. Mark the panel as not-running
+  //
+  // The reason arg ("auto" | "manual") distinguishes
+  // auto-stop (Toasts "Listening complete — review and
+  // lock") from manual stop (Toasts "Stopped"). When the
+  // user-initiated stopEnrollment() runs, it awaits the
+  // native call and then also resets state locally, so we
+  // guard with a ref to avoid duplicate UI flips.
+  const stoppedRef = useRef(false);
+  useEffect(() => {
+    if (!enrollmentEvents) return;
+    const sub = enrollmentEvents.addListener(
+      'activeEnrollmentStopped',
+      (event: { reason?: string } | null) => {
+        const reason = event?.reason || 'manual';
+        if (tickTimer.current) {
+          clearInterval(tickTimer.current);
+          tickTimer.current = null;
+        }
+        if (pollTimer.current) {
+          clearInterval(pollTimer.current);
+          pollTimer.current = null;
+        }
+        if (watchdogRef.current) {
+          clearTimeout(watchdogRef.current);
+          watchdogRef.current = null;
+        }
+        // Only flip if we still think we're running —
+        // otherwise a stale event after unmount could
+        // double-fire the toast.
+        if (!stoppedRef.current) {
+          stoppedRef.current = true;
+          // Reset on the next tick so a manual
+          // stopEnrollment() that lands in the same
+          // microtask doesn't see running=true.
+          setTimeout(() => {
+            stoppedRef.current = false;
+          }, 0);
+          if (reason === 'auto') {
+            showEnrollmentToast(
+              '✅ Listening complete — review and lock profile',
+            );
+          } else {
+            showEnrollmentToast('⏹ Stopped');
+          }
+          setRunning(false);
+          refreshStatus();
+        }
+      },
+    );
+    return () => sub.remove();
+  }, [refreshStatus]);
 
   const startEnrollment = useCallback(async () => {
     if (running) return;
@@ -108,10 +189,24 @@ export default function ActiveEnrollmentPanel() {
     setElapsedMs(0);
     setLastResult(null);
     const start = Date.now();
+    // v3.10.67: JS-side watchdog. Native should auto-stop
+    // at DEFAULT_DURATION_MS, but if it doesn't (e.g. the
+    // thread is stuck on a slow AudioRecord.read or the
+    // process is paused), we force-stop from JS too. This
+    // is the safety net that prevents the "did not stop
+    // after 30s" symptom Tobe reported.
+    const watchdog = setTimeout(() => {
+      if (running) {
+        try {
+          WakeWordModule?.stopActiveEnrollment?.().catch(() => {});
+        } catch (_) {}
+      }
+    }, DEFAULT_DURATION_MS + 3000);
     try {
       await WakeWordModule?.startActiveEnrollment?.(DEFAULT_DURATION_MS);
     } catch (e: any) {
       Alert.alert('Could not start', e?.message || 'Failed to start active enrollment');
+      clearTimeout(watchdog);
       setRunning(false);
       return;
     }
@@ -123,10 +218,16 @@ export default function ActiveEnrollmentPanel() {
     pollTimer.current = setInterval(() => {
       refreshStatus();
     }, POLL_INTERVAL_MS * 2);
+    // Save the watchdog so stopEnrollment can clear it.
+    watchdogRef.current = watchdog;
   }, [running, refreshStatus]);
 
   const stopEnrollment = useCallback(async () => {
     if (!running) return;
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
     try {
       await WakeWordModule?.stopActiveEnrollment?.();
     } catch (_) {}

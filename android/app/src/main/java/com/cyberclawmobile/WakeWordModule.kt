@@ -3242,12 +3242,34 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             val enrollment = EnrollmentAudioProcessor.getInstance(reactContext)
             activeEnrollmentThread = Thread {
                 val buf = ShortArray(chunkSamples)
+                // v3.10.67: track whether we exited via the
+                // duration deadline (auto-stop) vs manual
+                // stop. stopActiveEnrollment() unsets
+                // activeEnrollmentRunning and ALSO calls
+                // EnrollmentCoordinator.end(); we must NOT
+                // double-end here. Only end() when we exit
+                // the loop on our own (auto-stop).
+                var endedByDuration = false
                 try {
                     while (activeEnrollmentRunning &&
                            System.currentTimeMillis() - activeEnrollmentStartMs < activeEnrollmentDurationMs) {
                         val read = rec.read(buf, 0, buf.size)
                         if (read <= 0) continue
                         enrollment.processAudio(buf, read)
+                    }
+                    // If we're exiting because the duration
+                    // deadline elapsed (activeEnrollmentRunning
+                    // is still true), this is the auto-stop path.
+                    endedByDuration = activeEnrollmentRunning
+                    if (endedByDuration) {
+                        // v3.10.67: notify JS so it can fire
+                        // a Toast / clear timers / surface a
+                        // notification to the user. Without
+                        // this, the panel UI kept showing
+                        // "running" until a manual refresh.
+                        handler.post {
+                            emit("activeEnrollmentStopped", "auto", null)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.w("WakeWord", "Active enrollment read error: ${e.message}")
@@ -3256,6 +3278,18 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     try { rec.release() } catch (_: Exception) {}
                     activeEnrollmentRecorder = null
                     activeEnrollmentRunning = false
+                    // v3.10.67: ensure the mic gate is
+                    // released on the auto-stop path too.
+                    // Before, the thread's finally only
+                    // released the AudioRecord and never
+                    // called EnrollmentCoordinator.end(),
+                    // so after the 30s deadline the BG
+                    // service and foreground listener
+                    // stayed gated until a manual stop
+                    // restarted the cycle.
+                    if (endedByDuration) {
+                        EnrollmentCoordinator.end()
+                    }
                 }
             }.also { it.isDaemon = true; it.start() }
             promise.resolve(true)
@@ -3277,6 +3311,13 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             // their own and re-open their AudioRecord when
             // it flips back to false.
             EnrollmentCoordinator.end()
+            // v3.10.67: notify JS so the panel can fire a
+            // Toast / clear timers even when JS itself
+            // didn't initiate the stop (e.g. system-driven).
+            // Mirrors the auto-stop emit in the thread
+            // finally block. JS uses reason="manual" to
+            // skip the duplicate toast when it initiated.
+            emit("activeEnrollmentStopped", "manual", null)
             promise.resolve(true)
         } catch (e: Exception) {
             // Defensive: even on error, ungate. We never
