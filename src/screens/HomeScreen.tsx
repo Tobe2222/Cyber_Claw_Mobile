@@ -411,12 +411,36 @@ function appendAgentMessage(
     )) {
       return prev;
     }
-    // Stage 3: same normalized text anywhere in history
-    // — final defensive dedupe. Normalization strips
-    // emoji prefixes so the mobile-local vs desktop-echo
-    // pair dedupes correctly.
+    // Stage 3: same normalized text within 5 minutes —
+    // catches the mobile-local ↔ desktop-echo pair
+    // when timestamps drift far apart (slow network, STT
+    // backlog). 5 minutes is enough for the echo round-
+    // trip in normal conditions; longer than that means
+    // it's a fresh send, not an echo.
+    //
+    // v3.10.89 fix: removed the "anywhere in history"
+    // version of Stage 3 that was in v3.10.42..v3.10.88.
+    // Tobe reported (2026-07-23 17:54 then 18:03): "Hey"
+    // sent via mobile chat didn't appear because Stage 3
+    // matched the new "Hey" against an OLD cached "Hey"
+    // in cyberclaw-chat-byagent and dropped it. The
+    // local append returned prev (no state change), so
+    // the message never appeared in the chat — even
+    // though the desktop received the message, ran the
+    // agent pipeline, and echoed a reply. The agent's
+    // reply also matched the dedupe path so no "Hey"
+    // showed up at all.
+    //
+    // The 5-minute window matches typical echo round-trips
+    // (network + IPC + agent response). If the round-trip
+    // ever exceeds 5 minutes we have bigger problems
+    // (the desktop is hung). Past 5 minutes we trust
+    // that any matching text is a re-send by the user,
+    // not an echo.
+    const dupWindowMsCrossEcho = 5 * 60 * 1000;  // 5 min
     if (list.some(m =>
-      matchingText(m)
+      matchingText(m) &&
+      Math.abs(m.ts - msg.ts) < dupWindowMsCrossEcho
     )) {
       return prev;
     }
