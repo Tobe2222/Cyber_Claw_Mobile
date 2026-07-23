@@ -2091,6 +2091,29 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       if (!fullscreenRef.current && !msg.active) { /* keep until message arrives */ }
     };
 
+    // v3.10.87: tool-call events from the desktop's
+    // OpenClaw session tailer. When the agent runs an
+    // exec/read/write/etc. tool, the desktop emits
+    // `agent_tool` with a short, concise friendly name
+    // (e.g. "Running command..."). We use this to show
+    // a more accurate indicator than the generic
+    // "thinking..." — the user sees what the agent is
+    // actually doing.
+    //
+    // Tobe asked for "short and concise" — the desktop
+    // caps each friendly text at ~25 chars. We don't
+    // add a prefix like "💭" — the indicator bar is
+    // already visually distinct, and a prefix makes
+    // it longer than necessary.
+    //
+    // Falls back to "thinking..." if the desktop sends
+    // an unknown tool. Clears the indicator when the
+    // agent finishes (typing=false clears it).
+    const onAgentTool = (msg: any) => {
+      if (!msg || typeof msg.friendly !== 'string') return;
+      setChatVoiceStatus(msg.friendly);
+    };
+
     const onChatHistory = (msg: any) => {
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
@@ -2288,6 +2311,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // `?companion=${companionId}` below).
 
     syncClient.on('typing', onTyping);
+    // v3.10.87: tool-call events (see comment on the
+    // onAgentTool handler above for the design rationale).
+    syncClient.on('agent_tool', onAgentTool);
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
     syncClient.on('audio_response', onAudioResponse);
@@ -2594,6 +2620,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       try { syncClient?.off?.('state_change', onState); } catch {}
       try { syncClient?.off?.('chat', onChat); } catch {}
       try { syncClient?.off?.('typing', onTyping); } catch {}
+      try { syncClient?.off?.('agent_tool', onAgentTool); } catch {}
       try { syncClient?.off?.('chat_history', onChatHistory); } catch {}
       try { syncClient?.off?.('arena', onArena); } catch {}
       try { syncClient?.off?.('audio_response', onAudioResponse); } catch {}
