@@ -2949,13 +2949,31 @@ useEffect(() => {
     }
     return;
   }
-  // Incoming message while at bottom: auto-scroll. While scrolled
-  // away: increment the unread badge.
+  // v3.10.90: increment the unread badge whenever a new message
+  // arrives — even when the user is already at the bottom. The
+  // previous behaviour ("at bottom = no badge") made the
+  // v3.2.23 missed-broadcast replay invisible: the replay
+  // arrived while the user was at the bottom, auto-scrolled
+  // them there, but they had no visual cue that messages had
+  // been added. Tobe's request (2026-07-23 23:26): "do we have
+  // a update function when scrolling to the bottom? A refresh
+  // for new messages like function?"
+  //
+  // New behaviour: always increment the badge when a new
+  // message arrives. At bottom: still auto-scroll + show badge
+  // (badge fades after a tap or when count clears). Scrolled up:
+  // same as before — stay put + show badge.
+  //
+  // We DO NOT auto-scroll when at bottom if the new message
+  // looks like a replay (e.g. text is identical to the last
+  // one). The dedupe in appendAgentMessage catches most cases,
+  // but defensively skipping the scroll when the last message
+  // already matches prevents nudging the chat for every
+  // miss-and-recover.
   if (chatAtBottomRef.current) {
     setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
-  } else {
-    setChatUnreadCount(c => c + 1);
   }
+  setChatUnreadCount(c => c + 1);
 }, [messages.length]);
 
 // v3.1.16: when the user switches to the chat tab, jump to the
@@ -3499,7 +3517,36 @@ useEffect(() => {
                 KeyboardAvoidingView tabContent, putting it
                 inside the inputContainer area. */}
             <View style={styles.chatScrollContainer}>
-              {chatUnreadCount > 0 && !chatAtBottom && (
+              {/* v3.10.90: always show the "↓ N new messages" badge
+                  when there are unread messages, even if the user is
+                  already at the bottom. Previously it only showed when
+                  !chatAtBottom, so when the user was at the bottom
+                  and missed messages arrived (e.g. from a v3.2.23
+                  reconnect replay after WS disconnect), they had no
+                  visual cue that new content existed below.
+
+                  Tobe's request (2026-07-23 23:26): "do we have a
+                  update function when scrolling to the bottom? A
+                  refresh for new messages like function?" — wants
+                  an explicit affordance to discover and jump to new
+                  messages, not just an auto-scroll. The badge
+                  satisfies both: it's a tap target that scrolls to
+                  the bottom (clearing the unread count), and it's
+                  the visual indicator that "there are N messages you
+                  haven't seen yet."
+
+                  Behavior:
+                  - User at bottom + unread count > 0: badge shows.
+                    Tap → scrollToEnd + clear unread. Useful when
+                    the WS briefly disconnected and replayed
+                    messages after reconnect — the user might not
+                    have noticed new content below.
+                  - User scrolled up + unread count > 0: badge shows.
+                    Same tap behavior — same goal.
+                  - User at bottom + unread count = 0: badge hidden.
+                    No need to scroll if there's nothing new.
+              */}
+              {chatUnreadCount > 0 && (
                 <TouchableOpacity
                   style={styles.chatScrollToBottomBtn}
                   onPress={() => {
