@@ -2989,6 +2989,55 @@ useEffect(() => {
   }
 }, [activeTab]);
 
+// v3.10.91: periodic activity heartbeat while the chat
+// tab is open + app is foregrounded. The desktop uses
+// this to bump lastInteractionTs on the active companion
+// so its auto-sleep timer (12 min default) doesn't fire
+// while the user is actively engaged with the chat on
+// mobile. Tobe's report (2026-07-23 23:28): "The
+// companions should sleep on the mobile also like they
+// do on desktop."
+//
+// Only fires when:
+//   - Connected to the desktop
+//   - activeTab === 'chat' (not Events / Log)
+//   - appState === 'active' (app is foregrounded)
+//
+// 30s interval. Pinging more often wastes battery;
+// pinging less often risks missing the 12-min auto-sleep
+// window. 30s × 24 = 12 min budget — at the very edge
+// but still safe.
+//
+// Note: ping does NOT wake a sleeping companion. It only
+// RESETS the auto-sleep timer. To wake a sleeping companion
+// the user must actively engage (chat / voice / treat).
+const activityPingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+useEffect(() => {
+  const tick = () => {
+    try {
+      if (
+        activeTabRef.current === 'chat' &&
+        appStateRef.current === 'active' &&
+        isConnected
+      ) {
+        syncClient.sendActivityPing(activeChatAgentIdRef.current || 'companion');
+      }
+    } catch (_) {}
+  };
+  if (activityPingRef.current) clearInterval(activityPingRef.current);
+  activityPingRef.current = setInterval(tick, 30 * 1000);
+  // Fire one immediately on tab change / connect so the
+  // desktop sees activity within seconds of the user
+  // opening the chat, not after a 30s wait.
+  tick();
+  return () => {
+    if (activityPingRef.current) {
+      clearInterval(activityPingRef.current);
+      activityPingRef.current = null;
+    }
+  };
+}, [isConnected, activeTab]);
+
 // v3.8.6: explicit first-paint scroll to bottom. Belt-and-
 // suspenders to the onLayout handler above. Fires once when
 // messages first populate (e.g. when AsyncStorage hydration

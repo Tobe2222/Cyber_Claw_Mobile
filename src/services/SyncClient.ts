@@ -251,6 +251,25 @@ class SyncClient {
     this.send({ type: 'mobile_wake_agent', agentId });
   }
 
+  // v3.10.91: periodic activity ping from mobile to desktop. The
+  // desktop uses this to bump lastInteractionTs on the active
+  // companion, preventing auto-sleep while the mobile user is
+  // actively engaged. Without this, a user who only uses the
+  // mobile (and never chats / drops treats / inspects) would see
+  // their companion fall asleep after 12 min of inactivity,
+  // even though they're actively looking at the chat on mobile.
+  // The desktop's sendChatMessage already bumps on chat submit,
+  // but "just viewing chat on mobile" wasn't tracked.
+  //
+  // Sent every ~30s while the mobile is actively engaged
+  // (chat tab open, app foregrounded, etc.). The desktop
+  // ignores the ping if the agent isn't the active one
+  // (the ping is only for "is the user engaged with this
+  // companion right now").
+  sendActivityPing(agentId: string = 'companion') {
+    this.send({ type: 'mobile_activity_ping', agentId });
+  }
+
   sendRemoteToolResult(id: string, ok: boolean, data?: any, error?: string) {
     this.send({ type: 'remote_tool_result', id, ok, ...(data !== undefined ? { data } : {}), ...(error ? { error } : {}) });
   }
