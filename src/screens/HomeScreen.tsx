@@ -4054,11 +4054,23 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   attachmentImageWrap: {
-    width: 96,
-    height: 96,
+    // v3.10.88: bigger image preview for chat attachments
+    // (Tobe's request 2026-07-23: "Click the image that i
+    // have attached to inspect it like one can on discord").
+    // Discord-style chat uses a larger preview with a tap-
+    // to-expand affordance. Old was 96x96 (thumbnail-sized)
+    // which doesn't communicate "tap me to inspect". The
+    // tap-to-fullscreen modal was already wired (line 3091),
+    // but the small thumbnail didn't visually invite the tap.
+    // 180x180 is big enough to see detail at-a-glance but
+    // small enough that 2-3 still fit in a single bubble.
+    width: 180,
+    height: 180,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#000',
+    borderWidth: 1,
+    borderColor: 'rgba(247,147,26,0.4)',
   },
   attachmentImage: {
     width: '100%',
