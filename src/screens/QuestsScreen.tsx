@@ -39,6 +39,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  BackHandler,
   Clipboard,
   Modal,
   Platform,
@@ -124,6 +125,41 @@ export default function QuestsScreen({
   useEffect(() => { editorOpenRef.current = editorOpen; }, [editorOpen]);
   useEffect(() => { detailRef.current = detail; }, [detail]);
   useEffect(() => { creatingNewRef.current = !!(editorOpen && !editorOpen.id); }, [editorOpen]);
+
+  // v3.10.84: Android system back / gesture-nav back
+  // should pop the screen (and any open modals) instead
+  // of exiting the app. Tobe reported on v3.10.83
+  // (2026-07-23): "when inside the quest menu the phone
+  // back swipe exits the program. It should just go back
+  // to the home screen."
+  //
+  // Mirrors the pattern SettingsScreen (line 472) and
+  // CompanionSettingsScreen (line 765) use for their own
+  // back handling. Priority order matters:
+  //   1. confirm dialog (delete confirmation)
+  //   2. editor modal (create/edit quest)
+  //   3. detail modal (view quest)
+  //   4. screen itself → onBack() to return to home
+  // Each step returns true to tell the OS "I handled
+  // this, don't bubble it up to the activity (which would
+  // exit the app)."
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (confirm) { setConfirm(null); return true; }
+      if (editorOpen) {
+        setEditorOpen(null);
+        // If the editor was opened from the detail modal,
+        // the detail modal is already null (we close
+        // detail when opening editor). But onBack flow
+        // already cleared it, so nothing else to do here.
+        return true;
+      }
+      if (detail) { setDetail(null); return true; }
+      onBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [onBack, confirm, editorOpen, detail]);
 
   // v3.7.6: hydrate from the global cache key on mount, then
   // migrate any v3.7.4-era per-companion keys (cyberclaw-quests-<id>)
