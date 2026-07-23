@@ -233,6 +233,17 @@ interface ChatMessage {
   agentName?: string; // v3.1.15: human-readable name from desktop (e.g. "Lamasuu")
   ts: number;
   attachments?: Array<{ uri: string; type: string; name: string }>; // v3.10.20
+  // v3.10.85: which quest was active when this message
+  // was sent. Captured at append time (not derived at
+  // render time) so the chat history is self-documenting
+  // even if the active quest changes later. `null` means
+  // "no active quest" (the v3.10.82 default state).
+  // `undefined` means legacy messages from before
+  // v3.10.85 — render them as "no quest active" so the
+  // chat doesn't show quest separators on the user's
+  // entire old history.
+  activeQuestId?: string | null;
+  activeQuestName?: string | null;
 }
 
 interface LogEntry {
@@ -601,6 +612,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // stale values.
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
   useEffect(() => { messagesByAgentRef.current = messagesByAgent; }, [messagesByAgent]);
+
+  // v3.10.85: snapshot of the active quest at any given moment.
+  // Updated by a quests_list listener below (same broadcast
+  // QuestsScreen subscribes to). Used to stamp each new chat
+  // message with `activeQuestId` / `activeQuestName` at append
+  // time so the chat history shows which quest (if any) was
+  // active when each message was sent. `null` = no active
+  // quest (the v3.10.82 default state). `undefined` =
+  // quests haven't loaded yet from the desktop.
+  const activeQuestRef = useRef<{ id: string; name: string } | null | undefined>(undefined);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
@@ -1903,6 +1924,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // added one), so a missed dedupe just means the
       // transcription is the only entry — no duplicate.
       const aid: string = msg.agentId || activeChatAgentIdRef.current || 'companion';
+      // v3.10.85: stamp the message with which quest was
+      // active when it landed. The desktop echo can lag
+      // the mobile's local copy by a few seconds (network
+      // + STT + IPC round-trip), so the snapshot taken at
+      // append time may differ from what's active now —
+      // that's correct, it reflects the state at the time
+      // the user/agent actually exchanged the message.
+      const aq = activeQuestRef.current;
       const incoming: ChatMessage = {
         id: `${msg.ts || Date.now()}-${Math.random()}`,
         text: msg.text,
@@ -1910,6 +1939,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         agentId: aid,
         agentName: msg.agentName,
         ts: msg.ts || Date.now(),
+        activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
+        activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
       appendAgentMessage(incoming, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
       if (aid !== activeChatAgentIdRef.current) {
@@ -2317,12 +2348,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // `[From: <deviceName>] ` prefix so the desktop's
       // echo dedupes correctly.
       const deviceName = syncClient.getDeviceName?.() || 'Android Phone';
+      // v3.10.85: stamp with which quest was active at
+      // voice-send time. See the comment on the desktop-echo
+      // path for the rationale (snapshot-at-append, not at
+      // render — the chat history is self-documenting).
+      const aq = activeQuestRef.current;
       const localUserMsg: ChatMessage = {
         id: `user-local-${localTs}-${Math.random().toString(36).slice(2, 6)}`,
         text: `[From: ${deviceName}] ${msg.transcript}`,
         isUser: true,
         agentId: aid,
         ts: localTs,
+        activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
+        activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
       appendAgentMessage(localUserMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
@@ -2498,6 +2536,30 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     };
     syncClient.on('agents_list', onAgentsList);
 
+    // v3.10.85: track the active quest so each new chat
+    // message can be stamped with which quest (if any)
+    // was active when it was sent. The desktop broadcasts
+    // quests_list whenever a quest is created, edited,
+    // set-active, deleted, or marked-complete. Same
+    // broadcast QuestsScreen subscribes to (which keeps
+    // the full list). We only need the active one.
+    //
+    // Why a ref (not state): this is read at message-append
+    // time (inside the syncClient listeners and the user-
+    // send handler). Using state would cause stale reads
+    // because the listeners were registered with empty
+    // deps. The ref is always current.
+    const onQuestsList = (msg: any) => {
+      try {
+        const quests = Array.isArray(msg?.quests) ? msg.quests : [];
+        const active = quests.find((q: any) => q && q.active);
+        activeQuestRef.current = active && active.id
+          ? { id: active.id, name: active.name || '(unnamed quest)' }
+          : null;
+      } catch {}
+    };
+    syncClient.on('quests_list', onQuestsList);
+
     // NOTE: Wake word detection now happens locally on mobile in Wake Mode
 
     // NOTE: Wake word listener already set up at line 603 (wakeSub)
@@ -2541,6 +2603,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       try { syncClient?.off?.('voice_transcript_result', onVoiceTranscriptResult); } catch {}
       try { syncClient?.off?.('voice_received', onVoiceReceived); } catch {}
       try { syncClient?.off?.('agents_list', onAgentsList); } catch {}
+      // v3.10.85: quests_list listener (see comment above).
+      try { syncClient?.off?.('quests_list', onQuestsList); } catch {}
       try { syncClient?.off?.('agent_history', onAgentHistory); } catch {}
 
       try { syncClient?.off?.('send_error', onSendError); } catch {}
@@ -2677,6 +2741,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // duplicate-bubble bug.
       const aid = activeChatAgentIdRef.current || 'companion';
       const deviceName = syncClient.getDeviceName?.() || 'Android Phone';
+      // v3.10.85: stamp with which quest was active at
+      // typed-send time. Same snapshot-at-append pattern
+      // as the desktop-echo and voice paths.
+      const aq = activeQuestRef.current;
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
         text: text ? `[From: ${deviceName}] ${text}` : text,
@@ -2684,6 +2752,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         agentId: aid,
         ts: Date.now(),
         attachments: attachments.map(a => ({ uri: a.uri, type: a.type, name: a.name })),
+        activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
+        activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
       appendAgentMessage(userMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
       if (text) {
@@ -2893,6 +2963,44 @@ useEffect(() => {
       showDateSeparator = prevBucket !== currBucket;
     }
 
+    // v3.10.85: quest-change separator. Shows above the
+    // current message when its `activeQuestId` differs from
+    // the previous message's. The label shows the quest
+    // name (or "No active quest" if null) so the user can
+    // see at a glance which quest was active when each
+    // message was exchanged. The chat becomes self-
+    // documenting: scroll back and read the conversation
+    // boundaries by which quest was being worked on.
+    //
+    // Comparison logic:
+    //   - undefined vs undefined → no separator (both legacy)
+    //   - undefined vs null → no separator (legacy messages
+    //     don't break the no-quest label continuity)
+    //   - null vs id → separator (entering a quest)
+    //   - id vs null → separator (leaving to no quest)
+    //   - id1 vs id2 → separator (switching quests)
+    //   - same value → no separator
+    //   - undefined vs id → separator (legacy message
+    //     followed by a stamped message)
+    let showQuestSeparator = false;
+    let questSeparatorLabel: string | null = null;
+    if (index > 0 && messages[index - 1]) {
+      const prevQ = messages[index - 1].activeQuestId;
+      const currQ = item.activeQuestId;
+      const changed = (() => {
+        // Both undefined: no data, no separator
+        if (prevQ === undefined && currQ === undefined) return false;
+        // undefined vs null: treat as same (legacy into default)
+        if ((prevQ === undefined && currQ === null) || (prevQ === null && currQ === undefined)) return false;
+        // Otherwise compare directly
+        return prevQ !== currQ;
+      })();
+      if (changed) {
+        showQuestSeparator = true;
+        questSeparatorLabel = currQ == null ? 'No active quest' : `🎯 ${item.activeQuestName || '(unnamed quest)'}`;
+      }
+    }
+
     // v3.1.15: show the actual agent name (e.g. "🐾 Lamasuu") if we
     // know which agent spoke, otherwise fall back to the legacy label.
     // v3.1.15+ also reads item.agentName from the desktop payload.
@@ -2929,6 +3037,11 @@ useEffect(() => {
     return (
       <View>
         {showDateSeparator && <Text style={styles.dateSeparator}>{dateStr}</Text>}
+        {showQuestSeparator && questSeparatorLabel && (
+          <View style={styles.questSeparator}>
+            <Text style={styles.questSeparatorText}>{questSeparatorLabel}</Text>
+          </View>
+        )}
         <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
           <Text style={[styles.agentLabel, item.isUser ? styles.userLabel : styles.aiLabel]}>
             {agentLabel}
@@ -3869,6 +3982,27 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginVertical: 10,
     opacity: 0.85,
+  },
+  // v3.10.85: quest-change separator. Centered pill with
+  // a thin top/bottom border to visually mark the boundary
+  // between "talking about quest A" and "talking about
+  // quest B" (or "no quest"). Lighter color than the
+  // dateSeparator so the date is still the primary
+  // chronological landmark; quest is secondary context.
+  questSeparator: {
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 4,
+    paddingVertical: 4,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(247, 147, 26, 0.25)',
+  },
+  questSeparatorText: {
+    color: '#f7931a',
+    fontSize: 11,
+    fontWeight: '600',
+    opacity: 0.7,
   },
   messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 12, marginBottom: 8 },
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#1a3a5c', borderBottomRightRadius: 4 },
