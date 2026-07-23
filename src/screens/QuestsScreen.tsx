@@ -53,6 +53,14 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
+// v3.10.86: SafeAreaInsets for the editor modal's top
+// padding. Without this, the editor modal's bottom-sheet
+// card sits at the bottom and the dimmed quest list above
+// it shows through the scrim, with the status bar drawn on
+// top of the scrim — looks like a visual conflict at the
+// top of the screen (Tobe reported 2026-07-23). With the
+// inset padding, the modal starts below the status bar.
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type CompanionQuest = {
   id: string;
@@ -81,6 +89,9 @@ export default function QuestsScreen({
 }: {
   onBack: () => void;
 }) {
+  // v3.10.86: SafeAreaInsets for the editor modal's top
+  // padding. See the comment on the import.
+  const insets = useSafeAreaInsets();
   const [quests, setQuests] = useState<CompanionQuest[]>([]);
   const [hydrated, setHydrated] = useState(false);
   // v3.10.73: track whether at least one fresh broadcast
@@ -856,6 +867,7 @@ export default function QuestsScreen({
             <QuestEditorBody
               quest={editorOpen}
               isNew={!editorOpen.id}
+              insets={insets}
               onClose={() => setEditorOpen(null)}
               onSave={(updates) => {
                 // v3.8.1: if we opened the editor for a new
@@ -977,6 +989,7 @@ function QuestEditorBody({
   onClose,
   onSave,
   onDelete,
+  insets,
 }: {
   quest: CompanionQuest;
   // v3.8.1: when true, the editor is in "new quest" mode.
@@ -988,6 +1001,10 @@ function QuestEditorBody({
   onClose: () => void;
   onSave: (updates: Record<string, any>) => void;
   onDelete: () => void;
+  // v3.10.86: SafeAreaInsets passed from the parent so the
+  // editor header can start below the status bar on
+  // Android edge-to-edge.
+  insets?: { top: number; bottom: number; left: number; right: number };
 }) {
   // Local form state. Initialized from the quest prop.
   // The form is uncontrolled-ish (we just track values);
@@ -1014,7 +1031,13 @@ function QuestEditorBody({
   });
 
   return (
-    <View style={styles.editorCard}>
+    // v3.10.86: paddingTop includes the safe-area inset so
+    // the editor header starts below the status bar on
+    // Android (edge-to-edge mode). `insets.top` is 0 on
+    // iOS with the system status bar, ~30-50dp on Android
+    // depending on the device. The paddingTop: 8 in the
+    // style adds a small breathing-room on top of that.
+    <View style={[styles.editorCard, { paddingTop: insets.top + 8 }]}>
       <View style={styles.editorHeader}>
         <Text style={styles.editorTitle}>{isNew ? '➕  New quest' : '✏️  Edit quest'}</Text>
         <TouchableOpacity onPress={onClose} style={styles.editorCloseBtn}>
@@ -1930,18 +1953,34 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // v3.8.0: editor modal. Slides up from the bottom.
-  // The form fields are inside a ScrollView so long
-  // descriptions don't get clipped on small screens.
+  // v3.10.86: editor modal. Full-screen layout with safe-
+  // area top padding instead of the v3.8.0 bottom-sheet
+  // style. Tobe reported (2026-07-23): "some padding top
+  // for the background when editing quests. You can see
+  // the conflict in the top here." The v3.8.0 bottom-
+  // sheet design used `marginTop: 'auto'` to push the card
+  // to the bottom with `maxHeight: '90%'`, which left the
+  // top ~10% of the scrim showing the dimmed quest list
+  // behind. Combined with Android 15+ edge-to-edge (status
+  // bar drawn on top of the scrim, not above it), the top
+  // of the screen ended up showing a confusing mix of
+  // dimmed quest content + status bar + modal — the
+  // "conflict" Tobe saw.
+  //
+  // The fix: make the editor card full-screen (width +
+  // height 100%) with a small top padding for the safe
+  // area. This makes the editor feel like a dedicated
+  // editing screen rather than a partial bottom sheet,
+  // and the dimmed quest list is no longer visible
+  // through the scrim. The bottom-sheet rounded corners
+  // are gone too — a full-screen card doesn't need them.
   editorCard: {
     backgroundColor: '#0f1626',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
     borderWidth: 1,
     borderColor: '#2a2a3e',
     width: '100%',
-    maxHeight: '90%',
-    marginTop: 'auto',
+    height: '100%',
+    paddingTop: 8, // small breathing room above the header
     overflow: 'hidden',
   },
   editorHeader: {
