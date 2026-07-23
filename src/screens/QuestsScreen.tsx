@@ -631,46 +631,68 @@ export default function QuestsScreen({
                       <Text style={styles.cardActionText}>✏️</Text>
                     </TouchableOpacity>
                     <View style={{ flex: 1 }} />
-                    {!isActive && (
-                      <TouchableOpacity
-                        // v3.10.82: moved to the right side
-                        // of the card. Tobe's request
-                        // (2026-07-23): "add a button/toggle
-                        // on the right side of each there
-                        // where one can set as active. Much
-                        // easier than having to go into the
-                        // quests." Before this, ☆ was on
-                        // the LEFT of the action row, which
-                        // is where you'd expect the "edit"
-                        // action — and the "destructive"
-                        // ✕ on the right next to the
-                        // "default" ☆ was a confusing
-                        // visual pairing. ☆ is hidden when
-                        // the quest is already active
-                        // (ACTIVE banner at the top of the
-                        // card makes the active state
-                        // obvious).
-                        //
-                        // v3.10.73: same staleness guard as
-                        // ✏️ — set_quest_active also fails
-                        // if the desktop doesn't recognize
-                        // the id.
-                        style={[
-                          styles.cardActionBtn,
-                          !firstBroadcastReceived && styles.cardActionBtnDisabled,
-                        ]}
-                        onPress={(e) => {
-                          e?.stopPropagation?.();
-                          if (!firstBroadcastReceived) return;
+                    {/* v3.10.83: prominent "Set as active" button.
+                        v3.10.82 moved ☆ to the right but kept it
+                        as a small icon-only button. Tobe's
+                        follow-up (2026-07-23): "That star is it
+                        perhaps but thats not intuitive. Create a
+                        bigger set as active button on the right
+                        side of each as i asked for."
+
+                        Now it's a proper labeled button with
+                        the star icon + "Set as active" text,
+                        gold-tinted, sits clearly on the right
+                        edge of the action row. When the quest
+                        IS active, replace with a non-interactive
+                        "✓ Active" label so the user can confirm
+                        the state at a glance (the ACTIVE banner
+                        at the top of the card is fine for the
+                        initial discovery, but the inline label
+                        right next to the action button confirms
+                        the current state when scanning cards).
+
+                        The ✕ stays as a small icon-only button
+                        on the far right edge (destructive
+                        actions on the edge, infrequent). ✏️
+                        stays on the left as a small icon-only
+                        button (secondary action). */}
+                    <TouchableOpacity
+                      style={[
+                        styles.cardSetActiveBtn,
+                        isActive && styles.cardSetActiveBtnActive,
+                        !firstBroadcastReceived && styles.cardActionBtnDisabled,
+                      ]}
+                      onPress={(e) => {
+                        e?.stopPropagation?.();
+                        if (!firstBroadcastReceived) return;
+                        if (isActive) {
+                          // Tap the active button → deactivate
+                          // (jump to "no active quest" default).
+                          // Mirrors the no-quest card behavior
+                          // — easier than going back to the top
+                          // of the list.
+                          handleSetActive(null);
+                        } else {
                           handleSetActive(q.id);
-                        }}
-                      >
-                        <Text style={styles.cardActionText}>☆</Text>
-                      </TouchableOpacity>
-                    )}
+                        }
+                      }}
+                    >
+                      <Text style={[
+                        styles.cardSetActiveBtnIcon,
+                        isActive && styles.cardSetActiveBtnTextActive,
+                      ]}>
+                        {isActive ? '✓' : '☆'}
+                      </Text>
+                      <Text style={[
+                        styles.cardSetActiveBtnText,
+                        isActive && styles.cardSetActiveBtnTextActive,
+                      ]}>
+                        {isActive ? 'Active' : 'Set active'}
+                      </Text>
+                    </TouchableOpacity>
                     <TouchableOpacity
                       // v3.10.73: same staleness guard as
-                      // ✏️ and ☆ (see comment above). delete_quest
+                      // ✏️ and the set-active button. delete_quest
                       // with a stale id silently no-ops which
                       // is even worse than the others — the
                       // user clicks Delete, the confirmation
@@ -1688,12 +1710,61 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.05)',
-    gap: 4,
+    gap: 6,
   },
   cardActionBtn: {
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 6,
     borderRadius: 6,
+  },
+  // v3.10.83: prominent "Set as active" button.
+  // Gold-tinted pill, sits on the right side of the
+  // action row. v3.10.82 had ☆ as a small icon-only
+  // button which Tobe found unintuitive — the icon
+  // was visually similar to the ✕ next to it and
+  // didn't read as a primary action. Now it's a
+  // proper labeled pill: star icon + "Set active"
+  // text, gold border + soft gold background. When
+  // the quest IS active, the same button becomes
+  // green (✓ Active) to show the current state at
+  // a glance without relying on the ACTIVE banner
+  // at the top of the card.
+  cardSetActiveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#f7931a',
+    backgroundColor: 'rgba(247, 147, 26, 0.15)',
+    gap: 6,
+  },
+  cardSetActiveBtnIcon: {
+    fontSize: 14,
+    color: '#f7931a',
+    fontWeight: '700',
+  },
+  cardSetActiveBtnText: {
+    fontSize: 13,
+    color: '#f7931a',
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  // v3.10.83: active-state visual for the set-active
+  // button. Green (instead of gold) so it reads as
+  // "this is the current state" rather than "tap to
+  // do something". The ACTIVE banner at the top of
+  // the card is gold, so green here gives a clear
+  // visual distinction between "the card is the
+  // active quest" (top, gold) and "this button
+  // confirms the active state" (bottom, green).
+  cardSetActiveBtnActive: {
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+  },
+  cardSetActiveBtnTextActive: {
+    color: '#10b981',
   },
   // v3.10.73: stale-id guard. When the first desktop
   // broadcast hasn't arrived yet (cache-only render),
