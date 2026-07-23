@@ -331,7 +331,7 @@ export default function QuestsScreen({
   // to roll back if the desktop rejects the edit. The
   // `quests_update_failed` handler (also in the useEffect)
   // shows a toast on rejection.
-  const handleSetActive = (id: string) => {
+  const handleSetActive = (id: string | null) => {
     setError(null);
     syncClient.setQuestActive?.(id);
   };
@@ -420,6 +420,62 @@ export default function QuestsScreen({
                   ⏳ Syncing with desktop… (edit buttons will unlock when sync completes)
                 </Text>
               )}
+            {/* v3.10.82: "No active quest" card. Tobe's request
+                (2026-07-23): "Also add a default/no quest for
+                conversations not related to any of them."
+                Previously the only way to clear the active quest
+                was via the desktop UI; on the mobile, an active
+                quest stayed active forever once set, which meant
+                the agent kept getting quest context injected on
+                every chat reply even when the user wanted to
+                chat about something unrelated.
+
+                This card is the "default state" toggle. Tapping
+                it calls handleSetActive(null), which sends
+                `set_quest_active` with `id: null` to the desktop.
+                The desktop's onSetQuestActive handler already
+                supports empty/null ids (sets active: false on all
+                quests). The chat pipeline then stops injecting
+                quest context until another quest is set active.
+
+                The card is always visible at the top of the list
+                so the user can switch back to "no active quest"
+                even when a quest is currently active.
+
+                Visual: dashed border, lighter background, and a
+                ☆ icon that turns to ★ when "no quest" is the
+                current active state (matches the active-quest
+                visual language on the other cards). */}
+            <TouchableOpacity
+              style={[
+                styles.questCard,
+                styles.noQuestCard,
+                quests.every(q => !q.active) && styles.noQuestCardActive,
+              ]}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                if (!firstBroadcastReceived) return;
+                handleSetActive(null);
+              }}
+              disabled={!firstBroadcastReceived}
+            >
+              <View style={styles.questTopRow}>
+                <Text style={styles.questName}>💬  No active quest</Text>
+                <Text style={[styles.questPct, { fontSize: 16 }]}>
+                  {quests.every(q => !q.active) ? '★' : '☆'}
+                </Text>
+              </View>
+              <Text style={styles.noQuestCardDesc}>
+                Default state — chat without any quest context.
+                Use this for conversations that aren't about any
+                specific project. Tap to clear the active quest.
+              </Text>
+              {quests.some(q => q.active) && (
+                <Text style={styles.noQuestCardHint}>
+                  ⏵ Tap to deactivate “{quests.find(q => q.active)?.name}”
+                </Text>
+              )}
+            </TouchableOpacity>
             {sorted.map((q) => {
               const isComplete = q.status === 'completed';
               const isActive = !!q.active;
@@ -554,25 +610,6 @@ export default function QuestsScreen({
                       the card's onPress (which would open
                       the detail modal). */}
                   <View style={styles.cardActions}>
-                    {!isActive && (
-                      <TouchableOpacity
-                        // v3.10.73: same staleness guard as
-                        // ✏️ — see comment above. set_quest_active
-                        // also fails if the desktop doesn't
-                        // recognize the id.
-                        style={[
-                          styles.cardActionBtn,
-                          !firstBroadcastReceived && styles.cardActionBtnDisabled,
-                        ]}
-                        onPress={(e) => {
-                          e?.stopPropagation?.();
-                          if (!firstBroadcastReceived) return;
-                          handleSetActive(q.id);
-                        }}
-                      >
-                        <Text style={styles.cardActionText}>☆</Text>
-                      </TouchableOpacity>
-                    )}
                     <TouchableOpacity
                       // v3.10.73: disable the ✏️ button
                       // until the first broadcast arrives.
@@ -594,6 +631,43 @@ export default function QuestsScreen({
                       <Text style={styles.cardActionText}>✏️</Text>
                     </TouchableOpacity>
                     <View style={{ flex: 1 }} />
+                    {!isActive && (
+                      <TouchableOpacity
+                        // v3.10.82: moved to the right side
+                        // of the card. Tobe's request
+                        // (2026-07-23): "add a button/toggle
+                        // on the right side of each there
+                        // where one can set as active. Much
+                        // easier than having to go into the
+                        // quests." Before this, ☆ was on
+                        // the LEFT of the action row, which
+                        // is where you'd expect the "edit"
+                        // action — and the "destructive"
+                        // ✕ on the right next to the
+                        // "default" ☆ was a confusing
+                        // visual pairing. ☆ is hidden when
+                        // the quest is already active
+                        // (ACTIVE banner at the top of the
+                        // card makes the active state
+                        // obvious).
+                        //
+                        // v3.10.73: same staleness guard as
+                        // ✏️ — set_quest_active also fails
+                        // if the desktop doesn't recognize
+                        // the id.
+                        style={[
+                          styles.cardActionBtn,
+                          !firstBroadcastReceived && styles.cardActionBtnDisabled,
+                        ]}
+                        onPress={(e) => {
+                          e?.stopPropagation?.();
+                          if (!firstBroadcastReceived) return;
+                          handleSetActive(q.id);
+                        }}
+                      >
+                        <Text style={styles.cardActionText}>☆</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       // v3.10.73: same staleness guard as
                       // ✏️ and ☆ (see comment above). delete_quest
@@ -604,7 +678,6 @@ export default function QuestsScreen({
                       // nothing happens.
                       style={[
                         styles.cardActionBtn,
-                        styles.cardActionDelete,
                         !firstBroadcastReceived && styles.cardActionBtnDisabled,
                       ]}
                       onPress={(e) => {
@@ -682,7 +755,7 @@ export default function QuestsScreen({
             )}
             <View style={styles.modalFooter}>
               <TouchableOpacity
-                style={styles.modalCloseBtn}
+                style={[styles.modalCloseBtn, { flex: 1 }]}
                 onPress={() => setDetail(null)}
               >
                 <Text style={styles.modalCloseBtnText}>Close</Text>
@@ -1315,6 +1388,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginVertical: 6,
   },
+  // v3.10.82: "No active quest" card. Dashed border to
+  // visually distinguish it from real quests (which have
+  // solid colored borders). Lighter background so it
+  // doesn't compete with the real quests below. When this
+  // is the active state, swap to a soft gold border +
+  // bright star icon, matching the active-quest visual
+  // language on regular cards.
+  noQuestCard: {
+    backgroundColor: '#0a0e1a',
+    borderColor: '#3a3f55',
+    borderStyle: 'dashed',
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginVertical: 6,
+  },
+  noQuestCardActive: {
+    borderColor: '#f7931a',
+    borderStyle: 'solid',
+    borderWidth: 2,
+    backgroundColor: '#1a1408',
+  },
+  noQuestCardDesc: {
+    color: '#7a809a',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  noQuestCardHint: {
+    color: '#f7931a',
+    fontSize: 11,
+    marginTop: 6,
+    fontStyle: 'italic',
+  },
   questTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1471,10 +1579,13 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   modalCloseBtn: {
-    borderTopWidth: 1,
-    borderTopColor: '#222',
-    paddingVertical: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
     alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#333',
+    backgroundColor: '#15151a',
   },
   modalCloseBtnText: {
     color: '#f7931a',
@@ -1584,9 +1695,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 6,
   },
-  cardActionDelete: {
-    marginLeft: 'auto',
-  },
   // v3.10.73: stale-id guard. When the first desktop
   // broadcast hasn't arrived yet (cache-only render),
   // the card action buttons dim so the user sees they
@@ -1617,17 +1725,22 @@ const styles = StyleSheet.create({
     color: '#a55',
   },
 
-  // v3.8.0: detail-modal footer (Close + Edit). Replaces
-  // the old single-button layout.
+  // v3.10.82: detail-modal footer (Close + Edit). Both
+  // buttons get flex: 1 so they share width equally.
+  // v3.8.0 had flex: 1 only on Edit, which made Close
+  // hug the left edge while Edit stretched across the
+  // rest — looked wonky. Both buttons now get their own
+  // visible border (the v3.10.82 polish Tobe asked for)
+  // and a bit more vertical breathing room.
   modalFooter: {
     flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: '#222',
+    paddingTop: 8,
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    gap: 8,
   },
   modalEditBtn: {
     flex: 1,
-    borderLeftWidth: 1,
-    borderLeftColor: '#222',
   },
 
   // v3.8.0: confirm dialog. Compact card with title,
