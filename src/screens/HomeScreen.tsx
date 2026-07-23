@@ -1520,13 +1520,35 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', (e) => {
       setKeyboardVisible(true);
-      // v3.10.80: capture keyboard height for the
-      // manual-padding fix on Android (see the comment
-      // at the keyboardHeight state declaration). The
-      // endCoordinates.height includes the keyboard's
-      // full visual height (including the nav bar
-      // overlay area when edge-to-edge is on).
-      setKeyboardHeight(e?.endCoordinates?.height ?? 0);
+      // v3.10.81: compute the keyboard's visual height
+      // from `endCoordinates.screenY` rather than
+      // `endCoordinates.height`. On Android 15+ with
+      // edge-to-edge, `height` is the keyboard's content
+      // area only and EXCLUDES the suggestion bar (~50-
+      // 60dp on Gboard, ~70-80dp on Samsung Keyboard)
+      // and any top decoration. `screenY` is the Y
+      // position of the keyboard's actual top edge in
+      // screen coordinates, so `screen_height - screenY`
+      // gives the true visible height including the
+      // suggestion bar. Tobe hit this on v3.10.80
+      // (2026-07-23): the input row sat right at the
+      // top of the keys area, with the suggestion bar
+      // covering its bottom edge.
+      //
+      // Fall back to `endCoordinates.height` if screenY
+      // is missing (older RN versions / iOS). Use
+      // `Dimensions.get('screen').height` (full physical
+      // screen) rather than `Dimensions.get('window').height`
+      // because the window may be resized by adjustResize
+      // (in case it ever starts working again on some
+      // devices) and we want the full-screen reference.
+      const coords = e?.endCoordinates;
+      const visualHeight = coords
+        ? (typeof coords.screenY === 'number'
+            ? Math.max(0, Dimensions.get('screen').height - coords.screenY)
+            : coords.height ?? 0)
+        : 0;
+      setKeyboardHeight(visualHeight);
     });
     const hide = Keyboard.addListener('keyboardDidHide', () => {
       setKeyboardVisible(false);
