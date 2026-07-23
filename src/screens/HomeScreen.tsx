@@ -465,6 +465,28 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  // v3.10.80: keyboard height tracking. v3.10.71 disabled
+  // KeyboardAvoidingView on Android and relied on
+  // windowSoftInputMode="adjustResize" to push the chat
+  // input up. That worked on older Android, but Android 15+
+  // (the app's targetSdk is 36) enforces edge-to-edge and
+  // SILENTLY DISABLES adjustResize when the system bars are
+  // transparent — which is forced on edge-to-edge apps.
+  // Result: the chat input sits at the bottom of the
+  // unresized window and the keyboard covers it
+  // (Tobe reported 2026-07-23, "input field etc seems stuck
+  // on the bottom now. It should be above the keyboard").
+  //
+  // The fix is to track the keyboard height ourselves and
+  // apply it as paddingBottom on the inputContainer. This
+  // works regardless of adjustResize / edge-to-edge mode
+  // because we're moving the input up directly via padding,
+  // not relying on the OS to resize the window.
+  //
+  // iOS still uses KeyboardAvoidingView with behavior=
+  // 'padding' (above the KeyboardAvoidingView), so we only
+  // apply the manual padding on Android.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1496,8 +1518,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   // Keyboard
   useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
-    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    const show = Keyboard.addListener('keyboardDidShow', (e) => {
+      setKeyboardVisible(true);
+      // v3.10.80: capture keyboard height for the
+      // manual-padding fix on Android (see the comment
+      // at the keyboardHeight state declaration). The
+      // endCoordinates.height includes the keyboard's
+      // full visual height (including the nav bar
+      // overlay area when edge-to-edge is on).
+      setKeyboardHeight(e?.endCoordinates?.height ?? 0);
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
+    });
     return () => { show.remove(); hide.remove(); };
   }, []);
 
@@ -3241,18 +3275,31 @@ useEffect(() => {
 
       {/* Tab content - Hidden when fullscreen or landscape */}
       {!fullscreen && !isLandscape && (
-      // v3.10.71: KeyboardAvoidingView on iOS only.
-      // Android's `adjustResize` (AndroidManifest.xml)
-      // already resizes the window when the keyboard
-      // opens, so the inputContainer (flex-end) gets
-      // pushed up automatically. The previous
-      // `behavior='padding'` on Android had a known bug
-      // where the padding sometimes wasn't fully
-      // subtracted after keyboard hide, leaving a
-      // visible gap below the input row (Tobe reported
-      // this on 2026-07-22). On iOS we keep the
-      // KeyboardAvoidingView because there's no native
-      // adjustResize equivalent.
+      // v3.10.80: KeyboardAvoidingView on iOS only. The
+      // v3.10.71 reasoning ("Android's adjustResize already
+      // handles it natively") was correct for Android <15,
+      // but the app's targetSdk is 36 — Android 15+
+      // enforces edge-to-edge and silently DISABLES
+      // windowSoftInputMode="adjustResize" when the system
+      // bars are transparent. Result: the chat input sits at
+      // the bottom of the unresized window and the keyboard
+      // covers it (Tobe reported 2026-07-23, "input field
+      // etc seems stuck on the bottom now. It should be
+      // above the keyboard").
+      //
+      // The fix: track keyboard height via
+      // `Keyboard.addListener('keyboardDidShow', ...)` and
+      // apply it as paddingBottom on the inputContainer
+      // itself (see the v3.10.80 comment at the
+      // inputContainer render site). This works regardless
+      // of adjustResize / edge-to-edge mode because we're
+      // pushing the input up directly via padding, not
+      // relying on the OS to resize the window.
+      //
+      // On iOS we still use KeyboardAvoidingView with
+      // behavior='padding' because the iOS-native keyboard
+      // avoidance path is reliable and doesn't have the
+      // Android 15+ adjustResize problem.
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding' enabled={Platform.OS === 'ios'}>
         {activeTab === 'chat' && (
           <>
@@ -3451,7 +3498,26 @@ useEffect(() => {
                   </TouchableOpacity>
                 );
               })}
-            <View style={[styles.inputContainer, { paddingBottom: 8 + insets.bottom }]}>
+            <View style={[styles.inputContainer, {
+              // v3.10.80: Android keyboard avoidance. See
+              // the comment at the keyboardHeight state
+              // declaration for why we apply this manually
+              // instead of relying on adjustResize (Android
+              // 15+ disables it on edge-to-edge apps). When
+              // the keyboard is open, set paddingBottom to
+              // the keyboard height — this effectively pushes
+              // the input row up to sit just above the
+              // keyboard. When the keyboard is closed, fall
+              // back to the v3.10.70 nav-bar inset handling.
+              //
+              // iOS keeps using KeyboardAvoidingView (the
+              // wrapping component above) for keyboard
+              // avoidance, so we DON'T need to add keyboard
+              // height there.
+              paddingBottom: Platform.OS === 'android' && keyboardHeight > 0
+                ? keyboardHeight
+                : 8 + insets.bottom,
+            }]}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
               </TouchableOpacity>
