@@ -39,6 +39,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  Alert,
   BackHandler,
   Clipboard,
   Modal,
@@ -1006,6 +1007,56 @@ function QuestEditorBody({
   // Android edge-to-edge.
   insets?: { top: number; bottom: number; left: number; right: number };
 }) {
+  // v3.10.102: quest project instructions (markdown).
+  // The mobile's quest editor now exposes the same field
+  // the desktop's quest editor has. Hydrated from the
+  // desktop on mount via the request_quest_instructions
+  // sync message. Save writes the file via
+  // saveQuestInstructions + the new
+  // quest_instructions_saved ack. Tobe's v3.10.101
+  // feedback: "I still dont see a section for that
+  // quest instructions file." — the field was on the
+  // desktop but not the mobile. Now it is.
+  const [questInstructionsContent, setQuestInstructionsContent] = useState<string>('');
+  const [questInstructionsPath, setQuestInstructionsPath] = useState<string | null>(null);
+  const [questInstructionsLoading, setQuestInstructionsLoading] = useState<boolean>(true);
+  // v3.10.102: track whether the user edited the
+  // instructions textarea, so we can decide whether to
+  // send a save when they hit the editor's Save button.
+  // (If they didn't touch it, we skip the save entirely
+  // — no need to round-trip to the desktop.)
+  const [questInstructionsDirty, setQuestInstructionsDirty] = useState<boolean>(false);
+  useEffect(() => {
+    if (isNew || !quest.id) {
+      // New quest doesn't have an instructions file yet
+      // (the quest id doesn't exist until after Save).
+      setQuestInstructionsContent('');
+      setQuestInstructionsPath(null);
+      setQuestInstructionsLoading(false);
+      return;
+    }
+    setQuestInstructionsLoading(true);
+    setQuestInstructionsDirty(false);
+    let cancelled = false;
+    const onInstructions = (msg: any) => {
+      if (msg.questId !== quest.id) return;
+      if (cancelled) return;
+      if (msg.ok) {
+        setQuestInstructionsContent(msg.content || '');
+        setQuestInstructionsPath(msg.path || null);
+      } else {
+        setQuestInstructionsContent('');
+        setQuestInstructionsPath(null);
+      }
+      setQuestInstructionsLoading(false);
+    };
+    syncClient.on('quest_instructions', onInstructions);
+    syncClient.requestQuestInstructions(quest.id);
+    return () => {
+      cancelled = true;
+      syncClient.off?.('quest_instructions', onInstructions);
+    };
+  }, [quest.id, isNew]);
   // Local form state. Initialized from the quest prop.
   // The form is uncontrolled-ish (we just track values);
   // Save bundles them into an updates object.
@@ -1159,6 +1210,55 @@ function QuestEditorBody({
             </TouchableOpacity>
           </View>
         ))}
+
+        {/* v3.10.102: per-quest project instructions
+            field. Mirrors the desktop's quest editor
+            (v3.2.32). The textarea is monospace + dark
+            so it looks like a code/file editor. The
+            file path is shown below so the user can
+            verify it lives in the expected directory.
+            Hydration is async (we wait for the
+            quest_instructions ack on mount). For NEW
+            quests (isNew=true), the file doesn't exist
+            yet — the section is hidden until after
+            Save + a subsequent open. */}
+        {!isNew && (
+          <View style={styles.editorInstructionsBlock}>
+            <Text style={styles.editorFieldLabel}>📋 Quest instructions</Text>
+            <Text style={styles.editorInstructionsHint}>
+              Per-quest project instructions for the companion. Injected into the chat prompt as a separate context block when this quest is active. Use this for "how to do tasks" (e.g. "deploy via scp to the VPS", "edit files directly on the server").
+            </Text>
+            {questInstructionsLoading ? (
+              <Text style={styles.editorInstructionsLoading}>Loading instructions file…</Text>
+            ) : (
+              <>
+                <TextInput
+                  style={styles.editorInstructionsTextarea}
+                  value={questInstructionsContent}
+                  onChangeText={(text) => {
+                    setQuestInstructionsContent(text);
+                    setQuestInstructionsDirty(true);
+                  }}
+                  placeholder="# Project instructions for this quest&#10;&#10;## Deploy&#10;- scp dist/* user@vps:/var/www/&#10;- ssh user@vps 'systemctl restart nginx'"
+                  placeholderTextColor="#666"
+                  multiline
+                  numberOfLines={8}
+                  textAlignVertical="top"
+                />
+                {!!questInstructionsPath && (
+                  <Text style={styles.editorInstructionsPath} selectable>
+                    {questInstructionsPath}
+                  </Text>
+                )}
+                {questInstructionsDirty && (
+                  <Text style={styles.editorInstructionsDirtyHint}>
+                    ✎ Edited — will save on Save
+                  </Text>
+                )}
+              </>
+            )}
+          </View>
+        )}
       </ScrollView>
       <View style={styles.editorFooter}>
         {!isNew && (
@@ -1196,6 +1296,36 @@ function QuestEditorBody({
               goals: cleanedGoals,
             };
             onSave(updates);
+            // v3.10.102: if the user edited the
+            // instructions textarea, send the file to
+            // the desktop as part of the same Save. We
+            // wait for the quest_instructions_saved ack
+            // before closing the editor (so the file is
+            // actually written before the user moves
+            // on). For NEW quests the section is hidden
+            // — nothing to save here.
+            if (!isNew && quest.id && questInstructionsDirty) {
+              // v3.10.102: the parent's onClose
+              // happens in QuestsScreen after the
+              // ack. We listen for the ack here, fire
+              // onClose, and the parent's onSave
+              // callback already handled the quest
+              // update by the time the ack arrives.
+              const onSaved = (msg: any) => {
+                if (msg.questId !== quest.id) return;
+                syncClient.off?.('quest_instructions_saved', onSaved);
+                if (msg.ok) {
+                  setQuestInstructionsDirty(false);
+                } else {
+                  Alert.alert(
+                    'Save failed',
+                    `Could not save instructions: ${msg.error || 'unknown error'}`,
+                  );
+                }
+              };
+              syncClient.on('quest_instructions_saved', onSaved);
+              syncClient.saveQuestInstructions(quest.id, questInstructionsContent);
+            }
           }}
         >
           <Text style={styles.editorFooterBtnTextPrimary}>Save</Text>
@@ -2256,6 +2386,57 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 12,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  // v3.10.102: per-quest project instructions field in
+  // the editor. Same monospace + dark theme as the
+  // desktop's editor. The textarea is full-width with
+  // 8 lines visible (scrollable for longer content).
+  // The path is shown below the textarea so the user
+  // can verify it lives in the expected directory.
+  editorInstructionsBlock: {
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#2a2a3f',
+  },
+  editorInstructionsHint: {
+    color: '#7a809a',
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  editorInstructionsTextarea: {
+    backgroundColor: '#0a0a0a',
+    borderColor: '#2a2a3f',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: '#e0e0e0',
+    fontSize: 12,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    minHeight: 180,
+    textAlignVertical: 'top',
+  },
+  editorInstructionsPath: {
+    color: '#666',
+    fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginTop: 6,
+    paddingHorizontal: 4,
+  },
+  editorInstructionsLoading: {
+    color: '#7a809a',
+    fontSize: 12,
+    fontStyle: 'italic',
+    paddingVertical: 12,
+  },
+  editorInstructionsDirtyHint: {
+    color: '#fbbf24',
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 6,
   },
   editorHint: {
     color: '#666',

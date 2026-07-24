@@ -397,6 +397,17 @@ class SyncClient {
     this.send({ type: 'request_quest_instructions', questId });
   }
 
+  // v3.10.102: save the quest instructions file. Used
+  // by the mobile's quest editor's "Save" button to
+  // write the file inline. The desktop writes to
+  // <quest.directory>/QUEST_INSTRUCTIONS.md and returns
+  // { type: 'quest_instructions_saved', questId, ok,
+  // path, bytes, error }. The mobile reads the ack
+  // before closing the editor.
+  saveQuestInstructions(questId: string, content: string) {
+    this.send({ type: 'save_quest_instructions', questId, content });
+  }
+
   sendCompanionAction(action: any) {
     this.send({ type: 'companion_interaction', action });
   }
@@ -755,6 +766,16 @@ class SyncClient {
         //   { questId, ok, content, path, error }
         console.log('[SyncClient] Received quest_instructions for', msg.questId, 'ok=' + msg.ok);
         this.emit('quest_instructions', msg);
+        break;
+
+      case 'quest_instructions_saved':
+        // v3.10.102: the desktop acked a save from the
+        // mobile's quest editor. The mobile waits for
+        // this before closing the editor (so the file is
+        // actually written before the user moves on).
+        // Shape: { questId, ok, path, bytes, error }
+        console.log('[SyncClient] Received quest_instructions_saved for', msg.questId, 'ok=' + msg.ok);
+        this.emit('quest_instructions_saved', msg);
         break;
 
       case 'pong':
