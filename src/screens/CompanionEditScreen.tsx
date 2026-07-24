@@ -38,7 +38,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, Platform, Image,
+  StyleSheet, Alert, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -112,14 +112,6 @@ export default function CompanionEditScreen({
   // black_grouse). Bundle icons with the catalog so the
   // picker renders without a separate icon asset fetch.
   const [pixelCompanionId, setPixelCompanionId] = useState<string>('boar');
-  // v3.10.95: avatar is the actual pixel-art sprite as a
-  // data URL (the first frame of the idle animation). The
-  // desktop's agents_list broadcast (v3.2.27) includes
-  // this for every companion. The preview frame renders
-  // this image at the size slider's scale, so the user
-  // sees the same sprite the desktop's forge + arena
-  // show — not a generic emoji.
-  const [avatar, setAvatar] = useState<string | null>(null);
   const [traits, setTraits] = useState<Set<string>>(new Set());
   // v3.10.92: chattiness is the headline new feature. Default
   // 3 if the companion has no value yet (legacy companion).
@@ -160,7 +152,7 @@ export default function CompanionEditScreen({
           // v3.10.95: avatar is the actual pixel-art sprite
           // data URL (not the catalog emoji). Rendered in
           // the preview frame at the size slider's scale.
-          if (typeof a.avatar === 'string' && a.avatar) setAvatar(a.avatar);
+          if (typeof a.avatar === 'string' && a.avatar) { /* consumed: avatar broadcast received */ }
         }
         // v3.10.95: the desktop's agents_list broadcast (v3.2.27)
         // now carries the full spriteConfig object including
@@ -253,7 +245,7 @@ export default function CompanionEditScreen({
       if (!Array.isArray(msg?.agents)) return;
       const a = msg.agents.find((x: any) => x.id === companionId);
       if (!a) return;
-      if (typeof a.avatar === 'string' && a.avatar) setAvatar(a.avatar);
+      if (typeof a.avatar === 'string' && a.avatar) { /* consumed: avatar broadcast received */ }
       const spriteConfig = a.spriteConfig;
       if (spriteConfig) {
         if (typeof spriteConfig.scale === 'number') setScale(Math.max(1, Math.min(8, spriteConfig.scale)));
@@ -430,48 +422,18 @@ export default function CompanionEditScreen({
             control. Tobe's v3.10.93 feedback: "use the
             frame of the sprite selected like the desktop
             has. A preview frame." */}
-        <Section title="🖼️ Preview">
-          {/* v3.10.95: render the actual pixel-art avatar
-              (data URL from the desktop's agents_list
-              broadcast), not the catalog emoji. The avatar
-              is the first frame of the idle animation, the
-              same PNG that shows in the desktop's forge
-              preview + arena + chat tab icon. Tobe's
-              v3.10.94 feedback: "if the emoji is the preview
-              we can remove it, i was thinking of the sprite
-              the way it looks in the arena." The image is
-              scaled to scale × 16px (16–128px range,
-              matching the desktop's PixelSprite frameSize
-              × scale). Falls back to the catalog emoji if
-              no avatar is loaded yet (legacy companion or
-              first mount before broadcast). */}
-          <View style={styles.previewFrame}>
-            {avatar ? (
-              <Image
-                source={{ uri: avatar }}
-                style={{
-                  width: Math.max(16, Math.min(128, scale * 16)),
-                  height: Math.max(16, Math.min(128, scale * 16)),
-                  resizeMode: 'contain',
-                }}
-              />
-            ) : (
-              <Text
-                style={[
-                  styles.previewEmoji,
-                  { fontSize: Math.max(16, Math.min(128, scale * 16)) },
-                ]}
-              >
-                {(spriteCatalog as any).companions.find((c: any) => c.id === pixelCompanionId)?.icon || '🐾'}
-              </Text>
-            )}
-          </View>
-          <Text style={styles.previewLabel}>
-            {(spriteCatalog as any).companions.find((c: any) => c.id === pixelCompanionId)?.name || pixelCompanionId}
-            {' · '}
-            <Text style={styles.previewLabelScale}>{scale}×</Text>
-          </Text>
-        </Section>
+        {/* v3.10.97: preview removed. Tobe's v3.10.96
+            feedback: "the preview are just empty and
+            black now. You can remove it." The avatar
+            data URL wasn't being broadcast correctly
+            until v3.2.28 (file-path-to-data-URI
+            conversion at broadcast time). With v3.2.28
+            on the desktop, the preview would render the
+            actual pixel sprite, but Tobe asked to drop
+            the section entirely. The mobile's Companion
+            tab in the WebView arena still shows the
+            sprite at the chosen scale, so the
+            "see how it looks" affordance is preserved. */}
         <Section title="📐 Size">
           <Slider
             min={1}
@@ -711,32 +673,13 @@ const styles = StyleSheet.create({
   // The emoji inside scales with the size slider so the
   // user can see "this is what the sprite looks like
   // at scale N" without leaving the screen.
-  previewFrame: {
-    alignSelf: 'center',
-    width: 200,
-    height: 200,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#3a3a55',
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 8,
-  },
-  previewEmoji: {
-    textAlign: 'center',
-  },
-  previewLabel: {
-    color: '#fff',
-    fontSize: 14,
-    textAlign: 'center',
-    marginTop: 4,
-    fontWeight: '600',
-  },
-  previewLabelScale: {
-    color: '#f7931a',
-    fontWeight: '700',
-  },
+  // v3.10.97: previewFrame / previewEmoji / previewLabel
+  // / previewLabelScale styles removed along with the
+  // Preview section. The Section now goes straight from
+  // the Sprite picker to the Size slider. The user can
+  // see the sprite at the chosen scale in the Companion
+  // tab of the WebView arena (no in-Personalize preview
+  // needed).
   // v3.10.93: dark base for the empty checkbox icon.
   // The active state (☑) is rendered in the same color
   // as the active border so the checkbox visually ties
