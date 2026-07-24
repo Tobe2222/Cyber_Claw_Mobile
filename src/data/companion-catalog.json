@@ -1,0 +1,9 @@
+{
+  "companions": [
+    { "id": "fox", "name": "Fox", "icon": "🦊" },
+    { "id": "boar", "name": "Boar", "icon": "🐗" },
+    { "id": "deer", "name": "Deer", "icon": "🦌" },
+    { "id": "hare", "name": "Hare", "icon": "🐇" },
+    { "id": "black_grouse", "name": "Black Grouse", "icon": "🦚" }
+  ]
+}

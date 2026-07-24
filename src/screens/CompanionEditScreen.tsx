@@ -40,8 +40,20 @@ import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Alert, Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
+// v3.10.93: shared Slider matches the desktop's native
+// <input type="range">. PanResponder-driven drag + tap.
+import Slider from '../components/Slider';
+// v3.10.93: bundled sprite catalog (5 sprites, mirrors the
+// desktop's src/assets/companions/catalog.json). We strip the
+// animation frames + file paths on the mobile — the icon is
+// all the user needs to make a choice. The full catalog is
+// loaded from disk on the desktop; the mobile ships a
+// hand-curated subset because the assets themselves aren't
+// needed for the picker (only the metadata).
+import spriteCatalog from '../data/companion-catalog.json';
 
 // v3.10.92: trait list mirrors the desktop forge's
 // #forge-traits-grid. The id is the bare trait key (no prefix),
@@ -104,6 +116,11 @@ export default function CompanionEditScreen({
 }) {
   const [name, setName] = useState(companionName || '');
   const [scale, setScale] = useState<number>(4);
+  // v3.10.93: sprite picker state. pixelCompanionId
+  // matches the desktop's catalog id (fox, boar, deer, hare,
+  // black_grouse). Bundle icons with the catalog so the
+  // picker renders without a separate icon asset fetch.
+  const [pixelCompanionId, setPixelCompanionId] = useState<string>('boar');
   const [traits, setTraits] = useState<Set<string>>(new Set());
   const [primaryModel, setPrimaryModel] = useState<string>('');
   const [secondaryModel, setSecondaryModel] = useState<string>('');
@@ -116,6 +133,11 @@ export default function CompanionEditScreen({
   const [hydrated, setHydrated] = useState<boolean>(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const hydratedRef = useRef<boolean>(false);
+  // v3.10.93: safe-area insets so the header doesn't sit
+  // under the status bar (Tobe's v3.10.92 feedback). Used
+  // for paddingTop on the page container + the toast's
+  // bottom inset.
+  const insets = useSafeAreaInsets();
 
   // v3.10.92: hydrate from the local AsyncStorage cache
   // AND the latest agents_list broadcast. The cache is the
@@ -136,6 +158,10 @@ export default function CompanionEditScreen({
             const ch = Math.max(1, Math.min(5, a.chattiness));
             setChattiness(ch);
           }
+          // v3.10.93: sprite id is included in the agents_list
+          // broadcast as `sprite`. Hydrate the picker so the
+          // currently-selected sprite is visually obvious.
+          if (typeof a.sprite === 'string' && a.sprite) setPixelCompanionId(a.sprite);
         }
         // v3.10.92: the agents_list payload doesn't include
         // traits/primaryModel/secondaryModel (only the chattiness
@@ -155,6 +181,13 @@ export default function CompanionEditScreen({
           if (typeof local.scale === 'number') setScale(local.scale);
           if (typeof local.chattiness === 'number') setChattiness(local.chattiness);
           if (typeof local.customName === 'string' && local.customName) setName(local.customName);
+          // v3.10.93: pixelCompanionId is the sprite id. The
+          // local cache is the only source of truth on the
+          // mobile — the sprite isn't synced via agents_list
+          // (only the icon is). Fall back to the agents_list
+          // value (already set above) if the local cache
+          // doesn't have it.
+          if (typeof local.pixelCompanionId === 'string' && local.pixelCompanionId) setPixelCompanionId(local.pixelCompanionId);
         }
         setHydrated(true);
         hydratedRef.current = true;
@@ -218,6 +251,13 @@ export default function CompanionEditScreen({
     const patch = {
       customName: name.trim() || undefined,
       scale: Math.max(1, Math.min(8, scale)),
+      // v3.10.93: pixelCompanionId is the sprite id. The
+      // desktop's saveSpriteConfig accepts this as is;
+      // sprite_config_sync's whitelist (in sync-server.js)
+      // includes pixelCompanionId. The desktop's
+      // mobile-sprite-config-saved handler regenerates the
+      // avatar if the sprite changed.
+      pixelCompanionId: pixelCompanionId,
       traits: Array.from(traits),
       chattiness: Math.max(1, Math.min(5, chattiness)),
       primaryModel: effectivePrimary || '',
@@ -258,8 +298,8 @@ export default function CompanionEditScreen({
   }, [companionId, name, scale, traits, chattiness, primaryModel, secondaryModel, customModel, useCustomModel, saving, hydrated]);
 
   return (
-    <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 64 }]}>
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={onBack} style={styles.backBtn}>
             <Text style={styles.backBtnText}>← Back</Text>
@@ -286,71 +326,83 @@ export default function CompanionEditScreen({
           />
         </Section>
 
-        {/* Scale */}
-        <Section title="📐 Size">
-          <View style={styles.sliderRow}>
-            <Text style={styles.sliderLabel}>Scale <Text style={styles.sliderValue}>{scale}×</Text></Text>
-            <View style={styles.sliderWrap}>
-              <TouchableOpacity
-                style={[styles.sliderBtn, scale <= 1 && styles.sliderBtnDisabled]}
-                onPress={() => setScale(Math.max(1, scale - 1))}
-                disabled={saving || scale <= 1}
-              >
-                <Text style={styles.sliderBtnText}>−</Text>
-              </TouchableOpacity>
-              <Text style={styles.sliderScaleText}>{scale}</Text>
-              <TouchableOpacity
-                style={[styles.sliderBtn, scale >= 8 && styles.sliderBtnDisabled]}
-                onPress={() => setScale(Math.min(8, scale + 1))}
-                disabled={saving || scale >= 8}
-              >
-                <Text style={styles.sliderBtnText}>+</Text>
-              </TouchableOpacity>
-            </View>
+        {/* v3.10.93: sprite picker. Mirrors the desktop's
+            Companion Forge "🔄 Change Companion" picker. The
+            catalog is bundled with the mobile app (5 sprites,
+            matches the desktop's catalog.json). The currently
+            selected sprite has a gold border + background tint
+            so the user can see what's selected at a glance
+            (Tobe's v3.10.92 feedback: "i dont see which ones is
+            already selected"). Tapping a sprite card selects
+            it immediately; the Save button persists to the
+            desktop. */}
+        <Section title="🐾 Sprite">
+          <Text style={styles.sectionHint}>Pick the sprite for {companionName}. The currently selected one is highlighted.</Text>
+          <View style={styles.spriteGrid}>
+            {(spriteCatalog as any).companions.map((c: any) => {
+              const active = pixelCompanionId === c.id;
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.spriteCard, active && styles.spriteCardActive]}
+                  onPress={() => setPixelCompanionId(c.id)}
+                  disabled={saving}
+                >
+                  <Text style={styles.spriteIcon}>{c.icon}</Text>
+                  <Text style={[styles.spriteLabel, active && styles.spriteLabelActive]}>{c.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
+        </Section>
+
+        {/* Scale — v3.10.93: single horizontal slider matching the
+            desktop's <input type="range">. Tobe's v3.10.92
+            feedback: "we dont need 2 ways of up and down for the
+            scaling". The +/- buttons are gone; the slider is
+            draggable AND tappable (just like the desktop). */}
+        <Section title="📐 Size">
+          <Slider
+            min={1}
+            max={8}
+            step={1}
+            value={scale}
+            onChange={(v) => setScale(v)}
+            disabled={saving}
+            label="Scale"
+            showValue={`${scale}×`}
+          />
           <Text style={styles.sliderHint}>Bigger number = larger sprite in the arena.</Text>
         </Section>
 
-        {/* v3.10.92: chattiness — the headline new feature. */}
+        {/* v3.10.93: chattiness — single slider like the
+            desktop. The 1–5 tappable scale row is gone (it's
+            the "2 ways of up and down" Tobe flagged). Live
+            description below mirrors the desktop's
+            CHATTINESS_DESCRIPTIONS. */}
         <Section title="💬 Chattiness">
-          <View style={styles.sliderRow}>
-            <Text style={styles.sliderLabel}>How chatty <Text style={styles.sliderValue}>{chattiness}/5</Text></Text>
-            <View style={styles.sliderWrap}>
-              <TouchableOpacity
-                style={[styles.sliderBtn, chattiness <= 1 && styles.sliderBtnDisabled]}
-                onPress={() => setChattiness(Math.max(1, chattiness - 1))}
-                disabled={saving || chattiness <= 1}
-              >
-                <Text style={styles.sliderBtnText}>−</Text>
-              </TouchableOpacity>
-              <Text style={styles.sliderScaleText}>{chattiness}</Text>
-              <TouchableOpacity
-                style={[styles.sliderBtn, chattiness >= 5 && styles.sliderBtnDisabled]}
-                onPress={() => setChattiness(Math.min(5, chattiness + 1))}
-                disabled={saving || chattiness >= 5}
-              >
-                <Text style={styles.sliderBtnText}>+</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <Slider
+            min={1}
+            max={5}
+            step={1}
+            value={chattiness}
+            onChange={(v) => setChattiness(v)}
+            disabled={saving}
+            label="How chatty"
+            showValue={`${chattiness}/5`}
+          />
           <Text style={styles.sliderHint}>{CHATTINESS_DESCRIPTIONS[chattiness as 1|2|3|4|5] || CHATTINESS_DESCRIPTIONS[3]}</Text>
-          <View style={styles.chattinessScale}>
-            {[1, 2, 3, 4, 5].map(n => (
-              <TouchableOpacity
-                key={n}
-                style={[styles.chattinessStep, chattiness === n && styles.chattinessStepActive]}
-                onPress={() => setChattiness(n)}
-                disabled={saving}
-              >
-                <Text style={[styles.chattinessStepText, chattiness === n && styles.chattinessStepTextActive]}>{n}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
         </Section>
 
-        {/* Traits */}
+        {/* v3.10.93: traits. The checkbox icon + tinted
+            background make selected state obvious (Tobe's
+            v3.10.92 feedback: "i dont see which ones is
+            already selected"). Mirror the desktop's trait
+            row layout: checkbox on the left, label + desc on
+            the right. Multiple traits can be selected at
+            once (the desktop forge's checkbox array). */}
         <Section title="🎭 Behaviour Traits">
-          <Text style={styles.sectionHint}>Pick the traits that fit this companion.</Text>
+          <Text style={styles.sectionHint}>Pick the traits that fit this companion. Multiple selections allowed.</Text>
           <View style={styles.traitsGrid}>
             {TRAITS.map(t => {
               const active = traits.has(t.id);
@@ -361,8 +413,11 @@ export default function CompanionEditScreen({
                   onPress={() => toggleTrait(t.id)}
                   disabled={saving}
                 >
-                  <Text style={styles.traitLabel}>{t.label}</Text>
-                  <Text style={styles.traitDesc}>{t.desc}</Text>
+                  <Text style={[styles.traitBox, active && styles.traitBoxActive]}>{active ? '☑' : '☐'}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.traitLabel, active && styles.traitLabelActive]}>{t.label}</Text>
+                    <Text style={styles.traitDesc}>{t.desc}</Text>
+                  </View>
                 </TouchableOpacity>
               );
             })}
@@ -503,7 +558,9 @@ const styles = StyleSheet.create({
   },
   scroll: {
     padding: 16,
-    paddingBottom: 64,
+    // paddingBottom is set inline (insets.bottom + 64)
+    // so the scroll extends below the home indicator on
+    // iPhones with notches.
   },
   headerRow: {
     flexDirection: 'row',
@@ -563,85 +620,77 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
   },
-  sliderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  sliderLabel: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-    flex: 1,
-  },
-  sliderValue: {
-    color: '#f7931a',
-  },
-  sliderWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  sliderBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#f7931a',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sliderBtnDisabled: {
-    backgroundColor: '#3a3a55',
-  },
-  sliderBtnText: {
-    color: '#0a0a1a',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  sliderScaleText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-    minWidth: 24,
-    textAlign: 'center',
-  },
   sliderHint: {
     fontSize: 11,
     color: '#888',
     fontStyle: 'italic',
-    marginTop: 4,
+    marginTop: 8,
   },
-  chattinessScale: {
+  // v3.10.93: sprite picker grid. Cards are 5 across
+  // (the catalog has 5 sprites) with a gold border +
+  // background tint for the selected one. Tight 6px gap
+  // keeps the row compact; the icon is 32px so even
+  // small phones can show it.
+  spriteGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 6,
-    marginTop: 10,
   },
-  chattinessStep: {
-    flex: 1,
+  spriteCard: {
+    width: 64,
     paddingVertical: 8,
-    borderRadius: 6,
+    paddingHorizontal: 4,
+    borderRadius: 8,
     backgroundColor: '#0a0a1a',
     borderColor: '#3a3a55',
     borderWidth: 1,
     alignItems: 'center',
   },
-  chattinessStepActive: {
-    backgroundColor: '#f7931a',
-    borderColor: '#f7931a',
+  spriteCardActive: {
+    borderColor: '#fbbf24',
+    backgroundColor: 'rgba(251, 191, 36, 0.12)',
+    shadowColor: '#fbbf24',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  chattinessStepText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
+  spriteIcon: {
+    fontSize: 28,
+    marginBottom: 2,
   },
-  chattinessStepTextActive: {
-    color: '#0a0a1a',
+  spriteLabel: {
+    color: '#888',
+    fontSize: 10,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  spriteLabelActive: {
+    color: '#fbbf24',
+  },
+  // v3.10.93: dark base for the empty checkbox icon.
+  // The active state (☑) is rendered in the same color
+  // as the active border so the checkbox visually ties
+  // to the selected state.
+  traitBox: {
+    fontSize: 18,
+    color: '#555',
+    marginRight: 10,
+    marginTop: 1,
+  },
+  traitBoxActive: {
+    color: '#f7931a',
   },
   traitsGrid: {
     gap: 6,
   },
+  // v3.10.93: trait row is a flex-row with a checkbox on
+  // the left and label+desc on the right. Mirrors the
+  // desktop's .trait-toggle layout (flex, align-items:
+  // flex-start, gap: 8).
   traitToggle: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 6,
@@ -650,13 +699,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   traitToggleActive: {
-    backgroundColor: 'rgba(247, 147, 26, 0.15)',
+    backgroundColor: 'rgba(247, 147, 26, 0.18)',
     borderColor: '#f7931a',
   },
   traitLabel: {
     color: '#fff',
     fontWeight: '600',
     fontSize: 13,
+  },
+  // v3.10.93: active trait label turns orange (matches
+  // the desktop's .trait-toggle input[type=checkbox]:checked
+  // ~ .trait-label rule).
+  traitLabelActive: {
+    color: '#f7931a',
   },
   traitDesc: {
     color: '#888',
