@@ -3627,7 +3627,50 @@ useEffect(() => {
                 // of layoutHeight).
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 const distanceFromEnd = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-                setChatAtBottom(distanceFromEnd < 32);
+                const isAtBottom = distanceFromEnd < 32;
+                setChatAtBottom(isAtBottom);
+                // v3.10.96: clear the "↓ N new messages" badge
+                // when the user scrolls to the bottom of the
+                // chat. Tobe's v3.10.90/v3.10.95 feedback: the
+                // badge persisted even after the user manually
+                // scrolled to the bottom, requiring a tap on
+                // the badge to clear it. v3.10.90 introduced
+                // the "always show" rule so missed-broadcast
+                // replays were visible — but it lost the
+                // implicit "scrolled to bottom = caught up"
+                // semantic. The fix: the badge is "you have
+                // not yet seen these new messages". The moment
+                // the user is at the bottom of the chat, they
+                // have seen them. The onContentSizeChange
+                // handler's auto-scroll already moves them
+                // there for new incoming messages, so this
+                // clear is consistent with the auto-scroll
+                // behavior.
+                if (isAtBottom) {
+                  setChatUnreadCount(0);
+                  // v3.10.96 (Tobe's v3.10.95 feedback
+                  // second part): also clear the
+                  // per-companion tab badge for the
+                  // active agent. The tab badge (the
+                  // "9" red circle on the Clawsuu tab)
+                  // is `chatUnreadByAgent[activeAgent]`
+                  // and was persisting even after the
+                  // user scrolled to the bottom of the
+                  // chat. The agent_history callback
+                  // clears it on tab switch, but if the
+                  // history response is slow or fails
+                  // the badge lingers. Treating
+                  // "scrolled to bottom" as
+                  // "caught up" clears both badges
+                  // with the same gesture.
+                  const aid = activeChatAgentIdRef.current;
+                  if (aid) {
+                    setChatUnreadByAgent(prev => {
+                      if ((prev[aid] || 0) === 0) return prev;
+                      return { ...prev, [aid]: 0 };
+                    });
+                  }
+                }
               }}
               onContentSizeChange={() => {
                 // Auto-scroll to the newest on first render and whenever
