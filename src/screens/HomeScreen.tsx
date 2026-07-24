@@ -3758,16 +3758,47 @@ useEffect(() => {
                   return (
                     <View key={att.id} style={styles.attachmentPreviewItem}>
                       {isImage ? (
-                        <Image
-                          source={{ uri: att.uri }}
-                          style={styles.attachmentPreviewThumb}
-                        />
+                        // v3.10.98: tap the pending thumbnail to
+                        // open the same fullscreen viewer the
+                        // chat-history attachments use. Tobe's
+                        // v3.10.97 feedback: "i still cannot
+                        // Click the attached images to look
+                        // closer before sending my message."
+                        // Previously the thumb was a static
+                        // <Image> with no onPress; users had
+                        // to send + view the message to see
+                        // the image at full size. The fullscreen
+                        // viewer is already wired (setFullscreenAttachment
+                        // is used for chat-history attachments);
+                        // we just reuse it here.
+                        <TouchableOpacity
+                          onPress={() => setFullscreenAttachment({
+                            uri: att.uri,
+                            type: att.type,
+                            name: att.name,
+                          })}
+                          activeOpacity={0.7}
+                          style={styles.attachmentPreviewThumbWrap}
+                        >
+                          <Image
+                            source={{ uri: att.uri }}
+                            style={styles.attachmentPreviewThumb}
+                          />
+                        </TouchableOpacity>
                       ) : (
-                        <View style={styles.attachmentPreviewFile}>
+                        <TouchableOpacity
+                          onPress={() => setFullscreenAttachment({
+                            uri: att.uri,
+                            type: att.type,
+                            name: att.name,
+                          })}
+                          activeOpacity={0.7}
+                          style={styles.attachmentPreviewFile}
+                        >
                           <Text style={styles.attachmentPreviewFileText} numberOfLines={1}>
                             {att.name}
                           </Text>
-                        </View>
+                        </TouchableOpacity>
                       )}
                       <TouchableOpacity
                         style={styles.attachmentPreviewRemove}
@@ -4324,6 +4355,14 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 6,
     overflow: 'hidden',
+  },
+  // v3.10.98: wrap the thumb in a TouchableOpacity for
+  // tap-to-enlarge. Width/height match attachmentPreviewItem
+  // (60×60) so the visible image stays the same size; the
+  // wrap is a no-op visual but provides the onPress target.
+  attachmentPreviewThumbWrap: {
+    width: '100%',
+    height: '100%',
   },
   attachmentPreviewThumb: {
     width: '100%',
