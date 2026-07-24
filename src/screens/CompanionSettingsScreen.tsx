@@ -868,6 +868,33 @@ export default function CompanionSettingsScreen({
             </Text>
             <Hint>Tap a card to open its settings.</Hint>
 
+            {/* v3.10.94: Personalize card is now FIRST. Tobe's
+                v3.10.93 feedback: "put this companion edit in
+                the top of the companion settings". The card
+                opens the full CompanionEditScreen route with
+                sprite picker + scale + traits + chattiness.
+                The sub-line now reflects the v3.10.93 UI
+                change: no LLM options on mobile (those live
+                on the desktop), so we drop "model" from the
+                description. */}
+            <TouchableOpacity
+              style={[styles.phaseCard, { borderColor: '#f7931a' }]}
+              onPress={() => onOpenCompanionEdit?.({
+                companionId: companion.id,
+                companionName: companion.name,
+                emoji: companion.emoji || companion.icon || null,
+              })}
+            >
+              <Text style={styles.phaseCardEmoji}>✏️</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.phaseCardTitle}>Edit / Personalize</Text>
+                <Text style={styles.phaseCardSub}>
+                  Sprite, scale, traits, and chattiness for {companion.name}
+                </Text>
+              </View>
+              <Text style={styles.phaseCardArrow}>›</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity
               style={[styles.phaseCard, { borderColor: '#3b82f6' }]}
               onPress={() => setCompanionViewPhase('wake')}
@@ -945,37 +972,6 @@ export default function CompanionSettingsScreen({
                 <Text style={styles.phaseCardTitle}>Voice settings</Text>
                 <Text style={styles.phaseCardSub}>
                   Engine (Local / Premium API) and voice for {companion.name}
-                </Text>
-              </View>
-              <Text style={styles.phaseCardArrow}>›</Text>
-            </TouchableOpacity>
-
-            {/* v3.10.92: Personalize companion. Opens the
-                CompanionEditScreen as a full-screen route
-                (handled by App.tsx). Mirrors the desktop
-                Companion Forge for the fields the mobile can
-                edit: name, scale, traits, primary/secondary
-                model, and chattiness. The sprite picker
-                itself isn't on the mobile (the sprite
-                catalog is bundled with the desktop) — use
-                the desktop's forge for sprite changes. The
-                chattiness slider is the headline new feature
-                here — it lets the user dial down how often
-                the companion fires idle chatter without
-                touching the desktop. */}
-            <TouchableOpacity
-              style={[styles.phaseCard, { borderColor: '#f7931a' }]}
-              onPress={() => onOpenCompanionEdit?.({
-                companionId: companion.id,
-                companionName: companion.name,
-                emoji: companion.emoji || companion.icon || null,
-              })}
-            >
-              <Text style={styles.phaseCardEmoji}>✏️</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.phaseCardTitle}>Edit / Personalize</Text>
-                <Text style={styles.phaseCardSub}>
-                  Name, size, traits, model, and chattiness for {companion.name}
                 </Text>
               </View>
               <Text style={styles.phaseCardArrow}>›</Text>

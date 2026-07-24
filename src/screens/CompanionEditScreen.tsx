@@ -85,23 +85,14 @@ const CHATTINESS_DESCRIPTIONS = {
   5: 'Very chatty — comments every 15–30 minutes.',
 };
 
-// v3.10.92: model list. Hard-coded to match the desktop's
-// forge-model-primary optgroups (Anthropic, OpenAI, Google,
-// Local). The desktop uses the same list; the mobile doesn't
-// ship with the same provider catalog so we offer a curated
-// set. The desktop's saveSpriteConfig accepts any model
-// string, so adding a custom model is supported via the
-// "Custom model" option below.
-const MODEL_OPTIONS = [
-  { value: 'anthropic/claude-opus-4-6', label: 'Claude Opus 4' },
-  { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4' },
-  { value: 'anthropic/claude-haiku-3.5', label: 'Claude Haiku 3.5' },
-  { value: 'openai/gpt-4o', label: 'GPT-4o' },
-  { value: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
-  { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-  { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  { value: 'ollama/llama3', label: 'Ollama — Llama 3' },
-];
+// v3.10.94: model list removed from the mobile (Tobe:
+// "We can remove LLM options on the mobile end, that
+// can be desktop only"). The Models section + the entire
+// ModelPicker component + the related state were dropped
+// in this release. The desktop's sprite_config_sync
+// whitelist still accepts primaryModel/secondaryModel, so
+// a future "also let the phone pick a model" reversal is
+// a one-component re-add.
 
 export default function CompanionEditScreen({
   companionId,
@@ -122,13 +113,9 @@ export default function CompanionEditScreen({
   // picker renders without a separate icon asset fetch.
   const [pixelCompanionId, setPixelCompanionId] = useState<string>('boar');
   const [traits, setTraits] = useState<Set<string>>(new Set());
-  const [primaryModel, setPrimaryModel] = useState<string>('');
-  const [secondaryModel, setSecondaryModel] = useState<string>('');
   // v3.10.92: chattiness is the headline new feature. Default
   // 3 if the companion has no value yet (legacy companion).
   const [chattiness, setChattiness] = useState<number>(3);
-  const [customModel, setCustomModel] = useState<string>('');
-  const [useCustomModel, setUseCustomModel] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [hydrated, setHydrated] = useState<boolean>(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -176,8 +163,6 @@ export default function CompanionEditScreen({
         if (localRaw) {
           const local = JSON.parse(localRaw);
           if (Array.isArray(local.traits)) setTraits(new Set(local.traits));
-          if (typeof local.primaryModel === 'string') setPrimaryModel(local.primaryModel);
-          if (typeof local.secondaryModel === 'string') setSecondaryModel(local.secondaryModel);
           if (typeof local.scale === 'number') setScale(local.scale);
           if (typeof local.chattiness === 'number') setChattiness(local.chattiness);
           if (typeof local.customName === 'string' && local.customName) setName(local.customName);
@@ -247,7 +232,13 @@ export default function CompanionEditScreen({
     if (!hydrated) return;
     setSaving(true);
     setBanner(null);
-    const effectivePrimary = useCustomModel ? customModel.trim() : primaryModel;
+    // v3.10.94: LLM options are desktop-only. The mobile
+    // no longer picks the primary/secondary model — the
+    // desktop's Companion Forge owns that. We still write
+    // the rest of the patch (customName, scale, sprite,
+    // traits, chattiness) and the desktop's openclaw.json
+    // is the source of truth for the per-agent model
+    // mapping.
     const patch = {
       customName: name.trim() || undefined,
       scale: Math.max(1, Math.min(8, scale)),
@@ -260,8 +251,6 @@ export default function CompanionEditScreen({
       pixelCompanionId: pixelCompanionId,
       traits: Array.from(traits),
       chattiness: Math.max(1, Math.min(5, chattiness)),
-      primaryModel: effectivePrimary || '',
-      secondaryModel: secondaryModel || '',
     };
     try {
       // Persist locally first so the next mount of this
@@ -295,7 +284,7 @@ export default function CompanionEditScreen({
         return false;
       });
     }, 5000);
-  }, [companionId, name, scale, traits, chattiness, primaryModel, secondaryModel, customModel, useCustomModel, saving, hydrated]);
+  }, [companionId, name, scale, pixelCompanionId, traits, chattiness, saving, hydrated]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -361,6 +350,37 @@ export default function CompanionEditScreen({
             feedback: "we dont need 2 ways of up and down for the
             scaling". The +/- buttons are gone; the slider is
             draggable AND tappable (just like the desktop). */}
+
+        {/* v3.10.94: sprite preview frame. Mirrors the
+            desktop's #forge-companion-viewer — a 200×200
+            centered box with a dark background and a 2px
+            border. The mobile doesn't have the desktop's
+            pixel sprite renderer, so we render the catalog
+            emoji at a size proportional to the scale
+            slider (scale × 16, so 1 = 16px, 4 = 64px, 8 =
+            128px). The sprite name is shown below the
+            frame so the user can see what's currently
+            selected. Live-updates as they change either
+            control. Tobe's v3.10.93 feedback: "use the
+            frame of the sprite selected like the desktop
+            has. A preview frame." */}
+        <Section title="🖼️ Preview">
+          <View style={styles.previewFrame}>
+            <Text
+              style={[
+                styles.previewEmoji,
+                { fontSize: Math.max(16, Math.min(128, scale * 16)) },
+              ]}
+            >
+              {(spriteCatalog as any).companions.find((c: any) => c.id === pixelCompanionId)?.icon || '🐾'}
+            </Text>
+          </View>
+          <Text style={styles.previewLabel}>
+            {(spriteCatalog as any).companions.find((c: any) => c.id === pixelCompanionId)?.name || pixelCompanionId}
+            {' · '}
+            <Text style={styles.previewLabelScale}>{scale}×</Text>
+          </Text>
+        </Section>
         <Section title="📐 Size">
           <Slider
             min={1}
@@ -414,42 +434,26 @@ export default function CompanionEditScreen({
                   disabled={saving}
                 >
                   <Text style={[styles.traitBox, active && styles.traitBoxActive]}>{active ? '☑' : '☐'}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.traitLabel, active && styles.traitLabelActive]}>{t.label}</Text>
-                    <Text style={styles.traitDesc}>{t.desc}</Text>
-                  </View>
+                  {/* v3.10.94: dropped the description line for
+                      compactness (Tobe's v3.10.93 feedback: "make
+                      the behaviours smaller"). The label is
+                      recognizable on its own. The full
+                      description still lives in the TRAITS table
+                      at the top of the file for any future
+                      long-press tooltip. */}
+                  <Text style={[styles.traitLabel, active && styles.traitLabelActive]} numberOfLines={1}>{t.label}</Text>
                 </TouchableOpacity>
               );
             })}
           </View>
         </Section>
 
-        {/* Models */}
-        <Section title="🧠 Models">
-          <Text style={styles.sectionHint}>Pick the primary model. Secondary is a fallback for transient errors.</Text>
-          <ModelPicker
-            label="Primary"
-            value={primaryModel}
-            onChange={setPrimaryModel}
-            customModel={customModel}
-            onCustomModelChange={setCustomModel}
-            useCustomModel={useCustomModel}
-            onUseCustomModelChange={setUseCustomModel}
-            disabled={saving}
-          />
-          <View style={{ height: 8 }} />
-          <ModelPicker
-            label="Secondary"
-            value={secondaryModel}
-            onChange={setSecondaryModel}
-            customModel=""
-            onCustomModelChange={() => {}}
-            useCustomModel={false}
-            onUseCustomModelChange={() => {}}
-            disabled={saving}
-            optional
-          />
-        </Section>
+        {/* v3.10.94: LLM Models section removed. Tobe's
+            v3.10.93 feedback: "We can remove LLM options
+            on the mobile end, that can be desktop only."
+            The desktop's Companion Forge owns the model
+            picker. The mobile now only edits sprite, scale,
+            traits, and chattiness (plus name). */}
 
         <View style={styles.footer}>
           <TouchableOpacity
@@ -479,67 +483,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
       {children}
-    </View>
-  );
-}
-
-function ModelPicker({
-  label, value, onChange, customModel, onCustomModelChange,
-  useCustomModel, onUseCustomModelChange, disabled, optional,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  customModel: string;
-  onCustomModelChange: (v: string) => void;
-  useCustomModel: boolean;
-  onUseCustomModelChange: (v: boolean) => void;
-  disabled?: boolean;
-  optional?: boolean;
-}) {
-  return (
-    <View style={styles.modelPicker}>
-      <Text style={styles.modelLabel}>{label}</Text>
-      <View style={styles.modelOptions}>
-        {optional && (
-          <TouchableOpacity
-            style={[styles.modelChip, !value && !useCustomModel && styles.modelChipActive]}
-            onPress={() => { onChange(''); onUseCustomModelChange(false); }}
-            disabled={disabled}
-          >
-            <Text style={[styles.modelChipText, !value && !useCustomModel && styles.modelChipTextActive]}>None</Text>
-          </TouchableOpacity>
-        )}
-        {MODEL_OPTIONS.map(opt => (
-          <TouchableOpacity
-            key={opt.value}
-            style={[styles.modelChip, value === opt.value && !useCustomModel && styles.modelChipActive]}
-            onPress={() => { onChange(opt.value); onUseCustomModelChange(false); }}
-            disabled={disabled}
-          >
-            <Text style={[styles.modelChipText, value === opt.value && !useCustomModel && styles.modelChipTextActive]}>{opt.label}</Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity
-          style={[styles.modelChip, styles.modelChipCustom, useCustomModel && styles.modelChipActive]}
-          onPress={() => onUseCustomModelChange(!useCustomModel)}
-          disabled={disabled}
-        >
-          <Text style={[styles.modelChipText, useCustomModel && styles.modelChipTextActive]}>Custom</Text>
-        </TouchableOpacity>
-      </View>
-      {useCustomModel ? (
-        <TextInput
-          style={styles.input}
-          value={customModel}
-          onChangeText={onCustomModelChange}
-          placeholder="provider/model-name"
-          placeholderTextColor="#666"
-          editable={!disabled}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      ) : null}
     </View>
   );
 }
@@ -668,6 +611,41 @@ const styles = StyleSheet.create({
   spriteLabelActive: {
     color: '#fbbf24',
   },
+  // v3.10.94: preview frame mirrors the desktop's
+  // .forge-companion-preview (200×200, 2px border, dark
+  // background, rounded corners). On the mobile the
+  // preview is responsive: width matches the section
+  // content (100%) and the inner box is a 200px square
+  // (capped to keep tall phones from going huge).
+  // The emoji inside scales with the size slider so the
+  // user can see "this is what the sprite looks like
+  // at scale N" without leaving the screen.
+  previewFrame: {
+    alignSelf: 'center',
+    width: 200,
+    height: 200,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#3a3a55',
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 8,
+  },
+  previewEmoji: {
+    textAlign: 'center',
+  },
+  previewLabel: {
+    color: '#fff',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  previewLabelScale: {
+    color: '#f7931a',
+    fontWeight: '700',
+  },
   // v3.10.93: dark base for the empty checkbox icon.
   // The active state (☑) is rendered in the same color
   // as the active border so the checkbox visually ties
@@ -681,18 +659,25 @@ const styles = StyleSheet.create({
   traitBoxActive: {
     color: '#f7931a',
   },
+  // v3.10.94: 2-column trait grid. Tobe's v3.10.93
+  // feedback: "make the behaviours smaller and 2 or 3
+  // in a row". Dropped the description text (was the
+  // bulky bit) and the bigger padding. Each trait is
+  // now ~48% wide so 2 fit per row with the existing
+  // 6px gap. With 9 traits that fits 4 rows + a single
+  // half-width orphan (the desktop forge has the same
+  // 9 traits in 2 columns = 4 rows + orphan).
   traitsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 6,
   },
-  // v3.10.93: trait row is a flex-row with a checkbox on
-  // the left and label+desc on the right. Mirrors the
-  // desktop's .trait-toggle layout (flex, align-items:
-  // flex-start, gap: 8).
   traitToggle: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    alignItems: 'center',
+    width: '48%',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
     borderRadius: 6,
     backgroundColor: '#0a0a1a',
     borderColor: '#3a3a55',
@@ -705,55 +690,14 @@ const styles = StyleSheet.create({
   traitLabel: {
     color: '#fff',
     fontWeight: '600',
-    fontSize: 13,
+    fontSize: 12,
+    flexShrink: 1,
   },
   // v3.10.93: active trait label turns orange (matches
   // the desktop's .trait-toggle input[type=checkbox]:checked
   // ~ .trait-label rule).
   traitLabelActive: {
     color: '#f7931a',
-  },
-  traitDesc: {
-    color: '#888',
-    fontSize: 11,
-    marginTop: 2,
-  },
-  modelPicker: {
-    marginBottom: 4,
-  },
-  modelLabel: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  modelOptions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  modelChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#0a0a1a',
-    borderColor: '#3a3a55',
-    borderWidth: 1,
-  },
-  modelChipActive: {
-    backgroundColor: '#f7931a',
-    borderColor: '#f7931a',
-  },
-  modelChipCustom: {
-    borderStyle: 'dashed',
-  },
-  modelChipText: {
-    color: '#fff',
-    fontSize: 12,
-  },
-  modelChipTextActive: {
-    color: '#0a0a1a',
-    fontWeight: '700',
   },
   footer: {
     marginTop: 20,
