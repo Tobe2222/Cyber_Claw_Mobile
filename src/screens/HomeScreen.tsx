@@ -4354,12 +4354,23 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 6,
-    overflow: 'hidden',
+    // v3.10.99: removed `overflow: 'hidden'` so the
+    // floating ×-remove button (positioned at top: 2,
+    // right: 2 with negative offsets in earlier versions)
+    // isn't clipped. The rounded corners are now drawn
+    // by the inner Image's borderRadius instead of the
+    // container's overflow. Tobe's v3.10.98 feedback:
+    // "the red remove button is clipped for the
+    // attachment." (Visible in the screenshot — the X
+    // was at top: -4, right: -4, outside the 60×60
+    // container that had overflow:hidden.)
   },
-  // v3.10.98: wrap the thumb in a TouchableOpacity for
-  // tap-to-enlarge. Width/height match attachmentPreviewItem
-  // (60×60) so the visible image stays the same size; the
-  // wrap is a no-op visual but provides the onPress target.
+  // v3.10.99: inner image gets its own borderRadius
+  // (slightly smaller than the container's 6 so the
+  // rounded corners still show). The image is also
+  // padded on the top-right so the × button (now
+  // positioned at top: 2, right: 2 INSIDE the
+  // container) doesn't overlap the image content.
   attachmentPreviewThumbWrap: {
     width: '100%',
     height: '100%',
@@ -4367,6 +4378,12 @@ const styles = StyleSheet.create({
   attachmentPreviewThumb: {
     width: '100%',
     height: '100%',
+    // v3.10.99: match the container's borderRadius so
+    // the image is visually clipped to the same rounded
+    // shape. The container no longer has overflow:hidden
+    // (so the X button can sit outside the image bounds),
+    // so the image itself needs to be rounded.
+    borderRadius: 6,
   },
   attachmentPreviewFile: {
     width: '100%',
@@ -4386,8 +4403,17 @@ const styles = StyleSheet.create({
   },
   attachmentPreviewRemove: {
     position: 'absolute',
-    top: -4,
-    right: -4,
+    // v3.10.99: was top: -4, right: -4 (outside the 60×60
+    // container that had overflow:hidden) which clipped the
+    // button. Now positioned at top: 2, right: 2 inside the
+    // container. The button is still 18×18 with a 9px
+    // borderRadius, so it overlaps the image by 16px (most
+    // of the button). Users see a red circle in the
+    // top-right corner of the thumbnail. Tobe's v3.10.98
+    // feedback: "the red remove button is clipped for the
+    // attachment."
+    top: 2,
+    right: 2,
     width: 18,
     height: 18,
     borderRadius: 9,

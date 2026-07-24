@@ -1231,6 +1231,39 @@ function QuestDetailBody({
   // most recent work is at the top of the timeline.
   const changes = Array.isArray(quest.latestChanges) ? quest.latestChanges.slice().reverse() : [];
 
+  // v3.10.99: per-quest behavior file. Read-only on the
+  // mobile. We request the file content from the desktop
+  // when the detail modal opens and cache it locally.
+  // The desktop's editor is the source of truth; the
+  // mobile just shows what the file currently says.
+  const [behaviorContent, setBehaviorContent] = useState<string | null>(null);
+  const [behaviorPath, setBehaviorPath] = useState<string | null>(null);
+  const [behaviorLoading, setBehaviorLoading] = useState<boolean>(true);
+  useEffect(() => {
+    let cancelled = false;
+    setBehaviorContent(null);
+    setBehaviorPath(null);
+    setBehaviorLoading(true);
+    const onBehavior = (msg: any) => {
+      if (msg.questId !== quest.id) return;
+      if (cancelled) return;
+      if (msg.ok) {
+        setBehaviorContent(msg.content || '');
+        setBehaviorPath(msg.path || null);
+      } else {
+        setBehaviorContent('');
+        setBehaviorPath(null);
+      }
+      setBehaviorLoading(false);
+    };
+    syncClient.on('quest_behavior', onBehavior);
+    syncClient.requestQuestBehavior(quest.id);
+    return () => {
+      cancelled = true;
+      syncClient.off?.('quest_behavior', onBehavior);
+    };
+  }, [quest.id]);
+
   return (
     <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
       <Text style={styles.modalTitle}>
@@ -1282,6 +1315,47 @@ function QuestDetailBody({
           <Text style={styles.modalSectionBody}>{quest.description}</Text>
         </View>
       )}
+
+      {/* v3.10.99: per-quest behavior file. Shown
+          read-only on the mobile. The desktop's quest
+          editor is the source of truth for edits; the
+          mobile fetches the file content from the desktop
+          via request_quest_behavior when the detail
+          modal opens. Tobe's v3.10.98 feedback:
+          "I think we should add or make visible in
+          the quests, the dedicated md files for each
+          quest. Where we input quest/project specific
+          behaviour for the companion." */}
+      <View style={styles.modalSection}>
+        <Text style={styles.modalSectionTitle}>
+          📋 Behavior file
+        </Text>
+        {behaviorLoading ? (
+          <Text style={styles.modalSectionBody}>
+            Loading behavior file…
+          </Text>
+        ) : (behaviorContent && behaviorContent.length > 0) ? (
+          <>
+            {!!behaviorPath && (
+              <Text style={styles.modalBehaviorPath} selectable>
+                {behaviorPath}
+              </Text>
+            )}
+            <View style={styles.modalBehaviorBox}>
+              <Text style={styles.modalBehaviorText}>
+                {behaviorContent}
+              </Text>
+            </View>
+            <Text style={styles.modalBehaviorHint}>
+              Read-only on mobile. Edit on the desktop's Quests panel.
+            </Text>
+          </>
+        ) : (
+          <Text style={styles.modalSectionBody}>
+            No behavior file yet. Add one on the desktop's Quests panel (tap the quest's "📋 Behavior" button).
+          </Text>
+        )}
+      </View>
 
       {goals.length > 0 && (
         <View style={styles.modalSection}>
@@ -1618,6 +1692,37 @@ const styles = StyleSheet.create({
     color: '#cfd2e0',
     fontSize: 14,
     lineHeight: 20,
+  },
+  // v3.10.99: per-quest behavior file display. The
+  // path is shown in a monospace font with a muted
+  // color so it doesn't compete with the content.
+  // The content is in a styled box with a monospace
+  // font to mirror the desktop editor's textarea.
+  modalBehaviorPath: {
+    color: '#666',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 6,
+  },
+  modalBehaviorBox: {
+    backgroundColor: '#0a0a0a',
+    borderColor: '#2a2a3f',
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 10,
+    maxHeight: 200,
+  },
+  modalBehaviorText: {
+    color: '#cfd2e0',
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  modalBehaviorHint: {
+    color: '#666',
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 6,
   },
   goalRow: {
     flexDirection: 'row',

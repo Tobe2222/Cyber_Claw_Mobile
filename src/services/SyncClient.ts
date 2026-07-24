@@ -386,6 +386,17 @@ class SyncClient {
     this.send({ type: 'create_quest', quest });
   }
 
+  // v3.10.99: per-quest behavior file. The mobile
+  // requests the markdown content of a quest's
+  // behavior file from the desktop; the desktop reads
+  // the file (via the new quests:read-behavior IPC) and
+  // replies with { questId, content, path }. Read-only
+  // on mobile — the desktop is the source of truth for
+  // edits.
+  requestQuestBehavior(questId: string) {
+    this.send({ type: 'request_quest_behavior', questId });
+  }
+
   sendCompanionAction(action: any) {
     this.send({ type: 'companion_interaction', action });
   }
@@ -732,6 +743,18 @@ class SyncClient {
         // matching this to a pending edit (by action + id).
         console.warn('[SyncClient] Quest edit failed:', msg);
         this.emit('quests_update_failed', msg);
+        break;
+
+      case 'quest_behavior':
+        // v3.10.99: the desktop responded to a
+        // request_quest_behavior with the file's content.
+        // Emit so the QuestsScreen can populate the
+        // Behavior section in the quest detail view.
+        // Mobile is read-only on this file — the
+        // editor lives on the desktop. Shape:
+        //   { questId, ok, content, path, error }
+        console.log('[SyncClient] Received quest_behavior for', msg.questId, 'ok=' + msg.ok);
+        this.emit('quest_behavior', msg);
         break;
 
       case 'pong':
