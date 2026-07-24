@@ -386,15 +386,15 @@ class SyncClient {
     this.send({ type: 'create_quest', quest });
   }
 
-  // v3.10.100: per-quest project instructions. The mobile
+  // v3.10.101: per-quest instructions. The mobile
   // requests the markdown content of a quest's
   // instructions file from the desktop; the desktop reads
   // the file (via the new quests:read-project-instructions IPC) and
   // replies with { questId, content, path }. Read-only
   // on mobile — the desktop is the source of truth for
   // edits.
-  requestQuestProjectInstructions(questId: string) {
-    this.send({ type: 'request_quest_project_instructions', questId });
+  requestQuestInstructions(questId: string) {
+    this.send({ type: 'request_quest_instructions', questId });
   }
 
   sendCompanionAction(action: any) {
@@ -745,16 +745,16 @@ class SyncClient {
         this.emit('quests_update_failed', msg);
         break;
 
-      case 'quest_project_instructions':
-        // v3.10.100: the desktop responded to a
-        // request_quest_project_instructions with the file's content.
+      case 'quest_instructions':
+        // v3.10.101: the desktop responded to a
+        // request_quest_instructions with the file's content.
         // Emit so the QuestsScreen can populate the
-        // Project instructions section in the quest detail view.
+        // Quest instructions section in the quest detail view.
         // Mobile is read-only on this file — the
         // editor lives on the desktop. Shape:
         //   { questId, ok, content, path, error }
-        console.log('[SyncClient] Received quest_project_instructions for', msg.questId, 'ok=' + msg.ok);
-        this.emit('quest_project_instructions', msg);
+        console.log('[SyncClient] Received quest_instructions for', msg.questId, 'ok=' + msg.ok);
+        this.emit('quest_instructions', msg);
         break;
 
       case 'pong':

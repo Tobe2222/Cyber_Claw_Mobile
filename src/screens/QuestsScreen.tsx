@@ -1231,36 +1231,36 @@ function QuestDetailBody({
   // most recent work is at the top of the timeline.
   const changes = Array.isArray(quest.latestChanges) ? quest.latestChanges.slice().reverse() : [];
 
-  // v3.10.100: per-quest project instructions. Read-only on the
+  // v3.10.101: per-quest instructions. Read-only on the
   // mobile. We request the file content from the desktop
   // when the detail modal opens and cache it locally.
   // The desktop's editor is the source of truth; the
   // mobile just shows what the file currently says.
-  const [instructionsContent, setInstructionsContent] = useState<string | null>(null);
-  const [instructionsPath, setInstructionsPath] = useState<string | null>(null);
-  const [instructionsLoading, setInstructionsLoading] = useState<boolean>(true);
+  const [questInstructionsContent, setQuestInstructionsContent] = useState<string | null>(null);
+  const [questInstructionsPath, setQuestInstructionsPath] = useState<string | null>(null);
+  const [questInstructionsLoading, setQuestInstructionsLoading] = useState<boolean>(true);
   useEffect(() => {
     let cancelled = false;
-    setInstructionsContent(null);
-    setInstructionsPath(null);
-    setInstructionsLoading(true);
-    const onInstructions = (msg: any) => {
+    setQuestInstructionsContent(null);
+    setQuestInstructionsPath(null);
+    setQuestInstructionsLoading(true);
+    const onQuestInstructions = (msg: any) => {
       if (msg.questId !== quest.id) return;
       if (cancelled) return;
       if (msg.ok) {
-        setInstructionsContent(msg.content || '');
-        setInstructionsPath(msg.path || null);
+        setQuestInstructionsContent(msg.content || '');
+        setQuestInstructionsPath(msg.path || null);
       } else {
-        setInstructionsContent('');
-        setInstructionsPath(null);
+        setQuestInstructionsContent('');
+        setQuestInstructionsPath(null);
       }
-      setInstructionsLoading(false);
+      setQuestInstructionsLoading(false);
     };
-    syncClient.on('quest_project_instructions', onInstructions);
-    syncClient.requestQuestProjectInstructions(quest.id);
+    syncClient.on('quest_instructions', onQuestInstructions);
+    syncClient.requestQuestInstructions(quest.id);
     return () => {
       cancelled = true;
-      syncClient.off?.('quest_project_instructions', onInstructions);
+      syncClient.off?.('quest_instructions', onQuestInstructions);
     };
   }, [quest.id]);
 
@@ -1316,11 +1316,11 @@ function QuestDetailBody({
         </View>
       )}
 
-      {/* v3.10.100: per-quest project instructions. Shown
+      {/* v3.10.101: per-quest instructions. Shown
           read-only on the mobile. The desktop's quest
           editor is the source of truth for edits; the
           mobile fetches the file content from the desktop
-          via request_quest_project_instructions when the detail
+          via request_quest_instructions when the detail
           modal opens. Tobe's v3.10.98 feedback:
           "I think we should add or make visible in
           the quests, the dedicated md files for each
@@ -1328,31 +1328,31 @@ function QuestDetailBody({
           behaviour for the companion." */}
       <View style={styles.modalSection}>
         <Text style={styles.modalSectionTitle}>
-          📋 Project instructions
+          📋 Quest instructions
         </Text>
-        {instructionsLoading ? (
+        {questInstructionsLoading ? (
           <Text style={styles.modalSectionBody}>
-            Loading project instructions…
+            Loading quest instructions…
           </Text>
-        ) : (instructionsContent && instructionsContent.length > 0) ? (
+        ) : (questInstructionsContent && questInstructionsContent.length > 0) ? (
           <>
-            {!!instructionsPath && (
-              <Text style={styles.modalInstructionsPath} selectable>
-                {instructionsPath}
+            {!!questInstructionsPath && (
+              <Text style={styles.modalQuestInstructionsPath} selectable>
+                {questInstructionsPath}
               </Text>
             )}
-            <View style={styles.modalInstructionsBox}>
-              <Text style={styles.modalInstructionsText}>
-                {instructionsContent}
+            <View style={styles.modalQuestInstructionsBox}>
+              <Text style={styles.modalQuestInstructionsText}>
+                {questInstructionsContent}
               </Text>
             </View>
-            <Text style={styles.modalInstructionsHint}>
+            <Text style={styles.modalQuestInstructionsHint}>
               Read-only on mobile. Edit on the desktop's Quests panel.
             </Text>
           </>
         ) : (
           <Text style={styles.modalSectionBody}>
-            No project instructions yet. Add one on the desktop's Quests panel (tap the quest's "📋 Instructions" button).
+            No quest instructions yet. Add one on the desktop's Quests panel (tap the quest's "📋 Instructions" button).
           </Text>
         )}
       </View>
@@ -1693,18 +1693,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-  // v3.10.100: per-quest project instructions display. The
+  // v3.10.101: per-quest instructions display. The
   // path is shown in a monospace font with a muted
   // color so it doesn't compete with the content.
   // The content is in a styled box with a monospace
   // font to mirror the desktop editor's textarea.
-  modalInstructionsPath: {
+  modalQuestInstructionsPath: {
     color: '#666',
     fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     marginBottom: 6,
   },
-  modalInstructionsBox: {
+  modalQuestInstructionsBox: {
     backgroundColor: '#0a0a0a',
     borderColor: '#2a2a3f',
     borderWidth: 1,
@@ -1712,13 +1712,13 @@ const styles = StyleSheet.create({
     padding: 10,
     maxHeight: 200,
   },
-  modalInstructionsText: {
+  modalQuestInstructionsText: {
     color: '#cfd2e0',
     fontSize: 12,
     lineHeight: 18,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  modalInstructionsHint: {
+  modalQuestInstructionsHint: {
     color: '#666',
     fontSize: 11,
     fontStyle: 'italic',
