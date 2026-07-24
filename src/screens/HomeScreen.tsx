@@ -596,6 +596,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // read the latest values without a stale-closure bug.
   const activeChatAgentIdRef = useRef<string | null>(null);
   const messagesByAgentRef = useRef<Record<string, ChatMessage[]>>({});
+  // v3.10.103: forward-declared ref to sendMessage so the
+  // recent-pills long-press handler (defined inline in the
+  // JSX) can call the latest sendMessage without re-rendering
+  // the JSX tree. The ref is set inside sendMessage's
+  // useCallback body on every render.
+  const sendMessageRef = useRef<(() => Promise<void>) | null>(null);
   // v3.1.16: same trick for the agents list so onTyping and
   // other handlers can read the latest names without a stale
   // closure over the `agents` state.
@@ -2741,6 +2747,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
+    // v3.10.103: see the sendMessageRef declaration above.
+    // The ref is updated on every render so the recent-
+    // pills long-press handler (defined inline in the JSX,
+    // outside the useCallback closure) can call the latest
+    // sendMessage without re-rendering the JSX tree.
+    sendMessageRef.current = sendMessage;
     // v3.10.3: kick the active companion awake on any chat
     // submit. The desktop's sendChatMessage() also auto-wakes
     // when the text arrives, but the explicit mobile-side
@@ -3854,6 +3866,95 @@ useEffect(() => {
                   </TouchableOpacity>
                 );
               })}
+            {/* v3.10.103: "Recent" pill row. Shows the
+                last 3 user messages for the active
+                companion above the input. Tap a pill to
+                paste the text into the input; long-press
+                to re-send directly. Tobe's v3.10.102
+                feedback: "lets also create a small log
+                of the conversation, say, from the last
+                3 user messages and up. Such that the
+                user can refer to that if the process gets
+                interupted and the user dont has to write
+                it again." This is the mobile-side of
+                that: a quick-reference row that
+                recovers the user's last 3 messages in
+                case of an interruption (LLM timeout,
+                app crash, network drop, etc.) without
+                scrolling the full chat history.
+
+                The row is only visible when:
+                - the active companion has at least 1
+                  user message in its history AND
+                - the input is empty (otherwise it
+                  competes with the text the user is
+                  typing).
+
+                We use the in-memory `messages` state
+                (a view of messagesByAgent[activeChatAgentId])
+                as the source so the row updates live as
+                the user sends new messages. The
+                chat-byagent AsyncStorage cache is the
+                backup if messages is empty (e.g. just
+                opened the screen, the broadcast hasn't
+                landed yet). */}
+            {activeTab === 'chat' && inputText.trim().length === 0 && (() => {
+              const recent = (messages || [])
+                .filter((m) => m.isUser)
+                .slice(-3)
+                .reverse();
+              if (recent.length === 0) return null;
+              return (
+                <View style={styles.recentPillsRow}>
+                  <Text style={styles.recentPillsLabel}>Recent:</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.recentPillsContent}
+                  >
+                    {recent.map((m) => {
+                      const preview = m.text.length > 38
+                        ? m.text.substring(0, 35) + '…'
+                        : m.text;
+                      const ago = formatTimeAgoShort(m.ts);
+                      return (
+                        <TouchableOpacity
+                          key={m.id}
+                          style={styles.recentPill}
+                          onPress={() => setInputText(m.text)}
+                          onLongPress={() => {
+                            // Long-press: re-send
+                            // directly. Useful for
+                            // "the LLM timed out, try
+                            // again" without having to
+                            // paste + tap send. We
+                            // set the input first (so
+                            // the user sees what got
+                            // sent), then call
+                            // sendMessage().
+                            setInputText(m.text);
+                            setTimeout(() => {
+                              // setInputText is
+                              // async — wait one tick
+                              // for it to land
+                              // before sendMessage
+                              // reads inputText.
+                              sendMessageRef.current?.();
+                            }, 50);
+                          }}
+                          delayLongPress={400}
+                        >
+                          <Text style={styles.recentPillText} numberOfLines={1}>
+                            {preview}
+                          </Text>
+                          <Text style={styles.recentPillAgo}>{ago}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              );
+            })()}
             <View style={[styles.inputContainer, {
               // v3.10.80: Android keyboard avoidance. See
               // the comment at the keyboardHeight state
@@ -4048,6 +4149,23 @@ useEffect(() => {
           text replies can match. */}
     </View>
   );
+}
+
+// v3.10.103: short time-ago for the recent-pills row.
+// Mirrors the formatTimeAgo in QuestsScreen.tsx but
+// shorter ("3m ago" instead of "3 minutes ago") so it
+// fits in the pill's small 9px secondary line. Caps
+// at "1d ago" for anything older (the pills are short-
+// term recovery, not history).
+function formatTimeAgoShort(ts: number): string {
+  const now = Date.now();
+  const diff = Math.max(0, now - ts);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return '1d ago';
 }
 
 const styles = StyleSheet.create({
@@ -4650,5 +4768,56 @@ const styles = StyleSheet.create({
     color: 'rgba(247,147,26,0.7)',
     fontSize: 12,
     fontWeight: '600',
+  },
+  // v3.10.103: recent-pills row above the input. Shows
+  // the user's last 3 messages as tappable chips for
+  // quick recovery after an interruption. The row is
+  // hidden when the input is non-empty (it would compete
+  // with the user's typing). Pills are gold-tinted to
+  // match the Recent: label.
+  recentPillsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 4,
+    gap: 6,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(247,147,26,0.15)',
+    backgroundColor: 'rgba(247,147,26,0.04)',
+  },
+  recentPillsLabel: {
+    color: '#f7931a',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    flexShrink: 0,
+  },
+  recentPillsContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingRight: 12,
+  },
+  recentPill: {
+    backgroundColor: 'rgba(247,147,26,0.12)',
+    borderColor: 'rgba(247,147,26,0.3)',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    maxWidth: 180,
+    flexShrink: 0,
+  },
+  recentPillText: {
+    color: '#fde68a',
+    fontSize: 11,
+    fontWeight: '500',
+    maxWidth: 160,
+  },
+  recentPillAgo: {
+    color: 'rgba(247,147,26,0.6)',
+    fontSize: 9,
+    marginTop: 1,
   },
 });
