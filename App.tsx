@@ -20,6 +20,11 @@ import OpenWakeWordTrainer from './src/components/OpenWakeWordTrainer';
 import WakeSetManagerScreen from './src/components/WakeSetManagerScreen';
 import ExitPhraseTrainer from './src/components/ExitPhraseTrainer';
 import CompanionSettingsScreen from './src/screens/CompanionSettingsScreen';
+// v3.10.92: phone-side companion Personalize screen. Mirrors
+// the desktop forge for the fields the mobile can edit (name,
+// scale, traits, model, chattiness). Reached via the
+// 'companion-edit' route from CompanionSettingsScreen.
+import CompanionEditScreen from './src/screens/CompanionEditScreen';
 import QuestsScreen from './src/screens/QuestsScreen';
 import syncClient from './src/services/SyncClient';
 import { saveGreetingAudio } from './src/services/GreetingAudioCache';
@@ -94,7 +99,8 @@ export default function App(): React.JSX.Element {
   // "Back" button would do what.
   const [screen, setScreen] = useState<
     'home' | 'settings' | 'voice-mode' | 'companion' | 'quests' |
-    'wake-trainer' | 'wake-manager' | 'exit-trainer'
+    'wake-trainer' | 'wake-manager' | 'exit-trainer' |
+    'companion-edit'
   >('home');
   // v3.10.0: contexts for the new trainer / manager
   // routes. Set when CompanionSettingsScreen calls a
@@ -108,6 +114,13 @@ export default function App(): React.JSX.Element {
   const [exitTrainerCtx, setExitTrainerCtx] = useState<
     { companionId: string; companionName: string; presetPhrase?: string } | null
   >(null);
+  // v3.10.92: context for the companion-edit route. Set when
+  // CompanionSettingsScreen calls onOpenCompanionEdit. The
+  // Personalize screen renders this as a full-screen route,
+  // mirroring the desktop's Companion Forge mobile-equivalent.
+  const [companionEditCtx, setCompanionEditCtx] = useState<
+    { companionId: string; companionName: string; emoji?: string | null } | null
+  >(null);
   // v3.4.4: id of the companion whose settings are open
   // when screen === 'companion'. Set by SettingsScreen via
   // onOpenCompanion(id).
@@ -118,7 +131,7 @@ export default function App(): React.JSX.Element {
   // see 'home' (the initial state) and fire even when the user is
   // already in wake-mode or settings, which is what caused the
   // ping-pong in v3.1.82.
-  const screenRef = useRef<'home' | 'settings' | 'voice-mode'>('home');
+  const screenRef = useRef<typeof screen>('home');
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
   // v3.10.1: one-time AsyncStorage key migration.
@@ -522,6 +535,18 @@ export default function App(): React.JSX.Element {
                 setExitTrainerCtx(ctx);
                 setScreen('exit-trainer');
               }}
+              // v3.10.92: open the Personalize screen for
+              // the companion. The Personalize screen is a
+              // full-screen route (mirrors the desktop
+              // Companion Forge on mobile). On save, it
+              // sends sprite_config_sync to the desktop
+              // which applies the patch + re-broadcasts
+              // agents_list. On back, returns to the
+              // companion settings page.
+              onOpenCompanionEdit={(ctx) => {
+                setCompanionEditCtx(ctx);
+                setScreen('companion-edit');
+              }}
             />
           )}
           {screen === 'wake-trainer' && wakeTrainerCtx && (
@@ -560,6 +585,17 @@ export default function App(): React.JSX.Element {
               }}
               onCancel={() => {
                 setExitTrainerCtx(null);
+                setScreen('companion');
+              }}
+            />
+          )}
+          {screen === 'companion-edit' && companionEditCtx && (
+            <CompanionEditScreen
+              companionId={companionEditCtx.companionId}
+              companionName={companionEditCtx.companionName}
+              initialEmoji={companionEditCtx.emoji}
+              onBack={() => {
+                setCompanionEditCtx(null);
                 setScreen('companion');
               }}
             />

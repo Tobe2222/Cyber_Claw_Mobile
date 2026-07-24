@@ -90,12 +90,17 @@ export default function CompanionSettingsScreen({
   onPushWakeTrainer,
   onPushWakeManager,
   onPushExitTrainer,
+  // v3.10.92: open the Personalize screen for the
+  // companion. Lifted to App.tsx as a full-screen route
+  // (mirrors the desktop's Companion Forge on mobile).
+  onOpenCompanionEdit,
 }: {
   companionId: string;
   onBack: () => void;
   onPushWakeTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
   onPushWakeManager: (ctx: { companionId: string; companionName: string }) => void;
   onPushExitTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
+  onOpenCompanionEdit?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
 }) {
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
@@ -940,6 +945,37 @@ export default function CompanionSettingsScreen({
                 <Text style={styles.phaseCardTitle}>Voice settings</Text>
                 <Text style={styles.phaseCardSub}>
                   Engine (Local / Premium API) and voice for {companion.name}
+                </Text>
+              </View>
+              <Text style={styles.phaseCardArrow}>›</Text>
+            </TouchableOpacity>
+
+            {/* v3.10.92: Personalize companion. Opens the
+                CompanionEditScreen as a full-screen route
+                (handled by App.tsx). Mirrors the desktop
+                Companion Forge for the fields the mobile can
+                edit: name, scale, traits, primary/secondary
+                model, and chattiness. The sprite picker
+                itself isn't on the mobile (the sprite
+                catalog is bundled with the desktop) — use
+                the desktop's forge for sprite changes. The
+                chattiness slider is the headline new feature
+                here — it lets the user dial down how often
+                the companion fires idle chatter without
+                touching the desktop. */}
+            <TouchableOpacity
+              style={[styles.phaseCard, { borderColor: '#f7931a' }]}
+              onPress={() => onOpenCompanionEdit?.({
+                companionId: companion.id,
+                companionName: companion.name,
+                emoji: companion.emoji || companion.icon || null,
+              })}
+            >
+              <Text style={styles.phaseCardEmoji}>✏️</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.phaseCardTitle}>Edit / Personalize</Text>
+                <Text style={styles.phaseCardSub}>
+                  Name, size, traits, model, and chattiness for {companion.name}
                 </Text>
               </View>
               <Text style={styles.phaseCardArrow}>›</Text>

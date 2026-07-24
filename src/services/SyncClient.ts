@@ -434,6 +434,25 @@ class SyncClient {
     this.send({ type: 'set_companion_silence', agentId, silenceMs });
   }
 
+  // v3.10.92: Personalize screen — push a partial sprite
+  // config patch to the desktop. The desktop merges it into
+  // sprites.json, regenerates the avatar if the sprite id
+  // changed, and re-broadcasts the agents_list so every
+  // connected client (including the phone that initiated
+  // the edit) sees the change. The desktop replies with
+  // `sprite_config_sync_ok` on success or
+  // `sprite_config_sync_failed` on failure; the latter
+  // surfaces a toast via the emit pipeline below.
+  //
+  // `patch` is a partial sprite config: only the fields the
+  // user changed should be sent. Whitelist of accepted
+  // fields lives on the desktop side (sync-server.js); the
+  // mobile doesn't filter here so a future schema addition
+  // doesn't require a mobile update.
+  setSpriteConfig(agentId: string, patch: Record<string, any>) {
+    this.send({ type: 'sprite_config_sync', agentId, config: patch });
+  }
+
   // v3.2.5: kick off a custom openWakeWord training job on the
   // desktop. The desktop spawns the Python training script, streams
   // progress back via 'wake_training_progress' messages, and finally
@@ -733,6 +752,26 @@ class SyncClient {
         // reinstalled and is recovering state).
         console.log('[SyncClient] Received companion_settings_sync:', Object.keys(msg.settings || {}).length, 'companions');
         this.emit('companion_settings_sync', msg);
+        break;
+
+      case 'sprite_config_sync_ok':
+        // v3.10.92: desktop confirmed the Personalize save.
+        // The UI can stop its spinner; the real update
+        // arrives via the next agents_list broadcast
+        // (triggered by the desktop's
+        // broadcastAgentsListToMobile call inside
+        // mobile-sprite-config-saved).
+        console.log('[SyncClient] sprite_config_sync_ok for', msg.agentId);
+        this.emit('sprite_config_sync_ok', msg);
+        break;
+
+      case 'sprite_config_sync_failed':
+        // v3.10.92: desktop rejected the Personalize save.
+        // Surface to the UI so it can roll back its
+        // optimistic update and show an error toast with
+        // the reason + error from the desktop.
+        console.warn('[SyncClient] sprite_config_sync_failed:', msg);
+        this.emit('sprite_config_sync_failed', msg);
         break;
 
       default:
