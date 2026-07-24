@@ -38,7 +38,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, Platform,
+  StyleSheet, Alert, Platform, Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -112,6 +112,14 @@ export default function CompanionEditScreen({
   // black_grouse). Bundle icons with the catalog so the
   // picker renders without a separate icon asset fetch.
   const [pixelCompanionId, setPixelCompanionId] = useState<string>('boar');
+  // v3.10.95: avatar is the actual pixel-art sprite as a
+  // data URL (the first frame of the idle animation). The
+  // desktop's agents_list broadcast (v3.2.27) includes
+  // this for every companion. The preview frame renders
+  // this image at the size slider's scale, so the user
+  // sees the same sprite the desktop's forge + arena
+  // show — not a generic emoji.
+  const [avatar, setAvatar] = useState<string | null>(null);
   const [traits, setTraits] = useState<Set<string>>(new Set());
   // v3.10.92: chattiness is the headline new feature. Default
   // 3 if the companion has no value yet (legacy companion).
@@ -149,30 +157,59 @@ export default function CompanionEditScreen({
           // broadcast as `sprite`. Hydrate the picker so the
           // currently-selected sprite is visually obvious.
           if (typeof a.sprite === 'string' && a.sprite) setPixelCompanionId(a.sprite);
+          // v3.10.95: avatar is the actual pixel-art sprite
+          // data URL (not the catalog emoji). Rendered in
+          // the preview frame at the size slider's scale.
+          if (typeof a.avatar === 'string' && a.avatar) setAvatar(a.avatar);
         }
-        // v3.10.92: the agents_list payload doesn't include
-        // traits/primaryModel/secondaryModel (only the chattiness
-        // we just added). For those, we have to read from the
-        // desktop's sprite config via a follow-up request —
-        // the desktop doesn't expose a sprite-config getter
-        // over WS yet, so we fall back to the local custom
-        // persist (saved on every Save). If we never saved,
-        // default to baseline.
-        const localRaw = await AsyncStorage.getItem(`cyberclaw-companion-edit-${companionId}`);
-        if (cancelled) return;
-        if (localRaw) {
-          const local = JSON.parse(localRaw);
-          if (Array.isArray(local.traits)) setTraits(new Set(local.traits));
-          if (typeof local.scale === 'number') setScale(local.scale);
-          if (typeof local.chattiness === 'number') setChattiness(local.chattiness);
-          if (typeof local.customName === 'string' && local.customName) setName(local.customName);
-          // v3.10.93: pixelCompanionId is the sprite id. The
-          // local cache is the only source of truth on the
-          // mobile — the sprite isn't synced via agents_list
-          // (only the icon is). Fall back to the agents_list
-          // value (already set above) if the local cache
-          // doesn't have it.
-          if (typeof local.pixelCompanionId === 'string' && local.pixelCompanionId) setPixelCompanionId(local.pixelCompanionId);
+        // v3.10.95: the desktop's agents_list broadcast (v3.2.27)
+        // now carries the full spriteConfig object including
+        // traits. The mobile's Personalize screen was rendering
+        // empty trait checkboxes (no current selection visible)
+        // because the agents_list broadcast didn't include
+        // traits. Tobe's v3.10.94 feedback: "i still dont get
+        // the current settings. If you see the behaviours, none
+        // of them are selected, even tho they are on the
+        // desktop. The settings should be consistent between
+        // desktop and phone."
+        //
+        // Hydration order (most-recent-wins):
+        //   1. agents_list broadcast (the desktop's source of
+        //      truth, refreshed every ~60s and on every
+        //      sprite_config_sync)
+        //   2. local cache (cyberclaw-companion-edit-{id}) —
+        //      offline fallback for the case where the
+        //      desktop hasn't broadcast yet
+        //   3. component defaults
+        const spriteConfig = a?.spriteConfig;
+        if (spriteConfig) {
+          if (typeof spriteConfig.scale === 'number') setScale(Math.max(1, Math.min(8, spriteConfig.scale)));
+          if (typeof spriteConfig.chattiness === 'number') {
+            setChattiness(Math.max(1, Math.min(5, Math.round(spriteConfig.chattiness))));
+          }
+          if (Array.isArray(spriteConfig.traits)) setTraits(new Set(spriteConfig.traits));
+          if (typeof spriteConfig.pixelCompanionId === 'string' && spriteConfig.pixelCompanionId) {
+            setPixelCompanionId(spriteConfig.pixelCompanionId);
+          }
+          if (typeof spriteConfig.customName === 'string' && spriteConfig.customName) {
+            setName(spriteConfig.customName);
+          }
+        } else {
+          // v3.10.92: fallback for older broadcasts that
+          // don't have spriteConfig. The local cache is
+          // the only source of truth for traits on the
+          // mobile in that case. The desktop will send the
+          // full spriteConfig on the next ~60s sync.
+          const localRaw = await AsyncStorage.getItem(`cyberclaw-companion-edit-${companionId}`);
+          if (cancelled) return;
+          if (localRaw) {
+            const local = JSON.parse(localRaw);
+            if (Array.isArray(local.traits)) setTraits(new Set(local.traits));
+            if (typeof local.scale === 'number') setScale(local.scale);
+            if (typeof local.chattiness === 'number') setChattiness(local.chattiness);
+            if (typeof local.customName === 'string' && local.customName) setName(local.customName);
+            if (typeof local.pixelCompanionId === 'string' && local.pixelCompanionId) setPixelCompanionId(local.pixelCompanionId);
+          }
         }
         setHydrated(true);
         hydratedRef.current = true;
@@ -205,9 +242,38 @@ export default function CompanionEditScreen({
     };
     syncClient.on('sprite_config_sync_ok', onOk);
     syncClient.on('sprite_config_sync_failed', onFail);
+    // v3.10.95: also pick up live agents_list broadcasts
+    // while the screen is open. The desktop re-broadcasts
+    // agents_list after every sprite_config_sync (within
+    // ~100ms of the save), so the personalise screen sees
+    // the new sprite config / avatar / traits without
+    // waiting for a remount. The agents_list event is
+    // emitted by SyncClient with the full payload.
+    const onAgentsList = (msg: any) => {
+      if (!Array.isArray(msg?.agents)) return;
+      const a = msg.agents.find((x: any) => x.id === companionId);
+      if (!a) return;
+      if (typeof a.avatar === 'string' && a.avatar) setAvatar(a.avatar);
+      const spriteConfig = a.spriteConfig;
+      if (spriteConfig) {
+        if (typeof spriteConfig.scale === 'number') setScale(Math.max(1, Math.min(8, spriteConfig.scale)));
+        if (typeof spriteConfig.chattiness === 'number') {
+          setChattiness(Math.max(1, Math.min(5, Math.round(spriteConfig.chattiness))));
+        }
+        if (Array.isArray(spriteConfig.traits)) setTraits(new Set(spriteConfig.traits));
+        if (typeof spriteConfig.pixelCompanionId === 'string' && spriteConfig.pixelCompanionId) {
+          setPixelCompanionId(spriteConfig.pixelCompanionId);
+        }
+        if (typeof spriteConfig.customName === 'string' && spriteConfig.customName) {
+          setName(spriteConfig.customName);
+        }
+      }
+    };
+    syncClient.on('agents_list', onAgentsList);
     return () => {
       syncClient.off?.('sprite_config_sync_ok', onOk);
       syncClient.off?.('sprite_config_sync_failed', onFail);
+      syncClient.off?.('agents_list', onAgentsList);
     };
   }, [companionId]);
 
@@ -365,15 +431,40 @@ export default function CompanionEditScreen({
             frame of the sprite selected like the desktop
             has. A preview frame." */}
         <Section title="🖼️ Preview">
+          {/* v3.10.95: render the actual pixel-art avatar
+              (data URL from the desktop's agents_list
+              broadcast), not the catalog emoji. The avatar
+              is the first frame of the idle animation, the
+              same PNG that shows in the desktop's forge
+              preview + arena + chat tab icon. Tobe's
+              v3.10.94 feedback: "if the emoji is the preview
+              we can remove it, i was thinking of the sprite
+              the way it looks in the arena." The image is
+              scaled to scale × 16px (16–128px range,
+              matching the desktop's PixelSprite frameSize
+              × scale). Falls back to the catalog emoji if
+              no avatar is loaded yet (legacy companion or
+              first mount before broadcast). */}
           <View style={styles.previewFrame}>
-            <Text
-              style={[
-                styles.previewEmoji,
-                { fontSize: Math.max(16, Math.min(128, scale * 16)) },
-              ]}
-            >
-              {(spriteCatalog as any).companions.find((c: any) => c.id === pixelCompanionId)?.icon || '🐾'}
-            </Text>
+            {avatar ? (
+              <Image
+                source={{ uri: avatar }}
+                style={{
+                  width: Math.max(16, Math.min(128, scale * 16)),
+                  height: Math.max(16, Math.min(128, scale * 16)),
+                  resizeMode: 'contain',
+                }}
+              />
+            ) : (
+              <Text
+                style={[
+                  styles.previewEmoji,
+                  { fontSize: Math.max(16, Math.min(128, scale * 16)) },
+                ]}
+              >
+                {(spriteCatalog as any).companions.find((c: any) => c.id === pixelCompanionId)?.icon || '🐾'}
+              </Text>
+            )}
           </View>
           <Text style={styles.previewLabel}>
             {(spriteCatalog as any).companions.find((c: any) => c.id === pixelCompanionId)?.name || pixelCompanionId}
