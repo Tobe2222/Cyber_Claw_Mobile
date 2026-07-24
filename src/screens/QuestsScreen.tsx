@@ -1231,36 +1231,36 @@ function QuestDetailBody({
   // most recent work is at the top of the timeline.
   const changes = Array.isArray(quest.latestChanges) ? quest.latestChanges.slice().reverse() : [];
 
-  // v3.10.99: per-quest behavior file. Read-only on the
+  // v3.10.100: per-quest project instructions. Read-only on the
   // mobile. We request the file content from the desktop
   // when the detail modal opens and cache it locally.
   // The desktop's editor is the source of truth; the
   // mobile just shows what the file currently says.
-  const [behaviorContent, setBehaviorContent] = useState<string | null>(null);
-  const [behaviorPath, setBehaviorPath] = useState<string | null>(null);
-  const [behaviorLoading, setBehaviorLoading] = useState<boolean>(true);
+  const [instructionsContent, setInstructionsContent] = useState<string | null>(null);
+  const [instructionsPath, setInstructionsPath] = useState<string | null>(null);
+  const [instructionsLoading, setInstructionsLoading] = useState<boolean>(true);
   useEffect(() => {
     let cancelled = false;
-    setBehaviorContent(null);
-    setBehaviorPath(null);
-    setBehaviorLoading(true);
-    const onBehavior = (msg: any) => {
+    setInstructionsContent(null);
+    setInstructionsPath(null);
+    setInstructionsLoading(true);
+    const onInstructions = (msg: any) => {
       if (msg.questId !== quest.id) return;
       if (cancelled) return;
       if (msg.ok) {
-        setBehaviorContent(msg.content || '');
-        setBehaviorPath(msg.path || null);
+        setInstructionsContent(msg.content || '');
+        setInstructionsPath(msg.path || null);
       } else {
-        setBehaviorContent('');
-        setBehaviorPath(null);
+        setInstructionsContent('');
+        setInstructionsPath(null);
       }
-      setBehaviorLoading(false);
+      setInstructionsLoading(false);
     };
-    syncClient.on('quest_behavior', onBehavior);
-    syncClient.requestQuestBehavior(quest.id);
+    syncClient.on('quest_project_instructions', onInstructions);
+    syncClient.requestQuestProjectInstructions(quest.id);
     return () => {
       cancelled = true;
-      syncClient.off?.('quest_behavior', onBehavior);
+      syncClient.off?.('quest_project_instructions', onInstructions);
     };
   }, [quest.id]);
 
@@ -1316,11 +1316,11 @@ function QuestDetailBody({
         </View>
       )}
 
-      {/* v3.10.99: per-quest behavior file. Shown
+      {/* v3.10.100: per-quest project instructions. Shown
           read-only on the mobile. The desktop's quest
           editor is the source of truth for edits; the
           mobile fetches the file content from the desktop
-          via request_quest_behavior when the detail
+          via request_quest_project_instructions when the detail
           modal opens. Tobe's v3.10.98 feedback:
           "I think we should add or make visible in
           the quests, the dedicated md files for each
@@ -1328,31 +1328,31 @@ function QuestDetailBody({
           behaviour for the companion." */}
       <View style={styles.modalSection}>
         <Text style={styles.modalSectionTitle}>
-          📋 Behavior file
+          📋 Project instructions
         </Text>
-        {behaviorLoading ? (
+        {instructionsLoading ? (
           <Text style={styles.modalSectionBody}>
-            Loading behavior file…
+            Loading project instructions…
           </Text>
-        ) : (behaviorContent && behaviorContent.length > 0) ? (
+        ) : (instructionsContent && instructionsContent.length > 0) ? (
           <>
-            {!!behaviorPath && (
-              <Text style={styles.modalBehaviorPath} selectable>
-                {behaviorPath}
+            {!!instructionsPath && (
+              <Text style={styles.modalInstructionsPath} selectable>
+                {instructionsPath}
               </Text>
             )}
-            <View style={styles.modalBehaviorBox}>
-              <Text style={styles.modalBehaviorText}>
-                {behaviorContent}
+            <View style={styles.modalInstructionsBox}>
+              <Text style={styles.modalInstructionsText}>
+                {instructionsContent}
               </Text>
             </View>
-            <Text style={styles.modalBehaviorHint}>
+            <Text style={styles.modalInstructionsHint}>
               Read-only on mobile. Edit on the desktop's Quests panel.
             </Text>
           </>
         ) : (
           <Text style={styles.modalSectionBody}>
-            No behavior file yet. Add one on the desktop's Quests panel (tap the quest's "📋 Behavior" button).
+            No project instructions yet. Add one on the desktop's Quests panel (tap the quest's "📋 Instructions" button).
           </Text>
         )}
       </View>
@@ -1693,18 +1693,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-  // v3.10.99: per-quest behavior file display. The
+  // v3.10.100: per-quest project instructions display. The
   // path is shown in a monospace font with a muted
   // color so it doesn't compete with the content.
   // The content is in a styled box with a monospace
   // font to mirror the desktop editor's textarea.
-  modalBehaviorPath: {
+  modalInstructionsPath: {
     color: '#666',
     fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     marginBottom: 6,
   },
-  modalBehaviorBox: {
+  modalInstructionsBox: {
     backgroundColor: '#0a0a0a',
     borderColor: '#2a2a3f',
     borderWidth: 1,
@@ -1712,13 +1712,13 @@ const styles = StyleSheet.create({
     padding: 10,
     maxHeight: 200,
   },
-  modalBehaviorText: {
+  modalInstructionsText: {
     color: '#cfd2e0',
     fontSize: 12,
     lineHeight: 18,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  modalBehaviorHint: {
+  modalInstructionsHint: {
     color: '#666',
     fontSize: 11,
     fontStyle: 'italic',

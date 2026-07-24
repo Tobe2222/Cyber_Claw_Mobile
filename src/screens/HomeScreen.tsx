@@ -4354,7 +4354,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 6,
-    // v3.10.99: removed `overflow: 'hidden'` so the
+    // v3.10.100: removed `overflow: 'hidden'` so the
     // floating ×-remove button (positioned at top: 2,
     // right: 2 with negative offsets in earlier versions)
     // isn't clipped. The rounded corners are now drawn
@@ -4365,7 +4365,7 @@ const styles = StyleSheet.create({
     // was at top: -4, right: -4, outside the 60×60
     // container that had overflow:hidden.)
   },
-  // v3.10.99: inner image gets its own borderRadius
+  // v3.10.100: inner image gets its own borderRadius
   // (slightly smaller than the container's 6 so the
   // rounded corners still show). The image is also
   // padded on the top-right so the × button (now
@@ -4378,7 +4378,7 @@ const styles = StyleSheet.create({
   attachmentPreviewThumb: {
     width: '100%',
     height: '100%',
-    // v3.10.99: match the container's borderRadius so
+    // v3.10.100: match the container's borderRadius so
     // the image is visually clipped to the same rounded
     // shape. The container no longer has overflow:hidden
     // (so the X button can sit outside the image bounds),
@@ -4403,7 +4403,7 @@ const styles = StyleSheet.create({
   },
   attachmentPreviewRemove: {
     position: 'absolute',
-    // v3.10.99: was top: -4, right: -4 (outside the 60×60
+    // v3.10.100: was top: -4, right: -4 (outside the 60×60
     // container that had overflow:hidden) which clipped the
     // button. Now positioned at top: 2, right: 2 inside the
     // container. The button is still 18×18 with a 9px
