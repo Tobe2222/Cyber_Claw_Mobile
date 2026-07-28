@@ -408,6 +408,32 @@ class SyncClient {
     this.send({ type: 'save_quest_instructions', questId, content });
   }
 
+  // v3.10.103: ask the desktop for a companion's soul.md.
+  // Read-only — the desktop's Companion Forge is the editor.
+  // Desktop replies with { type: 'companion_soul', agentId,
+  // ok, content, presets, error }. Mobile emits this as a
+  // 'companion_soul' event so the SoulScreen can render.
+  requestCompanionSoul(agentId: string) {
+    this.send({ type: 'read_companion_soul', agentId });
+  }
+
+  // v3.10.103: ask the desktop for a companion's memory.md.
+  // Read-only — the desktop's Companion Forge is the editor.
+  // Desktop replies with { type: 'companion_memory', agentId,
+  // ok, content, error }. Mobile emits this as a
+  // 'companion_memory' event.
+  requestCompanionMemory(agentId: string) {
+    this.send({ type: 'read_companion_memory', agentId });
+  }
+
+  // v3.10.103: ask the desktop to clear a companion's
+  // memory.md. Mirrors the desktop's companion:clear-memory
+  // IPC. The mobile waits for the ack before refreshing
+  // its viewer.
+  clearCompanionMemory(agentId: string) {
+    this.send({ type: 'clear_companion_memory', agentId });
+  }
+
   sendCompanionAction(action: any) {
     this.send({ type: 'companion_interaction', action });
   }
@@ -776,6 +802,34 @@ class SyncClient {
         // Shape: { questId, ok, path, bytes, error }
         console.log('[SyncClient] Received quest_instructions_saved for', msg.questId, 'ok=' + msg.ok);
         this.emit('quest_instructions_saved', msg);
+        break;
+
+      case 'companion_soul':
+        // v3.10.103: the desktop responded to a
+        // requestCompanionSoul with the soul.md content
+        // + preset table. Emit so the SoulScreen can
+        // render. Shape:
+        //   { agentId, ok, content, presets, error }
+        console.log('[SyncClient] Received companion_soul for', msg.agentId, 'ok=' + msg.ok);
+        this.emit('companion_soul', msg);
+        break;
+
+      case 'companion_memory':
+        // v3.10.103: the desktop responded to a
+        // requestCompanionMemory with the memory.md
+        // content. Emit so the Memory viewer can render.
+        // Shape: { agentId, ok, content, error }
+        console.log('[SyncClient] Received companion_memory for', msg.agentId, 'ok=' + msg.ok);
+        this.emit('companion_memory', msg);
+        break;
+
+      case 'companion_memory_cleared':
+        // v3.10.103: the desktop acked a clear-memory
+        // request. Emit so the Memory viewer can show
+        // the empty state + a "Cleared" toast. Shape:
+        //   { agentId, ok, content, error }
+        console.log('[SyncClient] Received companion_memory_cleared for', msg.agentId, 'ok=' + msg.ok);
+        this.emit('companion_memory_cleared', msg);
         break;
 
       case 'pong':

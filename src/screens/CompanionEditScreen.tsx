@@ -120,6 +120,17 @@ export default function CompanionEditScreen({
   const [hydrated, setHydrated] = useState<boolean>(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const hydratedRef = useRef<boolean>(false);
+  // v3.10.103: soul + memory are read-only on mobile.
+  // The desktop's Companion Forge is the editor. We just
+  // display the desktop's read response so the user can
+  // see what their companion's character + remembered
+  // facts look like. Memory has a Clear button that calls
+  // the desktop's companion:clear-memory IPC.
+  const [soulContent, setSoulContent] = useState<string>('');
+  const [soulLoading, setSoulLoading] = useState<boolean>(true);
+  const [memoryContent, setMemoryContent] = useState<string>('');
+  const [memoryLoading, setMemoryLoading] = useState<boolean>(true);
+  const [clearingMemory, setClearingMemory] = useState<boolean>(false);
   // v3.10.93: safe-area insets so the header doesn't sit
   // under the status bar (Tobe's v3.10.92 feedback). Used
   // for paddingTop on the page container + the toast's
@@ -268,6 +279,74 @@ export default function CompanionEditScreen({
       syncClient.off?.('agents_list', onAgentsList);
     };
   }, [companionId]);
+
+  // v3.10.103: soul + memory are read-only on mobile.
+  // On mount we ask the desktop for both files; the
+  // responses arrive asynchronously via the
+  // 'companion_soul' / 'companion_memory' events. The
+  // Clear-memory button sends 'clear_companion_memory'
+  // and waits for 'companion_memory_cleared' to refresh
+  // the viewer. The desktop is the source of truth for
+  // both files — there is no on-device cache because
+  // the soul is the personality definition and the
+  // memory is auto-written by the companion's chat
+  // pipeline (which runs on the desktop).
+  useEffect(() => {
+    setSoulLoading(true);
+    setMemoryLoading(true);
+    const onSoul = (msg: any) => {
+      if (msg?.agentId !== companionId) return;
+      if (msg.ok) setSoulContent(msg.content || '');
+      else setSoulContent(`(error: ${msg.error || 'unknown'})`);
+      setSoulLoading(false);
+    };
+    const onMemory = (msg: any) => {
+      if (msg?.agentId !== companionId) return;
+      if (msg.ok) setMemoryContent(msg.content || '');
+      else setMemoryContent(`(error: ${msg.error || 'unknown'})`);
+      setMemoryLoading(false);
+    };
+    const onMemoryCleared = (msg: any) => {
+      if (msg?.agentId !== companionId) return;
+      setClearingMemory(false);
+      if (msg.ok) {
+        setMemoryContent(msg.content || '');
+        setBanner({ kind: 'ok', text: 'Memory cleared' });
+      } else {
+        setBanner({ kind: 'err', text: `Couldn't clear memory: ${msg.error || 'unknown'}` });
+      }
+    };
+    syncClient.on('companion_soul', onSoul);
+    syncClient.on('companion_memory', onMemory);
+    syncClient.on('companion_memory_cleared', onMemoryCleared);
+    syncClient.requestCompanionSoul(companionId);
+    syncClient.requestCompanionMemory(companionId);
+    return () => {
+      syncClient.off?.('companion_soul', onSoul);
+      syncClient.off?.('companion_memory', onMemory);
+      syncClient.off?.('companion_memory_cleared', onMemoryCleared);
+    };
+  }, [companionId]);
+
+  const onClearMemory = useCallback(() => {
+    if (clearingMemory) return;
+    if (!memoryContent || !memoryContent.trim()) return;
+    Alert.alert(
+      'Clear memory?',
+      `This will delete ${companionName}'s memory log. The companion will start with a clean slate on the next chat.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => {
+            setClearingMemory(true);
+            syncClient.clearCompanionMemory(companionId);
+          },
+        },
+      ],
+    );
+  }, [clearingMemory, memoryContent, companionName, companionId]);
 
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   useEffect(() => {
@@ -499,6 +578,64 @@ export default function CompanionEditScreen({
               );
             })}
           </View>
+        </Section>
+
+        {/* v3.10.103: Soul — read-only viewer of the companion's
+            character definition. The desktop's Companion Forge
+            is the editor (it has presets + textarea + Apply
+            preset). Mobile mirrors the file so the user can
+            see what their companion is "made of". Editing
+            requires opening the desktop forge. */}
+        <Section title="📜 Soul (read-only)">
+          <Text style={styles.sectionHint}>
+            Character definition for {companionName}. Edit on the desktop Companion Forge.
+          </Text>
+          <View style={styles.soulViewer}>
+            {soulLoading ? (
+              <Text style={styles.soulLoading}>Loading from desktop…</Text>
+            ) : (
+              <Text style={styles.soulText} selectable>
+                {soulContent && soulContent.trim()
+                  ? soulContent
+                  : '(empty — desktop has not generated a soul yet. Set traits in the desktop forge to generate one.)'}
+              </Text>
+            )}
+          </View>
+        </Section>
+
+        {/* v3.10.103: Memory — read-only log of what the
+            companion remembers (auto-written by the desktop's
+            remember_fact tool). Clear button hits the desktop's
+            companion:clear-memory IPC. The viewer mirrors the
+            file content; the desktop regenerates the content
+            from scratch on the next chat turn. */}
+        <Section title="🧠 Memory (read-only)">
+          <Text style={styles.sectionHint}>
+            Auto-written by {companionName} on the desktop. Clear to start fresh.
+          </Text>
+          <View style={styles.soulViewer}>
+            {memoryLoading ? (
+              <Text style={styles.soulLoading}>Loading from desktop…</Text>
+            ) : (
+              <Text style={styles.soulText} selectable>
+                {memoryContent && memoryContent.trim()
+                  ? memoryContent
+                  : '(empty — companion has not remembered anything yet)'}
+              </Text>
+            )}
+          </View>
+          <TouchableOpacity
+            style={[
+              styles.clearBtn,
+              (clearingMemory || !memoryContent || !memoryContent.trim()) && styles.clearBtnDisabled,
+            ]}
+            onPress={onClearMemory}
+            disabled={clearingMemory || !memoryContent || !memoryContent.trim()}
+          >
+            <Text style={styles.clearBtnText}>
+              {clearingMemory ? '🗑 Clearing…' : '🗑 Clear memory'}
+            </Text>
+          </TouchableOpacity>
         </Section>
 
         {/* v3.10.94: LLM Models section removed. Tobe's
@@ -778,5 +915,53 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '600',
     fontSize: 13,
+  },
+  // v3.10.103: soul + memory viewer surfaces. Read-only
+  // box with a thin gold border + monospace-feeling
+  // mono text to make it look like a "definition" panel.
+  // Match the desktop forge's textarea styling (#0a0a1a
+  // background, #3a3a55 border) so the mobile doesn't
+  // feel like a different app.
+  soulViewer: {
+    backgroundColor: '#0a0a1a',
+    borderColor: '#3a3a55',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minHeight: 60,
+  },
+  soulText: {
+    color: '#d0d0d0',
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  soulLoading: {
+    color: '#888',
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  // v3.10.103: clear-memory button — muted grey
+  // (not primary) so the user doesn't mistake it for
+  // the Save button. The companion is the writer; the
+  // Clear button is the escape hatch.
+  clearBtn: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+  },
+  clearBtnDisabled: {
+    opacity: 0.4,
+  },
+  clearBtnText: {
+    color: '#ef4444',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
