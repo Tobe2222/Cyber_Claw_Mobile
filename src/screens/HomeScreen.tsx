@@ -438,8 +438,25 @@ function appendAgentMessage(
     // that any matching text is a re-send by the user,
     // not an echo.
     const dupWindowMsCrossEcho = 5 * 60 * 1000;  // 5 min
+    // v3.10.110: limit cross-echo dedupe to SAME isUser
+    // type. Previously Stage 3 matched any message with
+    // the same normalized text within 5 minutes, which
+    // could silently drop an agent reply if its text
+    // happened to normalize-equal a recent user message
+    // (e.g. user said "Yo" at 17:48 and the agent replied
+    // with "Yo, I can do that" at 17:50 — the agent reply
+    // got dropped because it matched the user's "Yo" by
+    // prefix). Cross-echo dedupe should only catch
+    // user↔user echo pairs and agent↔agent echo pairs,
+    // not accidentally silence the OTHER side of the
+    // conversation. Tobe's 2026-07-29 18:49 report:
+    // "Yoyo. The Captcha and description looks good now."
+    // got a desktop-side agent reply ("raid a captcha
+    // farm...") but the bubble never appeared in the
+    // mobile chat history — most likely cause.
     if (list.some(m =>
       matchingText(m) &&
+      m.isUser === msg.isUser &&
       Math.abs(m.ts - msg.ts) < dupWindowMsCrossEcho
     )) {
       return prev;
@@ -2829,6 +2846,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
+    // v3.10.110: log every send attempt so we can see
+    // when the user presses Send on an empty input.
+    // Before this, an empty-tap-Send silently returned
+    // via the `if (!text && attachments.length === 0)`
+    // check below, with no log, no toast, no feedback.
+    // Tobe's 2026-07-29 18:30 report: "I wrote in the
+    // chat but no thinking indication and no response"
+    // turned out to be the empty-input silent-return
+    // case. Logging both entry AND skip paths here
+    // gives us a paper trail in the Log tab without
+    // changing visible UI.
+    addLogEntry('🟢 send: pressed', 'info');
     // v3.10.103: see the sendMessageRef declaration above.
     // The ref is updated on every render so the recent-
     // pills long-press handler (defined inline in the JSX,
@@ -2864,7 +2893,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       return;
     }
     const text = inputText.trim();
-    if (!text && attachments.length === 0) return;
+    if (!text && attachments.length === 0) {
+      // v3.10.110: silent empty-tap-send is confusing.
+      // Log the skip path so the user can see in the
+      // Log tab "send: pressed" followed by "send: empty
+      // input, ignored". Optionally also show a soft
+      // toast — disabled for now to avoid visual noise;
+      // the log is the first step; a haptic + toast
+      // can land in a later release.
+      addLogEntry('⬜ send: empty input, ignored', 'warn');
+      return;
+    }
 
     if (text || attachments.length > 0) {
       // v3.1.17: tag the user message with the active companion's
