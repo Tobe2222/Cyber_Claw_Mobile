@@ -652,6 +652,21 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // quest (the v3.10.82 default state). `undefined` =
   // quests haven't loaded yet from the desktop.
   const activeQuestRef = useRef<{ id: string; name: string } | null | undefined>(undefined);
+  // v3.10.108: sticky thinking flag. Mirrors Discord's
+  // server-authoritative typing indicator: once set true
+  // by a `typing: true` from desktop, stays true (and
+  // the React chatStatusBar keeps showing "X is
+  // thinking...") until EITHER:
+  //   (a) desktop sends `typing: false` (success path
+  //       from sendChatMessage's finally block), OR
+  //   (b) a fresh agent message lands in this chat
+  //       (appendAgentMessage call clears it).
+  // Replaces the previous behavior where HomeScreen
+  // unmount/remount on foreground transition wiped the
+  // bubble — Tobe's 2026-07-29 complaint that the
+  // thinking indicator "disappears after i went into
+  // another app and back again".
+  const thinkingStickyRef = useRef(false);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
@@ -1648,6 +1663,22 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       lastAppStateLogRef.current = now;
 
       if (goingForeground && wasBackground) {
+        // v3.10.108: re-apply the thinking-bubble state
+        // when the user comes back to foreground. Tobe's
+        // 2026-07-29 feedback: "the clawsuu is thinking
+        // still disappears after i went into another app
+        // and back again". If the desktop is still working
+        // on a reply (typing active, no message yet), the
+        // sticky ref re-applies the chatVoiceStatus so the
+        // bubble reappears. Discord's "X is typing..."
+        // indicator is the model here.
+        if (thinkingStickyRef.current && !fullscreenRef.current) {
+          const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
+          const name = a?.name || 'Companion';
+          setChatVoiceStatus(`${name} is thinking...`);
+          setIsThinking(true);
+          setArenaThinking(true);
+        }
         // Came back to foreground - restart listener with foreground (lenient) threshold
         if (!isWakeWordModeRef.current && !fullscreenRef.current) {
           const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
@@ -1973,6 +2004,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
       appendAgentMessage(incoming, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      // v3.10.108: any new message (user or agent) lands
+      // here. If it's an agent message, the typing
+      // indicator should clear — the response arrived. If
+      // it's a user message echo from the desktop, the
+      // sticky flag is also reset (it'll be set again on
+      // the next typing:true).
+      if (!incoming.isUser) {
+        thinkingStickyRef.current = false;
+        setIsThinking(false);
+        setArenaThinking(false);
+        setChatVoiceStatus(null);
+      }
       if (aid !== activeChatAgentIdRef.current) {
         setChatUnreadByAgent(prev => ({ ...prev, [aid]: (prev[aid] || 0) + 1 }));
       }
@@ -2118,7 +2161,31 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const name = a?.name || 'Companion';
         setChatVoiceStatus(`${name} is thinking...`);
       }
-      if (!fullscreenRef.current && !msg.active) { /* keep until message arrives */ }
+      // v3.10.108: keep the thinking bubble sticky across
+      // app foreground/background cycles. Tobe's 2026-07-29
+      // feedback: "the clawsuu is thinking still disappears
+      // after i went into another app and back again". What
+      // was happening: the mobile's chatVoiceStatus state was
+      // wiped when HomeScreen's useEffect re-ran on foreground
+      // (every WebSocket reconnect), and the previous code
+      // dropped the `{active:false}` message without restoring
+      // the bubble — even though the desktop might still be
+      // working on the reply. Discord's "X is typing..."
+      // indicator is server-authoritative: once the typing
+      // stream starts, the bubble stays until either an
+      // explicit `typing: false` arrives OR an agent message
+      // lands. We're mirroring that model: keep the bubble
+      // visible until the next agent message or an explicit
+      // {active:false} arrives, regardless of foreground
+      // transitions.
+      // Set a client-side sticky flag the moment we receive
+      // {active:true}; clear it ONLY on {active:false} OR when
+      // a fresh agent message arrives via appendAgentMessage.
+      if (msg.active) {
+        thinkingStickyRef.current = true;
+      } else {
+        thinkingStickyRef.current = false;
+      }
     };
 
     // v3.10.87: tool-call events from the desktop's
