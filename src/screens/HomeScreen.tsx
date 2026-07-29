@@ -2149,6 +2149,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
         // v3.1.16: data is stored in chronological order (oldest→newest).
         // The desktop sends it that way; we keep it as-is.
+        // v3.10.107: preserve attachments through the
+        // history re-deserialization. Tobe's 2026-07-29
+        // feedback: image previews "sometimes get into the
+        // message and other times it vanishes and its only
+        // the text which gets sent". The local bubble HAS
+        // the attachments when the user sends the message
+        // (we set them right above), but on the next
+        // chat-history pull (reconnect, foreground, tab
+        // switch, desktop-echo reconcile), this map wiped
+        // them — so the second you backgrounded the app
+        // and reopened it, every image preview vanished.
+        // Forwarding the field is the minimal fix; the
+        // long-term fix (desktop-side image rendering)
+        // is out of scope for this release.
         const loaded = msg.messages.map((m: any) => ({
           id: `hist-${m.ts}-${Math.random()}`,
           text: m.text,
@@ -2156,6 +2170,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           agentId: m.agentId,
           agentName: m.agentName,
           ts: m.ts,
+          attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
         }));
         // v3.1.17: route the legacy flat chat_history response to
         // the active companion. The desktop sends this on first
