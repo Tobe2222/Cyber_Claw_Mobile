@@ -649,6 +649,11 @@ class SyncClient {
           this._isReconnecting = false;
           AsyncStorage.setItem(STORAGE_KEY_TOKEN, msg.token);
           this.setState('connected');
+          // v3.10.109: flush any chat / attachment messages that
+          // were buffered while the WS was reconnecting. By this
+          // point `this.ws.readyState` is OPEN, so _attemptSend
+          // forwards each buffered message straight to the desktop.
+          this._flushSendBuffer();
           this.emit('paired', { token: msg.token });
         } else {
           this.emit('pair_failed', { error: msg.error });
@@ -661,6 +666,10 @@ class SyncClient {
           this._isReconnecting = false;
           this._reconnectAttempts = 0;
           this.setState('connected');
+          // v3.10.109: same flush as pair_result. After a
+          // reconnect, the auth round-trip just landed;
+          // push any buffered chat through now.
+          this._flushSendBuffer();
           // v3.10.68: cache the device name so outgoing
           // local messages can prefix `[From: <name>]`
           // to match the desktop's echo format.
@@ -891,20 +900,78 @@ class SyncClient {
   // a half-closed socket. Now we log a warning so the Log tab
   // shows the dropped message and we can correlate with the
   // desktop log to find the race.
-  private send(obj: any) {
+  // v3.10.109: outgoing-message buffer for the reconnect
+  // window. Before this, any chat message fired during a
+  // CONNECTING / CLOSED WS state was silently dropped
+  // (only a console.warn, not visible in the Log tab).
+  // Tobe's 2026-07-29 15:51 report: "Sup" (3:48 PM) and
+  // "Hey" (3:49 PM) showed up locally on the mobile but
+  // never reached the desktop — no thinking bubble, no
+  // reply. The desktop log showed 9 successful reconnects
+  // in the 30 seconds before Tobe's report, none carrying
+  // a chat payload. The mobile was reconnecting faster
+  // than it was authenticating; the message landed in
+  // send() during a CONNECTING window and got dropped.
+  // Buffer plays them back as soon as `setState
+  // 'connected'` fires, capping at 50 messages to bound
+  // memory if the desktop is permanently unreachable.
+  private _sendBuffer: any[] = [];
+  private _maxBufferSize = 50;
+
+  // Flush the buffer. Called from setState('connected')
+  // once the auth round-trip has completed.
+  private _flushSendBuffer() {
+    if (this._sendBuffer.length === 0) return;
+    const buf = this._sendBuffer;
+    this._sendBuffer = [];
+    console.log(`[SyncClient] Flushing ${buf.length} buffered message(s) after reconnect`);
+    for (const obj of buf) {
+      this._attemptSend(obj);
+    }
+  }
+
+  private _attemptSend(obj: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(obj));
       } catch (e: any) {
-        this.emit('send_error', { type: obj.type, reason: e?.message });
+        this.emit('send_error', { type: obj?.type, reason: e?.message });
       }
+    } else {
+      // Re-buffer if still not open (rare — usually only if
+      // a SECOND reconnect cycle starts mid-flush).
+      if (this._sendBuffer.length < this._maxBufferSize) {
+        this._sendBuffer.push(obj);
+      }
+    }
+  }
+
+  private send(obj: any) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this._attemptSend(obj);
     } else {
       // v3.1.21: visible diagnostic. State 0=CONNECTING, 1=OPEN,
       // 2=CLOSING, 3=CLOSED. We only want to warn for non-trivial
       // message types (don't spam the log with pings).
-      if (obj.type && obj.type !== 'ping') {
-        const state = this.ws ? this.ws.readyState : 'no-ws';
-        console.warn(`[SyncClient] Dropped '${obj.type}' — WS not open (readyState=${state}, state=${this._state})`);
+      //
+      // v3.10.109: instead of dropping, BUFFER non-ping
+      // messages. They'll be flushed when setState fires
+      // 'connected' after the auth completes. The buffer
+      // caps at 50 messages; anything beyond is dropped
+      // (with a console.warn to make it visible in the
+      // dev console). The user's local bubble still
+      // shows the message, so they see their text in the
+      // chat history — it's the BACKEND delivery that
+      // gets deferred, not the local UI.
+      if (obj && obj.type && obj.type !== 'ping') {
+        if (this._sendBuffer.length < this._maxBufferSize) {
+          this._sendBuffer.push(obj);
+          const state = this.ws ? this.ws.readyState : 'no-ws';
+          console.warn(`[SyncClient] Buffered '${obj.type}' (state=${this._state}, readyState=${state}, buffer=${this._sendBuffer.length})`);
+        } else {
+          console.warn(`[SyncClient] Dropped '${obj.type}' — buffer full (${this._maxBufferSize})`);
+          this.emit('send_error', { type: obj.type, reason: 'send buffer full — desktop unreachable' });
+        }
       }
     }
   }
