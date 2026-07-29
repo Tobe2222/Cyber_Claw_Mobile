@@ -533,13 +533,24 @@ export default function QuestsScreen({
               const dirName = q.directory
                 ? q.directory.split('/').filter(Boolean).pop() || q.directory
                 : '';
-              // v3.7.8: active quest gets a gold border + soft
-              // gold glow. If active + completed, use a muted
-              // gold so it doesn't shout. The completed
-              // (non-active) case is unchanged.
+              // v3.10.106: swapped active/inactive colors.
+              // The active quest is now PURPLE and the
+              // inactive ones are ORANGE. Most of the app's
+              // accent colors are orange (Connect indicator,
+              // active chat, send button, BTC ticker, the
+              // "Set active" button, etc.) so a gold-border
+              // active quest blended in. Inverting the
+              // active/inactive colors makes the active quest
+              // the only purple on a list of orange cards,
+              // which is the most distinct possible signal.
+              // Tobe's 2026-07-29 feedback: "the current
+              // quest is orange while the rest is purple. it
+              // should be the other way around since most of
+              // the things are orange. to make the current
+              // selected more distinct."
               const borderColor = isActive
-                ? (isComplete ? 'rgba(247, 147, 26, 0.6)' : '#f7931a')
-                : (isComplete ? '#10b981' : '#a855f7');
+                ? (isComplete ? 'rgba(168, 85, 247, 0.6)' : '#a855f7')
+                : (isComplete ? '#10b981' : '#f7931a');
               const cardOpacity = isActive
                 ? (isComplete ? 0.85 : 1)
                 : (isComplete ? 0.55 : 1);
