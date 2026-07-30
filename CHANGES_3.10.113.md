@@ -111,3 +111,18 @@ Mobile:
   existing Dark/Light buttons in Settings.
 
 versionCode: 337
+
+## v3.10.113 fix (commit 07d50e4)
+
+GH Actions build #669 failed at `createBundleReleaseJsAndAssets`
+because a regex-based script had dropped the `useTheme()` call
+inside the destructured TypeScript params object of 4 screens
+(looking for the first `{` after `function NAME(` matched the
+params-opening brace, not the body brace). Fix: relocate the
+hook call to immediately after the function body opening brace.
+
+Lesson: regex-based AST surgery is fragile. The distinction
+between `function NAME({ ... })` (params brace) and the body
+brace is parse-context, not regex. For next migration, prefer
+`tsc --noEmit` + a real AST tool (babel.parse, recast) over
+regex on raw source text.
