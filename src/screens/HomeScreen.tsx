@@ -597,6 +597,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // before our scrollToEnd had a chance to land.
   const chatAtBottomRef = useRef(true);
   useEffect(() => { chatAtBottomRef.current = chatAtBottom; }, [chatAtBottom]);
+  // v3.10.111: tracks whether the chat FlatList has ever been
+  // laid out, so onLayout's "force scroll to bottom" only runs
+  // on the FIRST layout (initial mount when the chat tab opens
+  // for the first time, or after a hard remount). Subsequent
+  // layouts (font scale change, keyboard show/hide, rotation,
+  // companion re-render) leave the user's scroll position alone
+  // instead of yanking them back to the latest message.
+  // Resets only when the component unmounts (the ref's lifecycle
+  // is tied to the FlatList's tree position via the ref hook).
+  const chatLayoutSeenRef = useRef(false);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
   // v3.10.70: mirror of activeTab so the chat-event
@@ -3758,9 +3768,12 @@ useEffect(() => {
                 // Without inversion, "at the bottom" means near the
                 // end of contentSize.height (within a small threshold
                 // of layoutHeight).
+                // v3.10.111: 32px → 50px to better match Discord's
+                // "near bottom" feel — small phone screens have
+                // denser scroll budgets and 32px felt twitchy.
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 const distanceFromEnd = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-                const isAtBottom = distanceFromEnd < 32;
+                const isAtBottom = distanceFromEnd < 50;
                 setChatAtBottom(isAtBottom);
                 // v3.10.96: clear the "↓ N new messages" badge
                 // when the user scrolls to the bottom of the
@@ -3827,7 +3840,21 @@ useEffect(() => {
                 // useEffect skipped because lastMessageIdRef
                 // already matched the hydrated messages).
                 //
-                // The fix:
+                // v3.10.111: only force-scroll-to-bottom on the
+                // FIRST layout (initial mount / first time the
+                // FlatList becomes visible). Tobe reported
+                // (2026-07-30) that the chat "almost forcefully
+                // scrolls down to the bottom" — this onLayout
+                // handler was the culprit: it ran every time
+                // the FlatList re-laid out (font scale change,
+                // rotation, companion re-render, etc.), yanking
+                // the user back to the bottom mid-read. Now
+                // `chatLayoutSeenRef` guards the scroll so only
+                // the FIRST onLayout does it. Subsequent layouts
+                // leave the scroll position alone — Discord-
+                // style "stay where you left it".
+                //
+                // The fix (preserved from v3.8.6):
                 //   1. Two-attempt scroll (immediate + 250ms) so
                 //      the second attempt runs after the FlatList
                 //      has measured the full content. The second
@@ -3835,7 +3862,8 @@ useEffect(() => {
                 //   2. setChatAtBottom(true) AFTER the scroll so
                 //      the onContentSizeChange handler doesn't
                 //      fight us and reset to "scrolled up".
-                if (messages.length > 0) {
+                if (messages.length > 0 && !chatLayoutSeenRef.current) {
+                  chatLayoutSeenRef.current = true;
                   chatRef.current?.scrollToEnd({ animated: false });
                   setTimeout(() => {
                     chatRef.current?.scrollToEnd({ animated: false });
