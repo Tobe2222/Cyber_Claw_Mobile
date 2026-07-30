@@ -62,10 +62,6 @@ import syncClient from '../services/SyncClient';
 // top of the screen (Tobe reported 2026-07-23). With the
 // inset padding, the modal starts below the status bar.
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-// v3.10.113: theme support. The root container's bg
-// follows the active theme. Inner styles stay dark for
-// now (full inner migration is v3.11.0).
-import { useTheme } from '../theme/ThemeContext';
 
 type CompanionQuest = {
   id: string;
@@ -94,8 +90,6 @@ export default function QuestsScreen({
 }: {
   onBack: () => void;
 }) {
-  // v3.10.113: theme for the root container bg.
-  const { theme: t } = useTheme();
   // v3.10.86: SafeAreaInsets for the editor modal's top
   // padding. See the comment on the import.
   const insets = useSafeAreaInsets();
@@ -1635,7 +1629,7 @@ function formatTimeAgo(date: Date): string {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: t.bg.primary },
+  container: { flex: 1, backgroundColor: '#0a0a0a' },
   // v3.7.7: paddingTop: 50 matches the v3.4.5 pattern from
   // CompanionSettingsScreen / SettingsScreen. Clears both
   // Android status bars (~30-40dp) and iOS Dynamic Island

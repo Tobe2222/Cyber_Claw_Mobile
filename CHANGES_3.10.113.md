@@ -126,3 +126,55 @@ between `function NAME({ ... })` (params brace) and the body
 brace is parse-context, not regex. For next migration, prefer
 `tsc --noEmit` + a real AST tool (babel.parse, recast) over
 regex on raw source text.
+
+## v3.10.113 fix #2 — runtime crash on app start (commit after 07d50e4)
+
+Regression introduced by the v3.10.113 root-tint migration: the
+script replaced `container: { backgroundColor: '#0a0a0a' }` with
+`container: { backgroundColor: t.bg.primary }` at module scope.
+But `t` was only defined inside the function body via
+`const { theme: t } = useTheme();`. `StyleSheet.create` is a
+module-level expression, so the bundle referenced `t` at
+module-load time — and `t` doesn't exist there.
+
+Runtime crash on app start:
+```
+JavaScriptException: [runtime not ready]: ReferenceError:
+Property 't' doesn't exist
+```
+
+Two screens hit this (CompanionSettingsScreen, QuestsScreen).
+The other two (CompanionEditScreen, WakeModeScreen) had
+different original hex codes (`#0a0a1a`, `#000`) that the
+script didn't match, so they were unaffected.
+
+**Fix:** reverted the two affected container styles back to hex
+literals (`#0a0a0a`) and removed the now-unused `useTheme()`
+import + hook from all 4 screens. Net diff is negative
+(removed code, no new code added). The SettingsScreen theme
+toggle still works — only the SettingsScreen uses the theme
+system, just like before v3.10.113.
+
+**Why didn't bundle-test catch this?** Running
+`npx react-native bundle` succeeded — but the bundle parser
+doesn't *execute* the code. The crash happens at runtime when
+JS evaluates the `StyleSheet.create` call. To catch this
+class of bug, you need a real run: bundle + boot in emulator
++ inspect the first frame.
+
+**Lesson:** "Module-level `const styles = StyleSheet.create({...})`
+cannot reference function-scoped variables." The bridge
+problem: a definitions object at module scope has one lifetime
+(per app load), but the variables it would want to reference
+are scoped to a function call. The fix is either (a) make
+the styles object a function factory called inside the
+function, or (b) keep the styles at module scope and only use
+literal values. v3.10.113 attempted (a) for the container
+only — halfway, doesn't work because the rest of the styles
+object is still at module scope and doesn't have `t` either.
+
+**Decision:** lock v3.10.113 to "SettingsScreen ships with
+full theme support; the rest of the screens stay dark for
+now." v3.11.0 will do the full inner-style migration properly
+per screen — every styling block becomes a `makeStyles(t)`
+factory called inside the function body.

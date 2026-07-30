@@ -70,10 +70,6 @@ import syncClient from '../services/SyncClient';
 // addLogEntry / syncLog / logListeners to a shared
 // src/services/LogStore.ts (same shape as SyncClient.ts) so
 // screens don't cross-import each other for log calls.
-// v3.10.113: theme support. The root container's bg
-// follows the active theme. Inner styles stay dark for
-// now (full inner migration is v3.11.0).
-import { useTheme } from '../theme/ThemeContext';
 
 type Companion = {
   id: string;
@@ -106,8 +102,6 @@ export default function CompanionSettingsScreen({
   onPushExitTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
   onOpenCompanionEdit?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
 }) {
-  // v3.10.113: theme for the root container bg.
-  const { theme: t } = useTheme();
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
   // = sub-page for that phase.
@@ -1959,7 +1953,7 @@ function testDesktopVoice() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: t.bg.primary },
+  container: { flex: 1, backgroundColor: '#0a0a0a' },
   // v3.4.5: bumped paddingTop from 16 → 50 on BOTH Android
   // and iOS. Tobe's screenshot showed the section still
   // flush against the status bar even after the first

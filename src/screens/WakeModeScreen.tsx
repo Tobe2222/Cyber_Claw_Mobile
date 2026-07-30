@@ -47,10 +47,6 @@ import { getCachedGreetingPath, ensureGreetingCached } from '../services/Greetin
 // talk; same color/animation as the full bar in
 // SettingsScreen's Voice mode section.
 import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
-// v3.10.113: theme support. The root container's bg
-// follows the active theme. Inner styles stay dark for
-// now (full inner migration is v3.11.0).
-import { useTheme } from '../theme/ThemeContext';
 
 const { AppControl, WakeWordModule } = NativeModules;
 
@@ -135,8 +131,6 @@ interface WakeModeScreenProps {
 
 export default function WakeModeScreen({
   companionId, agents, onExit, voiceMode = false, onWakeMatch }: WakeModeScreenProps) {
-  // v3.10.113: theme for the root container bg.
-  const { theme: t } = useTheme();
   const webViewRef = useRef<WebView>(null);
   const recorderActiveRef = useRef<boolean>(false);
   // v3.9.6 — ref for the per-turn silence listener unsub.
