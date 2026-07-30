@@ -54,6 +54,10 @@ import Slider from '../components/Slider';
 // hand-curated subset because the assets themselves aren't
 // needed for the picker (only the metadata).
 import spriteCatalog from '../data/companion-catalog.json';
+// v3.10.113: theme support. The root container's bg
+// follows the active theme. Inner styles stay dark for
+// now (full inner migration is v3.11.0).
+import { useTheme } from '../theme/ThemeContext';
 
 // v3.10.92: trait list mirrors the desktop forge's
 // #forge-traits-grid. The id is the bare trait key (no prefix),
@@ -95,6 +99,9 @@ const CHATTINESS_DESCRIPTIONS = {
 // a one-component re-add.
 
 export default function CompanionEditScreen({
+  // v3.10.113: theme for the root container bg.
+  const { theme: t } = useTheme();
+
   companionId,
   companionName,
   initialEmoji,

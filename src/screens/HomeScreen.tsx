@@ -3,7 +3,7 @@
  * Arena (real sprites) + Chat/Events/Log tabs + TTS + background service
  */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, ScrollView, StyleSheet, Image,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert, Modal,
@@ -22,6 +22,12 @@ import { extractAudioFeatures, matchAgainstTraining, matchAgainstAllCompanions, 
 import { base64ToInt16Array } from '../services/AudioUtils';
 import { version as APP_VERSION } from '../../package.json';
 import RemoteToolHandler from '../services/RemoteToolHandler';
+// v3.10.113: theme support. The container, top bar, and
+// chat input bar follow the active theme. The arena (WebView)
+// and chat messages are media content and stay dark — they
+// ship their own backgrounds via the WebView's CSS.
+import { useTheme } from '../theme/ThemeContext';
+import { Theme } from '../theme/tokens';
 
 // Native modules
 const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
@@ -474,12 +480,16 @@ function appendAgentMessage(
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
 export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQuests, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onOpenQuests?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
-  // v3.10.70: read Android nav-bar inset so we can pad
-  // the chat input above it. Without this the input
-  // row sat ~48dp above the bottom of the screen with
-  // a visible dark gap (Tobe reported this on
-  // 2026-07-22). On iOS with a notch device, top
-  // inset is also used elsewhere; bottom is 0.
+  // v3.10.113: theme-aware container + chrome. The arena
+  // (WebView) and chat messages are media content and stay
+  // dark — they ship their own backgrounds via the
+  // WebView's CSS — but the rest of the screen (top bar,
+  // chat input, modals) follows the active theme.
+  const { theme } = useTheme();
+  const t = theme;
+  // Build the styles from the active theme. The styles
+  // object is rebuilt only when the theme changes (memo).
+  const styles = useMemo(() => makeStyles(t), [t]);
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // v3.1.17: per-companion chat history. The mobile companion tab
@@ -4235,8 +4245,8 @@ function formatTimeAgoShort(ts: number): string {
   return '1d ago';
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+const makeStyles = (t: Theme) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg.primary },
   wakeModeBadge: {
     color: '#f7931a',
     fontSize: 11,
@@ -4252,9 +4262,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'ios' ? 54 : 44,
     paddingBottom: 10,
-    backgroundColor: '#111', borderBottomWidth: 1, borderBottomColor: '#222',
+    backgroundColor: t.bg.primary, borderBottomWidth: 1, borderBottomColor: t.border.subtle,
   },
-  headerTitle: { color: '#f7931a', fontSize: 16, fontWeight: 'bold' },
+  headerTitle: { color: t.brand.accent, fontSize: 16, fontWeight: 'bold' },
   headerTitleContainer: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -4269,18 +4279,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     flex: 1,
   },
-  headerTitleLeft: { color: '#f7931a', fontSize: 16, fontWeight: 'bold' },
-  headerTitleRight: { color: '#f7931a', fontSize: 16, fontWeight: 'bold' },
+  headerTitleLeft: { color: t.brand.accent, fontSize: 16, fontWeight: 'bold' },
+  headerTitleRight: { color: t.brand.accent, fontSize: 16, fontWeight: 'bold' },
   headerCameraSpace: { width: 32 }, // room for camera cutout
   headerRight: { flexDirection: 'row', alignItems: 'center' },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  dotOnline: { backgroundColor: '#4ade80' },
-  dotOffline: { backgroundColor: '#666' },
-  dotLost: { backgroundColor: '#ef4444' },
-  statusLabel: { color: '#888', fontSize: 12, marginRight: 10 },
+  dotOnline: { backgroundColor: t.brand.success },
+  dotOffline: { backgroundColor: t.text.dim },
+  dotLost: { backgroundColor: t.brand.danger },
+  statusLabel: { color: t.text.muted, fontSize: 12, marginRight: 10 },
   settingsBtn: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: t.bg.tertiary,
+    borderWidth: 1, borderColor: t.border.mid,
     justifyContent: 'center', alignItems: 'center',
   },
   settingsIcon: { fontSize: 16 },
@@ -4291,13 +4302,13 @@ const styles = StyleSheet.create({
   },
   wakeDebugText: { flex: 1, color: '#4ade80', fontSize: 11, fontFamily: 'monospace' },
   tabBar: {
-    flexDirection: 'row', backgroundColor: '#111',
-    borderBottomWidth: 1, borderBottomColor: '#222',
+    flexDirection: 'row', backgroundColor: t.bg.primary,
+    borderBottomWidth: 1, borderBottomColor: t.border.subtle,
   },
   tab: { flex: 1, paddingVertical: 4, alignItems: 'center' },
-  tabActive: { borderBottomWidth: 2, borderBottomColor: '#f7931a' },
-  tabText: { color: '#666', fontSize: 13 },
-  tabTextActive: { color: '#f7931a', fontWeight: 'bold' },
+  tabActive: { borderBottomWidth: 2, borderBottomColor: t.brand.accent },
+  tabText: { color: t.text.dim, fontSize: 13 },
+  tabTextActive: { color: t.brand.accent, fontWeight: 'bold' },
   // v3.1.17: companion tab bar (one tab per companion). Sits
   // between the system tabs and the chat content.
   // v3.1.48: companion tab bar tightened — Tobe asked for minimal
@@ -4518,7 +4529,7 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: 'row', alignItems: 'flex-end',
     paddingHorizontal: 12, paddingVertical: 8,
-    borderTopWidth: 1, borderTopColor: '#222', backgroundColor: '#111',
+    borderTopWidth: 1, borderTopColor: t.border.subtle, backgroundColor: t.bg.primary,
   },
   // v3.10.30: attachment preview row (sits above
   // the inputContainer). Horizontal scroll of
@@ -4529,9 +4540,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 8,
     paddingBottom: 4,
-    backgroundColor: '#111',
+    backgroundColor: t.bg.primary,
     borderTopWidth: 1,
-    borderTopColor: '#222',
+    borderTopColor: t.border.subtle,
     gap: 8,
   },
   attachmentPreviewItem: {
@@ -4613,9 +4624,11 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   textInput: {
-    flex: 1, backgroundColor: '#1a1a2e', color: '#e0e0e0',
+    flex: 1,
+    backgroundColor: t.input.bg, color: t.text.primary,
+    borderColor: t.input.border, borderWidth: 1,
     borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 15, maxHeight: 100, borderWidth: 1, borderColor: '#333',
+    fontSize: 15, maxHeight: 100,
   },
   sendButton: {
     marginLeft: 8, width: 40, height: 40, borderRadius: 20,

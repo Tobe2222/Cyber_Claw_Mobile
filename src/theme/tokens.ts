@@ -80,6 +80,8 @@ export const darkTheme = {
     // Secondary
     cyan: '#00d4ff',
     cyanDim: '#0099bb',
+    cyanSoft: 'rgba(0,212,255,0.10)',
+    cyanGlow: 'rgba(0,212,255,0.30)',
 
     // Semantic
     success: '#4ade80',
@@ -105,6 +107,7 @@ export const darkTheme = {
   input: {
     bg: '#1a1a22',
     border: '#333',
+    borderFocus: '#00d4ff',
     placeholder: '#555',
   },
   scrollbar: {
@@ -128,19 +131,34 @@ export const darkTheme = {
 export const lightTheme = {
   name: 'light' as ThemeName,
 
+  // v3.10.113: increased forest + sky presence. The previous
+  // v3.10.112 palette was too cream/white-centric — the bg was
+  // almost white and the section cards were pure white, so the
+  // whole screen read as "white + green accents" rather than
+  // "forest + sky." Tobe's feedback 2026-07-30: ‘I would like
+  // more sky and forest, not just white.’ So:
+  //   - bg.primary is no longer near-white. It's a soft sage
+  //     that immediately reads as forest.
+  //   - bg.secondary (cards) is a paler mint with a sky-ward
+  //     gradient into the bg.tertiary hue.
+  //   - bg.tertiary is a deeper sage for elevated surfaces.
+  //   - bg.elevated is the sky hue — for top-of-stack popovers.
+  //   - input.bg is now a pale sky tint, not pure white.
+  //   - The brand.cyan / brand.info get more saturation so the
+  //     sky-blue accents actually read as sky.
   bg: {
-    primary: '#f5f7f0',       // warm cream — main app background
-    secondary: '#ffffff',     // panels / cards
-    tertiary: '#eaeee0',      // elevated surfaces (slightly darker cream)
-    elevated: '#e0e8d4',      // highest elevation (subtle moss tint)
-    overlay: 'rgba(45,90,61,0.06)',
-    scrim: 'rgba(45,90,61,0.18)',
+    primary: '#e3ecd9',       // soft sage — main app background (the "forest floor")
+    secondary: '#eaf2dd',     // cards — slightly lighter mint, reads as moss-lit
+    tertiary: '#d4e3c4',      // elevated — deeper sage for inputs/inputs-container
+    elevated: '#dbe9f0',     // popovers — the "sky" tint
+    overlay: 'rgba(45,90,61,0.08)',
+    scrim: 'rgba(30,55,40,0.32)',
   },
 
   border: {
-    subtle: '#dfe5d2',
-    mid: '#c5d0b3',
-    strong: '#a8b894',
+    subtle: '#b8c9a6',        // slightly more visible against softer bg
+    mid: '#8aa478',           // forest mid-green, used for active borders
+    strong: '#5b7a4a',        // deep forest, used for headers/section titles
   },
 
   text: {
@@ -158,9 +176,12 @@ export const lightTheme = {
     accentBright: '#3a7a52',
     accentGlow: 'rgba(45,90,61,0.18)',
 
-    // Sky blue secondary (instead of neon cyan)
-    cyan: '#3a7ca5',
-    cyanDim: '#2a5d80',
+    // Sky blue secondary — bumped saturation so it actually
+    // reads as sky. v3.10.112 #3a7ca5 was too gray.
+    cyan: '#3d8fc4',
+    cyanDim: '#2a6fa0',
+    cyanSoft: '#cfe4f3',      // pale sky tint for backgrounds
+    cyanGlow: 'rgba(61,143,196,0.18)',
 
     // Semantic — softer for light bg
     success: '#15803d',
@@ -168,27 +189,28 @@ export const lightTheme = {
     danger: '#b91c1c',
     dangerSoft: 'rgba(185,28,28,0.08)',
     warning: '#b45309',
-    info: '#2563eb',
-    infoSoft: 'rgba(37,99,235,0.10)',
+    info: '#2d7cb8',
+    infoSoft: 'rgba(45,124,184,0.10)',
   },
 
   rarity: {
     common: '#6b7280',
-    uncommon: '#15803d',
-    rare: '#3a7ca5',
+    uncommon: '#2d7a3d',
+    rare: '#3d8fc4',
     epic: '#2d5a3d',
     legendary: '#b45309',
     mythic: '#be185d',
   },
 
   input: {
-    bg: '#ffffff',
-    border: '#c5d0b3',
-    placeholder: '#8a958a',
+    bg: '#eaf4f9',             // pale sky — distinct from card bg
+    border: '#8aa478',         // forest green border
+    borderFocus: '#3d8fc4',    // sky blue on focus
+    placeholder: '#7a8b7c',
   },
   scrollbar: {
-    track: '#eaeee0',
-    thumb: '#c5d0b3',
+    track: '#d4e3c4',
+    thumb: '#8aa478',
   },
 } as const;
 
@@ -221,6 +243,8 @@ export type Theme = {
     readonly accentGlow: string;
     readonly cyan: string;
     readonly cyanDim: string;
+    readonly cyanSoft: string;
+    readonly cyanGlow: string;
     readonly success: string;
     readonly successSoft: string;
     readonly danger: string;
@@ -240,6 +264,7 @@ export type Theme = {
   readonly input: {
     readonly bg: string;
     readonly border: string;
+    readonly borderFocus: string;
     readonly placeholder: string;
   };
   readonly scrollbar: {
