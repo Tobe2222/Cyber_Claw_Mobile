@@ -3472,7 +3472,7 @@ useEffect(() => {
 
       {/* Arena - Conditional rendering based on fullscreen or landscape */}
       {!keyboardVisible && (
-        <View style={fullscreen || isLandscape ? [StyleSheet.absoluteFill, { zIndex: 100 }] : { height: ARENA_HEIGHT, borderBottomWidth: 2, borderBottomColor: '#f7931a' }}>
+        <View style={fullscreen || isLandscape ? [styles.arenaFrameFullscreen, { zIndex: 100 }] : styles.arenaFrame}>
           <WebView
             key={webViewKey}
             ref={webViewRef}
@@ -4246,6 +4246,23 @@ function formatTimeAgoShort(ts: number): string {
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
+  // v3.10.114: heavy forest green frame around the arena. Tobe's
+  // spec (2026-07-30 19:16 GMT+2): "I want green and blue, especially
+  // heavy around the arena and below the chat." This is the
+  // border that surrounds the dark WebView (which is the arena)
+  // and gives the home screen its forest depth.
+  arenaFrame: {
+    height: ARENA_HEIGHT,
+    borderWidth: 3,
+    borderColor: t.brand.accent,
+    borderRadius: 6,
+  },
+  arenaFrameFullscreen: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 100,
+  },
+
   container: { flex: 1, backgroundColor: t.bg.primary },
   wakeModeBadge: {
     color: '#f7931a',
@@ -4297,10 +4314,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   settingsIcon: { fontSize: 16 },
   wakeDebugBar: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.85)', paddingHorizontal: 10, paddingVertical: 6,
-    borderBottomWidth: 1, borderBottomColor: '#222',
+    backgroundColor: t.bg.tertiary, paddingHorizontal: 10, paddingVertical: 6,
+    borderBottomWidth: 1, borderBottomColor: t.border.subtle,
   },
-  wakeDebugText: { flex: 1, color: '#4ade80', fontSize: 11, fontFamily: 'monospace' },
+  wakeDebugText: { flex: 1, color: t.brand.success, fontSize: 11, fontFamily: 'monospace' },
   tabBar: {
     flexDirection: 'row', backgroundColor: t.bg.primary,
     borderBottomWidth: 1, borderBottomColor: t.border.subtle,
@@ -4315,9 +4332,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // space between companion tabs (Clawsuu / Lamasuu / etc). Reduced
   // padding, margin, and max height.
   companionTabBar: {
-    backgroundColor: '#0a0a14',
+    // v3.10.114: forest green to match the arena frame,
+    // reading as a single 'forest zone' above the chat.
+    backgroundColor: t.brand.accentDim,
     borderBottomWidth: 1,
-    borderBottomColor: '#1a1a2e',
+    borderBottomColor: t.border.mid,
     maxHeight: 36,
   },
   companionTabBarContent: {
@@ -4330,7 +4349,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // the bar's height stable so the layout doesn't jump when the
   // real tabs arrive.
   companionTabPlaceholder: {
-    color: '#666',
+    color: t.text.muted,
     fontSize: 12,
     fontStyle: 'italic',
     paddingVertical: 6,
@@ -4389,9 +4408,13 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontWeight: '700',
   },
   tabContent: { flex: 1 },
-  chatList: { padding: 12, paddingBottom: 8 },
+  // v3.10.114: chat list bg is the soft cream (matches the
+    // 'chat can be more of the White' spec from Tobe). Bubbles
+    // themselves are pure white with sky/forest borders so the
+    // contrast is bubble -> bg, not bg -> page.
+  chatList: { padding: 12, paddingBottom: 8, backgroundColor: t.bg.primary },
   dateSeparator: {
-    color: '#f7931a',
+    color: t.brand.accent,
     fontSize: 11,
     fontWeight: '700',
     textTransform: 'uppercase',
@@ -4421,16 +4444,25 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontWeight: '600',
     opacity: 0.7,
   },
-  messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 12, marginBottom: 8 },
-  userBubble: { alignSelf: 'flex-end', backgroundColor: '#1a3a5c', borderBottomRightRadius: 4 },
-  aiBubble: { alignSelf: 'flex-start', backgroundColor: '#1a1a2e', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#333' },
-  agentLabel: { fontSize: 10, fontWeight: '700', marginBottom: 4 },
-  userLabel: { color: '#ffffff', fontWeight: 'bold' },
-  aiLabel: { color: '#f7931a', fontWeight: 'bold' },
-  messageText: { fontSize: 12, lineHeight: 16 },
-  userText: { color: '#ffffff', fontWeight: '500' },  // White for user
-  aiText: { color: '#f7931a' },  // Orange for companion
-  timestamp: { color: '#888', fontSize: 8, marginTop: 4, textAlign: 'right' },
+  // v3.10.114: white bubbles with sky/forest borders per Tobe's
+  // spec ('the chat can be more of the White. Green for forest,
+  // blue for sky'). User bubble: white bg, sky blue border +
+  // accent. AI bubble: white bg, forest green border + accent.
+  // The dark navy/old hex values are gone.
+  messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 12, marginBottom: 8, backgroundColor: t.bg.secondary, borderWidth: 1, borderColor: t.border.mid },
+  userBubble: { alignSelf: 'flex-end', backgroundColor: t.bg.secondary, borderBottomRightRadius: 4, borderColor: t.brand.cyan, borderWidth: 1.5 },
+  aiBubble: { alignSelf: 'flex-start', backgroundColor: t.bg.secondary, borderBottomLeftRadius: 4, borderColor: t.brand.accent, borderWidth: 1.5 },
+  agentLabel: { fontSize: 10, fontWeight: '700', marginBottom: 4, color: t.text.muted },
+  userLabel: { color: t.brand.cyanDim, fontWeight: 'bold' },
+  aiLabel: { color: t.brand.accent, fontWeight: 'bold' },
+  // v3.10.114: text follows the bubble border color so user
+  // messages read as 'from you' (sky blue text) and AI as
+  // 'from companion' (forest green text). Both on a white bg,
+  // high contrast, easy to scan.
+  messageText: { fontSize: 13, lineHeight: 18, color: t.text.primary },
+  userText: { color: t.brand.cyanDim, fontWeight: '500' },
+  aiText: { color: t.brand.accentDim, fontWeight: '500' },
+  timestamp: { color: t.text.muted, fontSize: 9, marginTop: 4, textAlign: 'right' },
 
   // v3.10.20: attachment rendering. Inline image
   // previews (square 96px thumbnails) inside the
@@ -4525,7 +4557,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontWeight: '600',
   },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
-  emptyChatText: { color: '#555', fontSize: 14, textAlign: 'center' },
+  emptyChatText: { color: t.text.muted, fontSize: 14, textAlign: 'center' },
   inputContainer: {
     flexDirection: 'row', alignItems: 'flex-end',
     paddingHorizontal: 12, paddingVertical: 8,
@@ -4632,24 +4664,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   },
   sendButton: {
     marginLeft: 8, width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#f7931a', justifyContent: 'center', alignItems: 'center',
+    backgroundColor: t.brand.accent, justifyContent: 'center', alignItems: 'center',
   },
-  sendButtonDisabled: { backgroundColor: '#333' },
-  sendButtonText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
-  eventLine: { color: '#3b82f6', fontSize: 12, fontFamily: 'monospace', lineHeight: 18, marginBottom: 4, fontWeight: '500' },  // Blue for events
-  logList: { padding: 12 },
-  logLine: { color: '#8a8', fontSize: 11, fontFamily: 'monospace', lineHeight: 16 },
-  logSent: { color: '#4a9eff' },
-  logReceived: { color: '#4ade80' },
-  logError: { color: '#ff0000' },  // Red for error logs
+  sendButtonDisabled: { backgroundColor: t.border.mid },
+  sendButtonText: { color: t.text.inverse, fontSize: 16, fontWeight: 'bold' },
+  eventLine: { color: t.brand.cyan, fontSize: 12, fontFamily: 'monospace', lineHeight: 18, marginBottom: 4, fontWeight: '500' },
+  logList: { padding: 12, backgroundColor: t.bg.primary },
+  logLine: { color: t.text.muted, fontSize: 11, fontFamily: 'monospace', lineHeight: 16 },
+  logSent: { color: t.brand.cyan },
+  logReceived: { color: t.brand.success },
+  logError: { color: t.brand.danger },
   micButton: {
-    backgroundColor: 'rgba(247,147,26,0.12)', borderRadius: 18,
-    // v3.10.16: shrunk from 48x48 to 36x36 — the buttons
-    // were eating too much of the keyboard-adjacent
-    // real estate. Tobe's v3.10.15 feedback: "make the
-    // + and mic button smaller."
+    backgroundColor: t.brand.accentGlow, borderRadius: 18,
     width: 36, height: 36, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(247,147,26,0.4)', marginRight: 6,
+    borderWidth: 1, borderColor: t.brand.accent, marginRight: 6,
   },
   micButtonActive: {
     backgroundColor: 'rgba(239,68,68,0.25)', borderColor: '#ef4444',
