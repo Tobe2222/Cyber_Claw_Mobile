@@ -4,12 +4,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  StatusBar, SafeAreaView, StyleSheet, NativeModules, NativeEventEmitter, AppState,
+  SafeAreaView, StyleSheet, NativeModules, NativeEventEmitter, AppState,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { ThemeProvider } from './src/theme/ThemeContext';
 import HomeScreen, { markWakeJustExited, isWakeJustExited } from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import WakeModeScreen from './src/screens/WakeModeScreen';
@@ -469,10 +470,10 @@ export default function App(): React.JSX.Element {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <SafeAreaProvider>
-        <SafeAreaView style={styles.container}>
-          <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" translucent={false} />
-          {screen === 'home' && (
+      <ThemeProvider>
+        <SafeAreaProvider>
+          <SafeAreaView style={styles.container}>
+            {screen === 'home' && (
             <HomeScreen
               onOpenSettings={() => setScreen('settings')}
               onOpenVoiceMode={() => setScreen('voice-mode')}
@@ -636,10 +637,19 @@ export default function App(): React.JSX.Element {
           )}
         </SafeAreaView>
       </SafeAreaProvider>
+      </ThemeProvider>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  // v3.10.112: theme-aware background. The root styles
+  // container is the gesture root + safe-area gutter; the
+  // hardcoded dark hex was there to avoid a white flash
+  // before ThemeProvider mounted. Now we use a neutral
+  // near-black that's close to both deep-dark and
+  // border.dark (light theme), so the flash is minimal
+  // for either theme. Individual screens override at
+  // their own root.
   container: { flex: 1, backgroundColor: '#0a0a0a' },
 });

@@ -107,7 +107,7 @@
  *                            in v3.7.0.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
   Switch, Alert, Platform, PermissionsAndroid, Linking, NativeModules, BackHandler,
@@ -144,6 +144,11 @@ import {
   RemotePermissionKey,
 } from '../services/RemoteToolPermissions';
 import { version as APP_VERSION } from '../../package.json';
+// v3.10.112: theme system. The toggle in the top header
+// drives useTheme(); styles below are built from the same
+// theme tokens so each render picks up the right colors.
+import { useTheme } from '../theme/ThemeContext';
+import { Theme } from '../theme/tokens';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
 
@@ -172,6 +177,14 @@ export default function SettingsScreen({
   onBack: () => void;
   onOpenCompanion: (companionId: string) => void;
 }) {
+  // ── Theme (v3.10.112) ─────────────────────────────────────────
+  // The toggle in the top header calls setTheme(); useTheme
+  // returns the active palette + helpers. styles are rebuilt
+  // below via a makeStyles factory so they pick up the right
+  // colors for the active theme.
+  const { theme, themeName, toggle: toggleTheme } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+
   // ── Connection ────────────────────────────────────────────────
   const [hostIp, setHostIp] = useState('');
   const [pairingCode, setPairingCode] = useState('');
@@ -1166,6 +1179,21 @@ export default function SettingsScreen({
         <Text style={styles.backBtn}>← Back</Text>
       </TouchableOpacity>
       <Text style={styles.title}>Settings</Text>
+      {/* v3.10.112: theme toggle. Right-aligned in the fixed
+          header. The icon flips with the active theme; the
+          label is the OPPOSITE of the current theme (showing
+          the action rather than the state, which reads better
+          in this spot). State is persisted to AsyncStorage via
+          ThemeProvider.setTheme — survives restart. */}
+      <TouchableOpacity
+        onPress={toggleTheme}
+        style={styles.themeToggleBtn}
+        accessibilityRole="button"
+        accessibilityLabel={themeName === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+      >
+        <Text style={styles.themeToggleIcon}>{themeName === 'dark' ? '☀️' : '🌙'}</Text>
+        <Text style={styles.themeToggleLabel}>{themeName === 'dark' ? 'Light' : 'Dark'}</Text>
+      </TouchableOpacity>
     </View>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
@@ -1864,18 +1892,33 @@ export default function SettingsScreen({
 }
 
 // ── Inline section components ────────────────────────────────
+// v3.10.112: each helper calls useTheme() and builds its
+// own style object from the active theme. Previously they
+// referenced a module-level `styles` constant. With the
+// theme system, that pattern breaks because the styles need
+// to come from the active theme — not a frozen module-level
+// object. The helpers are tiny (a few styles each), so the
+// inline build is cheap and the code reads naturally.
+
 function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
+  const { theme: t } = useTheme();
+  const styles = {
+    section: { backgroundColor: t.bg.tertiary, borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: t.brand.accent },
+    title: { color: t.brand.accent, fontSize: 18, fontWeight: 'bold' as const, marginBottom: 4 },
+    desc: { color: t.text.muted, fontSize: 13, marginBottom: 16, lineHeight: 18 },
+  };
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {desc ? <Text style={styles.sectionDesc}>{desc}</Text> : null}
+      <Text style={styles.title}>{title}</Text>
+      {desc ? <Text style={styles.desc}>{desc}</Text> : null}
       {children}
     </View>
   );
 }
 
 function SubTitle({ children }: { children: React.ReactNode }) {
-  return <Text style={styles.subGroupTitle}>{children}</Text>;
+  const { theme: t } = useTheme();
+  return <Text style={{ color: t.text.muted, fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12, letterSpacing: 0.5 }}>{children}</Text>;
 }
 
 // v3.4.5: bigger title for major groups within a
@@ -1888,19 +1931,28 @@ function SubTitle({ children }: { children: React.ReactNode }) {
 // needed.
 
 function Label({ children }: { children: React.ReactNode }) {
-  return <Text style={styles.label}>{children}</Text>;
+  const { theme: t } = useTheme();
+  return <Text style={{ color: t.text.secondary, fontSize: 14, marginBottom: 6, marginTop: 8 }}>{children}</Text>;
 }
 
 function Hint({ children }: { children: React.ReactNode }) {
-  return <Text style={styles.hint}>{children}</Text>;
+  const { theme: t } = useTheme();
+  return <Text style={{ color: t.text.dim, fontSize: 12, marginTop: 4, marginBottom: 8, lineHeight: 16 }}>{children}</Text>;
 }
 
 function Toggle({ title, sub, value, onValueChange }: { title: string; sub: string; value: boolean; onValueChange: (v: boolean) => void }) {
+  const { theme: t } = useTheme();
+  const styles = {
+    row: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const, paddingVertical: 8 },
+    info: { flex: 1 },
+    title: { color: t.text.primary, fontSize: 14, fontWeight: '600' as const },
+    sub: { color: t.text.muted, fontSize: 12, marginTop: 2 },
+  };
   return (
-    <View style={styles.toggleRow}>
-      <View style={styles.toggleInfo}>
-        <Text style={styles.toggleTitle}>{title}</Text>
-        <Text style={styles.toggleSub}>{sub}</Text>
+    <View style={styles.row}>
+      <View style={styles.info}>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.sub}>{sub}</Text>
       </View>
       <Switch
         value={value}
@@ -1913,328 +1965,22 @@ function Toggle({ title, sub, value, onValueChange }: { title: string; sub: stri
 }
 
 function OptionBtn({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
+  const { theme: t } = useTheme();
+  const styles = {
+    btn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: t.border.mid, backgroundColor: t.bg.secondary },
+    active: { backgroundColor: t.brand.accent, borderColor: t.brand.accent },
+    text: { color: t.text.primary, fontSize: 13, fontWeight: '600' as const },
+    textActive: { color: t.text.inverse },
+  };
   return (
-    <TouchableOpacity style={[styles.optionBtn, active && styles.optionActive]} onPress={onPress}>
-      <Text style={[styles.optionText, active && styles.optionTextActive]}>{label}</Text>
+    <TouchableOpacity style={[styles.btn, active && styles.active]} onPress={onPress}>
+      <Text style={[styles.text, active && styles.textActive]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-/**
- * v3.2.27 — List of trained exit phrases with radio buttons.
- * v3.3.0 — Added per-row actions (🎙 retrain, 🗑 delete) since
- * the Wake/Exit layout puts the trainer *below* the list now
- * (was: the list is below the trainer card). Both taps call
- * back to the parent so the parent can open the trainer with
- * the right preset phrase. onClear stays for the
- * "disable all" link at the bottom.
- *
- * Reads AsyncStorage for keys matching
- * `cyberclaw-exit-samples-*`. Each entry becomes a row; the
- * active one (matches `activePhrase`) gets the green ring.
- * If no phrases are trained, shows a hint pointing to the
- * trainer card below.
- */
-function TrainedPhrasePicker({ activePhrase, onSelect, onClear, onRetrain, onDelete }: {
-  activePhrase: string;
-  onSelect: (p: string) => void;
-  onClear: () => void;
-  // v3.3.0: optional retrain/delete handlers. When
-  // provided, the row shows 🎙 and 🗑 buttons on the
-  // right edge; tapping them calls back to the parent
-  // (which opens the trainer modal / shows the delete
-  // confirm). When omitted, the row is read-only
-  // (preserves v3.2.27 behavior).
-  onRetrain?: (p: string) => void;
-  onDelete?: (p: string) => void;
-}) {
-  const [phrases, setPhrases] = useState<string[]>([]);
-  const reload = useCallback(async () => {
-    try {
-      const keys = await AsyncStorage.getAllKeys();
-      const exitKeys = keys.filter(k => k.startsWith('cyberclaw-exit-samples-'));
-      // Normalize key suffix back to the phrase. The trainer
-      // stores phrases as the suffix with hyphens replacing
-      // spaces; reverse that here.
-      const list = exitKeys.map(k =>
-        k.replace('cyberclaw-exit-samples-', '').replace(/-/g, ' ')
-      );
-      setPhrases(list);
-    } catch (_) {}
-  }, []);
-  useEffect(() => { reload(); }, [reload, activePhrase]);
-
-  if (phrases.length === 0) {
-    return (
-      <View style={styles.trainedPickerHint}>
-        <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
-          No trained exit phrases yet. Tap "Train exit phrase"
-          below to record 6 samples.
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.trainedPicker}>
-      {phrases.map(p => {
-        const active = activePhrase === p;
-        return (
-          <TouchableOpacity
-            key={p}
-            style={[styles.trainedPickerRow, active && styles.trainedPickerRowActive]}
-            onPress={() => onSelect(p)}
-          >
-            <Text style={[styles.trainedPickerRadio, active && styles.trainedPickerRadioActive]}>
-              {active ? '◉' : '◯'}
-            </Text>
-            <Text style={[styles.trainedPickerLabel, active && styles.trainedPickerLabelActive]}>
-              {p}
-            </Text>
-            {onRetrain || onDelete ? (
-              // v3.3.0: small action icon group on the
-              // right. Same row press still selects the
-              // active phrase — these icons are touch-
-              // targets that stop propagation via the
-              // inner TouchableOpacity.
-              <View style={styles.trainedPickerActions}>
-                {onRetrain ? (
-                  <TouchableOpacity
-                    onPress={(e) => { e.stopPropagation?.(); onRetrain(p); }}
-                    style={styles.trainedPickerActionBtn}
-                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                  >
-                    <Text style={styles.trainedPickerActionIcon}>🎙</Text>
-                  </TouchableOpacity>
-                ) : null}
-                {onDelete ? (
-                  <TouchableOpacity
-                    onPress={(e) => { e.stopPropagation?.(); onDelete(p); }}
-                    style={styles.trainedPickerActionBtn}
-                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                  >
-                    <Text style={styles.trainedPickerActionIcon}>🗑</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            ) : (
-              <Text style={styles.trainedPickerBadge}>✓ trained</Text>
-            )}
-          </TouchableOpacity>
-        );
-      })}
-      {activePhrase && (
-        <TouchableOpacity onPress={onClear} style={styles.trainedPickerClear}>
-          <Text style={{ color: '#dc2626', fontSize: 12 }}>Disable exit phrase</Text>
-        </TouchableOpacity>
-      )}
-    </View>
-  );
-}
-
-/**
- * v3.3.0 — List of trained wake phrases, one per companion.
- * Mirrors TrainedPhrasePicker but reads from the wake
- * training data (WakeTrainingModel + native .tflite saved
- * models) instead of the per-phrase exit samples.
- *
- * Each row shows the companion's emoji, name, and the
- * trained wake phrase. Tap a row to make that companion's
- * model the active wake (which the HomeScreen's OWW
- * listener picks up via cyberclaw-audio-settings.wakeWord).
- * Tap 🎙 to retrain (opens the trainer modal pre-loaded
- * with that companion's phrase); tap 🗑 to delete the
- * trained model for that companion.
- *
- * Empty state: shows a hint pointing to the train-new
- * button below.
- */
-function WakePhrasePicker({
-  companions,
-  savedModels,
-  activeCompanionId,
-  onSelect,
-  onRetrain,
-  onDelete,
-}: {
-  companions: Array<{ id: string; name: string; emoji?: string | null; icon?: string | null }>;
-  savedModels: Record<string, { phrase: string; path: string; savedAt: number }>;
-  activeCompanionId: string | null;
-  onSelect: (companionId: string) => void;
-  onRetrain: (companionId: string, phrase: string) => void;
-  onDelete: (companionId: string) => void;
-}) {
-  // Build the list: only companions that have a saved
-  // wake model. Show them in the same order they appear
-  // in the cached agents list (which mirrors the
-  // desktop's arena order).
-  const trainedRows = companions
-    .filter(c => savedModels[c.id]?.phrase)
-    .map(c => ({
-      companionId: c.id,
-      name: c.name,
-      emoji: c.emoji || c.icon || '🐾',
-      phrase: savedModels[c.id].phrase,
-      savedAt: savedModels[c.id].savedAt,
-    }));
-
-  if (trainedRows.length === 0) {
-    return (
-      <View style={styles.trainedPickerHint}>
-        <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
-          No trained wake phrases yet. Tap "Train wake phrase for new companion"
-          below to record 6 samples for one of your companions.
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.trainedPicker}>
-      {trainedRows.map(r => {
-        const active = activeCompanionId === r.companionId;
-        return (
-          <TouchableOpacity
-            key={r.companionId}
-            style={[styles.trainedPickerRow, active && styles.trainedPickerRowActive]}
-            onPress={() => onSelect(r.companionId)}
-          >
-            <Text style={[styles.trainedPickerRadio, active && styles.trainedPickerRadioActive]}>
-              {active ? '◉' : '◯'}
-            </Text>
-            <Text style={[styles.trainedPickerCompanionEmoji]}>{r.emoji}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.trainedPickerLabel, active && styles.trainedPickerLabelActive]}>
-                {r.name}
-              </Text>
-              <Text style={styles.trainedPickerPhrase}>
-                {r.phrase}
-              </Text>
-            </View>
-            <View style={styles.trainedPickerActions}>
-              <TouchableOpacity
-                onPress={(e) => { e.stopPropagation?.(); onRetrain(r.companionId, r.phrase); }}
-                style={styles.trainedPickerActionBtn}
-                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-              >
-                <Text style={styles.trainedPickerActionIcon}>🎙</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={(e) => { e.stopPropagation?.(); onDelete(r.companionId); }}
-                style={styles.trainedPickerActionBtn}
-                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-              >
-                <Text style={styles.trainedPickerActionIcon}>🗑</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        );
-      })}
-      {/* v3.3.0: row showing the currently-active wake
-          model if none of the listed companions is set
-          as active. Without this, the user might train a
-          wake word, have it become active by default,
-          then look at the picker and see no active badge
-          — confusing. Shows "..." if there's a saved
-          model for some companionId not in the current
-          agents list (cached stale). */}
-      {!activeCompanionId && trainedRows.length > 0 ? (
-        <Text style={[styles.trainedPickerBadge, { marginTop: 6, alignSelf: 'flex-start' }]}>
-          Tap a row to activate
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-/**
- * v3.4.0: per-companion exit-phrase picker. Reads
- * AsyncStorage for keys matching
- * `cyberclaw-exit-samples-<companionId>-*` and renders
- * each as a row with active selector + 🎙 retrain + 🗑
- * delete. Mirrors TrainedPhrasePicker but the storage
- * namespace is per-companion (the v3.4.0 storage model
- * move; legacy global keys are migrated by
- * `migrateLegacyExitSamples` on first launch of v3.4.0
- * and then ignored).
- */
-function PerCompanionExitPicker({ companionId, activePhrase, onSelect, onRetrain, onDelete }: {
-  companionId: string;
-  activePhrase: string;
-  onSelect: (p: string) => void;
-  onRetrain?: (p: string) => void;
-  onDelete?: (p: string) => void;
-}) {
-  const [phrases, setPhrases] = useState<string[]>([]);
-  const reload = useCallback(async () => {
-    try {
-      const keys = await AsyncStorage.getAllKeys();
-      const prefix = `cyberclaw-exit-samples-${companionId}-`;
-      const exitKeys = keys.filter(k => k.startsWith(prefix));
-      const list = exitKeys.map(k =>
-        k.replace(prefix, '').replace(/-/g, ' ')
-      );
-      setPhrases(list);
-    } catch (_) {}
-  }, [companionId]);
-  useEffect(() => { reload(); }, [reload, activePhrase]);
-
-  if (phrases.length === 0) {
-    return (
-      <View style={styles.trainedPickerHint}>
-        <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
-          No trained exit phrases yet. Tap "Train new exit phrase"
-          below to record 6 samples.
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.trainedPicker}>
-      {phrases.map(p => {
-        const active = activePhrase === p;
-        return (
-          <TouchableOpacity
-            key={p}
-            style={[styles.trainedPickerRow, active && styles.trainedPickerRowActive]}
-            onPress={() => onSelect(p)}
-          >
-            <Text style={[styles.trainedPickerRadio, active && styles.trainedPickerRadioActive]}>
-              {active ? '◉' : '◯'}
-            </Text>
-            <Text style={[styles.trainedPickerLabel, active && styles.trainedPickerLabelActive]}>
-              {p}
-            </Text>
-            <View style={styles.trainedPickerActions}>
-              {onRetrain ? (
-                <TouchableOpacity
-                  onPress={(e) => { e.stopPropagation?.(); onRetrain(p); }}
-                  style={styles.trainedPickerActionBtn}
-                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                >
-                  <Text style={styles.trainedPickerActionIcon}>🎙</Text>
-                </TouchableOpacity>
-              ) : null}
-              {onDelete ? (
-                <TouchableOpacity
-                  onPress={(e) => { e.stopPropagation?.(); onDelete(p); }}
-                  style={styles.trainedPickerActionBtn}
-                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                >
-                  <Text style={styles.trainedPickerActionIcon}>🗑</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+const makeStyles = (t: Theme) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.bg.primary },
   // v3.4.5: bumped paddingTop from 16 → 50 on BOTH Android
   // and iOS. Tobe's screenshot showed the section still
   // flush against the status bar even after the first
@@ -2260,55 +2006,73 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'android' ? 34 : 10,
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: t.bg.primary,
     borderBottomWidth: 1,
-    borderBottomColor: '#1f1f1f',
+    borderBottomColor: t.border.subtle,
   },
-  backBtn: { color: '#f7931a', fontSize: 16 },
-  title: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginLeft: 16 },
+  backBtn: { color: t.brand.accent, fontSize: 16 },
+  title: { color: t.text.primary, fontSize: 20, fontWeight: 'bold', marginLeft: 16 },
+  // v3.10.112: sun/moon theme toggle. Right-aligned in the
+  // header. Pads with a small hit-area so 44pt touch targets
+  // are respected. The icon + the active-label border swap
+  // based on the current theme so the user can read the
+  // current state at a glance.
+  themeToggleBtn: {
+    marginLeft: 'auto',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: t.border.mid,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  themeToggleIcon: { fontSize: 16 },
+  themeToggleLabel: { fontSize: 12, color: t.text.secondary, fontWeight: '600' },
   // v3.1.75: orange section border for better visual distinction
   // (was #222 — almost invisible against the #111 background).
   // Uses the same #f7931a brand orange as the active option pills
   // and the test buttons, so the whole settings page reads as
   // one consistent colour system.
-  section: { backgroundColor: '#111', borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#f7931a' },
-  sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
-  sectionDesc: { color: '#888', fontSize: 13, marginBottom: 16, lineHeight: 18 },
-  subGroupTitle: { color: '#aaa', fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12, letterSpacing: 0.5 },
+  section: { backgroundColor: t.bg.tertiary, borderRadius: 12, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: t.brand.accent },
+  sectionTitle: { color: t.brand.accent, fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+  sectionDesc: { color: t.text.muted, fontSize: 13, marginBottom: 16, lineHeight: 18 },
+  subGroupTitle: { color: t.text.muted, fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12, letterSpacing: 0.5 },
   // v3.4.7: groupTitle + groupDivider styles REMOVED.
   // Listening settings and Companions are now separate
   // Section blocks (each with its own orange border).
-  label: { color: '#ccc', fontSize: 14, marginBottom: 6, marginTop: 8 },
-  hint: { color: '#666', fontSize: 12, marginTop: 4, marginBottom: 8, lineHeight: 16 },
-  hintSmall: { color: '#10b981', fontSize: 11, marginTop: 4, fontStyle: 'italic' },
-  savedHint: { color: '#4caf50', fontSize: 12, marginTop: 6 },
-  input: { backgroundColor: '#1a1a2e', color: '#e0e0e0', borderRadius: 8, padding: 12, fontSize: 16, borderWidth: 1, borderColor: '#333' },
-  button: { backgroundColor: '#f7931a', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12 },
-  buttonText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
-  buttonConnected: { backgroundColor: '#333', borderWidth: 1, borderColor: '#4ade80' },
-  buttonTextConnected: { color: '#4ade80' },
+  label: { color: t.text.secondary, fontSize: 14, marginBottom: 6, marginTop: 8 },
+  hint: { color: t.text.dim, fontSize: 12, marginTop: 4, marginBottom: 8, lineHeight: 16 },
+  hintSmall: { color: t.brand.success, fontSize: 11, marginTop: 4, fontStyle: 'italic' },
+  savedHint: { color: t.brand.success, fontSize: 12, marginTop: 6 },
+  input: { backgroundColor: t.bg.tertiary, color: t.text.primary, borderRadius: 8, padding: 12, fontSize: 16, borderWidth: 1, borderColor: t.border.mid },
+  button: { backgroundColor: t.brand.accent, borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12 },
+  buttonText: { color: t.text.inverse, fontSize: 16, fontWeight: 'bold' },
+  buttonConnected: { backgroundColor: t.border.mid, borderWidth: 1, borderColor: t.brand.success },
+  buttonTextConnected: { color: t.brand.success },
   statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
-  dotGreen: { backgroundColor: '#4ade80' },
-  dotYellow: { backgroundColor: '#eab308' },
-  dotRed: { backgroundColor: '#666' },
-  statusText: { color: '#ccc', fontSize: 14 },
-  divider: { height: 1, backgroundColor: '#222', marginVertical: 12 },
-  permRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 6, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#1a1a2e' },
-  permLabel: { color: '#ddd', fontSize: 14, fontWeight: 'bold' },
-  permDesc: { color: '#777', fontSize: 11, marginTop: 2 },
-  permBtn: { backgroundColor: '#f7931a', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  permBtnText: { color: '#000', fontSize: 12, fontWeight: 'bold' },
+  dotGreen: { backgroundColor: t.brand.success },
+  dotYellow: { backgroundColor: t.brand.warning },
+  dotRed: { backgroundColor: t.text.dim },
+  statusText: { color: t.text.secondary, fontSize: 14 },
+  divider: { height: 1, backgroundColor: t.bg.tertiary, marginVertical: 12 },
+  permRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 6, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: t.bg.tertiary },
+  permLabel: { color: t.text.primary, fontSize: 14, fontWeight: 'bold' },
+  permDesc: { color: t.text.muted, fontSize: 11, marginTop: 2 },
+  permBtn: { backgroundColor: t.brand.accent, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  permBtnText: { color: t.text.inverse, fontSize: 12, fontWeight: 'bold' },
   permBtnSmall: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#111', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#222' },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: t.bg.tertiary, borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: t.bg.tertiary },
   toggleInfo: { flex: 1, marginRight: 12 },
-  toggleTitle: { color: '#eee', fontSize: 14, fontWeight: '600' },
-  toggleSub: { color: '#666', fontSize: 12, marginTop: 2 },
+  toggleTitle: { color: t.text.primary, fontSize: 14, fontWeight: '600' },
+  toggleSub: { color: t.text.dim, fontSize: 12, marginTop: 2 },
   optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  optionBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#1a1a2e', borderWidth: 1, borderColor: '#333' },
-  optionActive: { backgroundColor: 'rgba(247,147,26,0.2)', borderColor: '#f7931a' },
-  optionText: { color: '#888', fontSize: 13 },
-  optionTextActive: { color: '#f7931a', fontWeight: 'bold' },
+  optionBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: t.bg.tertiary, borderWidth: 1, borderColor: t.border.mid },
+  optionActive: { backgroundColor: 'rgba(247,147,26,0.2)', borderColor: t.brand.accent },
+  optionText: { color: t.text.muted, fontSize: 13 },
+  optionTextActive: { color: t.brand.accent, fontWeight: 'bold' },
   // v3.2.27 — trained-phrase picker rows
   trainedPicker: { marginTop: 8 },
   trainedPickerHint: { marginTop: 8, paddingVertical: 8 },
@@ -2317,22 +2081,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: t.bg.tertiary,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: t.border.mid,
     marginBottom: 6,
   },
   trainedPickerRowActive: {
     backgroundColor: 'rgba(16,185,129,0.15)',
-    borderColor: '#10b981',
+    borderColor: t.brand.success,
   },
-  trainedPickerRadio: { color: '#666', fontSize: 18, marginRight: 10 },
-  trainedPickerRadioActive: { color: '#10b981' },
-  trainedPickerLabel: { color: '#fff', fontSize: 14, flex: 1 },
+  trainedPickerRadio: { color: t.text.dim, fontSize: 18, marginRight: 10 },
+  trainedPickerRadioActive: { color: t.brand.success },
+  trainedPickerLabel: { color: t.text.primary, fontSize: 14, flex: 1 },
   trainedPickerLabelActive: { fontWeight: '700' },
   trainedPickerBadge: {
-    color: '#10b981',
+    color: t.brand.success,
     fontSize: 11,
     fontWeight: '600',
     backgroundColor: 'rgba(16,185,129,0.15)',
@@ -2364,39 +2128,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 14,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: t.bg.tertiary,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: t.border.mid,
     marginBottom: 6,
   },
   companionListRowActive: {
     backgroundColor: 'rgba(16,185,129,0.10)',
-    borderColor: '#10b981',
+    borderColor: t.brand.success,
   },
   companionListEmoji: {
     fontSize: 24,
     marginRight: 12,
   },
   companionListName: {
-    color: '#fff',
+    color: t.text.primary,
     fontSize: 15,
     fontWeight: '600',
   },
   companionListDetail: {
-    color: '#888',
+    color: t.text.muted,
     fontSize: 12,
     marginTop: 2,
     fontStyle: 'italic',
   },
   companionListActive: {
-    color: '#10b981',
+    color: t.brand.success,
     fontSize: 18,
     marginHorizontal: 8,
     fontWeight: 'bold',
   },
   companionListArrow: {
-    color: '#888',
+    color: t.text.muted,
     fontSize: 22,
     marginLeft: 4,
   },
@@ -2407,7 +2171,7 @@ const styles = StyleSheet.create({
   phaseCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0f1626',
+    backgroundColor: t.bg.secondary,
     borderRadius: 12,
     borderWidth: 2,
     paddingVertical: 16,
@@ -2419,17 +2183,17 @@ const styles = StyleSheet.create({
     fontSize: 28,
   },
   phaseCardTitle: {
-    color: '#fff',
+    color: t.text.primary,
     fontSize: 16,
     fontWeight: '600',
   },
   phaseCardSub: {
-    color: '#9aa0b4',
+    color: t.text.muted,
     fontSize: 12,
     marginTop: 3,
   },
   phaseCardArrow: {
-    color: '#888',
+    color: t.text.muted,
     fontSize: 24,
     marginLeft: 4,
   },
@@ -2446,11 +2210,11 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   detailBackBtnText: {
-    color: '#f7931a',
+    color: t.brand.accent,
     fontSize: 16,
   },
   detailHeader: {
-    color: '#fff',
+    color: t.text.primary,
     fontSize: 18,
     fontWeight: 'bold',
     flex: 1,
@@ -2477,7 +2241,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   trainedPickerPhrase: {
-    color: '#aaa',
+    color: t.text.muted,
     fontSize: 12,
     marginTop: 1,
     fontStyle: 'italic',
@@ -2487,23 +2251,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   thresholdRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  thresholdEdge: { color: '#888', fontSize: 12, width: 32, textAlign: 'center' },
+  thresholdEdge: { color: t.text.muted, fontSize: 12, width: 32, textAlign: 'center' },
   thresholdCell: { flex: 1, height: 28, justifyContent: 'center', alignItems: 'center', borderRadius: 4, marginHorizontal: 1 },
-  thresholdCellActive: { backgroundColor: '#f7931a' },
-  thresholdCellPast: { backgroundColor: '#3a2a00' },
-  thresholdCellFuture: { backgroundColor: '#1a1a1a' },
-  thresholdCellText: { color: '#666', fontSize: 9 },
-  debugBox: { backgroundColor: '#0a0a1a', borderRadius: 8, padding: 10, marginTop: 12, borderWidth: 1, borderColor: '#222' },
-  debugBoxTitle: { color: '#f7931a', fontSize: 11, fontWeight: 'bold' },
-  debugBoxClear: { color: '#666', fontSize: 11 },
-  debugLine: { color: '#8a8', fontSize: 11, fontFamily: 'monospace', lineHeight: 16 },
-  trainBtn: { backgroundColor: '#1a1a2e', borderRadius: 10, padding: 14, marginTop: 8, borderWidth: 1, borderColor: '#f7931a', borderStyle: 'dashed', alignItems: 'center' },
-  trainBtnText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  trainBtnSub: { color: '#888', fontSize: 12, marginTop: 2 },
-  testBtn: { backgroundColor: 'rgba(247,147,26,0.15)', borderRadius: 8, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#f7931a', marginTop: 8 },
-  testBtnText: { color: '#f7931a', fontSize: 14, fontWeight: '600' },
-  saveAudioBtn: { backgroundColor: '#22c55e', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12 },
-  saveAudioBtnText: { color: '#000', fontSize: 15, fontWeight: 'bold' },
+  thresholdCellActive: { backgroundColor: t.brand.accent },
+  thresholdCellPast: { backgroundColor: t.brand.warning },
+  thresholdCellFuture: { backgroundColor: t.bg.tertiary },
+  thresholdCellText: { color: t.text.dim, fontSize: 9 },
+  debugBox: { backgroundColor: t.bg.secondary, borderRadius: 8, padding: 10, marginTop: 12, borderWidth: 1, borderColor: t.bg.tertiary },
+  debugBoxTitle: { color: t.brand.accent, fontSize: 11, fontWeight: 'bold' },
+  debugBoxClear: { color: t.text.dim, fontSize: 11 },
+  debugLine: { color: t.brand.success, fontSize: 11, fontFamily: 'monospace', lineHeight: 16 },
+  trainBtn: { backgroundColor: t.bg.tertiary, borderRadius: 10, padding: 14, marginTop: 8, borderWidth: 1, borderColor: t.brand.accent, borderStyle: 'dashed', alignItems: 'center' },
+  trainBtnText: { color: t.text.primary, fontSize: 15, fontWeight: 'bold' },
+  trainBtnSub: { color: t.text.muted, fontSize: 12, marginTop: 2 },
+  testBtn: { backgroundColor: 'rgba(247,147,26,0.15)', borderRadius: 8, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: t.brand.accent, marginTop: 8 },
+  testBtnText: { color: t.brand.accent, fontSize: 14, fontWeight: '600' },
+  saveAudioBtn: { backgroundColor: t.brand.success, borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12 },
+  saveAudioBtnText: { color: t.text.inverse, fontSize: 15, fontWeight: 'bold' },
   // v3.8.3: send-trained-model badge styles. Same shape as
   // the wake trainer's getSavedWakeModels badge but tinted
   // green for the 'trained' state and gray for 'no model'.
@@ -2520,17 +2284,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sendModelBadgeIcon: {
-    color: '#22c55e',
+    color: t.brand.success,
     fontSize: 18,
     fontWeight: '700',
     marginRight: 10,
   },
   sendModelBadgeTextWrap: { flex: 1 },
-  sendModelBadgeText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  sendModelBadgeMeta: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
-  aboutFooter: { alignItems: 'center', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#222' },
-  aboutVersion: { color: '#666', fontSize: 12 },
-  aboutLink: { color: '#444', fontSize: 11, marginTop: 4 },
+  sendModelBadgeText: { color: t.text.primary, fontSize: 14, fontWeight: '600' },
+  sendModelBadgeMeta: { color: t.text.muted, fontSize: 12, marginTop: 2 },
+  aboutFooter: { alignItems: 'center', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: t.bg.tertiary },
+  aboutVersion: { color: t.text.dim, fontSize: 12 },
+  aboutLink: { color: t.border.strong, fontSize: 11, marginTop: 4 },
   // v3.1.68: wake-training companion picker modal. Bottom
   // sheet style with a dimmed backdrop. The backdrop
   // Pressable closes the modal; the inner Pressable
@@ -2538,27 +2302,27 @@ const styles = StyleSheet.create({
   // doesn't bubble up and close the sheet.
   pickerOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: t.bg.scrim,
     justifyContent: 'flex-end',
   },
   pickerSheet: {
-    backgroundColor: '#111',
+    backgroundColor: t.bg.tertiary,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingHorizontal: 16,
     paddingTop: 18,
     paddingBottom: Platform.OS === 'android' ? 24 : 16,
     borderTopWidth: 1,
-    borderColor: '#222',
+    borderColor: t.bg.tertiary,
   },
   pickerTitle: {
-    color: '#fff',
+    color: t.text.primary,
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 4,
   },
   pickerSub: {
-    color: '#888',
+    color: t.text.muted,
     fontSize: 12,
     marginBottom: 12,
   },
@@ -2571,13 +2335,13 @@ const styles = StyleSheet.create({
   pickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1a1a2e',
+    backgroundColor: t.bg.tertiary,
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: t.border.mid,
   },
   pickerRowIcon: {
     fontSize: 24,
@@ -2586,19 +2350,19 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   pickerRowName: {
-    color: '#fff',
+    color: t.text.primary,
     fontSize: 15,
     fontWeight: '600',
     flex: 1,
   },
   pickerRowHint: {
-    color: '#f7931a',
+    color: t.brand.accent,
     fontSize: 12,
     fontWeight: '600',
     marginLeft: 8,
   },
   pickerRowBadge: {
-    color: '#10b981',
+    color: t.brand.success,
     fontSize: 10,
     fontWeight: '700',
     backgroundColor: '#10b98122',
@@ -2609,14 +2373,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   pickerCancel: {
-    backgroundColor: '#222',
+    backgroundColor: t.bg.tertiary,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: 'center',
     marginTop: 4,
   },
   pickerCancelText: {
-    color: '#ccc',
+    color: t.text.secondary,
     fontSize: 15,
     fontWeight: '600',
   },
