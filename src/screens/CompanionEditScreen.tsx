@@ -99,9 +99,6 @@ const CHATTINESS_DESCRIPTIONS = {
 // a one-component re-add.
 
 export default function CompanionEditScreen({
-  // v3.10.113: theme for the root container bg.
-  const { theme: t } = useTheme();
-
   companionId,
   companionName,
   initialEmoji,
@@ -112,6 +109,8 @@ export default function CompanionEditScreen({
   initialEmoji?: string | null;
   onBack: () => void;
 }) {
+  // v3.10.113: theme for the root container bg.
+  const { theme: t } = useTheme();
   const [name, setName] = useState(companionName || '');
   const [scale, setScale] = useState<number>(4);
   // v3.10.93: sprite picker state. pixelCompanionId

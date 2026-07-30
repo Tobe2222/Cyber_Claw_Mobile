@@ -83,9 +83,6 @@ type Companion = {
 };
 
 export default function CompanionSettingsScreen({
-  // v3.10.113: theme for the root container bg.
-  const { theme: t } = useTheme();
-
   companionId,
   onBack,
   // v3.10.0: push-callbacks for trainer / manager /
@@ -109,6 +106,8 @@ export default function CompanionSettingsScreen({
   onPushExitTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
   onOpenCompanionEdit?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
 }) {
+  // v3.10.113: theme for the root container bg.
+  const { theme: t } = useTheme();
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
   // = sub-page for that phase.

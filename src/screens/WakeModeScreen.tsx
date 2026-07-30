@@ -134,9 +134,9 @@ interface WakeModeScreenProps {
 }
 
 export default function WakeModeScreen({
+  companionId, agents, onExit, voiceMode = false, onWakeMatch }: WakeModeScreenProps) {
   // v3.10.113: theme for the root container bg.
   const { theme: t } = useTheme();
- companionId, agents, onExit, voiceMode = false, onWakeMatch }: WakeModeScreenProps) {
   const webViewRef = useRef<WebView>(null);
   const recorderActiveRef = useRef<boolean>(false);
   // v3.9.6 — ref for the per-turn silence listener unsub.

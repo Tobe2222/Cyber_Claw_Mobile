@@ -90,13 +90,12 @@ const CACHE_KEY = 'cyberclaw-quests';
 const LEGACY_KEY_PREFIX = 'cyberclaw-quests-';
 
 export default function QuestsScreen({
-  // v3.10.113: theme for the root container bg.
-  const { theme: t } = useTheme();
-
   onBack,
 }: {
   onBack: () => void;
 }) {
+  // v3.10.113: theme for the root container bg.
+  const { theme: t } = useTheme();
   // v3.10.86: SafeAreaInsets for the editor modal's top
   // padding. See the comment on the import.
   const insets = useSafeAreaInsets();
