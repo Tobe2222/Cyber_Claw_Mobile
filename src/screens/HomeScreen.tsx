@@ -4425,8 +4425,24 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     borderColor: '#222',
   },
   companionTabActive: {
-    backgroundColor: 'rgba(247,147,26,0.18)',
-    borderColor: '#f7931a',
+    // v3.10.118: was rgba(247,147,26,0.18) bg + #f7931a
+    // border. Tobe reported (Discord #cyber-dev
+    // 2026-07-31 15:45 GMT+2) that the bright orange
+    // active tab still "looks off in relation to the
+    // rest" — the home screen now has forest frame +
+    // forest tab bar (v3.10.114-117) and the orange
+    // active state fights that palette.
+    //
+    // Switch to bg.forestDark bg + border.strong border
+    // in BOTH light + dark mode (no `t.name === 'light'`
+    // check — the contrast issue is the same in both
+    // modes because the orange is on top of the
+    // earth/forest tab bar bg, which is dark in both).
+    // The active tab still pops (deeper green on dark
+    // forest) but matches the home-screen palette
+    // instead of shouting brand-accent orange.
+    backgroundColor: t.bg.forestDark,
+    borderColor: t.border.strong,
   },
   // v3.1.48: tighter companion tab emoji and name.
   companionTabEmoji: {
@@ -4449,7 +4465,16 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     maxWidth: 80,
   },
   companionTabNameActive: {
-    color: '#f7931a',
+    // v3.10.118: was #f7931a (brand accent orange). Tobe
+    // reported (Discord #cyber-dev 2026-07-31 15:45 GMT+2)
+    // that the orange active tab "looks off in relation
+    // to the rest" — the home screen is now forest-themed
+    // and the orange competes with that. Switch to
+    // text.primary (bright white in dark mode, deep
+    // charcoal in light) so the active companion name
+    // reads as "the one you're using" without shouting
+    // brand-accent.
+    color: t.text.primary,
   },
   companionTabBadge: {
     marginLeft: 6,

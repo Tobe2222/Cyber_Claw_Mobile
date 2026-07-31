@@ -73,6 +73,18 @@ body.wake-mode #status{display:none!important}
   display:flex;gap:4px;z-index:20;pointer-events:all;
 }
 body.wake-mode #ctrlBottomLeft{display:none!important}
+/* v3.10.118: bottom-right arena background picker
+     button. Mirror of #ctrlBottomLeft at the same
+     6px bottom-right inset. The actual picker menu
+     (#bg-menu) lives below this button — styled
+     separately so the button can stay small
+     (36x36 like #feed-btn). Hidden in wake/voice
+     mode (the arena is fullscreen for those). */
+#ctrlBottomRight{
+  position:absolute;bottom:6px;right:6px;
+  display:flex;gap:4px;z-index:20;pointer-events:all;
+}
+body.wake-mode #ctrlBottomRight{display:none!important}
 .ctrlBtnSmall{
   background:rgba(0,0,0,0.72);
   border:1px solid rgba(247,147,26,0.45);
@@ -181,6 +193,76 @@ body.wake-mode #ctrlBottomLeft{display:none!important}
 }
 body.wake-mode #feed-menu { display: none !important; }
 
+/* v3.10.118: in-arena background picker menu.
+     Mirrors #feed-menu positioning (centered
+     horizontally at the bottom) so the two
+     pickers look like a matched pair. Each option
+     is a tile showing the background's id
+     ('forest' / 'meadow' / 'grove' / 'none') and
+     a small thumbnail (or 'None' label). Selection
+     state matches #feed-menu .feed-treat.selected
+     (orange border + glow). */
+#bg-menu {
+  position: absolute;
+  bottom: 50px;
+  right: 6px;
+  z-index: 18;
+  pointer-events: all;
+  background: rgba(10,10,14,0.96);
+  border: 1px solid rgba(247,147,26,0.45);
+  border-radius: 12px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+#bg-menu.hidden { display: none; }
+#bg-menu .bg-title {
+  font-size: 9px;
+  color: #f7931a;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  text-align: center;
+  margin-bottom: 4px;
+  font-family: 'Orbitron', monospace;
+}
+#bg-menu .bg-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1a1a28;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #ddd;
+  font-family: 'Orbitron', monospace;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: transform 0.1s;
+}
+#bg-menu .bg-option:active { transform: scale(0.96); }
+#bg-menu .bg-option.selected {
+  border-color: #f7931a;
+  background: rgba(247,147,26,0.18);
+  box-shadow: 0 0 8px rgba(247,147,26,0.4);
+}
+#bg-menu .bg-option .bg-thumb {
+  width: 28px;
+  height: 14px;
+  border-radius: 3px;
+  background: #2a2a3a;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+body.wake-mode #bg-menu { display: none !important; }
+
 /* v3.10.75: treat ghost — the dragged treat emoji
      that follows the finger after selecting. Default
      hidden; .active class makes it visible. The
@@ -269,6 +351,52 @@ body.wake-mode #feed-menu { display: none !important; }
      src/css/layout.css:889 and src/js/app.js:4782. -->
 <div id="ctrlBottomLeft">
   <button class="ctrlBtnSmall" id="feedBtn" title="Feed companion">🍖</button>
+</div>
+
+<!-- v3.10.118: bottom-right arena background picker
+     button. Taps open the #bg-menu (in-arena picker,
+     no React Native round-trip). Local-only — the
+     selection is persisted via window.localStorage,
+     NOT synced from the desktop's companion-state.
+     Tobe's request (2026-07-31 15:45 GMT+2): "add the
+     arena backgrounds into the mobile end also. These
+     dont need to be synced. Put it in the bottom right
+     of the arena." The three backgrounds (forest,
+     meadow, grove) already exist in
+     android/app/src/main/assets/backgrounds/ and the
+     arena already has setBackground(id) +
+     loadBackground(id) + bgImage rendering — v3.10.118
+     just adds the UI to pick one. -->
+<div id="ctrlBottomRight">
+  <button class="ctrlBtnSmall" id="bgBtn" title="Arena background">🌄</button>
+</div>
+
+<!-- v3.10.118: in-arena background picker. Same
+     pattern as #feed-menu (local toggle, no React
+     Native IPC). Options: None / forest / meadow /
+     grove. None clears bgImage; the others call
+     setBackground(id) which calls loadBackground(id)
+     which sets bgImage from file:///android_asset/
+     backgrounds/. Selection persists in localStorage
+     under 'cyberclaw-mobile-arena-bg'. -->
+<div id="bg-menu" class="hidden">
+  <span class="bg-title">🌄 Background</span>
+  <button class="bg-option" data-bg="none">
+    <span class="bg-thumb" style="background:#0a0a2e;"></span>
+    <span>None</span>
+  </button>
+  <button class="bg-option" data-bg="forest">
+    <img class="bg-thumb" src="file:///android_asset/backgrounds/pixel_landscape_2.png" alt="forest"/>
+    <span>Forest</span>
+  </button>
+  <button class="bg-option" data-bg="meadow">
+    <img class="bg-thumb" src="file:///android_asset/backgrounds/pixel_landscape_1.png" alt="meadow"/>
+    <span>Meadow</span>
+  </button>
+  <button class="bg-option" data-bg="grove">
+    <img class="bg-thumb" src="file:///android_asset/backgrounds/pixel_landscape_3.png" alt="grove"/>
+    <span>Grove</span>
+  </button>
 </div>
 
 <!-- v3.10.75: in-arena feed menu (was a bottom-sheet
@@ -1207,6 +1335,67 @@ body.wake-mode #feed-menu { display: none !important; }
     loadBackground(id);
   }
 
+  // v3.10.118: bg-menu picker. The "None" option
+  // doesn't go through loadBackground() (which always
+  // tries to load an image); it sets bgImage to null
+  // and updates currentBgId so the selection ring on
+  // the menu reflects the choice. Selection persists
+  // in localStorage so it survives arena reload.
+  function selectBg(id) {
+    if (id === 'none') {
+      bgImage = null;
+      currentBgId = 'none';
+    } else {
+      setBackground(id);
+    }
+    try { localStorage.setItem('cyberclaw-mobile-arena-bg', id); } catch (_) {}
+    refreshBgMenuSelection();
+  }
+
+  function refreshBgMenuSelection() {
+    document.querySelectorAll('#bg-menu .bg-option').forEach((btn) => {
+      const id = btn.getAttribute('data-bg');
+      if (id === currentBgId) btn.classList.add('selected');
+      else btn.classList.remove('selected');
+    });
+  }
+
+  function toggleBgMenu() {
+    const m = document.getElementById('bg-menu');
+    if (!m) return;
+    // v3.10.118: close #feed-menu if open so the two
+    // menus don't fight for the same screen space.
+    const fm = document.getElementById('feed-menu');
+    if (fm && !fm.classList.contains('hidden')) fm.classList.add('hidden');
+    m.classList.toggle('hidden');
+    if (!m.classList.contains('hidden')) refreshBgMenuSelection();
+  }
+
+  // Wire the 🌄 button + each menu option after the
+  // DOM is ready. Using DOMContentLoaded check first
+  // (the script runs after the body in the same HTML
+  // file, so the elements exist already, but the
+  // guard is cheap).
+  function wireBgMenu() {
+    const btn = document.getElementById('bgBtn');
+    if (btn) btn.addEventListener('click', toggleBgMenu);
+    document.querySelectorAll('#bg-menu .bg-option').forEach((opt) => {
+      opt.addEventListener('click', () => {
+        const id = opt.getAttribute('data-bg');
+        selectBg(id);
+        // Close menu after selection (single-tap flow,
+        // matches #feed-menu behaviour).
+        const m = document.getElementById('bg-menu');
+        if (m) m.classList.add('hidden');
+      });
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireBgMenu);
+  } else {
+    wireBgMenu();
+  }
+
   function drawBackground() {
     const w = canvas.width, h = canvas.height;
     // v3.1.63: solid black background in either wake mode
@@ -1983,7 +2172,27 @@ body.wake-mode #feed-menu { display: none !important; }
   window.addEventListener('resize', resize);
   resize();
   loadCatalog();
-  loadBackground('forest');
+  // v3.10.118: read the saved background from
+  // localStorage (set by the bg-menu picker). Fall
+  // back to 'forest' (the prior default) for fresh
+  // installs or if localStorage is unavailable
+  // (private browsing, quota errors). The 'none'
+  // option is handled by selectBg() — it sets
+  // bgImage=null directly without going through
+  // loadBackground().
+  let initialBg = 'forest';
+  try {
+    const saved = localStorage.getItem('cyberclaw-mobile-arena-bg');
+    if (saved && ['forest','meadow','grove','none'].includes(saved)) {
+      initialBg = saved;
+    }
+  } catch (_) {}
+  if (initialBg === 'none') {
+    bgImage = null;
+    currentBgId = 'none';
+  } else {
+    loadBackground(initialBg);
+  }
 
   // v3.1.51: read ?companion=<id> from the URL. WakeModeScreen uses
   // this to set the active companion without needing to call
