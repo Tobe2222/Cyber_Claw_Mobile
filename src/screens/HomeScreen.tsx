@@ -4385,12 +4385,16 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     // (bg.ground) — the tab bar sits between the arena (forest)
     // and the chat (cream/sky), so it reads as 'the ground under
     // the trees'. Border becomes earth-brown for the same reason.
-    // Dark mode keeps the dim-orange forest-green because the
-    // dark-mode tab bar should still feel forest-adjacent, not
-    // earth-toned (dark earth would just look like mud).
-    backgroundColor: t.name === 'light' ? t.bg.ground : t.brand.accentDim,
+    // v3.10.116: dark mode also gets the forest treatment (was
+    // brand.accentDim, the dim orange) because bright orange on
+    // a dark page reads as a neon ad, not a tab bar. Switching
+    // to bg.forestDark (#1f3d28) keeps the home-screen dark-mode
+    // aesthetic consistent (forest frame -> forest tab -> dark
+    // chat) without the orange flash that Tobe flagged in
+    // Discord at 2026-07-31 12:19 GMT+2.
+    backgroundColor: t.name === 'light' ? t.bg.ground : t.bg.forestDark,
     borderBottomWidth: 1,
-    borderBottomColor: t.name === 'light' ? t.border.brown : t.border.mid,
+    borderBottomColor: t.name === 'light' ? t.border.brown : t.border.strong,
     maxHeight: 36,
   },
   companionTabBarContent: {
