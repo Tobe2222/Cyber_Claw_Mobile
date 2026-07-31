@@ -3470,6 +3470,19 @@ useEffect(() => {
         </View>
       )}
 
+      {/* v3.10.115: sky gradient strip between the header and the
+          arena. Tobe's spec (2026-07-30 21:45 GMT+2): a sky-blue
+          gradient above the arena, reading as 'looking up through
+          the trees'. Hidden in fullscreen / landscape like the
+          header. The gradient is implemented as a View with a
+          solid bg.skyLight bg + a thin bg.skyDeep bottom-border
+          (no LinearGradient dep needed — keeps the bundle lean). */}
+      {!fullscreen && !isLandscape && (
+        <View style={styles.skyStrip}>
+          <View style={styles.skyStripCloud} />
+        </View>
+      )}
+
       {/* Arena - Conditional rendering based on fullscreen or landscape */}
       {!keyboardVisible && (
         <View style={fullscreen || isLandscape ? [styles.arenaFrameFullscreen, { zIndex: 100 }] : styles.arenaFrame}>
@@ -4246,16 +4259,50 @@ function formatTimeAgoShort(ts: number): string {
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
+  // v3.10.115: sky gradient strip rendered between the header and
+  // the arena. Solid bg.skyLight fill with a darker bottom border
+  // (bg.skyDeep) to fake the gradient without adding a
+  // LinearGradient dep. ~14dp tall — enough to read as 'sky band'
+  // but doesn't shrink the arena visibly.
+  skyStrip: {
+    height: 14,
+    backgroundColor: t.bg.skyLight,
+    borderBottomWidth: 2,
+    borderBottomColor: t.bg.skyDeep,
+  },
+  // Decorative cloud silhouette. A small rounded View that sits
+  // top-right of the sky strip. ~18dp wide, ~6dp tall, very pale.
+  // Two of these would be ideal but for v3.10.115 we ship one and
+  // see if Tobe wants more — adding a second is a 3-line change.
+  skyStripCloud: {
+    position: 'absolute',
+    top: 4,
+    right: 32,
+    width: 28,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#ffffff',
+    opacity: 0.65,
+  },
   // v3.10.114: heavy forest green frame around the arena. Tobe's
   // spec (2026-07-30 19:16 GMT+2): "I want green and blue, especially
   // heavy around the arena and below the chat." This is the
   // border that surrounds the dark WebView (which is the arena)
   // and gives the home screen its forest depth.
+  // v3.10.115: light mode uses border.strong (deep forest) instead
+  // of brand.accent (orange) so the frame reads as forest, not neon.
+  // Dark mode keeps brand.accent because the dark-mode arena frame
+  // is meant to be a neon-accent outline on a black bg.
   arenaFrame: {
     height: ARENA_HEIGHT,
     borderWidth: 3,
-    borderColor: t.brand.accent,
+    borderColor: t.name === 'light' ? t.border.strong : t.brand.accent,
     borderRadius: 6,
+    // v3.10.115: in light mode, give the arena a soft forest fill
+    // visible behind the WebView while it loads (the WebView itself
+    // is dark; the fill color shows through the brief loading gap
+    // before arena.html paints).
+    backgroundColor: t.name === 'light' ? t.bg.forestDark : 'transparent',
   },
   arenaFrameFullscreen: {
     position: 'absolute',
@@ -4334,9 +4381,16 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   companionTabBar: {
     // v3.10.114: forest green to match the arena frame,
     // reading as a single 'forest zone' above the chat.
-    backgroundColor: t.brand.accentDim,
+    // v3.10.115: in light mode, switch to warm brown earth
+    // (bg.ground) — the tab bar sits between the arena (forest)
+    // and the chat (cream/sky), so it reads as 'the ground under
+    // the trees'. Border becomes earth-brown for the same reason.
+    // Dark mode keeps the dim-orange forest-green because the
+    // dark-mode tab bar should still feel forest-adjacent, not
+    // earth-toned (dark earth would just look like mud).
+    backgroundColor: t.name === 'light' ? t.bg.ground : t.brand.accentDim,
     borderBottomWidth: 1,
-    borderBottomColor: t.border.mid,
+    borderBottomColor: t.name === 'light' ? t.border.brown : t.border.mid,
     maxHeight: 36,
   },
   companionTabBarContent: {

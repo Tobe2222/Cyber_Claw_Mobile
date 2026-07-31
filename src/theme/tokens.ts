@@ -51,6 +51,19 @@ export const darkTheme = {
     elevated: '#222',         // even higher (popovers)
     overlay: 'rgba(0,0,0,0.35)',
     scrim: 'rgba(0,0,0,0.55)',
+
+    // v3.10.115: scene tokens for the home screen. Dark mode
+    // doesn't really need the forest/sky/ground theme (the
+    // arena is its own dark forest), but the tokens exist
+    // for type-symmetry with lightTheme.
+    sky: '#1a2530',
+    skyDeep: '#0f1a25',
+    skyLight: '#1f2c38',
+    ground: '#1a1a1a',
+    groundDark: '#0a0a0a',
+    groundLight: '#222',
+    forest: '#1a2e1f',
+    forestDark: '#0a1a0f',
   },
 
   // Borders
@@ -58,6 +71,11 @@ export const darkTheme = {
     subtle: '#1f1f1f',
     mid: '#333',
     strong: '#444',
+    // v3.10.115: brown earth border (used in dark mode for
+    // any earth-tone element, even though dark mode is
+    // mostly dark)
+    brown: '#5b3e1f',
+    brownDark: '#3a2510',
   },
 
   // Text
@@ -153,12 +171,33 @@ export const lightTheme = {
     elevated: '#dbe9f0',     // popovers — the "sky" tint
     overlay: 'rgba(45,90,61,0.08)',
     scrim: 'rgba(30,55,40,0.32)',
+
+    // v3.10.115: scene tokens. Tobe asked (2026-07-30 21:45 GMT+2)
+    // for forest + sky + brown ground around the home screen:
+    //   - sky: a soft sky-blue gradient strip above the arena
+    //   - skyDeep: deeper sky for the gradient mid-point
+    //   - ground: warm brown earth for the chat list area
+    //   - groundDark: deeper earth for shadows under the chat
+    //   - forest: medium forest green for the arena frame fill
+    //     (different from brand.accent which is the text-color
+    //     forest; bg.forest is the canvas forest)
+    sky: '#bdd9e8',           // pale sky, for the strip above the arena
+    skyDeep: '#6fa3c4',       // mid-sky for gradient
+    skyLight: '#e3f0f6',      // lightest sky for the very top
+    ground: '#a47e54',        // warm brown earth
+    groundDark: '#5b3e1f',    // deep earth for shadows
+    groundLight: '#d4b896',   // pale brown for lit areas
+    forest: '#3d6b4a',        // canvas forest green (medium)
+    forestDark: '#1f3d28',    // deep forest for shadows
   },
 
   border: {
     subtle: '#b8c9a6',        // slightly more visible against softer bg
     mid: '#8aa478',           // forest mid-green, used for active borders
     strong: '#5b7a4a',        // deep forest, used for headers/section titles
+    // v3.10.115: earth-tone borders for the ground area
+    brown: '#7a5635',
+    brownDark: '#4a2f15',
   },
 
   text: {
@@ -223,11 +262,26 @@ export type Theme = {
     readonly elevated: string;
     readonly overlay: string;
     readonly scrim: string;
+    // v3.10.115: scene tokens — sky / ground / forest palette.
+    // These don't have to match across dark and light themes
+    // (dark uses dim navy variants, light uses the colorful
+    // palette) — the type just says "all strings exist".
+    readonly sky: string;
+    readonly skyDeep: string;
+    readonly skyLight: string;
+    readonly ground: string;
+    readonly groundDark: string;
+    readonly groundLight: string;
+    readonly forest: string;
+    readonly forestDark: string;
   };
   readonly border: {
     readonly subtle: string;
     readonly mid: string;
     readonly strong: string;
+    // v3.10.115: earth-tone borders
+    readonly brown: string;
+    readonly brownDark: string;
   };
   readonly text: {
     readonly primary: string;
