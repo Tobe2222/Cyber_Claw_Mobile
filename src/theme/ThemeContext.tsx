@@ -103,7 +103,16 @@ export function ThemeProvider({ children }: ProviderProps): React.JSX.Element {
   }, []);
 
   const toggle = useCallback(() => {
-    setTheme(themeName === 'dark' ? 'light' : 'dark');
+    // v3.10.119: cycle through three themes: dark → forest →
+    // light → dark. The order matches Tobe's mental model:
+    // sun (light) on the left, forest in the middle, moon
+    // (dark) on the right. Cycling through 3 with a single
+    // button is still usable; users who want a specific
+    // theme can use the segmented control in SettingsScreen.
+    const order: ThemeName[] = ['dark', 'forest', 'light'];
+    const idx = order.indexOf(themeName);
+    const next = order[(idx + 1) % order.length];
+    setTheme(next);
   }, [themeName, setTheme]);
 
   const value = useMemo<ThemeContextValue>(() => ({
@@ -116,9 +125,12 @@ export function ThemeProvider({ children }: ProviderProps): React.JSX.Element {
 
   // Status bar follows the theme. barStyle controls the
   // battery / clock color; backgroundColor is the Android
-  // nav bar color (iOS ignores it).
+  // nav bar color (iOS ignores it). v3.10.119: forest
+  // theme is a "light" theme visually (cream-white text
+  // on green/brown scene) so it gets 'dark-content' for
+  // the bar style.
   const isDark = themeName === 'dark';
-  const statusBarBg = isDark ? themes.dark.bg.primary : themes.light.bg.primary;
+  const statusBarBg = themes[themeName].bg.primary;
 
   return (
     <ThemeContext.Provider value={value}>

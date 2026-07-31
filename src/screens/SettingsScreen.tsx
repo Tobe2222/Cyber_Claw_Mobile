@@ -148,6 +148,7 @@ import { version as APP_VERSION } from '../../package.json';
 // drives useTheme(); styles below are built from the same
 // theme tokens so each render picks up the right colors.
 import { useTheme } from '../theme/ThemeContext';
+import type { ThemeName } from '../theme/tokens';
 import { Theme } from '../theme/tokens';
 
 const SETTINGS_KEY = 'cyberclaw-mobile-settings';
@@ -182,7 +183,7 @@ export default function SettingsScreen({
   // returns the active palette + helpers. styles are rebuilt
   // below via a makeStyles factory so they pick up the right
   // colors for the active theme.
-  const { theme, themeName, toggle: toggleTheme } = useTheme();
+  const { theme, themeName, setTheme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
   // ── Connection ────────────────────────────────────────────────
@@ -1179,21 +1180,43 @@ export default function SettingsScreen({
         <Text style={styles.backBtn}>← Back</Text>
       </TouchableOpacity>
       <Text style={styles.title}>Settings</Text>
-      {/* v3.10.112: theme toggle. Right-aligned in the fixed
-          header. The icon flips with the active theme; the
-          label is the OPPOSITE of the current theme (showing
-          the action rather than the state, which reads better
-          in this spot). State is persisted to AsyncStorage via
-          ThemeProvider.setTheme — survives restart. */}
-      <TouchableOpacity
-        onPress={toggleTheme}
-        style={styles.themeToggleBtn}
-        accessibilityRole="button"
-        accessibilityLabel={themeName === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-      >
-        <Text style={styles.themeToggleIcon}>{themeName === 'dark' ? '☀️' : '🌙'}</Text>
-        <Text style={styles.themeToggleLabel}>{themeName === 'dark' ? 'Light' : 'Dark'}</Text>
-      </TouchableOpacity>
+      {/* v3.10.119: three-way theme segmented control.
+          Replaces the v3.10.112 single-toggle button.
+          The order left-to-right matches Tobe's mental
+          model (sun → forest → moon). The active theme
+          is highlighted with the brand accent + a
+          border ring. Each button calls setTheme()
+          directly rather than cycling (the v3.10.118
+          `toggle` still cycles for backwards compat
+          with any other call sites, but the user
+          always sees all three options here). */}
+      <View style={styles.themeSegControl}>
+        {(['light', 'forest', 'dark'] as ThemeName[]).map((id) => {
+          const isActive = themeName === id;
+          const icon = id === 'light' ? '☀️' : id === 'forest' ? '🌳' : '🌙';
+          const label = id === 'light' ? 'Sun' : id === 'forest' ? 'Forest' : 'Moon';
+          const a11y = id === 'light' ? 'Sun (light) theme'
+                     : id === 'forest' ? 'Forest theme'
+                     : 'Moon (dark) theme';
+          return (
+            <TouchableOpacity
+              key={id}
+              onPress={() => setTheme(id)}
+              style={[styles.themeSegBtn, isActive && styles.themeSegBtnActive]}
+              accessibilityRole="button"
+              accessibilityLabel={a11y}
+              accessibilityState={{ selected: isActive }}
+            >
+              <Text style={[styles.themeSegIcon, isActive && styles.themeSegIconActive]}>
+                {icon}
+              </Text>
+              <Text style={[styles.themeSegLabel, isActive && styles.themeSegLabelActive]}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </View>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
@@ -2014,22 +2037,40 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   title: { color: t.text.primary, fontSize: 20, fontWeight: 'bold', marginLeft: 16 },
   // v3.10.112: sun/moon theme toggle. Right-aligned in the
   // header. Pads with a small hit-area so 44pt touch targets
-  // are respected. The icon + the active-label border swap
-  // based on the current theme so the user can read the
-  // current state at a glance.
-  themeToggleBtn: {
+  // v3.10.119: three-way segmented control. Replaces
+  // the v3.10.112 single-toggle. Right-aligned in the
+  // header. Each option (Sun / Forest / Moon) gets
+  // equal width with a small gap between them. The
+  // active option gets the brand accent border + bg
+  // so the user can see which one is current at a
+  // glance. The whole control is one logical unit
+  // (marginLeft: 'auto' pushes it to the right edge
+  // of the header row).
+  themeSegControl: {
     marginLeft: 'auto',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: t.border.mid,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
-  themeToggleIcon: { fontSize: 16 },
-  themeToggleLabel: { fontSize: 12, color: t.text.secondary, fontWeight: '600' },
+  themeSegBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: t.border.subtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'transparent',
+  },
+  themeSegBtnActive: {
+    borderColor: t.brand.accent,
+    backgroundColor: t.brand.accentGlow,
+  },
+  themeSegIcon: { fontSize: 14 },
+  themeSegIconActive: {},
+  themeSegLabel: { fontSize: 11, color: t.text.muted, fontWeight: '600' },
+  themeSegLabelActive: { color: t.brand.accent },
   // v3.1.75: orange section border for better visual distinction
   // (was #222 — almost invisible against the #111 background).
   // Uses the same #f7931a brand orange as the active option pills

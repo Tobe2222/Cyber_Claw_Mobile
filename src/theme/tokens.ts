@@ -28,7 +28,7 @@
  * theme key is `cyberclaw-mobile-theme` — defined here once.
  */
 
-export type ThemeName = 'dark' | 'light';
+export type ThemeName = 'dark' | 'light' | 'forest';
 
 export const THEME_STORAGE_KEY = 'cyberclaw-mobile-theme';
 
@@ -43,94 +43,109 @@ export const DEFAULT_THEME: ThemeName = 'dark';
 export const darkTheme = {
   name: 'dark' as ThemeName,
 
-  // Backgrounds
+  // v3.10.119: redesign as the "moon" theme. Tobe's spec
+  // (2026-07-31 16:00 GMT+2): "dark mode to the right
+  // (moon) which is mostly black and cyber Orange + other
+  // neon colors." The pre-v3.10.119 dark palette was
+  // pretty muted — neon orange on near-black, but the
+  // accents (cyan, green, etc.) were desaturated.
+  // v3.10.119 cranks everything up to cyberpunk-neon:
+  //   - bg.primary = near-black (#050510 — deep space)
+  //   - bg.tertiary / bg.elevated get a slight blue tint
+  //     so the surface elevation reads as "lit by neon"
+  //     not "lit by grey"
+  //   - scene tokens stay dim-navy (no need to redesign)
+  //     but get a deeper sky for night feel
+  //   - brand accent gets brighter (ff8c1a vs ff6b35) and
+  //     the cyan/success/danger/info all go full neon
   bg: {
-    primary: '#0a0a0a',       // main app background
-    secondary: '#0c0c10',     // panels / cards
-    tertiary: '#1a1a22',      // elevated surfaces
-    elevated: '#222',         // even higher (popovers)
-    overlay: 'rgba(0,0,0,0.35)',
-    scrim: 'rgba(0,0,0,0.55)',
+    primary: '#050510',       // near-black, deep space
+    secondary: '#0a0a18',     // panels
+    tertiary: '#15151f',      // elevated (slight blue tint)
+    elevated: '#1a1a28',      // popovers
+    overlay: 'rgba(247,147,26,0.12)',
+    scrim: 'rgba(0,0,0,0.65)',
 
-    // v3.10.115: scene tokens for the home screen. Dark mode
-    // doesn't really need the forest/sky/ground theme (the
-    // arena is its own dark forest), but the tokens exist
-    // for type-symmetry with lightTheme.
-    sky: '#1a2530',
-    skyDeep: '#0f1a25',
-    skyLight: '#1f2c38',
-    ground: '#1a1a1a',
-    groundDark: '#0a0a0a',
-    groundLight: '#222',
-    forest: '#1a2e1f',
-    forestDark: '#0a1a0f',
+    // Scene tokens — deep night versions. The sky strip
+    // becomes a deep navy gradient (the night sky), the
+    // ground becomes a dark earth, the forest becomes a
+    // deep dark forest. These stay dim so the home screen
+    // doesn't get visually loud.
+    sky: '#0c1a2e',
+    skyDeep: '#050a18',
+    skyLight: '#1a2a4e',
+    ground: '#3a2a18',
+    groundDark: '#1a0f08',
+    groundLight: '#5a3a22',
+    forest: '#0a2a14',
+    forestDark: '#050f08',
   },
 
   // Borders
   border: {
-    subtle: '#1f1f1f',
-    mid: '#333',
-    strong: '#444',
-    // v3.10.115: brown earth border (used in dark mode for
-    // any earth-tone element, even though dark mode is
-    // mostly dark)
-    brown: '#5b3e1f',
-    brownDark: '#3a2510',
+    subtle: '#1f1f2f',
+    mid: '#2a2a3f',
+    strong: '#3a3a55',
+    brown: '#3a2a18',
+    brownDark: '#1a0f08',
   },
 
   // Text
   text: {
-    primary: '#e8e8ec',
-    secondary: '#aaa',
-    muted: '#888',
-    dim: '#555',
+    primary: '#ffffff',
+    secondary: '#d4d4e0',
+    muted: '#7a7a8a',
+    dim: '#4a4a5a',
     inverse: '#0a0a0a',
   },
 
   // Brand
   brand: {
-    // Originals — kept as aliases for code that still references them
-    accent: '#ff6b35',        // orange
+    // v3.10.119: brighter neon orange. The pre-v3.10.119
+    // #ff6b35 was already saturated; bumping to #ff8c1a
+    // makes it pop harder against the deeper bg.primary
+    // (#050510 vs the old #0a0a0a). Cyberpunk-neon.
+    accent: '#ff8c1a',
     accentDim: '#cc5528',
-    accentBright: '#f7931e',
-    accentGlow: 'rgba(255,107,53,0.5)',
+    accentBright: '#ffaa3f',
+    accentGlow: 'rgba(255,140,26,0.5)',
 
-    // Secondary
-    cyan: '#00d4ff',
-    cyanDim: '#0099bb',
-    cyanSoft: 'rgba(0,212,255,0.10)',
-    cyanGlow: 'rgba(0,212,255,0.30)',
+    // v3.10.119: neon cyan, brighter.
+    cyan: '#00f0ff',
+    cyanDim: '#00a8c0',
+    cyanSoft: 'rgba(0,240,255,0.12)',
+    cyanGlow: 'rgba(0,240,255,0.40)',
 
-    // Semantic
-    success: '#4ade80',
-    successSoft: 'rgba(34,197,94,0.12)',
-    danger: '#dc2626',
-    dangerSoft: 'rgba(220,38,38,0.12)',
-    warning: '#f59e0b',
-    info: '#3b82f6',
-    infoSoft: 'rgba(59,130,246,0.12)',
+    // Semantic — neon variants
+    success: '#22ff88',        // neon green
+    successSoft: 'rgba(34,255,136,0.12)',
+    danger: '#ff2d6f',        // neon pink (cyberpunk-danger)
+    dangerSoft: 'rgba(255,45,111,0.12)',
+    warning: '#ffd000',        // neon yellow
+    info: '#00d4ff',          // neon blue
+    infoSoft: 'rgba(0,212,255,0.12)',
   },
 
-  // Rarity (RPG)
+  // Rarity (RPG) — neon variants for cyberpunk feel
   rarity: {
-    common: '#9ca3af',
-    uncommon: '#4ade80',
-    rare: '#00d4ff',
-    epic: '#ff6b35',
-    legendary: '#f7931e',
-    mythic: '#f472b6',
+    common: '#7a7a8a',
+    uncommon: '#22ff88',
+    rare: '#00f0ff',
+    epic: '#ff8c1a',
+    legendary: '#ffd000',
+    mythic: '#ff2d6f',
   },
 
   // Misc
   input: {
-    bg: '#1a1a22',
-    border: '#333',
-    borderFocus: '#00d4ff',
-    placeholder: '#555',
+    bg: '#15151f',
+    border: '#2a2a3f',
+    borderFocus: '#ff8c1a',   // orange focus ring (cyberpunk)
+    placeholder: '#4a4a5a',
   },
   scrollbar: {
-    track: '#0c0c10',
-    thumb: '#333',
+    track: '#0a0a18',
+    thumb: '#2a2a3f',
   },
 } as const;
 
@@ -149,107 +164,247 @@ export const darkTheme = {
 export const lightTheme = {
   name: 'light' as ThemeName,
 
-  // v3.10.113: increased forest + sky presence. The previous
-  // v3.10.112 palette was too cream/white-centric — the bg was
-  // almost white and the section cards were pure white, so the
-  // whole screen read as "white + green accents" rather than
-  // "forest + sky." Tobe's feedback 2026-07-30: ‘I would like
-  // more sky and forest, not just white.’ So:
-  //   - bg.primary is no longer near-white. It's a soft sage
-  //     that immediately reads as forest.
-  //   - bg.secondary (cards) is a paler mint with a sky-ward
-  //     gradient into the bg.tertiary hue.
-  //   - bg.tertiary is a deeper sage for elevated surfaces.
-  //   - bg.elevated is the sky hue — for top-of-stack popovers.
-  //   - input.bg is now a pale sky tint, not pure white.
-  //   - The brand.cyan / brand.info get more saturation so the
-  //     sky-blue accents actually read as sky.
+  // v3.10.119: redesign as the "sun" theme. Tobe's spec
+  // (2026-07-31 16:00 GMT+2): "light mode (sun) which is
+  // light colors, white and light blue etc." The v3.10.113
+  // sage-cream palette read as "forest floor" — it was
+  // meant to complement the dark "forest" companion theme,
+  // but Tobe now wants a true light/bright option, not a
+  // second forest variant. The sun theme should feel like
+  // a clear bright day:
+  //   - bg.primary = pure white (not cream/sage)
+  //   - bg.secondary = very pale gray (subtle card lift)
+  //   - bg.tertiary = pale blue (sky-tinted elevated)
+  //   - bg.elevated = pure white (popovers)
+  //   - scene tokens (sky/ground/forest) all move toward
+  //     sky-blue tones — the home screen becomes "white
+  //     page with blue sky accents" instead of "cream
+  //     page with brown earth accents"
+  //   - border tokens move toward pale blue
+  //   - brand accent stays CyberClaw orange (brand
+  //     identity) but accentBright becomes sky-blue so
+  //     secondary actions don't shout orange
   bg: {
-    primary: '#e3ecd9',       // soft sage — main app background (the "forest floor")
-    secondary: '#eaf2dd',     // cards — slightly lighter mint, reads as moss-lit
-    tertiary: '#d4e3c4',      // elevated — deeper sage for inputs/inputs-container
-    elevated: '#dbe9f0',     // popovers — the "sky" tint
-    overlay: 'rgba(45,90,61,0.08)',
-    scrim: 'rgba(30,55,40,0.32)',
+    primary: '#ffffff',       // pure white — main app background
+    secondary: '#f8fafc',     // very pale gray — cards / panels
+    tertiary: '#e0f2fe',      // pale blue — elevated surfaces (sky-tinted)
+    elevated: '#ffffff',      // pure white — popovers
+    overlay: 'rgba(30,58,138,0.08)',
+    scrim: 'rgba(15,23,42,0.32)',
 
-    // v3.10.115: scene tokens. Tobe asked (2026-07-30 21:45 GMT+2)
-    // for forest + sky + brown ground around the home screen:
-    //   - sky: a soft sky-blue gradient strip above the arena
-    //   - skyDeep: deeper sky for the gradient mid-point
-    //   - ground: warm brown earth for the chat list area
-    //   - groundDark: deeper earth for shadows under the chat
-    //   - forest: medium forest green for the arena frame fill
-    //     (different from brand.accent which is the text-color
-    //     forest; bg.forest is the canvas forest)
-    sky: '#bdd9e8',           // pale sky, for the strip above the arena
-    skyDeep: '#6fa3c4',       // mid-sky for gradient
-    skyLight: '#e3f0f6',      // lightest sky for the very top
-    ground: '#a47e54',        // warm brown earth
-    groundDark: '#5b3e1f',    // deep earth for shadows
-    groundLight: '#d4b896',   // pale brown for lit areas
-    forest: '#3d6b4a',        // canvas forest green (medium)
-    forestDark: '#1f3d28',    // deep forest for shadows
+    // Scene tokens — sky tones (sun theme reads as
+    // "white page, blue sky strip above arena").
+    sky: '#bfdbfe',           // pale sky for the strip
+    skyDeep: '#60a5fa',       // deeper sky for gradient mid
+    skyLight: '#eff6ff',      // lightest sky for the very top
+    ground: '#fef3c7',        // pale tan (sun-warmed earth)
+    groundDark: '#fcd34d',    // medium tan for shadows
+    groundLight: '#fefce8',   // palest tan for lit areas
+    forest: '#bbf7d0',        // light leafy green (decorative)
+    forestDark: '#86efac',    // medium green for shadows
   },
 
   border: {
-    subtle: '#b8c9a6',        // slightly more visible against softer bg
-    mid: '#8aa478',           // forest mid-green, used for active borders
-    strong: '#5b7a4a',        // deep forest, used for headers/section titles
-    // v3.10.115: earth-tone borders for the ground area
-    brown: '#7a5635',
+    subtle: '#e2e8f0',        // very pale gray-blue
+    mid: '#bfdbfe',           // pale blue
+    strong: '#60a5fa',        // medium blue
+    brown: '#d4b896',         // tan (warm border)
+    brownDark: '#a47e54',
+  },
+
+  text: {
+    primary: '#0c1a2a',       // deep navy — high-contrast on white
+    secondary: '#1e3a5a',     // dark blue
+    muted: '#64748b',         // medium slate
+    dim: '#94a3b8',           // light slate
+    inverse: '#ffffff',
+  },
+
+  brand: {
+    // CyberClaw orange stays as the primary accent —
+    // brand identity, not theme-specific. AccentBright
+    // becomes sky-blue so non-primary CTAs don't shout
+    // orange.
+    accent: '#f7931a',        // CyberClaw orange (the brand)
+    accentDim: '#cc5528',
+    accentBright: '#3d8fc4',  // sky blue for secondary actions
+    accentGlow: 'rgba(247,147,26,0.18)',
+
+    // Sky-blue secondary palette — bumped saturation
+    // over the v3.10.112 values so the sky-blue accents
+    // actually read as sky on white bg.
+    cyan: '#3d8fc4',
+    cyanDim: '#2a6fa0',
+    cyanSoft: '#dbeafe',
+    cyanGlow: 'rgba(61,143,196,0.18)',
+
+    // Semantic — bright but readable on white
+    success: '#16a34a',
+    successSoft: 'rgba(22,163,74,0.10)',
+    danger: '#dc2626',
+    dangerSoft: 'rgba(220,38,38,0.10)',
+    warning: '#d97706',
+    info: '#0891b2',
+    infoSoft: 'rgba(8,145,178,0.10)',
+  },
+
+  rarity: {
+    common: '#64748b',
+    uncommon: '#16a34a',
+    rare: '#0891b2',
+    epic: '#7c3aed',
+    legendary: '#d97706',
+    mythic: '#db2777',
+  },
+
+  input: {
+    bg: '#ffffff',             // pure white input
+    border: '#bfdbfe',         // pale blue border
+    borderFocus: '#3d8fc4',    // sky blue on focus
+    placeholder: '#94a3b8',
+  },
+  scrollbar: {
+    track: '#f8fafc',
+    thumb: '#bfdbfe',
+  },
+} as const;
+
+/**
+ * Forest theme — the middle option, between sun and moon.
+ *
+ * v3.10.119: NEW theme. Tobe's spec (2026-07-31 16:00
+ * GMT+2): "Forest mode (forest) which is in the middle.
+ * Where we create it to look like an actual forest or a
+ * tree in graphics/looks. Green around the arena, Brown
+ * in the chat area for a tree trunk, and green under
+ * there again for bushes/foliage. And blue and white as
+ * sky above the arena."
+ *
+ * The whole point of this theme is the COMPOSITION, not
+ * the individual tokens. The token values are designed
+ * so the home screen reads as "looking up at the sky
+ * through a forest canopy, with a tree trunk in front of
+ * you." Visually:
+ *
+ *   ┌─────────────────────────────┐  <- sky strip (sky/skyDeep)
+ *   │   sky strip (pale blue)     │
+ *   ├─────────────────────────────┤
+ *   │  ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │
+ *   │  ┃     ARENA             ┃  │  <- arena frame: forest green
+ *   │  ┃   (forest fill)       ┃  │
+ *   │  ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │
+ *   ├─────────────────────────────┤  <- companion tab bar: brown bark
+ *   │      🍖 🌄 (tab buttons)   │
+ *   ├─────────────────────────────┤
+ *   │                             │
+ *   │   CHAT (brown trunk cavity) │  <- chat list: brown ground
+ *   │                             │
+ *   │   [user] [clawsuu] [user]  │
+ *   │                             │
+ *   ├─────────────────────────────┤
+ *   │   bushes/foliage (green)    │  <- below chat: forest green
+ *   └─────────────────────────────┘
+ *
+ * Token-by-token:
+ *   - bg.primary: forest green (the foliage around the chat)
+ *   - bg.secondary: lighter green for cards
+ *   - bg.tertiary: deeper green for elevated surfaces
+ *   - sky/skyDeep/skyLight: pale blue for the sky strip
+ *   - ground/groundDark/groundLight: warm brown (tree trunk)
+ *   - forest/forestDark: vibrant green for the arena frame
+ *   - border.brown/brownDark: bark-colored borders
+ *   - text.primary: cream-white (readable on both green + brown)
+ *   - brand.accent: stays CyberClaw orange (brand identity)
+ */
+export const forestTheme = {
+  name: 'forest' as ThemeName,
+
+  bg: {
+    primary: '#5b8c5a',       // forest green — foliage around the chat
+    secondary: '#6da56b',     // lighter green — cards
+    tertiary: '#4a7549',      // deeper green — elevated surfaces
+    elevated: '#7eb47d',      // light green — popovers
+    overlay: 'rgba(31,61,40,0.12)',
+    scrim: 'rgba(10,26,15,0.45)',
+
+    // Sky tones — pale blue for the sky strip above
+    // the arena (the v3.10.115 skyStrip + skyStripCloud).
+    sky: '#c8e0f0',           // pale sky
+    skyDeep: '#7fb0d0',       // mid-sky for gradient
+    skyLight: '#e8f4fa',      // lightest sky
+
+    // Ground tones — warm brown for the tree trunk
+    // cavity (chat list area) + the companion tab bar.
+    ground: '#a47e54',        // warm brown
+    groundDark: '#5b3e1f',    // deep bark
+    groundLight: '#d4b896',   // pale bark
+
+    // Forest tones — vibrant green for the arena
+    // frame + foliage under the chat.
+    forest: '#3d6b4a',        // vibrant forest green
+    forestDark: '#1f3d28',    // deep forest
+  },
+
+  border: {
+    subtle: '#7eb47d',        // light green
+    mid: '#5b8c5a',           // mid forest green
+    strong: '#1f3d28',        // deep forest
+    brown: '#7a5635',         // bark brown
     brownDark: '#4a2f15',
   },
 
   text: {
-    primary: '#1a2e1f',       // near-black green
-    secondary: '#3d4f3e',
-    muted: '#5c6b5e',
-    dim: '#8a958a',
-    inverse: '#f5f7f0',
+    primary: '#f8f8f4',       // cream-white — readable on green/brown
+    secondary: '#d4d4cc',
+    muted: '#a8a89c',
+    dim: '#7a7a70',
+    inverse: '#1a2e1f',       // dark green for text on light surfaces
   },
 
   brand: {
-    // Forest green primary (instead of neon orange)
-    accent: '#2d5a3d',
-    accentDim: '#1f4029',
-    accentBright: '#3a7a52',
-    accentGlow: 'rgba(45,90,61,0.18)',
+    // CyberClaw orange stays as the primary accent — the
+    // brand identity is independent of theme. AccentBright
+    // becomes bark-brown so secondary actions don't shout
+    // orange over the green/brown scene.
+    accent: '#f7931a',        // CyberClaw orange
+    accentDim: '#cc5528',
+    accentBright: '#d4b896',  // pale bark for secondary actions
+    accentGlow: 'rgba(247,147,26,0.30)',
 
-    // Sky blue secondary — bumped saturation so it actually
-    // reads as sky. v3.10.112 #3a7ca5 was too gray.
-    cyan: '#3d8fc4',
-    cyanDim: '#2a6fa0',
-    cyanSoft: '#cfe4f3',      // pale sky tint for backgrounds
-    cyanGlow: 'rgba(61,143,196,0.18)',
+    // Sky-blue secondary (matches the sky strip)
+    cyan: '#7fb0d0',
+    cyanDim: '#5a8aa8',
+    cyanSoft: '#cfe4f3',
+    cyanGlow: 'rgba(127,176,208,0.25)',
 
-    // Semantic — softer for light bg
-    success: '#15803d',
-    successSoft: 'rgba(21,128,61,0.10)',
-    danger: '#b91c1c',
-    dangerSoft: 'rgba(185,28,28,0.08)',
-    warning: '#b45309',
-    info: '#2d7cb8',
-    infoSoft: 'rgba(45,124,184,0.10)',
+    // Semantic — readable on green/brown scene
+    success: '#22ff88',        // neon green (pops on brown)
+    successSoft: 'rgba(34,255,136,0.15)',
+    danger: '#ff5a5a',
+    dangerSoft: 'rgba(255,90,90,0.15)',
+    warning: '#ffd000',
+    info: '#7fb0d0',
+    infoSoft: 'rgba(127,176,208,0.15)',
   },
 
   rarity: {
-    common: '#6b7280',
-    uncommon: '#2d7a3d',
-    rare: '#3d8fc4',
-    epic: '#2d5a3d',
-    legendary: '#b45309',
-    mythic: '#be185d',
+    common: '#a8a89c',
+    uncommon: '#22ff88',
+    rare: '#7fb0d0',
+    epic: '#f7931a',
+    legendary: '#ffd000',
+    mythic: '#ff5a8a',
   },
 
   input: {
-    bg: '#eaf4f9',             // pale sky — distinct from card bg
-    border: '#8aa478',         // forest green border
-    borderFocus: '#3d8fc4',    // sky blue on focus
-    placeholder: '#7a8b7c',
+    bg: '#1a3a1f',             // deep forest — cream-white text contrasts well
+    border: '#5b8c5a',         // mid forest border
+    borderFocus: '#f7931a',    // orange focus ring
+    placeholder: '#a8a89c',
   },
   scrollbar: {
-    track: '#d4e3c4',
-    thumb: '#8aa478',
+    track: '#5b3e1f',
+    thumb: '#a47e54',
   },
 } as const;
 
@@ -330,4 +485,5 @@ export type Theme = {
 export const themes: Record<ThemeName, Theme> = {
   dark: darkTheme,
   light: lightTheme,
+  forest: forestTheme,
 };

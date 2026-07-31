@@ -4296,13 +4296,26 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   arenaFrame: {
     height: ARENA_HEIGHT,
     borderWidth: 3,
-    borderColor: t.name === 'light' ? t.border.strong : t.brand.accent,
+    // v3.10.119: arena frame border per theme. Sun
+    // (light) uses border.strong (deep blue) — a
+    // sky-blue frame around the arena. Forest uses
+    // border.strong (deep forest) — a forest-green
+    // frame. Moon (dark) keeps the neon-accent
+    // orange border — the v3.10.115 design intent
+    // (neon outline on near-black). The new forest
+    // theme also uses border.strong (it's not a
+    // dark/light distinction anymore, just a moon
+    // gets a special border).
+    borderColor: t.name === 'dark' ? t.brand.accent : t.border.strong,
     borderRadius: 6,
-    // v3.10.115: in light mode, give the arena a soft forest fill
-    // visible behind the WebView while it loads (the WebView itself
-    // is dark; the fill color shows through the brief loading gap
-    // before arena.html paints).
-    backgroundColor: t.name === 'light' ? t.bg.forestDark : 'transparent',
+    // v3.10.119: arena fill per theme. Sun (light) and
+    // Forest both get bg.forestDark — a deep forest
+    // fill that's visible while the WebView loads (the
+    // WebView itself is dark, so the fill shows through
+    // the brief loading gap). Moon (dark) is
+    // 'transparent' so the arena dark background shows
+    // through directly.
+    backgroundColor: t.name === 'dark' ? 'transparent' : t.bg.forestDark,
   },
   arenaFrameFullscreen: {
     position: 'absolute',
@@ -4392,9 +4405,25 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     // aesthetic consistent (forest frame -> forest tab -> dark
     // chat) without the orange flash that Tobe flagged in
     // Discord at 2026-07-31 12:19 GMT+2.
-    backgroundColor: t.name === 'light' ? t.bg.ground : t.bg.forestDark,
+    // v3.10.119: companion tab bar bg per theme. Each
+    // theme has a distinct "ground" treatment that
+    // matches its home-screen composition:
+    //   - sun (light): bg.skyLight (pale blue strip —
+    //     reads as "sky continuation under the arena")
+    //   - forest: bg.ground (warm brown bark — reads
+    //     as "ground under the tree")
+    //   - moon (dark): bg.forestDark (deep forest — the
+    //     v3.10.117 dark-mode forest treatment)
+    backgroundColor: t.name === 'light' ? t.bg.skyLight
+                   : t.name === 'forest' ? t.bg.ground
+                   : t.bg.forestDark,
     borderBottomWidth: 1,
-    borderBottomColor: t.name === 'light' ? t.border.brown : t.border.strong,
+    // v3.10.119: tab bar border per theme. Sun uses
+    // border.mid (pale blue), Forest uses border.brown
+    // (bark), Moon uses border.strong (deep forest).
+    borderBottomColor: t.name === 'light' ? t.border.mid
+                     : t.name === 'forest' ? t.border.brown
+                     : t.border.strong,
     maxHeight: 36,
   },
   companionTabBarContent: {
@@ -4495,7 +4524,17 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     // 'chat can be more of the White' spec from Tobe). Bubbles
     // themselves are pure white with sky/forest borders so the
     // contrast is bubble -> bg, not bg -> page.
-  chatList: { padding: 12, paddingBottom: 8, backgroundColor: t.bg.primary },
+  // v3.10.119: chat list bg per theme. Sun (light)
+    // and Moon (dark) use the page bg (white / near-
+    // black) — the chat just sits on the page.
+    // Forest uses bg.ground (warm brown) — the chat
+    // becomes the "tree trunk cavity" that Tobe
+    // described: "Brown in the chat area for a tree
+    // trunk, and green under there again for bushes/
+    // foliage." The page bg around the chat stays
+    // bg.primary (forest green), so the chat looks
+    // like a brown inset in a green frame.
+    chatList: { padding: 12, paddingBottom: 8, backgroundColor: t.name === 'forest' ? t.bg.ground : t.bg.primary },
   dateSeparator: {
     color: t.brand.accent,
     fontSize: 11,
