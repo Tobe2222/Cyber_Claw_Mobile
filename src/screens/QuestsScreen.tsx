@@ -121,6 +121,26 @@ export default function QuestsScreen({
   // on the desktop). Cleared automatically on next render
   // or on user dismiss.
   const [error, setError] = useState<string | null>(null);
+  // v3.10.117: refresh-button spinner state. True while a
+  // user-initiated re-request from the desktop is in flight.
+  // Cleared by either the quests_list broadcast arriving
+  // (early success) or a 2s safety timeout (so the UI can't
+  // get stuck if the desktop is offline / slow).
+  const [refreshing, setRefreshing] = useState(false);
+  // v3.10.117: ref so the quests_list handler (which lives
+  // inside a useEffect with empty deps, like the others)
+  // can read+clear the current refresh timeout without
+  // going stale. Same pattern as editorOpenRef / detailRef.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // v3.10.117: mirror of the `refreshing` state for the
+  // broadcast handler. The handler is captured at the
+  // useEffect mount and re-captured on every change, but
+  // reading `refreshing` from a closure inside the
+  // handler would always see the initial false (the v3.8.0
+  // stale-closure trap that editorOpenRef exists for).
+  // Using a ref keeps the handler logic simple: read the
+  // ref, decide whether to clear the spinner.
+  const refreshingRef = useRef<boolean>(false);
   // v3.8.0: refs so the quests_list handler (which lives
   // inside a useEffect with empty deps) can read the
   // current editorOpen / detail state without going stale.
@@ -137,6 +157,11 @@ export default function QuestsScreen({
   useEffect(() => { editorOpenRef.current = editorOpen; }, [editorOpen]);
   useEffect(() => { detailRef.current = detail; }, [detail]);
   useEffect(() => { creatingNewRef.current = !!(editorOpen && !editorOpen.id); }, [editorOpen]);
+  // v3.10.117: keep refreshingRef in sync so the
+  // quests_list broadcast handler can read the latest
+  // value without going stale (same trap the other refs
+  // exist for).
+  useEffect(() => { refreshingRef.current = refreshing; }, [refreshing]);
 
   // v3.10.84: Android system back / gesture-nav back
   // should pop the screen (and any open modals) instead
@@ -274,6 +299,27 @@ export default function QuestsScreen({
       // not found" on 2026-07-22). After this point the
       // card data is canonical and edits will round-trip.
       setFirstBroadcastReceived(true);
+      // v3.10.117: if a user-initiated refresh is in flight
+      // (the refresh button is showing its spinner), this
+      // broadcast is the confirmation that the desktop
+      // answered. Stop the spinner early and cancel the
+      // safety timeout so the UI feels responsive (the
+      // desktop usually replies within ~100ms, well under
+      // the 2s timeout). We use the ref for the timeout
+      // because the handler is inside a useEffect with empty
+      // deps — reading state directly would give us stale
+      // values. The `refreshing` state itself is fine to
+      // read here because React re-renders the handler on
+      // every state change... wait, no, the handler is
+      // captured at useEffect mount and never re-captured.
+      // So we need a ref for refreshing too.
+      if (refreshTimerRef.current || refreshingRef.current) {
+        if (refreshTimerRef.current) {
+          clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = null;
+        }
+        setRefreshing(false);
+      }
       AsyncStorage.setItem(CACHE_KEY, JSON.stringify(list)).catch(() => {});
       // v3.8.0: if the editor is open and the broadcast
       // includes a quest with the same id, the desktop has
@@ -363,6 +409,13 @@ export default function QuestsScreen({
       cancelled = true;
       syncClient.off?.('quests_list', handler);
       syncClient.off?.('quests_update_failed', failedHandler);
+      // v3.10.117: clean up the refresh-safety timeout so
+      // it can't fire after the screen unmounts and call
+      // setRefreshing on an unmounted component.
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -395,6 +448,33 @@ export default function QuestsScreen({
     setError(null);
     syncClient.markQuestGoalDone?.(id, goalIndex, completed);
   };
+  // v3.10.117: user-initiated refresh. Calls the same
+  // `request_quests_list` WebSocket message that the
+  // mount-time useEffect sends, but tied to a button so
+  // the user can recover when the broadcast was missed
+  // (Tobe hit this on 2026-07-31: the chat pipeline
+  // confirmed a quest creation but the quest page showed
+  // nothing — either the broadcast landed before the
+  // screen mounted, or it was missed entirely).
+  //
+  // Spinner stops on either (a) the quests_list broadcast
+  // arriving (handler below) or (b) the 2s safety timeout.
+  // The 2s timeout is a safety net for the desktop being
+  // offline / slow — without it, a missed broadcast would
+  // leave the spinner spinning forever.
+  const handleRefresh = () => {
+    if (refreshing) return; // double-tap guard
+    setError(null);
+    setRefreshing(true);
+    try {
+      syncClient.requestQuestsList?.();
+    } catch (_) {}
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      setRefreshing(false);
+      refreshTimerRef.current = null;
+    }, 2000);
+  };
 
   // v3.7.8: sort order is now (1) the active quest, then
   // (2) non-completed quests, then (3) completed quests.
@@ -419,20 +499,53 @@ export default function QuestsScreen({
             <Text style={styles.detailBackBtnText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.detailHeader}>📜  Quests</Text>
-          {/* v3.8.1: + New Quest button. Opens the editor
-              modal in "new" mode (empty fields). Tapping
-              Save sends create_quest to the desktop; the
-              next broadcast replaces the state and the
-              editor auto-closes. Replaces the 60pt spacer
-              that was here before (the spacer kept the
-              header text centered; now the + takes that
-              space). */}
-          <TouchableOpacity
-            onPress={() => setEditorOpen({ id: '', name: '', description: '', status: 'active', goals: [] } as CompanionQuest)}
-            style={styles.newQuestBtn}
-          >
-            <Text style={styles.newQuestBtnText}>+  New</Text>
-          </TouchableOpacity>
+          {/* v3.10.117: right-side action cluster. Holds
+              + New (v3.8.1) and ↻ Refresh (v3.10.117)
+              side by side. Both are subtle orange outlines
+              so they don't shout, but they sit close
+              enough together that the user reads them as a
+              single "actions" group on the right edge of
+              the header. The cluster keeps the outer
+              detailHeaderRow's `justifyContent:
+              space-between` working (it's a single child
+              of the row, balancing against Back + title). */}
+          <View style={styles.headerActionsCluster}>
+            {/* v3.8.1: + New Quest button. Opens the editor
+                modal in "new" mode (empty fields). Tapping
+                Save sends create_quest to the desktop; the
+                next broadcast replaces the state and the
+                editor auto-closes. Replaces the 60pt spacer
+                that was here before (the spacer kept the
+                header text centered; now the + takes that
+                space). */}
+            <TouchableOpacity
+              onPress={() => setEditorOpen({ id: '', name: '', description: '', status: 'active', goals: [] } as CompanionQuest)}
+              style={styles.newQuestBtn}
+            >
+              <Text style={styles.newQuestBtnText}>+  New</Text>
+            </TouchableOpacity>
+            {/* v3.10.117: ↻ Refresh button. User-initiated
+                re-request from the desktop. Tobe's request
+                (2026-07-31): the chat pipeline can confirm
+                a quest creation before the quests_list
+                broadcast lands on the mobile, so the quest
+                page shows nothing. Tapping refresh forces
+                another request_quests_list WebSocket
+                message; the next broadcast replaces the
+                list. While in flight, the label switches
+                to "⏳ …" so the user knows something's
+                happening. Same syncClient.requestQuestsList
+                call as the mount-time useEffect. */}
+            <TouchableOpacity
+              onPress={handleRefresh}
+              style={styles.refreshBtn}
+              disabled={refreshing}
+            >
+              <Text style={[styles.refreshBtnText, refreshing && styles.refreshBtnTextActive]}>
+                {refreshing ? '⏳ …' : '↻ Refresh'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.section}>
@@ -1659,6 +1772,43 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(247, 147, 26, 0.55)',
     backgroundColor: 'rgba(247, 147, 26, 0.08)',
+  },
+  // v3.10.117: right-side action cluster. Holds
+  // + New and ↻ Refresh side by side with a small gap.
+  // Wrapped in a row so the outer header's `space-between`
+  // layout still works (single child on the right of
+  // the header row, balancing against Back + title).
+  headerActionsCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  // v3.10.117: ↻ Refresh button. Same visual language as
+  // + New (subtle orange outline, low-opacity orange
+  // background) so they read as siblings. Slightly lighter
+  // border so it visually subordinates to + New (the
+  // primary action). Same height/padding so the two
+  // buttons align horizontally.
+  refreshBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(247, 147, 26, 0.35)',
+    backgroundColor: 'rgba(247, 147, 26, 0.05)',
+  },
+  // v3.10.117: refresh button text. Same color as + New
+  // for sibling visual consistency.
+  refreshBtnText: {
+    color: '#f7931a',
+    fontSize: 14,
+  },
+  // v3.10.117: refresh button text while a refresh is
+  // in flight. Slight opacity dim so the button feels
+  // "busy" but is still readable. No spinner animation
+  // — the icon swap (↻ → ⏳) is the visual cue.
+  refreshBtnTextActive: {
+    opacity: 0.7,
   },
   newQuestBtnText: {
     color: '#f7931a',
