@@ -341,11 +341,34 @@ let chatDraft = '';
 export function getChatDraft() { return chatDraft; }
 export function setChatDraft(s: string) { chatDraft = s; }
 
+// v3.10.122: arenaHidden persistence. Same module-scope
+// pattern as chatDraft (v3.10.120) — survives HomeScreen
+// unmount on Settings navigation. Default false (arena
+// shown) so existing users see no change until they tap
+// the hide-arena button.
+let arenaHiddenPersistent = false;
+export function getArenaHidden() { return arenaHiddenPersistent; }
+export function setArenaHiddenPersistent(v: boolean) { arenaHiddenPersistent = v; }
+
 type TabId = 'chat' | 'events' | 'log';
 
 // v3.1.17: per-companion chat helper. We use this in two ways:
 //   1. Append a freshly arrived message to a specific companion's
 //      history (server tells us which agent it belongs to).
+// v3.10.122: helper for the arenaStrip's left-side label
+// (active companion's icon + name). Mirrors the desktop's
+// companion-tab visual. Falls back to 🐾 emoji when the
+// active agent isn't found in the agents list (e.g. boot
+// race before the first agents_list broadcast lands).
+function companionIconForActive(
+  agents: Array<{ id: string; emoji?: string | null; icon?: string | null }>,
+  activeId: string | null,
+): string {
+  if (!activeId) return '🐾';
+  const a = (agents || []).find(x => x.id === activeId);
+  return a?.emoji || a?.icon || '🐾';
+}
+
 //   2. Update the `messages` view-state when the user switches
 //      companion tabs, so the FlatList re-renders.
 //
@@ -582,6 +605,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
+  // v3.10.122: arena can be hidden to give the chat list
+  // more vertical room. Tobe's 2026-08-01 13:52 follow-up:
+  // "we should also add a hide arena button, perhaps in the
+  // bottom middle of the arena." When true, the arena
+  // collapses to a thin strip (~64dp) with the active
+  // companion sprite + a "▼ Show" button to bring it back.
+  // Persisted in module scope so it survives Settings
+  // round-trip (mirrors the chatDraft pattern in v3.10.120).
+  const [arenaHidden, setArenaHidden] = useState(getArenaHidden());
+  const toggleArenaHidden = () => {
+    const next = !arenaHidden;
+    setArenaHidden(next);
+    setArenaHiddenPersistent(next);
+  };
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const [isLandscape, setIsLandscape] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
@@ -3531,8 +3568,27 @@ useEffect(() => {
           fill the freed ~16dp. */}
       {/* skyStrip REMOVED in v3.10.121 */}
 
-      {/* Arena - Conditional rendering based on fullscreen or landscape */}
+      {/* Arena - Conditional rendering based on fullscreen, landscape, or arenaHidden.
+          v3.10.122: arenaHidden (Tobe's 13:52 follow-up: "we
+          should also add a hide arena button, perhaps in the
+          bottom middle of the arena") collapses the arena to a
+          thin strip with the active companion's icon + a "Show
+          arena" button. Chat list gets the freed vertical
+          space. Fullscreen/landscape modes still take
+          precedence (those are for voice mode, which needs the
+          arena). */}
       {!keyboardVisible && (
+        arenaHidden && !fullscreen && !isLandscape ? (
+          <View style={styles.arenaStrip}>
+            <Text style={styles.arenaStripLabel}>
+              {companionIconForActive(agentsRef.current, activeChatAgentIdRef.current)}{' '}
+              {(agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current)?.name || 'Companion'}
+            </Text>
+            <TouchableOpacity style={styles.arenaShowButton} onPress={toggleArenaHidden}>
+              <Text style={styles.arenaShowButtonText}>▼ Show arena</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
         <View style={fullscreen || isLandscape ? [styles.arenaFrameFullscreen, { zIndex: 100 }] : styles.arenaFrame}>
           <WebView
             key={webViewKey}
@@ -3604,6 +3660,22 @@ useEffect(() => {
               <Text style={{ color: '#a78bfa', fontSize: 14, fontWeight: '700' }}>💤 sleeping</Text>
             </View>
           )}
+          {/* v3.10.122: hide-arena button. Bottom-center
+              overlay that collapses the arena to a thin strip
+              (the arenaStrip render above). Tobe's 2026-08-01
+              13:52 follow-up: "we should also add a hide arena
+              button, perhaps in the bottom middle of the arena."
+              Only rendered in non-fullscreen + non-landscape
+              mode (voice mode owns the arena in fullscreen). */}
+          {!fullscreen && !isLandscape && (
+            <TouchableOpacity
+              style={styles.arenaHideButton}
+              onPress={toggleArenaHidden}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.arenaHideButtonText}>▲ Hide arena</Text>
+            </TouchableOpacity>
+          )}
           {/* Close button removed - using arena Exit button instead */}
           {/* Voice status indicator in fullscreen mode */}
           {fullscreen && (
@@ -3628,6 +3700,7 @@ useEffect(() => {
             </View>
           )}
         </View>
+        )
       )}
 
       {/* Thinking indicator - Hidden when fullscreen */}
@@ -3827,14 +3900,16 @@ useEffect(() => {
               data={messages}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
-              // v3.10.121: inline paddingBottom to reserve
-              // space for the floating input row. The base
-              // chatList style has paddingBottom: 8; we
-              // bump to INPUT_FLOAT_HEIGHT (~56dp) +
-              // insets.bottom so the last message scrolls
-              // above the input. The +8 keeps the original
-              // breathing room above the input.
-              contentContainerStyle={[styles.chatList, { paddingBottom: 8 + 56 + insets.bottom }]}
+              // v3.10.122: paddingBottom reduced from 8 to 4.
+              // Tobe's 2026-08-01 13:52 follow-up: "there is
+              // a tiny bit of room at the bottom also, that
+              // space could be used by the chat." The 4dp
+              // reserves just enough space for the
+              // inputContainer's borderTop (1dp) + 3dp of
+              // visual breathing room. The 56dp footer-height
+              // estimate + insets.bottom stay the same so the
+              // last message still scrolls above the input.
+              contentContainerStyle={[styles.chatList, { paddingBottom: 4 + 56 + insets.bottom }]}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               // v3.1.16: simple chronological FlatList (not inverted).
@@ -4386,6 +4461,64 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     top: 0, left: 0, right: 0, bottom: 0,
     zIndex: 100,
   },
+  // v3.10.122: collapsed-arena strip. ~52dp tall bar shown
+  // when arenaHidden=true (Tobe's 13:52 follow-up). Holds
+  // the active companion's icon + name on the left, a
+  // "▼ Show arena" button on the right. Chat list extends
+  // into the freed ~260dp+ vertical space.
+  arenaStrip: {
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    backgroundColor: t.bg.primary,
+    borderBottomWidth: 1,
+    borderBottomColor: t.border.subtle,
+  },
+  arenaStripLabel: {
+    color: t.text.primary,
+    fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
+  },
+  arenaShowButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: t.brand.accent,
+    backgroundColor: 'rgba(247, 147, 26, 0.12)',
+  },
+  arenaShowButtonText: {
+    color: t.brand.accent,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  // v3.10.122: hide-arena button overlay (sits at the
+  // bottom-middle of the arena). Small pill with "▲ Hide
+  // arena" text, dark translucent background so it's
+  // readable over both the dark and forest backgrounds.
+  arenaHideButton: {
+    position: 'absolute',
+    bottom: 8,
+    left: '50%',
+    marginLeft: -52,  // half of 104px width — visually centered
+    width: 104,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(247, 147, 26, 0.4)',
+    alignItems: 'center',
+  },
+  arenaHideButtonText: {
+    color: '#f7931a',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
 
   container: { flex: 1, backgroundColor: t.bg.primary },
   wakeModeBadge: {
@@ -4402,12 +4535,18 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'ios' ? 54 : 44,
-    // v3.10.121: 10 → 6 so the arena sits closer to the
-    // header. Tobe: "We can move the arena even further up
-    // so close as possible to the settings button so the
-    // border almost touches the settings button."
-    paddingBottom: 6,
-    backgroundColor: t.bg.primary, borderBottomWidth: 1, borderBottomColor: t.border.subtle,
+    // v3.10.122: 6 → 2 AND borderBottom removed. Tobe's
+    // 2026-08-01 13:52 follow-up: "We can move the arena
+    // even further up so close as possible to the
+    // settings button so the border almost touches the
+    // settings button." The arena's own top border
+    // (borderWidth: 3 in arenaFrame) provides the
+    // separator between header and arena — having both
+    // borders was double-bordered visual noise. Padding
+    // dropped to 2 to bring the arena's orange border as
+    // close to the gear icon row as possible.
+    paddingBottom: 2,
+    backgroundColor: t.bg.primary,
   },
   headerTitle: { color: t.brand.accent, fontSize: 16, fontWeight: 'bold' },
   headerTitleContainer: {
