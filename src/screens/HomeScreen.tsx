@@ -260,13 +260,16 @@ interface LogEntry {
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-// v3.10.121: bumped again to 0.68×w (cap 320) after Tobe
-// asked to push the arena closer to the header. The
-// skyStrip is gone (~14dp freed) and the header
-// paddingBottom dropped (10→6, ~4dp freed) — total ~18dp
-// goes back to the arena. Cap at 320 keeps it from
-// eating the chat list on small phones (iPhone SE).
-const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.68, 320);
+// v3.10.123: reduced from 0.68×w (cap 320) to 0.61×w
+// (cap 290). Tobe's 2026-08-01 15:22 follow-up: "lets
+// reduce the Height a bit but keep same gap to
+// settings. By perhaps 10% such that we lift the chat
+// Height to replace. Chat needs to be taller while
+// arena smaller." ~10% reduction. Cap at 290 keeps
+// it from getting too small on wider phones. The
+// ~30dp savings goes to the chat list (more
+// messages visible above the input row).
+const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.61, 290);
 const CHAT_STORAGE_KEY = 'cyberclaw-chat-history';
 const ARCHIVE_STORAGE_KEY = 'cyberclaw-chat-archive';
 const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
@@ -3660,13 +3663,16 @@ useEffect(() => {
               <Text style={{ color: '#a78bfa', fontSize: 14, fontWeight: '700' }}>💤 sleeping</Text>
             </View>
           )}
-          {/* v3.10.122: hide-arena button. Bottom-center
-              overlay that collapses the arena to a thin strip
-              (the arenaStrip render above). Tobe's 2026-08-01
-              13:52 follow-up: "we should also add a hide arena
-              button, perhaps in the bottom middle of the arena."
-              Only rendered in non-fullscreen + non-landscape
-              mode (voice mode owns the arena in fullscreen). */}
+          {/* v3.10.123: hide-arena button. Moved from bottom-center
+              to TOP-center of the arena. Tobe's 2026-08-01
+              15:22 follow-up: "Lets put the hide arena in the
+              top of the arena Instead." The bottom-center was
+              overlapping the Quests/Voice Mode buttons on
+              some screens and the "Where am I" label
+              (Clawsuu) on others. Top-center is clear of all
+              existing UI elements. Only rendered in
+              non-fullscreen + non-landscape mode (voice mode
+              owns the arena in fullscreen). */}
           {!fullscreen && !isLandscape && (
             <TouchableOpacity
               style={styles.arenaHideButton}
@@ -3900,16 +3906,13 @@ useEffect(() => {
               data={messages}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
-              // v3.10.122: paddingBottom reduced from 8 to 4.
-              // Tobe's 2026-08-01 13:52 follow-up: "there is
-              // a tiny bit of room at the bottom also, that
-              // space could be used by the chat." The 4dp
-              // reserves just enough space for the
-              // inputContainer's borderTop (1dp) + 3dp of
-              // visual breathing room. The 56dp footer-height
-              // estimate + insets.bottom stay the same so the
-              // last message still scrolls above the input.
-              contentContainerStyle={[styles.chatList, { paddingBottom: 4 + 56 + insets.bottom }]}
+              // v3.10.123: footer-height estimate 56 → 44
+              // to match the slimmer input row (paddingVertical
+              // 8→4 + paddingBottom-closed 8+insets→insets =
+              // ~12dp shorter). The 4dp breathing room + insets.
+              // bottom stay the same. Net: chat list gains
+              // ~12dp of room.
+              contentContainerStyle={[styles.chatList, { paddingBottom: 4 + 44 + insets.bottom }]}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               // v3.1.16: simple chronological FlatList (not inverted).
@@ -4201,14 +4204,18 @@ useEffect(() => {
               // keyboard. When the keyboard is closed, fall
               // back to the v3.10.70 nav-bar inset handling.
               //
-              // v3.10.121: inputContainer is now inside
-              // the footerOverlay (a position:absolute
-              // container at bottom:0). The chat list
-              // extends behind it (opaque bg.primary hides
-              // the chat content underneath). Tobe:
-              // "there is a tiny bit of room at the bottom
-              // also, that space could be used by the chat.
-              // Lets optimize space more."
+              // v3.10.123: closed-keyboard paddingBottom
+              // dropped from 8 + insets.bottom to
+              // insets.bottom. Tobe's 2026-08-01 15:22
+              // follow-up: "I think there is a little more
+              // room for the keyboard at the bottom, it
+              // perhaps can go lower, not sure." Reading the
+              // ambiguity as "the input row could sit lower
+              // on the screen" — the extra 8dp of padding
+              // was unused space between the input content
+              // and the nav bar. Removing it lets the input
+              // sit ~8dp closer to the bottom edge; the
+              // chat list gains 8dp of vertical room.
               //
               // iOS keeps using KeyboardAvoidingView (the
               // wrapping component above) for keyboard
@@ -4216,7 +4223,7 @@ useEffect(() => {
               // height there.
               paddingBottom: Platform.OS === 'android' && keyboardHeight > 0
                 ? keyboardHeight
-                : 8 + insets.bottom,
+                : insets.bottom,
             }]}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
@@ -4495,13 +4502,15 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  // v3.10.122: hide-arena button overlay (sits at the
-  // bottom-middle of the arena). Small pill with "▲ Hide
-  // arena" text, dark translucent background so it's
-  // readable over both the dark and forest backgrounds.
+  // v3.10.123: hide-arena button overlay (TOP-center of
+  // the arena, per Tobe's 15:22 follow-up). Small pill
+  // with "▲ Hide arena" text, dark translucent
+  // background so it's readable over both the dark and
+  // forest backgrounds. Was bottom:8 in v3.10.122;
+  // moved to top:8 in v3.10.123.
   arenaHideButton: {
     position: 'absolute',
-    bottom: 8,
+    top: 8,
     left: '50%',
     marginLeft: -52,  // half of 104px width — visually centered
     width: 104,
@@ -4902,7 +4911,15 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   emptyChatText: { color: t.text.muted, fontSize: 14, textAlign: 'center' },
   inputContainer: {
     flexDirection: 'row', alignItems: 'flex-end',
-    paddingHorizontal: 12, paddingVertical: 8,
+    paddingHorizontal: 12,
+    // v3.10.123: paddingVertical 8 → 4. Combined with
+    // the paddingBottom 8→0 change in the inline override,
+    // the input row is ~12dp shorter. Tobe: "there is a
+    // little more room for the keyboard at the bottom,
+    // it perhaps can go lower." The reduced vertical
+    // padding gives the chat list 12dp of recovered
+    // vertical room when the input is at rest.
+    paddingVertical: 4,
     borderTopWidth: 1, borderTopColor: t.border.subtle, backgroundColor: t.bg.primary,
   },
   // v3.10.30: attachment preview row (sits above
