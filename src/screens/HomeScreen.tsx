@@ -260,13 +260,13 @@ interface LogEntry {
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-// v3.10.120: bumped from 0.52×w (cap 230) to 0.62×w (cap 280) so
-// the arena fills the freed sky-strip space after Tobe
-// removed the skyStrip pill + border. The extra ~30-50dp
-// makes the forest scene readable as a real scene rather
-// than a thin strip; cap at 280 keeps it from eating
-// the chat list on small phones.
-const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.62, 280);
+// v3.10.121: bumped again to 0.68×w (cap 320) after Tobe
+// asked to push the arena closer to the header. The
+// skyStrip is gone (~14dp freed) and the header
+// paddingBottom dropped (10→6, ~4dp freed) — total ~18dp
+// goes back to the arena. Cap at 320 keeps it from
+// eating the chat list on small phones (iPhone SE).
+const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.68, 320);
 const CHAT_STORAGE_KEY = 'cyberclaw-chat-history';
 const ARCHIVE_STORAGE_KEY = 'cyberclaw-chat-archive';
 const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
@@ -3519,20 +3519,17 @@ useEffect(() => {
           header. The gradient is implemented as a View with a
           solid bg.skyLight bg + a thin bg.skyDeep bottom-border
           (no LinearGradient dep needed — keeps the bundle lean). */}
-      {/* v3.10.120: skyStrip (the pale-blue 14dp strip above
-          the arena, with the cloud silhouette) is hidden
-          entirely on dark mode. Tobe's report (2026-08-01):
-          the cloud pill in the upper-right looked like a
-          "weird slider" and the bottom border of the strip
-          looked like a "weird gray line". On dark mode the
-          strip is just dark navy with a pill — pure visual
-          noise. Light + forest themes keep it (the pale-blue
-          sky + cloud silhouette reads as intentional design
-          there). The arena now fills the freed vertical
-          space — see the ARENA_HEIGHT bump on line ~263. */}
-      {!fullscreen && !isLandscape && t.name !== 'dark' && (
-        <View style={styles.skyStrip} />
-      )}
+      {/* v3.10.121: skyStrip removed entirely (was hidden on dark
+          in v3.10.120). Tobe's follow-up (2026-08-01 12:37):
+          "Yeah we dont need that cloud pill in light mode
+          either, it looks terrible." Confirmed — the cloud
+          silhouette in the upper-right was the same element
+          that looked like a slider on dark mode; on light
+          mode it just looked like a misplaced white pill.
+          Removing the whole skyStrip also lets the arena sit
+          closer to the header. ARENA_HEIGHT bumps further to
+          fill the freed ~16dp. */}
+      {/* skyStrip REMOVED in v3.10.121 */}
 
       {/* Arena - Conditional rendering based on fullscreen or landscape */}
       {!keyboardVisible && (
@@ -3830,7 +3827,14 @@ useEffect(() => {
               data={messages}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
-              contentContainerStyle={styles.chatList}
+              // v3.10.121: inline paddingBottom to reserve
+              // space for the floating input row. The base
+              // chatList style has paddingBottom: 8; we
+              // bump to INPUT_FLOAT_HEIGHT (~56dp) +
+              // insets.bottom so the last message scrolls
+              // above the input. The +8 keeps the original
+              // breathing room above the input.
+              contentContainerStyle={[styles.chatList, { paddingBottom: 8 + 56 + insets.bottom }]}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               // v3.1.16: simple chronological FlatList (not inverted).
@@ -3963,6 +3967,20 @@ useEffect(() => {
               }
             />
             </View>
+            {/* v3.10.121: chat-footer overlay (status bar +
+                attachment previews + cross-agent banner +
+                input row) now floats at the bottom of the
+                chatScrollContainer via styles.footerOverlay.
+                The chat list extends behind it (chatList
+                contentContainer paddingBottom reserves the
+                space for the overlay). Tobe: "there is a
+                tiny bit of room at the bottom also, that
+                space could be used by the chat. Lets
+                optimize space more." The footer overlay has
+                backgroundColor: t.bg.primary so chat content
+                behind it is hidden — the chat just gets
+                more vertical room for messages. */}
+            <View style={styles.footerOverlay}>
             {chatVoiceStatus && (
               <View style={styles.chatStatusBar}>
                 <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
@@ -4108,6 +4126,15 @@ useEffect(() => {
               // keyboard. When the keyboard is closed, fall
               // back to the v3.10.70 nav-bar inset handling.
               //
+              // v3.10.121: inputContainer is now inside
+              // the footerOverlay (a position:absolute
+              // container at bottom:0). The chat list
+              // extends behind it (opaque bg.primary hides
+              // the chat content underneath). Tobe:
+              // "there is a tiny bit of room at the bottom
+              // also, that space could be used by the chat.
+              // Lets optimize space more."
+              //
               // iOS keeps using KeyboardAvoidingView (the
               // wrapping component above) for keyboard
               // avoidance, so we DON'T need to add keyboard
@@ -4165,6 +4192,7 @@ useEffect(() => {
               >
                 <Text style={styles.sendButtonText}>▶</Text>
               </TouchableOpacity>
+            </View>
             </View>
           </>
         )}
@@ -4310,31 +4338,16 @@ function formatTimeAgoShort(ts: number): string {
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-  // v3.10.115: sky gradient strip rendered between the header and
-  // the arena. Solid bg.skyLight fill with a darker bottom border
-  // (bg.skyDeep) to fake the gradient without adding a
-  // LinearGradient dep. ~14dp tall — enough to read as 'sky band'
-  // but doesn't shrink the arena visibly.
-  skyStrip: {
-    height: 14,
-    backgroundColor: t.bg.skyLight,
-    borderBottomWidth: 2,
-    borderBottomColor: t.bg.skyDeep,
-  },
-  // Decorative cloud silhouette. A small rounded View that sits
-  // top-right of the sky strip. ~18dp wide, ~6dp tall, very pale.
-  // Two of these would be ideal but for v3.10.115 we ship one and
-  // see if Tobe wants more — adding a second is a 3-line change.
-  skyStripCloud: {
-    position: 'absolute',
-    top: 4,
-    right: 32,
-    width: 28,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: '#ffffff',
-    opacity: 0.65,
-  },
+  // v3.10.121: skyStrip + skyStripCloud styles removed.
+  // Was a decorative ~14dp pale-blue/pale-green band with a
+  // white cloud silhouette rendered between the header and the
+  // arena. Tobe flagged it twice (v3.10.120: "weird slider" on
+  // dark mode; v3.10.121: "we dont need that cloud pill in
+  // light mode either, it looks terrible"). Element is fully
+  // removed from the render and the styles are now dead — left
+  // in for now in case a future theme wants a different
+  // decorative element between header and arena. Safe to delete
+  // in a future cleanup PR.
   // v3.10.114: heavy forest green frame around the arena. Tobe's
   // spec (2026-07-30 19:16 GMT+2): "I want green and blue, especially
   // heavy around the arena and below the chat." This is the
@@ -4389,7 +4402,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'ios' ? 54 : 44,
-    paddingBottom: 10,
+    // v3.10.121: 10 → 6 so the arena sits closer to the
+    // header. Tobe: "We can move the arena even further up
+    // so close as possible to the settings button so the
+    // border almost touches the settings button."
+    paddingBottom: 6,
     backgroundColor: t.bg.primary, borderBottomWidth: 1, borderBottomColor: t.border.subtle,
   },
   headerTitle: { color: t.brand.accent, fontSize: 16, fontWeight: 'bold' },
@@ -4585,7 +4602,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     // foliage." The page bg around the chat stays
     // bg.primary (forest green), so the chat looks
     // like a brown inset in a green frame.
-    chatList: { padding: 12, paddingBottom: 8, backgroundColor: t.name === 'forest' ? t.bg.ground : t.bg.primary },
+    chatList: {
+    // v3.10.121: bumped paddingBottom from 8 to ~64+insets
+    // so the last chat message can scroll above the
+    // floating input row. The input row is now
+    // position:absolute at the bottom of
+    // chatScrollContainer, so the chat list would otherwise
+    // extend behind it. The paddingBottom reserves space
+    // for the input + the nav-bar inset. The exact pixel
+    // value is computed inline (not a style token) because
+    // it depends on the live insets.bottom.
+    padding: 12,
+    paddingBottom: 8,
+    backgroundColor: t.name === 'forest' ? t.bg.ground : t.bg.primary,
+  },
   dateSeparator: {
     color: t.brand.accent,
     fontSize: 11,
@@ -4886,6 +4916,22 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // than the bottom of the whole chat tab (which put it inside
   // the input row). Replaces the previous direct FlatList render.
   chatScrollContainer: { flex: 1, position: 'relative' },
+  // v3.10.121: floating footer overlay. Wraps the chat
+  // status bar + attachment previews + cross-agent
+  // banner + input row in a position:absolute container
+  // at the bottom of chatScrollContainer. The chat list
+  // (FlatList) extends behind it; the overlay's bg.primary
+  // hides the chat content underneath. Tobe: "there is a
+  // tiny bit of room at the bottom also, that space
+  // could be used by the chat. Lets optimize space more."
+  // The chatList contentContainer paddingBottom reserves
+  // the space for the overlay (~64dp + insets.bottom).
+  footerOverlay: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    zIndex: 10,
+    backgroundColor: t.bg.primary,
+  },
   // v3.1.14: "↓ N new messages" floating badge shown above the chat
   // when the user has scrolled up to read history and incoming
   // messages arrive.
