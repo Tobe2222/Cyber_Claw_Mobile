@@ -260,7 +260,13 @@ interface LogEntry {
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.52, 230);
+// v3.10.120: bumped from 0.52×w (cap 230) to 0.62×w (cap 280) so
+// the arena fills the freed sky-strip space after Tobe
+// removed the skyStrip pill + border. The extra ~30-50dp
+// makes the forest scene readable as a real scene rather
+// than a thin strip; cap at 280 keeps it from eating
+// the chat list on small phones.
+const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.62, 280);
 const CHAT_STORAGE_KEY = 'cyberclaw-chat-history';
 const ARCHIVE_STORAGE_KEY = 'cyberclaw-chat-archive';
 const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
@@ -320,6 +326,20 @@ export function onLogEntry(fn: (e: LogEntry) => void) { logListeners.push(fn); }
 export function offLogEntry(fn: (e: LogEntry) => void) {
   const i = logListeners.indexOf(fn); if (i >= 0) logListeners.splice(i, 1);
 }
+
+// v3.10.120: module-scoped chat draft. Persists the typed
+// text across HomeScreen unmounts so navigating to Settings
+// and back doesn't wipe the user's in-progress message.
+// Tobe's report (2026-08-01): "when i type, then go check
+// settings, my text disappears, it should be remembered."
+//
+// Module-scoped because HomeScreen unmounts on navigation
+// (App.tsx switches screen='home' -> 'settings'), so any
+// useState inside the component resets to '' on remount.
+// Module scope survives unmounts. Cleared on send.
+let chatDraft = '';
+export function getChatDraft() { return chatDraft; }
+export function setChatDraft(s: string) { chatDraft = s; }
 
 type TabId = 'chat' | 'events' | 'log';
 
@@ -514,7 +534,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [chatUnreadByAgent, setChatUnreadByAgent] = useState<Record<string, number>>({});
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
-  const [inputText, setInputText] = useState('');
+  // v3.10.120: inputText persists across Settings navigation
+  // via module-scope `chatDraft`. Tobe's 2026-08-01 feedback:
+  // "when i type, then go check settings, my text disappears,
+  // it should be remembered." Initializing from chatDraft
+  // restores on remount; the local setInputText wrapper keeps
+  // the module-scope copy in sync so the next remount sees it.
+  const [inputText, setInputTextLocal] = useState(() => getChatDraft());
+  const setInputText = (s: string) => {
+    setChatDraft(s);
+    setInputTextLocal(s);
+  };
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   // v3.10.20: fullscreen attachment viewer. When the user
   // taps an image preview in the chat, we open this modal
@@ -2068,8 +2098,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       //     notification would just clash
       //   - Wake mode is open and idle — same logic as
       //     voice mode: there's already audio
+      //   - v3.10.120: replay=true (sync-server tagged
+      //     this chat_message as a reconnect-replay of a
+      //     cached AI reply). The user wasn't there when
+      //     the reply landed; we still want the chat
+      //     history to fill in (handled above by the
+      //     appendAgentMessage call), but a system
+      //     notification would just spam the tray. Tobe
+      //     reported (2026-08-01): "for some reason i get
+      //     notification from earlier messages" — that
+      //     was the 50-message rolling-buffer replay
+      //     firing one notification per cached reply on
+      //     reconnect.
       const isOwnReply = !msg.isUser;
-      if (isOwnReply) {
+      if (isOwnReply && !msg.replay) {
         const isChatFocused =
           appStateRef.current === 'active' &&
           !fullscreenRef.current &&
@@ -3477,10 +3519,19 @@ useEffect(() => {
           header. The gradient is implemented as a View with a
           solid bg.skyLight bg + a thin bg.skyDeep bottom-border
           (no LinearGradient dep needed — keeps the bundle lean). */}
-      {!fullscreen && !isLandscape && (
-        <View style={styles.skyStrip}>
-          <View style={styles.skyStripCloud} />
-        </View>
+      {/* v3.10.120: skyStrip (the pale-blue 14dp strip above
+          the arena, with the cloud silhouette) is hidden
+          entirely on dark mode. Tobe's report (2026-08-01):
+          the cloud pill in the upper-right looked like a
+          "weird slider" and the bottom border of the strip
+          looked like a "weird gray line". On dark mode the
+          strip is just dark navy with a pill — pure visual
+          noise. Light + forest themes keep it (the pale-blue
+          sky + cloud silhouette reads as intentional design
+          there). The arena now fills the freed vertical
+          space — see the ARENA_HEIGHT bump on line ~263. */}
+      {!fullscreen && !isLandscape && t.name !== 'dark' && (
+        <View style={styles.skyStrip} />
       )}
 
       {/* Arena - Conditional rendering based on fullscreen or landscape */}
