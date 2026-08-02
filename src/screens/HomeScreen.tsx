@@ -3009,6 +3009,44 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           res.assets.forEach(asset => addAttachment(asset));
         }
       })},
+      // v3.10.128: paste from clipboard. RN's TextInput
+      // silently drops pasted images — there's no
+      // onPaste handler and no way to detect the user's
+      // intent to attach a screenshot. Tobe 2026-08-02
+      // 21:03: 'I now have to paste pictures of that
+      // whole conversation but it seems that he cannot
+      // see the pictures i paste.' The companion was
+      // reading the message "I did paste it" but had
+      // nothing to attach. Clipboard.getImage() returns
+      // the image the user copied (e.g. a screenshot)
+      // as a base64 PNG string on both iOS and Android.
+      // The library has no hasImageAsync — we have to
+      // call getImage() and check for non-empty. If the
+      // clipboard has no image, it throws or returns
+      // empty on Android depending on the version; we
+      // treat both as "no image".
+      { text: 'Paste from clipboard', onPress: async () => {
+        try {
+          const b64 = await Clipboard.getImage();
+          if (!b64 || b64.length < 100) {
+            Alert.alert('No image', 'There is no image on the clipboard. Copy an image first (long-press an image → Copy).');
+            return;
+          }
+          // The library returns a base64-encoded PNG (no
+          // data: prefix). We wrap it in data:image/png;base64,
+          // which is a valid uri for React Native's <Image>
+          // and for the existing sendAttachment pipeline.
+          const dataUri = `data:image/png;base64,${b64}`;
+          addAttachment({
+            uri: dataUri,
+            fileName: `pasted-${Date.now()}.png`,
+            type: 'image/png',
+          });
+        } catch (e) {
+          console.warn('[paste-image] clipboard read failed:', e?.message);
+          Alert.alert('Paste failed', 'Could not read the clipboard image. Make sure an image is copied to the clipboard, then try again.');
+        }
+      } },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }, []);
@@ -4418,6 +4456,33 @@ useEffect(() => {
             }]}>
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
+              </TouchableOpacity>
+              {/* v3.10.128: dedicated paste-from-clipboard
+                  button. The + button opens a menu where
+                  Paste is the third option — but a
+                  one-tap button is faster for the common
+                  case of pasting a screenshot. Same
+                  handler logic, no menu. */}
+              <TouchableOpacity
+                style={styles.micButton}
+                onPress={async () => {
+                  try {
+                    const b64 = await Clipboard.getImage();
+                    if (!b64 || b64.length < 100) {
+                      Alert.alert('No image', 'Copy an image first (long-press an image → Copy), then tap paste.');
+                      return;
+                    }
+                    const dataUri = `data:image/png;base64,${b64}`;
+                    addAttachment({ uri: dataUri, fileName: `pasted-${Date.now()}.png`, type: 'image/png' });
+                  } catch (e) {
+                    console.warn('[paste-image] clipboard read failed:', e?.message);
+                    Alert.alert('Paste failed', 'Could not read the clipboard image.');
+                  }
+                }}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                activeOpacity={0.6}
+              >
+                <Text style={[styles.micButtonText, { fontSize: 18, lineHeight: 20 }]}>📋</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
