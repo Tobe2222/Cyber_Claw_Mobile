@@ -4463,6 +4463,47 @@ useEffect(() => {
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
               </TouchableOpacity>
+              {/* v3.10.130: dedicated paste-from-clipboard
+                  button. The v3.10.129 focus-only handler was
+                  unreliable — Android's Clipboard.getImage()
+                  often returned null when called on focus
+                  (e.g. when the user copied the image BEFORE
+                  opening the chat, or the clipboard hadn't
+                  been read since the app was foregrounded).
+                  Tobe 2026-08-02 22:35: 'tested again.
+                  Attached a picture but it did not show up in
+                  the chat after.' The focus handler didn't
+                  pick it up. The explicit button gives the
+                  user a reliable on-demand path: copy image
+                  → tap 📋 → attachment appears. */}
+              <TouchableOpacity
+                style={styles.micButton}
+                onPress={async () => {
+                  try {
+                    addLogEntry('📋 Paste: reading clipboard image...', 'info');
+                    const b64 = await Clipboard.getImage();
+                    if (!b64 || b64.length < 100) {
+                      addLogEntry('📋 Paste: no image on clipboard', 'warn');
+                      Alert.alert('No image', 'Copy an image first (long-press an image → Copy), then tap paste.');
+                      return;
+                    }
+                    const dataUri = `data:image/png;base64,${b64}`;
+                    addAttachment({
+                      uri: dataUri,
+                      fileName: `pasted-${Date.now()}.png`,
+                      type: 'image/png',
+                    });
+                    addLogEntry('📋 Paste: attached ' + Math.round(b64.length / 1024) + ' KB image', 'info');
+                  } catch (e) {
+                    addLogEntry('📋 Paste failed: ' + (e?.message || 'unknown'), 'error');
+                    Alert.alert('Paste failed', 'Could not read the clipboard image. Try copying again.');
+                  }
+                }}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                activeOpacity={0.6}
+              >
+                <Text style={[styles.micButtonText, { fontSize: 18, lineHeight: 20 }]}>📋</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
                 onPress={toggleVoiceInput}
