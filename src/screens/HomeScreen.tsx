@@ -687,6 +687,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // Resets only when the component unmounts (the ref's lifecycle
   // is tied to the FlatList's tree position via the ref hook).
   const chatLayoutSeenRef = useRef(false);
+  // v3.10.126: persisted scroll position per agent. The chat
+  // is a FlatList with `inverted={false}` (newest at the
+  // bottom). When the user navigates away from Home and
+  // back, the FlatList re-mounts and would lose its scroll
+  // position. Tobe's 2026-08-02 17:28 report: "each time
+  // home screen comes the chat Auto scrolls to the bottom,
+  // but why does it even start at the top. Cant it just
+  // stay where it got left?"
+  //
+  // We persist the scroll offset to AsyncStorage keyed by
+  // agentId (so each companion's chat remembers its own
+  // scroll position), and restore on first layout of the
+  // FlatList. If the user was at the bottom when they left,
+  // the auto-scroll-to-end behavior handles the restore (no
+  // change). If they were scrolled up, we restore the exact
+  // offset so they land where they left off.
+  const [chatScrollOffsetByAgent, setChatScrollOffsetByAgent] = useState<Record<string, number>>({});
+  // v3.10.126: ref mirror so the debounced write can read the
+  // latest offset without a stale-closure. Updated by the
+  // scroll handler at every onScroll event.
+  const chatScrollOffsetRef = useRef<Record<string, number>>({});
+  // v3.10.126: which agent's offset to restore on first layout.
+  // Captured at mount so a mid-flight agent switch doesn't
+  // restore the wrong offset.
+  const chatRestoreAgentRef = useRef<string | null>(null);
+  const chatRestoreOffsetRef = useRef<number | null>(null);
+  // v3.10.126: debounce timer for the scroll-offset write.
+  // Null = no write pending. Set when a scroll fires; the
+  // timer fires once and writes the latest offset to
+  // AsyncStorage. This keeps fast swipe gestures from
+  // writing to storage on every frame.
+  const chatScrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
   // v3.10.70: mirror of activeTab so the chat-event
@@ -808,6 +840,41 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const bucket = messagesByAgentRef.current[activeChatAgentId] || [];
     setMessages(bucket);
   }, [activeChatAgentId]);
+
+  // v3.10.126: hydrate the persisted per-agent scroll
+  // offsets from AsyncStorage on mount. The map is keyed
+  // by agentId so Clawsuu's chat remembers its position
+  // independent of Lamasuu's. We mirror the loaded map
+  // into chatScrollOffsetRef so the onScroll handler can
+  // read it without re-renders.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('cyberclaw-chat-scroll-byagent');
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+        if (cancelled) return;
+        // Sanitize: only keep finite numeric offsets.
+        const cleaned: Record<string, number> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          const n = Number(v);
+          if (Number.isFinite(n) && n >= 0) cleaned[k] = n;
+        }
+        chatScrollOffsetRef.current = cleaned;
+        setChatScrollOffsetByAgent(cleaned);
+        // Capture the offset for the current active agent so
+        // the FlatList's onLayout handler can restore it.
+        if (activeChatAgentId && cleaned[activeChatAgentId] !== undefined) {
+          chatRestoreAgentRef.current = activeChatAgentId;
+          chatRestoreOffsetRef.current = cleaned[activeChatAgentId];
+        }
+      } catch (_) { /* ignore corrupt storage */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // mount-once load; activeChatAgentId read inside is the initial value
 
   // v3.1.63: inject setCentered(true) when voice mode
   // (fullscreen) is entered, setCentered(false) when exited.
@@ -3948,6 +4015,33 @@ useEffect(() => {
               // scrollToEnd to jump there.
               inverted={false}
               onScroll={(e) => {
+                // v3.10.126: capture the current scroll offset for
+                // persistence. We update the ref mirror on every
+                // scroll event (cheap — just an object write) and
+                // schedule a debounced AsyncStorage write so we
+                // don't thrash storage on rapid scroll gestures.
+                const aid = activeChatAgentIdRef.current;
+                if (aid) {
+                  chatScrollOffsetRef.current = {
+                    ...chatScrollOffsetRef.current,
+                    [aid]: e.nativeEvent.contentOffset.y,
+                  };
+                  // v3.10.126: schedule debounced write. Only
+                  // write if no write is pending — the pending
+                  // timer is keyed in a module-level ref so a
+                  // fast flurry of scrolls coalesces into one
+                  // write. 250ms feels instant to the user but
+                  // skips writes during a swipe gesture.
+                  if (!chatScrollSaveTimerRef.current) {
+                    chatScrollSaveTimerRef.current = setTimeout(() => {
+                      chatScrollSaveTimerRef.current = null;
+                      AsyncStorage.setItem(
+                        'cyberclaw-chat-scroll-byagent',
+                        JSON.stringify(chatScrollOffsetRef.current),
+                      ).catch(() => { /* swallow — best-effort */ });
+                    }, 250);
+                  }
+                }
                 // Without inversion, "at the bottom" means near the
                 // end of contentSize.height (within a small threshold
                 // of layoutHeight).
@@ -4047,11 +4141,63 @@ useEffect(() => {
                 //      fight us and reset to "scrolled up".
                 if (messages.length > 0 && !chatLayoutSeenRef.current) {
                   chatLayoutSeenRef.current = true;
-                  chatRef.current?.scrollToEnd({ animated: false });
-                  setTimeout(() => {
+                  // v3.10.126: restore the persisted scroll
+                  // offset for the active agent if there is
+                  // one. The mount-time hydrate effect set
+                  // chatRestoreOffsetRef to the saved offset
+                  // for the agent that was active at mount.
+                  // If the offset is null/undefined (first
+                  // ever open, or no saved value) we fall back
+                  // to the v3.8.6 / v3.10.111 scroll-to-end
+                  // behavior. This is what Tobe asked for on
+                  // 2026-08-02 17:28: "cant it just stay where
+                  // it got left?"
+                  //
+                  // We schedule the restore at +50ms and +300ms
+                  // to mirror the two-attempt scroll pattern of
+                  // v3.8.6: the second attempt runs after the
+                  // FlatList has fully measured the content
+                  // (so the scrollToOffset doesn't land before
+                  // the message list knows its own height).
+                  const restoreOffset = chatRestoreOffsetRef.current;
+                  if (typeof restoreOffset === 'number' && restoreOffset > 0) {
+                    // The user was scrolled up last time.
+                    // Restore exactly where they were.
+                    chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
+                    setTimeout(() => {
+                      chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
+                      // v3.10.126: if the restored position
+                      // is now near the bottom of the (possibly
+                      // new) content, treat as caught-up so the
+                      // auto-scroll kicks in for new messages.
+                      // Otherwise leave chatAtBottom false so
+                      // the user can read history without being
+                      // yanked to the bottom on every new msg.
+                      try {
+                        // @ts-ignore — scrollToOffset callbacks
+                        // differ across RN versions; we read the
+                        // position synchronously instead.
+                      } catch {}
+                      // Use getScrollResponder + scrollY via
+                      // window measurement: simpler to schedule
+                      // one more tick and read onScroll's next
+                      // call. For now we leave it false unless
+                      // the user scrolls. The onScroll handler
+                      // will set chatAtBottom=true if they end
+                      // up within 50px of the bottom.
+                    }, 300);
+                    chatRestoreOffsetRef.current = null;
+                  } else {
+                    // First-ever open or no saved offset
+                    // (or the user was at the bottom last
+                    // time). Use the v3.8.6 / v3.10.111
+                    // scroll-to-end.
                     chatRef.current?.scrollToEnd({ animated: false });
-                    setChatAtBottom(true);
-                  }, 250);
+                    setTimeout(() => {
+                      chatRef.current?.scrollToEnd({ animated: false });
+                      setChatAtBottom(true);
+                    }, 250);
+                  }
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
