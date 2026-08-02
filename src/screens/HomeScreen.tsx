@@ -3912,7 +3912,33 @@ useEffect(() => {
               // ~12dp shorter). The 4dp breathing room + insets.
               // bottom stay the same. Net: chat list gains
               // ~12dp of room.
-              contentContainerStyle={[styles.chatList, { paddingBottom: 4 + 44 + insets.bottom }]}
+              //
+              // v3.10.124: when the keyboard is up on Android,
+              // also add keyboardHeight to the padding so the
+              // last message can scroll fully above the input
+              // row. The inputContainer uses paddingBottom:
+              // keyboardHeight to push its content up by the
+              // keyboard height (the Android 15+ edge-to-edge
+              // workaround), and the footerOverlay wrapping
+              // the input grows by keyboardHeight — but the
+              // FlatList is flex:1 inside chatScrollContainer
+              // and the footerOverlay is position:absolute, so
+              // the FlatList itself does NOT shrink. Without
+              // adding keyboardHeight here, the last message
+              // ends up behind the input and "scroll to the
+              // bottom" can't reach it. Tobe hit this on
+              // v3.10.123 (2026-08-02 15:22): "for some
+              // reason i cannot scroll all the way down now
+              // when i have the keyboard up."
+              //
+              // iOS uses KeyboardAvoidingView with
+              // behavior='padding', which already shrinks
+              // the FlatList by keyboardHeight, so no extra
+              // padding is needed there.
+              contentContainerStyle={[styles.chatList, {
+                paddingBottom: 4 + 44 + insets.bottom
+                  + (Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight : 0),
+              }]}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               // v3.1.16: simple chronological FlatList (not inverted).
@@ -4473,8 +4499,17 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // the active companion's icon + name on the left, a
   // "▼ Show arena" button on the right. Chat list extends
   // into the freed ~260dp+ vertical space.
+  //
+  // v3.10.124: strip height 52 → 28 ("almost half the size").
+  // Tobe's 2026-08-02 15:22 follow-up: "the hide arena can be
+  // smaller. Almost half the size." The 52dp strip was
+  // visually heavy and felt like the arena was still partly
+  // there. 28dp is enough room for a 14px label + a small
+  // show button on the same row, and it frees ~24dp of
+  // vertical room for the chat list. Label font + button
+  // padding/dimensions trimmed to fit the slimmer row.
   arenaStrip: {
-    height: 52,
+    height: 28,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -4485,21 +4520,21 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   },
   arenaStripLabel: {
     color: t.text.primary,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     flex: 1,
   },
   arenaShowButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: t.brand.accent,
     backgroundColor: 'rgba(247, 147, 26, 0.12)',
   },
   arenaShowButtonText: {
     color: t.brand.accent,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   // v3.10.123: hide-arena button overlay (TOP-center of
