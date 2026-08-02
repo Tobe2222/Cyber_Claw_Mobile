@@ -3466,7 +3466,25 @@ useEffect(() => {
           <Text style={[styles.agentLabel, item.isUser ? styles.userLabel : styles.aiLabel]}>
             {agentLabel}
           </Text>
-          <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
+          {/* v3.10.127: selectable={true} lets the user tap-and-
+              hold to bring up the system text-selection
+              handles and then copy. Without it React Native
+              renders Text as a single non-selectable block
+              (you can highlight the whole bubble but not
+              individual characters). Tobe 2026-08-02 20:34:
+              'i meant on mobile actually ... just so i can
+              select characters and copy the text is what i
+              want.'
+              selectTextOnFocus is intentionally NOT set —
+              we want the user to be able to tap-and-hold,
+              not have every text field auto-select on
+              focus. Tap-and-hold is the standard mobile
+              gesture for text selection in iOS/Android
+              when selectable=true is on the Text. */}
+          <Text
+            style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}
+            selectable={true}
+          >{item.text}</Text>
           {/* v3.10.20: render attachment previews. Images
               show inline with a tap-to-open-fullscreen
               handler; non-image attachments (audio, video,
