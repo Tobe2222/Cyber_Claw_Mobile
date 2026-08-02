@@ -3913,31 +3913,32 @@ useEffect(() => {
               // bottom stay the same. Net: chat list gains
               // ~12dp of room.
               //
-              // v3.10.124: when the keyboard is up on Android,
-              // also add keyboardHeight to the padding so the
-              // last message can scroll fully above the input
-              // row. The inputContainer uses paddingBottom:
-              // keyboardHeight to push its content up by the
-              // keyboard height (the Android 15+ edge-to-edge
-              // workaround), and the footerOverlay wrapping
-              // the input grows by keyboardHeight — but the
-              // FlatList is flex:1 inside chatScrollContainer
-              // and the footerOverlay is position:absolute, so
-              // the FlatList itself does NOT shrink. Without
-              // adding keyboardHeight here, the last message
-              // ends up behind the input and "scroll to the
-              // bottom" can't reach it. Tobe hit this on
-              // v3.10.123 (2026-08-02 15:22): "for some
-              // reason i cannot scroll all the way down now
-              // when i have the keyboard up."
+              // v3.10.125: revert the v3.10.124 keyboardHeight
+              // addition. The v3.10.124 patch was a band-aid
+              // that grew contentSize by keyboardHeight when
+              // the keyboard opened, which fired
+              // onContentSizeChange → scrollToEnd → the user
+              // ended up at the new padded bottom. That
+              // created a "rubber-band at fake bottom" feel
+              // — the user could see the last message above
+              // the input but the FlatList had blank
+              // paddingBottom below it, so scrolling further
+              // down snapped back. Tobe hit this on 2026-08-02
+              // 16:46: "when Im almost at the bottom and i
+              // try to scroll further down it takes me back
+              // where I started."
               //
-              // iOS uses KeyboardAvoidingView with
-              // behavior='padding', which already shrinks
-              // the FlatList by keyboardHeight, so no extra
-              // padding is needed there.
+              // The real fix (in v3.10.125) is to make
+              // footerOverlay flex-flow instead of
+              // position:absolute, so the FlatList flex-shrinks
+              // when the keyboard opens (because the
+              // footerOverlay's input grows by keyboardHeight
+              // via paddingBottom). No paddingBottom trick on
+              // the FlatList needed — the FlatList's visible
+              // area now stops at the input's top edge, no
+              // matter where the input is on screen.
               contentContainerStyle={[styles.chatList, {
-                paddingBottom: 4 + 44 + insets.bottom
-                  + (Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight : 0),
+                paddingBottom: 4 + 44 + insets.bottom,
               }]}
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
@@ -4504,37 +4505,40 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // Tobe's 2026-08-02 15:22 follow-up: "the hide arena can be
   // smaller. Almost half the size." The 52dp strip was
   // visually heavy and felt like the arena was still partly
-  // there. 28dp is enough room for a 14px label + a small
-  // show button on the same row, and it frees ~24dp of
-  // vertical room for the chat list. Label font + button
-  // padding/dimensions trimmed to fit the slimmer row.
+  // there.
+  //
+  // v3.10.125: 28 → 22 ("Make it smaller." — Tobe's 16:46
+  // follow-up on 2026-08-02). The 28dp strip still felt
+  // chunky next to the 18-20dp tabs row. 22dp matches the
+  // visual weight of a compact status row. Label and button
+  // text shrunk one more step to fit comfortably.
   arenaStrip: {
-    height: 28,
+    height: 22,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     backgroundColor: t.bg.primary,
     borderBottomWidth: 1,
     borderBottomColor: t.border.subtle,
   },
   arenaStripLabel: {
     color: t.text.primary,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     flex: 1,
   },
   arenaShowButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: t.brand.accent,
     backgroundColor: 'rgba(247, 147, 26, 0.12)',
   },
   arenaShowButtonText: {
     color: t.brand.accent,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
   },
   // v3.10.123: hide-arena button overlay (TOP-center of
@@ -4543,15 +4547,23 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // background so it's readable over both the dark and
   // forest backgrounds. Was bottom:8 in v3.10.122;
   // moved to top:8 in v3.10.123.
+  //
+  // v3.10.125: shrink the pill itself to match the
+  // slimmer arena strip aesthetic. Tobe's 16:46
+  // follow-up: "the hide arena don't seem to have
+  // changed size." — he was looking at this top-center
+  // pill (which the v3.10.124 work didn't touch).
+  // paddingVertical 6 → 3, font 11 → 10, width 104 → 88,
+  // radius 14 → 10. Net: ~half the vertical footprint.
   arenaHideButton: {
     position: 'absolute',
-    top: 8,
+    top: 6,
     left: '50%',
-    marginLeft: -52,  // half of 104px width — visually centered
-    width: 104,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 14,
+    marginLeft: -44,  // half of 88px width — visually centered
+    width: 88,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 10,
     backgroundColor: 'rgba(0, 0, 0, 0.55)',
     borderWidth: 1,
     borderColor: 'rgba(247, 147, 26, 0.4)',
@@ -4559,7 +4571,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   },
   arenaHideButtonText: {
     color: '#f7931a',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.3,
   },
@@ -5106,21 +5118,58 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // sits at the bottom of THIS container (above the input) rather
   // than the bottom of the whole chat tab (which put it inside
   // the input row). Replaces the previous direct FlatList render.
-  chatScrollContainer: { flex: 1, position: 'relative' },
+  // v3.10.125: flex column layout. The FlatList is the first
+  // flex child (flex:1) so it fills the available space;
+  // the footerOverlay (status bar / attachment row / cross-
+  // agent banner / input row) is the second flex child
+  // taking its natural height. When the keyboard opens,
+  // the inputContainer's paddingBottom grows by
+  // keyboardHeight, which grows the footerOverlay's natural
+  // height by keyboardHeight, which makes the FlatList
+  // flex-shrink by keyboardHeight. The chat list's visible
+  // area now stops at the input's top edge.
+  chatScrollContainer: { flex: 1, flexDirection: 'column' },
   // v3.10.121: floating footer overlay. Wraps the chat
   // status bar + attachment previews + cross-agent
-  // banner + input row in a position:absolute container
-  // at the bottom of chatScrollContainer. The chat list
-  // (FlatList) extends behind it; the overlay's bg.primary
-  // hides the chat content underneath. Tobe: "there is a
-  // tiny bit of room at the bottom also, that space
-  // could be used by the chat. Lets optimize space more."
-  // The chatList contentContainer paddingBottom reserves
-  // the space for the overlay (~64dp + insets.bottom).
+  // banner + input row. Was originally position:absolute
+  // at the bottom of chatScrollContainer (v3.10.121
+  // rationale: chat list extends behind the overlay to
+  // gain ~50dp of vertical room; Tobe: "lets optimize
+  // space more"). The paddingBottom trick on the
+  // FlatList's contentContainerStyle reserved the
+  // scroll-space for the overlay.
+  //
+  // v3.10.125: switched from position:absolute to
+  // flex-flow (no absolute positioning). The v3.10.124
+  // approach (add keyboardHeight to the FlatList's
+  // paddingBottom when the keyboard is up on Android)
+  // created a "fake bottom" the FlatList rubber-banded
+  // against: the last message was visible above the
+  // input, but the FlatList had keyboardHeight of blank
+  // space below it, so any "scroll down past the last
+  // message" gesture snapped back. Tobe's 2026-08-02
+  // 16:46 report: "when Im almost at the bottom and i
+  // try to scroll further down it takes me back where I
+  // started, like thats the bottom while there are text
+  // further down."
+  //
+  // Flex-flow fixes this cleanly: the inputContainer's
+  // paddingBottom grows by keyboardHeight when the
+  // keyboard is up (the existing v3.10.80 Android
+  // edge-to-edge workaround), which grows the
+  // footerOverlay's natural height by keyboardHeight,
+  // which makes the FlatList above it flex-shrink by
+  // keyboardHeight. The FlatList's visible area now stops
+  // at the input's top edge — the last message can
+  // always scroll fully above the input, no rubber-band.
+  //
+  // The "chat behind input" optimization from v3.10.121
+  // is sacrificed (~50dp of chat space), but the
+  // keyboard behavior is now correct and the trade is
+  // worth it. Future improvement: bring back the
+  // behind-input chat area as a separate "ghost"
+  // background-only layer if the user wants the visual.
   footerOverlay: {
-    position: 'absolute',
-    left: 0, right: 0, bottom: 0,
-    zIndex: 10,
     backgroundColor: t.bg.primary,
   },
   // v3.1.14: "↓ N new messages" floating badge shown above the chat
