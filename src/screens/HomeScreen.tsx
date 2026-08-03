@@ -228,6 +228,12 @@ interface AttachmentItem {
   uri: string;
   name: string;
   type: string;
+  // v3.10.132: pre-read base64 of the file. Read at picker
+  // time so the send path doesn't have an async race or
+  // silent failure. Optional — if the read at picker time
+  // failed, the send path will retry from `uri`.
+  data?: string;
+  size?: number;
 }
 
 interface ChatMessage {
@@ -237,7 +243,7 @@ interface ChatMessage {
   agentId?: string;
   agentName?: string; // v3.1.15: human-readable name from desktop (e.g. "Lamasuu")
   ts: number;
-  attachments?: Array<{ uri: string; type: string; name: string }>; // v3.10.20
+  attachments?: Array<{ uri: string; type: string; name: string; data?: string; size?: number }>; // v3.10.20 (+ v3.10.132: data/size for inline base64)
   // v3.10.85: which quest was active when this message
   // was sent. Captured at append time (not derived at
   // render time) so the chat history is self-documenting
@@ -255,7 +261,7 @@ interface LogEntry {
   id: string;
   text: string;
   ts: number;
-  type: 'info' | 'sent' | 'received' | 'error';
+  type: 'info' | 'sent' | 'received' | 'error' | 'warn' | 'debug' | 'voice';
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -577,7 +583,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // v3.10.19 feedback: "images dont attach themselves to
   // the chat, such that one can Click them and look at them
   // also, like discord does".
-  const [fullscreenAttachment, setFullscreenAttachment] = useState<{ uri: string; type: string; name: string } | null>(null);
+  const [fullscreenAttachment, setFullscreenAttachment] = useState<{ uri: string; type: string; name: string; data?: string } | null>(null);
 
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
@@ -2950,15 +2956,74 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const lastAppStateLogRef = useRef<number>(0);
 
   // Add attachment
-  const addAttachment = (asset: any) => {
+  const addAttachment = async (asset: any) => {
+    const uri = asset.uri || '';
+    const fileName = asset.fileName || 'attachment';
+    const fileType = asset.type || 'image/jpeg';
+    // v3.10.132: read the file to base64 immediately at
+    // picker time. Previously the send path did
+    // `fs.readFile(att.uri, 'base64')` inside a Promise
+    // chain, which had multiple silent-failure modes:
+    //  1. URI didn't start with `file://` or `content://`
+    //     → no branch matched, attachment dropped without
+    //     a single log line. Tobe 2026-08-03 07:08:
+    //     'The image did not go through even tho it was
+    //     attached to my message, but it did not show
+    //     up in the chat.' Zero '[Attachment]' logs on
+    //     the desktop side, confirming the mobile send
+    //     silently dropped.
+    //  2. `fs.readFile` returned an empty string → the
+    //     `.then` fired with empty b64, sent an empty
+    //     image, no error surfaced.
+    //  3. Race between `setAttachments([])` clearing
+    //     state and the async `.then` callback.
+    // Reading at picker time eliminates all three. The
+    // attachment gets the data inline, the bubble
+    // preview can render, and the send path is just a
+    // synchronous call.
+    let dataBase64: string | undefined;
+    let fileSize: number | undefined;
+    if (uri) {
+      try {
+        const fs = require('react-native-fs');
+        // RNFS readFile accepts both `file://` and
+        // bare absolute paths. Some pickers return
+        // `content://` URIs that RNFS can't read
+        // directly; we strip the prefix and pass the
+        // path through. (react-native-image-picker
+        // v8.2.1 already copies content URIs into the
+        // app cache and returns a `file://` URI, so
+        // this branch is rarely hit.)
+        const readPath = uri.startsWith('file://') ? uri.slice(7) : uri;
+        if (uri.startsWith('content://')) {
+          addLogEntry(`📎 content:// URI — relying on picker copy`, 'warn');
+        }
+        dataBase64 = await fs.readFile(readPath, 'base64');
+        fileSize = dataBase64 ? Math.floor((dataBase64.length * 3) / 4) : 0;
+        addLogEntry(`📎 Read: ${fileName} (${fileSize} bytes from ${uri.slice(0, 60)}…)`, 'info');
+      } catch (e: any) {
+        addLogEntry(`📎 Read failed at picker time: ${fileName}: ${e?.message ?? 'unknown'}`, 'error');
+        // Don't add to the list if we can't read it —
+        // attaching a broken attachment is worse UX
+        // than telling the user "this image couldn't
+        // be opened".
+        return;
+      }
+    }
+    if (!dataBase64) {
+      addLogEntry(`📎 Skipped: ${fileName} (no data)`, 'warn');
+      return;
+    }
     const attachment: AttachmentItem = {
       id: Date.now().toString(),
-      uri: asset.uri || '',
-      name: asset.fileName || 'attachment',
-      type: asset.type || 'image/jpeg',
+      uri,
+      name: fileName,
+      type: fileType,
+      data: dataBase64,
+      size: fileSize,
     };
     setAttachments(prev => [...prev, attachment]);
-    addLogEntry(`📎 Added: ${attachment.name}`, 'info');
+    addLogEntry(`📎 Added: ${fileName}`, 'info');
   };
 
   // Remove attachment
@@ -3011,11 +3076,21 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
       { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
-        if (res.assets?.[0]) addAttachment(res.assets[0]);
+        // v3.10.132: addAttachment is async (reads base64
+        // at picker time). Fire and forget; picker callbacks
+        // don't surface errors anyway, the addAttachment
+        // log entries are the source of truth.
+        if (res.assets?.[0]) addAttachment(res.assets[0]).catch((e: any) => {
+          addLogEntry(`📎 Camera attach failed: ${e?.message ?? 'unknown'}`, 'error');
+        });
       })},
       { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 0 }, (res) => {
         if (res.assets && res.assets.length > 0) {
-          res.assets.forEach(asset => addAttachment(asset));
+          res.assets.forEach(asset => {
+            addAttachment(asset).catch((e: any) => {
+              addLogEntry(`📎 Gallery attach failed: ${asset?.fileName ?? '?'}: ${e?.message ?? 'unknown'}`, 'error');
+            });
+          });
         }
       })},
       { text: 'Cancel', style: 'cancel' },
@@ -3113,7 +3188,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         isUser: true,
         agentId: aid,
         ts: Date.now(),
-        attachments: attachments.map(a => ({ uri: a.uri, type: a.type, name: a.name })),
+        attachments: attachments.map(a => ({ uri: a.uri, type: a.type, name: a.name, data: a.data, size: a.size })),
         activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
         activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
@@ -3125,26 +3200,35 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
 
     for (const att of attachments) {
-      try {
-        const fs = require('react-native-fs');
-        if (att.uri.startsWith('file://')) {
-          fs.readFile(att.uri, 'base64').then((b64: string) => {
-            const ok = syncClient.sendAttachment(b64, att.type, att.name);
-            addLogEntry(ok ? `📎 Sent: ${att.name}` : `📎 Send failed: ${att.name}`, ok ? 'info' : 'error');
-          }).catch((e: any) => {
-            addLogEntry(`📎 Read failed: ${att.name}: ${e?.message}`, 'error');
-          });
-        } else if (att.uri.startsWith('content://') && (att as any).data) {
-          // Some Android camera capture results come back as
-          // content:// URIs with the data inline — fall back
-          // to whatever the picker provided.
-          const b64 = (att as any).data;
-          const ok = syncClient.sendAttachment(b64, att.type, att.name);
-          addLogEntry(ok ? `📎 Sent: ${att.name}` : `📎 Send failed: ${att.name}`, ok ? 'info' : 'error');
+      // v3.10.132: send the pre-read base64 from
+      // addAttachment(). The previous code did an async
+      // file read here with multiple silent-failure modes
+      // (no branch match for the URI scheme, empty result,
+      // race with setAttachments([])). Reading at picker
+      // time stores the data inline so the send path is
+      // synchronous and observable.
+      let b64 = att.data;
+      if (!b64 && att.uri) {
+        // Fallback: the pre-read at picker time failed but
+        // we still have a URI. Try once more at send time
+        // before giving up.
+        try {
+          const fs = require('react-native-fs');
+          const readPath = att.uri.startsWith('file://') ? att.uri.slice(7) : att.uri;
+          const readB64 = fs.readFileSync(readPath, 'base64');
+          b64 = readB64;
+          addLogEntry(`📎 Re-read at send: ${att.name} (${Math.floor((readB64.length * 3) / 4)} bytes)`, 'info');
+        } catch (e: any) {
+          addLogEntry(`📎 Send-time read failed: ${att.name}: ${e?.message ?? 'unknown'}`, 'error');
+          continue;
         }
-      } catch (e: any) {
-        addLogEntry(`📎 Error: ${att.name}: ${e?.message}`, 'error');
       }
+      if (!b64) {
+        addLogEntry(`📎 No data for ${att.name}, skipping`, 'warn');
+        continue;
+      }
+      const ok = syncClient.sendAttachment(b64, att.type, att.name);
+      addLogEntry(ok ? `📎 Sent: ${att.name} (${Math.floor((b64.length * 3) / 4)} bytes)` : `📎 Send failed: ${att.name}`, ok ? 'info' : 'error');
     }
 
     setInputText('');
@@ -3513,7 +3597,16 @@ useEffect(() => {
                   >
                     {isImage ? (
                       <Image
-                        source={{ uri: att.uri }}
+                        // v3.10.132: prefer a data: URI when we
+                        // have the base64 inline. The `file://`
+                        // path from the picker can disappear if
+                        // the app's cache is cleaned, and the
+                        // Image component can't load it on demand.
+                        // The data URI is always available until
+                        // the attachment is cleared.
+                        source={att.data
+                          ? { uri: `data:${att.type};base64,${att.data}` }
+                          : { uri: att.uri }}
                         style={styles.attachmentImage}
                         resizeMode="cover"
                       />
@@ -4562,7 +4655,14 @@ useEffect(() => {
             <View style={styles.fullscreenAttachmentContent}>
               {fullscreenAttachment.type?.startsWith('image/') ? (
                 <Image
-                  source={{ uri: fullscreenAttachment.uri }}
+                  // v3.10.132: prefer the inline base64 data
+                  // URI over the cached file path. The
+                  // cached file can be cleared by Android's
+                  // cache cleaner at any time, which would
+                  // leave the fullscreen viewer blank.
+                  source={fullscreenAttachment.data
+                    ? { uri: `data:${fullscreenAttachment.type};base64,${fullscreenAttachment.data}` }
+                    : { uri: fullscreenAttachment.uri }}
                   style={styles.fullscreenAttachmentImage}
                   resizeMode="contain"
                 />
