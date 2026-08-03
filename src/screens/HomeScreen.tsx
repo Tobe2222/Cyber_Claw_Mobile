@@ -16,7 +16,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder, disposeSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import { getVAD, resetVAD } from '../services/SileroVAD';  // Voice Activity Detection
-import Clipboard from '@react-native-clipboard/clipboard';
 import RNFS from 'react-native-fs';
 import { extractAudioFeatures, matchAgainstTraining, matchAgainstAllCompanions, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array } from '../services/AudioUtils';
@@ -2967,49 +2966,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // v3.10.128: auto-paste clipboard image on TextInput focus.
-  // RN's TextInput has no onPaste handler for images — pasting
-  // a screenshot into the chat silently drops the image data.
-  // The standard mobile pattern: when the user taps the chat
-  // input, before the keyboard appears, check the clipboard
-  // for an image. If there's one, auto-attach it. Tobe 2026-08-02
-  // 21:03: 'I now have to paste pictures of that whole
-  // conversation but it seems that he cannot see the pictures
-  // i paste.' Updated 2026-08-02 21:23: 'We dont need a new
-  // button, we just have to make the pasted pictures see able
-  // for the companion' — so this is just the focus check, no
-  // new UI. The user's existing paste gesture works.
-  //
-  // Guarded by a ref so we don't re-add the same image every
-  // focus. We track the last clipboard SHA / content hash and
-  // skip if it hasn't changed. Also skipped while the
-  // attachment list already has a clipboard-pasted item that
-  // matches (so the user can back out of a paste by clicking
-  // away and back).
-  const lastClipboardHashRef = useRef<string>('');
-  const handleTextInputFocus = useCallback(async () => {
-    try {
-      const b64 = await Clipboard.getImage();
-      if (!b64 || b64.length < 100) return; // no image, or empty
-      // Cheap dedupe: hash the first/last 100 chars of the
-      // base64. Same image pasted twice = same hash, skip.
-      const hash = `${b64.length}:${b64.slice(0, 64)}:${b64.slice(-64)}`;
-      if (hash === lastClipboardHashRef.current) return;
-      lastClipboardHashRef.current = hash;
-      const dataUri = `data:image/png;base64,${b64}`;
-      addAttachment({
-        uri: dataUri,
-        fileName: `pasted-${Date.now()}.png`,
-        type: 'image/png',
-      });
-      addLogEntry('📋 Auto-attached clipboard image', 'info');
-    } catch (e) {
-      // Clipboard read failed (no permission, no image, etc).
-      // Silent — this is a background convenience, not a
-      // primary action. Log only.
-      console.log('[clipboard-paste] no image or read failed:', e?.message);
-    }
-  }, []);
+  // v3.10.131: removed the auto-paste-on-focus handler and
+  // the explicit 📋 clipboard paste button. Tobe 2026-08-03
+  // 06:33: 'i cant use the clipboard button, i need to select
+  // from gallery not clipboard, as i have said that clipboard
+  // button is useless'. The clipboard path is unreliable on
+  // Android (Clipboard.getImage() returns null in many cases)
+  // and not what Tobe wants. Going forward the only attachment
+  // path is the `+` button → gallery picker (launchImageLibrary).
+  // Camera stays available via the Alert that `+` shows.
 
   // Toggle Wake Mode - v3.1.12: delegate to App-level navigation so the
   // wake mode UI always renders in the dedicated WakeModeScreen (not as
@@ -4463,47 +4428,6 @@ useEffect(() => {
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
               </TouchableOpacity>
-              {/* v3.10.130: dedicated paste-from-clipboard
-                  button. The v3.10.129 focus-only handler was
-                  unreliable — Android's Clipboard.getImage()
-                  often returned null when called on focus
-                  (e.g. when the user copied the image BEFORE
-                  opening the chat, or the clipboard hadn't
-                  been read since the app was foregrounded).
-                  Tobe 2026-08-02 22:35: 'tested again.
-                  Attached a picture but it did not show up in
-                  the chat after.' The focus handler didn't
-                  pick it up. The explicit button gives the
-                  user a reliable on-demand path: copy image
-                  → tap 📋 → attachment appears. */}
-              <TouchableOpacity
-                style={styles.micButton}
-                onPress={async () => {
-                  try {
-                    addLogEntry('📋 Paste: reading clipboard image...', 'info');
-                    const b64 = await Clipboard.getImage();
-                    if (!b64 || b64.length < 100) {
-                      addLogEntry('📋 Paste: no image on clipboard', 'warn');
-                      Alert.alert('No image', 'Copy an image first (long-press an image → Copy), then tap paste.');
-                      return;
-                    }
-                    const dataUri = `data:image/png;base64,${b64}`;
-                    addAttachment({
-                      uri: dataUri,
-                      fileName: `pasted-${Date.now()}.png`,
-                      type: 'image/png',
-                    });
-                    addLogEntry('📋 Paste: attached ' + Math.round(b64.length / 1024) + ' KB image', 'info');
-                  } catch (e) {
-                    addLogEntry('📋 Paste failed: ' + (e?.message || 'unknown'), 'error');
-                    Alert.alert('Paste failed', 'Could not read the clipboard image. Try copying again.');
-                  }
-                }}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                activeOpacity={0.6}
-              >
-                <Text style={[styles.micButtonText, { fontSize: 18, lineHeight: 20 }]}>📋</Text>
-              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.micButton, isVoiceListening && styles.micButtonActive]}
                 onPress={toggleVoiceInput}
@@ -4541,7 +4465,6 @@ useEffect(() => {
                   returnKeyType="send"
                   onSubmitEditing={sendMessage}
                   blurOnSubmit={false}
-                  onFocus={handleTextInputFocus}
                 />
               )}
               <TouchableOpacity
