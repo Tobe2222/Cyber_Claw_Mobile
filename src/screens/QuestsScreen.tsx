@@ -1284,19 +1284,33 @@ function QuestEditorBody({
     // below the input; the user taps a button to
     // accept it. This keeps the input itself
     // clearly empty until the user opts in.
+    //
+    // v3.10.136: for EXISTING quests (Tobe 2026-08-04
+    // 17:31: directory should be editable), start
+    // pre-filled with the current quest.directory so
+    // the user sees what's currently in use and can
+    // edit in place. The desktop's `quests:update`
+    // detects a change and re-scaffolds.
+    if (!isNew) {
+      return quest.directory || '';
+    }
     return '';
   });
   const [directorySuggestion, setDirectorySuggestion] = useState<string>('');
   useEffect(() => {
     // v3.10.134: compute the suggested directory path
-    // when the editor opens for a new quest. Combines
-    // the Settings.defaultQuestDir (if set) with a
-    // filesystem-safe version of the quest name. We
-    // keep the input itself empty so the user has to
-    // explicitly opt in — pre-filling was confusing
-    // because the desktop would mkdir the directory
-    // even if the user only meant to change the name.
-    if (!isNew) return;
+    // when the editor opens. Combines the
+    // Settings.defaultQuestDir (if set) with a
+    // filesystem-safe version of the quest name.
+    //
+    // v3.10.136: now fires for both new AND existing
+    // quests. The suggestion is the new "auto-default"
+    // — for existing quests it appears as a "← Use"
+    // chip below the input (which is currently
+    // pre-filled with the EXISTING directory), letting
+    // the user one-tap replace with the new auto-
+    // default. Same logic, same JSX; just no
+    // `if (!isNew) return;` early-out.
     let cancelled = false;
     (async () => {
       try {
@@ -1389,44 +1403,63 @@ function QuestEditorBody({
             + the conversation-log hint) and is out of scope
             here. Users wanting to move a directory should
             delete + recreate. */}
-        {isNew && (
-          <>
-            <Text style={styles.editorFieldLabel}>📁 Project directory</Text>
-            <TextInput
-              style={styles.editorInput}
-              value={directory}
-              onChangeText={setDirectory}
-              placeholder="(optional) path on this device or remote host"
-              placeholderTextColor="#666"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {directorySuggestion && directorySuggestion !== directory && (
-              <View style={styles.editorDirectorySuggestion}>
-                <Text style={styles.editorDirectorySuggestionText}>
-                  💡 Suggested: <Text style={styles.editorDirectorySuggestionPath}>
-                    {directorySuggestion}
-                  </Text>
-                </Text>
-                <TouchableOpacity
-                  style={styles.editorDirectorySuggestionBtn}
-                  onPress={() => setDirectory(directorySuggestion)}
-                >
-                  <Text style={styles.editorDirectorySuggestionBtnText}>← Use</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            <Text style={styles.editorDirectoryHelpText}>
-              Optional. Set a default in Settings → Quest directory, or leave blank
-              to add later via the desktop.
+        {/* v3.10.136: project directory is always
+            visible + editable, both for new AND
+            existing quests. Tobe 2026-08-04 17:31:
+            'Tried to edit a quest, its directory is
+            not shown and should be editable. Here we
+            potentially need to move and/or create new
+            directories for the user.'
+            The desktop's `quests:update` (v3.2.62)
+            detects a directory change and re-scaffolds
+            the new dir (mkdir + write INSTRUCTIONS.md
+            placeholder + CONVERSATION.md placeholder).
+            We do NOT migrate the old files — moving
+            the directory is the right user signal that
+            the quest is now about a different folder.
+
+            For new quests the directory field starts
+            blank and the suggestion auto-fills via the
+            "← Use" button (re-using the v3.10.134 logic).
+            For existing quests we pre-fill with the
+            current directory (so editing shows the
+            current value), and the "← Use" button
+            suggests a NEW directory based on the
+            Settings.defaultQuestDir + quest.name (if
+            different from the current value). The
+            Auto-set to Project default button does the
+            same as the editor's existing "← Use". */}
+
+        <Text style={styles.editorFieldLabel}>📁 Project directory</Text>
+        <TextInput
+          style={styles.editorInput}
+          value={directory}
+          onChangeText={setDirectory}
+          placeholder="(optional) path on this device or remote host"
+          placeholderTextColor="#666"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {directorySuggestion && directorySuggestion !== directory && (
+          <View style={styles.editorDirectorySuggestion}>
+            <Text style={styles.editorDirectorySuggestionText}>
+              💡 Suggested: <Text style={styles.editorDirectorySuggestionPath}>
+                {directorySuggestion}
+              </Text>
             </Text>
-          </>
+            <TouchableOpacity
+              style={styles.editorDirectorySuggestionBtn}
+              onPress={() => setDirectory(directorySuggestion)}
+            >
+              <Text style={styles.editorDirectorySuggestionBtnText}>← Use</Text>
+            </TouchableOpacity>
+          </View>
         )}
-        {!isNew && !!quest.directory && (
-          <Text style={styles.editorDirectoryHint}>
-            📁 {quest.directory}
-          </Text>
-        )}
+        <Text style={styles.editorDirectoryHelpText}>
+          {isNew
+            ? 'Optional. Set a default in Settings → Quest directory, or leave blank to add later via the desktop.'
+            : 'Edit to move the quest to a different directory. Desktop will mkdir + scaffold INSTRUCTIONS.md + CONVERSATION.md in the new location.'}
+        </Text>
         {/* v3.10.74: removed the "Active" toggle (the
             double-active bug Tobe reported). The "this
             is THE active quest" flag is now set
@@ -1586,27 +1619,39 @@ function QuestEditorBody({
             // 'active' so the field falls into place
             // automatically.
             //
-            // Directory handling: for NEW quests we pass
-            // the user's free-text value (trimmed; empty
-            // string → undefined so the desktop doesn't
-            // store a stray empty path). For EXISTING
-            // quests we still don't send directory —
-            // editing is intentionally read-only in the
-            // editor (see the directory block above). The
-            // desktop ignores directory on update either
-            // way, but explicitly NOT sending the field
-            // for existing quests means a typo in the
-            // editor can't accidentally rewrite the
-            // stored path.
+            // Directory handling:
+            //   - For NEW quests: pass the user's
+            //     free-text value (trimmed; empty
+            //     string → undefined so the desktop
+            //     doesn't store a stray empty path).
+            //   - For EXISTING quests (v3.10.136):
+            //     pass the user's edited value. The
+            //     desktop detects a directory CHANGE
+            //     and re-scaffolds the new dir (mkdir
+            //     + write INSTRUCTIONS.md + CONVERSATION.md
+            //     placeholders). Empty string = clear
+            //     the directory (falls back to the
+            //     id-based path on next read). Same
+            //     wire-level behavior in both cases;
+            //     no branching beyond the trim.
+            //     Tobe 2026-08-04 17:31: 'Here we
+            //     potentially need to move and/or
+            //     create new directories for the user.'
             const updates: Record<string, any> = {
               name: name.trim() || quest.name,
               description: description.trim(),
               goals: cleanedGoals,
             };
-            if (isNew) {
-              const trimmedDir = directory.trim();
-              if (trimmedDir) updates.directory = trimmedDir;
-            }
+            const trimmedDir = directory.trim();
+            updates.directory = trimmedDir || undefined;
+            // Note: updates.directory is now always
+            // present in the payload (new + existing).
+            // For new quests, undefined = no directory
+            // (the desktop's existing default). For
+            // existing quests, if the user didn't edit
+            // the directory, the value is the same as
+            // the current quest.directory so the
+            // desktop's no-op-on-equal branch fires.
             onSave(updates);
             // v3.10.102: if the user edited the
             // instructions textarea, send the file to
@@ -1757,6 +1802,48 @@ function QuestDetailBody({
           <Text style={styles.modalSectionBody}>{quest.description}</Text>
         </View>
       )}
+
+      {/* v3.10.136: per-quest directory surfaced in the
+          detail modal so the user can see WHERE the
+          project files live without opening the editor.
+          Tobe 2026-08-04 17:31: "And in the inspect or
+          Click on the quest the directory should be
+          shown there too." Tapping the row opens the
+          editor (where the directory is now editable
+          — see the v3.10.136 changes in
+          QuestEditorBody above), so the path is also
+          a shortcut to "Move to a different project
+          folder". For quests without a directory, the
+          row says "(no directory)" and the tap still
+          drops into the editor so the user can add
+          one. */}
+
+      <View style={styles.modalSection}>
+        <Text style={styles.modalSectionTitle}>
+          📁 Project directory
+        </Text>
+        {quest.directory ? (
+          <Text
+            style={[styles.modalSectionBody, styles.modalDirectoryText]}
+            selectable
+            onPress={() => onEdit?.()}
+          >
+            {quest.directory}
+            <Text style={styles.modalDirectoryEditHint}>
+              {' '}(tap to edit)
+            </Text>
+          </Text>
+        ) : (
+          <Text
+            style={styles.modalSectionBody}
+            onPress={() => onEdit?.()}
+          >
+            <Text style={styles.modalDirectoryEmpty}>
+              (no directory — tap to set)
+            </Text>
+          </Text>
+        )}
+      </View>
 
       {/* v3.10.101: per-quest instructions. Shown
           read-only on the mobile. The desktop's quest
@@ -2171,6 +2258,24 @@ const styles = StyleSheet.create({
     color: '#cfd2e0',
     fontSize: 14,
     lineHeight: 20,
+  },
+  // v3.10.136: directory row in the detail modal.
+  // Uses a monospace font so paths are readable,
+  // and a muted "(tap to edit)" hint that doubles
+  // as the visual affordance for opening the editor.
+  modalDirectoryText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 13,
+  },
+  modalDirectoryEditHint: {
+    color: '#7a809a',
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
+  modalDirectoryEmpty: {
+    color: '#7a809a',
+    fontSize: 13,
+    fontStyle: 'italic',
   },
   // v3.10.101: per-quest instructions display. The
   // path is shown in a monospace font with a muted

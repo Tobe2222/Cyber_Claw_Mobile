@@ -431,6 +431,28 @@ class SyncClient {
     this.send({ type: 'clear_quest_conversation_log', questId });
   }
 
+  // v3.10.136: CYBERCLAW.md (the overarching system
+  // prompt) read / write / reset, round-tripped through
+  // the desktop's SyncServer callbacks (v3.2.62) +
+  // `system:*` IPCs. The desktop is the source of
+  // truth; this method just sends the request.
+  // Desktop replies fire a `cyberclaw_system` event
+  // with { ok, content, defaultContent, path, error }.
+  //
+  // Tobe 2026-08-04 17:31: 'did we have a cyberclaw md
+  // also, outside of companions? If not we should
+  // have it in the settings (editable with a warning
+  // that this might break the companions behaviour).'
+  requestCyberclawSystem() {
+    this.send({ type: 'request_cyberclaw_system' });
+  }
+  saveCyberclawSystem(content: string) {
+    this.send({ type: 'save_cyberclaw_system', content });
+  }
+  resetCyberclawSystem() {
+    this.send({ type: 'reset_cyberclaw_system' });
+  }
+
   // v3.10.103: ask the desktop for a companion's soul.md.
   // Read-only — the desktop's Companion Forge is the editor.
   // Desktop replies with { type: 'companion_soul', agentId,

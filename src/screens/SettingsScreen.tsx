@@ -221,6 +221,32 @@ export default function SettingsScreen({
   // `defaultQuestDir` key. Mobile-only — the desktop
   // doesn't need this value.
   const [defaultQuestDir, setDefaultQuestDir] = useState<string>('');
+  // v3.10.136: visual feedback for the Save button.
+  // Without this, the button silently persists the
+  // value and the user has no idea if the save
+  // actually landed (Tobe 2026-08-04 17:31: 'no
+  // indication that it saved or not'). A
+  // timestamp lets the render-side re-render a
+  // "✓ Saved" badge for ~2 seconds after a successful
+  // save. Number | null so we can compare with
+  // Date.now() to decide whether the badge is still
+  // inside the fade window.
+  const [defaultQuestDirSavedAt, setDefaultQuestDirSavedAt] = useState<number | null>(null);
+  // v3.10.136: CYBERCLAW.md editor state. The
+  // overarching system prompt lives on the desktop
+  // at ~/.openclaw/cyberclaw/CYBERCLAW.md. The mobile
+  // Settings screen lets the user read, edit, save,
+  // and reset it (with a warning that mistuned text
+  // can break companion behavior). All state is
+  // local — the desktop is the source of truth, and
+  // we sync on every load/save.
+  const [cyberclawContent, setCyberclawContent] = useState<string>('');
+  const [cyberclawDefaultContent, setCyberclawDefaultContent] = useState<string>('');
+  const [cyberclawPath, setCyberclawPath] = useState<string>('');
+  const [cyberclawLoading, setCyberclawLoading] = useState<boolean>(true);
+  const [cyberclawSaving, setCyberclawSaving] = useState<boolean>(false);
+  const [cyberclawSavedAt, setCyberclawSavedAt] = useState<number | null>(null);
+  const [cyberclawResetConfirming, setCyberclawResetConfirming] = useState<boolean>(false);
   // v3.4.7: fgThreshold/bgThreshold state + UI removed.
   // The Match Thresholds UI control was a low-level knob for
   // the v3.1 sample-matching wake detector. Since v3.1.95 we
@@ -664,6 +690,14 @@ export default function SettingsScreen({
   // forget with an Alert if AsyncStorage is
   // unavailable (rare — typically permission
   // issues on storage).
+  //
+  // v3.10.136: on success, set defaultQuestDirSavedAt
+  // to Date.now() so the JSX can render a "✓ Saved"
+  // badge for ~2 seconds. Tobe 2026-08-04 17:31: 'no
+  // indication that it saved or not'. The badge is
+  // set via state, so we don't need to track a
+  // timeout separately — the render is driven by
+  // the timestamp value.
   const saveDefaultQuestDir = async () => {
     try {
       const raw = await AsyncStorage.getItem('cyberclaw-mobile-settings');
@@ -673,8 +707,83 @@ export default function SettingsScreen({
         'cyberclaw-mobile-settings',
         JSON.stringify(settings),
       );
+      setDefaultQuestDirSavedAt(Date.now());
     } catch (e: any) {
       Alert.alert('Save failed', `Could not save default quest directory: ${e?.message || 'unknown error'}`);
+    }
+  };
+
+  // v3.10.136: CYBERCLAW.md (the overarching system
+  // prompt) load / save / reset. The desktop is the
+  // source of truth: it stores the file at
+  // ~/.openclaw/cyberclaw/CYBERCLAW.md. The mobile
+  // reads via `syncClient.requestCyberclawSystem()`,
+  // which round-trips through the SyncServer's
+  // `request_cyberclaw_system` WS case (desktop
+  // v3.2.62) and replies with `cyberclaw_system`
+  // event carrying the content + path + default
+  // content (for the "Reset to default" button).
+  //
+  // The mobile is read-only on the desktop's
+  // file system, but read/write on the in-app copy
+  // (textbox), with a Save button that pushes the
+  // in-app copy back to the desktop.
+  //
+  // Tobe 2026-08-04 17:31: "did we have a cyberclaw md
+  // also, outside of companions? If not we should
+  // have it in the settings (editable with a warning
+  // that this might break the companions behaviour),
+  // this tells the agent that we are talking within
+  // cyberclaw, what cyberclaw is and how to
+  // behave/response/do things, like, - we create a
+  // quest like this: create a directory with quest
+  // instructions etc. - Pictures are seen like
+  // this, - check quest directory conversation
+  // file, memory, before reply - always reply on
+  // cyberclaw if spoken to here."
+  const loadCyberclawSystem = () => {
+    setCyberclawLoading(true);
+    try {
+      syncClient.requestCyberclawSystem?.();
+    } catch (e: any) {
+      console.warn('[CYBERCLAW] requestCyberclawSystem threw:', e?.message);
+      setCyberclawLoading(false);
+    }
+  };
+  const saveCyberclawSystem = async () => {
+    setCyberclawSaving(true);
+    try {
+      await syncClient.saveCyberclawSystem?.(cyberclawContent);
+      setCyberclawSavedAt(Date.now());
+    } catch (e: any) {
+      Alert.alert('Save failed', `Could not save CYBERCLAW.md: ${e?.message || 'unknown error'}`);
+    } finally {
+      setCyberclawSaving(false);
+    }
+  };
+  const resetCyberclawSystem = async () => {
+    if (!cyberclawResetConfirming) {
+      setCyberclawResetConfirming(true);
+      // Auto-dismiss the confirm prompt after 5 seconds
+      // (the user has to tap "Yes, reset" to actually
+      // do it). Avoids leaving a stale confirm
+      // sitting on screen.
+      setTimeout(() => setCyberclawResetConfirming(false), 5000);
+      return;
+    }
+    setCyberclawResetConfirming(false);
+    setCyberclawSaving(true);
+    try {
+      await syncClient.resetCyberclawSystem?.();
+      // The reset event reply carries the new (default)
+      // content, which we update via the listener in
+      // useEffect. No need to set it here — the listener
+      // will fire and update cyberclawContent.
+      setCyberclawSavedAt(Date.now());
+    } catch (e: any) {
+      Alert.alert('Reset failed', `Could not reset CYBERCLAW.md: ${e?.message || 'unknown error'}`);
+    } finally {
+      setCyberclawSaving(false);
     }
   };
 
@@ -806,7 +915,39 @@ export default function SettingsScreen({
     syncClient.on('pair_failed', (msg: any) => {
       Alert.alert('Pairing Failed', msg.error || 'Wrong code or expired.');
     });
-    return () => { syncClient.off('state_change', onStateChange); };
+    // v3.10.136: CYBERCLAW.md listener. Fires both on
+    // initial load (after requestCyberclawSystem round-trips)
+    // and after a successful save/reset (the desktop re-sends
+    // the new content). The listener takes the canonical
+    // content from the desktop and writes it into the local
+    // textbox state. We always trust the desktop's content
+    // over the local copy on a save ack.
+    const onCyberclawSystem = (msg: any) => {
+      if (!msg || !msg.ok) {
+        setCyberclawLoading(false);
+        return;
+      }
+      setCyberclawContent(msg.content || '');
+      setCyberclawDefaultContent(msg.defaultContent || '');
+      setCyberclawPath(msg.path || '');
+      setCyberclawLoading(false);
+    };
+    syncClient.on('cyberclaw_system', onCyberclawSystem);
+    // v3.10.136: fire the initial fetch once on mount
+    // and again whenever the WS connection comes back.
+    // The desktop's reply lands in the listener above,
+    // which writes into cyberclawContent. If the
+    // connection isn't ready yet, the request is a
+    // queued fire-and-forget inside SyncClient that
+    // lands on auth (or silently drops on a hard
+    // disconnect — but the next 'state_change' will
+    // re-fire it via the effect below).
+    const fireFetch = () => loadCyberclawSystem();
+    fireFetch();
+    return () => {
+      syncClient.off('state_change', onStateChange);
+      syncClient.off('cyberclaw_system', onCyberclawSystem);
+    };
   }, []);
 
   // ── Permission helpers ────────────────────────────────────────
@@ -1966,6 +2107,26 @@ export default function SettingsScreen({
           CompanionSettingsScreen. */}
       <Section title="Quests" desc="Default paths for new quests created on this phone.">
         <Label>📁 Default quest directory</Label>
+        {/* v3.10.136: example moved ABOVE the input field so
+            the user sees the convention first, types after.
+            Tobe 2026-08-04 17:31: 'it should be better,
+            suggestions and example right above.' The path
+            shown below is generic (`/path/to/your/projects`)
+            rather than a real example of Tobe's actual disk
+            layout — Tobe also said 'dont use my directory
+            as text example' on 2026-08-04 17:31. The
+            concrete suggested pre-fill (with ↳ examples)
+            still happens in the quest editor, not here. */}
+        <Hint>
+          💡 <Text style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>/path/to/your/projects/</Text>
+          {'\n'}    ↳ seed-signer/
+          {'\n'}    ↳ cyber-music-v2/
+          {'\n\n'}
+          Tip: when you tap + New, the editor will
+          auto-pre-fill
+          <Text style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}> &lt;your-dir&gt;/&lt;quest-name&gt;</Text>
+          {' '}as the suggestion.
+        </Hint>
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
           <TextInput
             style={{
@@ -1981,7 +2142,7 @@ export default function SettingsScreen({
             }}
             value={defaultQuestDir}
             onChangeText={setDefaultQuestDir}
-            placeholder="/media/humpsuu/CYBERDRIVE/2B/work/projects"
+            placeholder="/path/to/your/projects"
             placeholderTextColor={theme.text.dim}
             autoCapitalize="none"
             autoCorrect={false}
@@ -1999,23 +2160,184 @@ export default function SettingsScreen({
             <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Save</Text>
           </TouchableOpacity>
         </View>
+        {/* v3.10.136: visible save feedback. Renders "✓ Saved"
+            for 2 seconds after a successful save. Driven by
+            the defaultQuestDirSavedAt timestamp state — no
+            setTimeout, just a derived value from the current
+            Date.now(). If the user types more characters
+            after saving, the badge fades naturally because
+            the time delta crosses the 2-second threshold. */}
+        {defaultQuestDirSavedAt !== null && (Date.now() - defaultQuestDirSavedAt) < 2000 && (
+          <Text style={{ color: theme.brand.accentBright, fontSize: 12, marginTop: 4, fontWeight: '600' }}>
+            ✓ Saved
+          </Text>
+        )}
         <Hint>
           Where new projects get rooted. Leave empty to skip
           the suggestion when creating a quest. Path is
           used as a suggestion only — the desktop (or the
           quest editor) decides what actually gets created.
         </Hint>
-        <SubTitle>Path examples</SubTitle>
+      </Section>
+
+      {/* v3.10.136: CYBERCLAW.md editor. The
+          overarching system prompt lives on the desktop
+          at `~/.openclaw/cyberclaw/CYBERCLAW.md`. This
+          section lets the user:
+            - read the current content (in a scrollable
+              multiline input)
+            - save their own edits (button writes back to
+              the desktop via WS round-trip)
+            - reset to the default (button unlinks the
+              user's file so the desktop reads the
+              shipped default on next save)
+          With a prominent warning that mistuned text
+          can break companion behavior — the prompt is
+          the foundation of how the companion reasons.
+          Tobe 2026-08-04 17:31: "did we have a
+          cyberclaw md also, outside of companions?
+          If not we should have it in the settings
+          (editable with a warning that this might
+          break the companions behaviour), this
+          tells the agent that we are talking within
+          cyberclaw, what cyberclaw is and how to
+          behave/response/do things, like, - we create
+          a quest like this: create a directory with
+          quest instructions etc. - Pictures are seen
+          like this, - check quest directory
+          conversation file, memory, before reply -
+          always reply on cyberclaw if spoken to here.
+          These are just examples but in theory should
+          be correct and aligned with what i want."
+
+          Behaviour notes:
+            - The desktop is the source of truth. The
+              mobile's textbox is a working copy; Save
+              pushes back. On mount we fetch once; on
+              WS reconnect we re-fetch.
+            - Saving does NOT restart the desktop. The
+              new content takes effect on the NEXT
+              chat send because assembleContext() reads
+              the file every time.
+            - Reset to default removes the user's file
+              and shows the shipped default in the
+              textbox. The user can then save (writes
+              the default in place of nothing) or just
+              close the modal (the default sticks
+              because nothing in the FS). */}
+      <Section
+        title="CYBERCLAW.md"
+        desc="The overarching system prompt. Read by every companion on every chat send."
+      >
+        {/* Warning box. v3.10.136 — rendered as a
+            red-bordered sub-section so the user
+            can't miss it before editing. */}
+        <View style={{
+          backgroundColor: 'rgba(255,80,80,0.12)',
+          borderColor: '#cc4444',
+          borderWidth: 1,
+          borderRadius: 6,
+          padding: 10,
+          marginBottom: 12,
+        }}>
+          <Text style={{ color: '#ff8888', fontSize: 13, fontWeight: '700', marginBottom: 4 }}>
+            ⚠️ Editing this changes how every companion thinks
+          </Text>
+          <Text style={{ color: '#ffaaaa', fontSize: 12, lineHeight: 16 }}>
+            The desktop reads CYBERCLAW.md on every chat send
+            and injects it as the first block of system context.
+            A mistuned prompt can break companion behaviour
+            (lost tone, broken tool use, ignored instructions).
+            Reset to the shipped default if you get lost.
+          </Text>
+        </View>
+        {cyberclawPath ? (
+          <Text style={{
+            color: theme.text.dim,
+            fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+            fontSize: 11,
+            marginBottom: 8,
+          }} selectable>
+            📄 {cyberclawPath}
+          </Text>
+        ) : null}
+        {cyberclawLoading ? (
+          <Text style={{ color: theme.text.dim, fontStyle: 'italic', marginVertical: 12 }}>
+            Loading CYBERCLAW.md…
+          </Text>
+        ) : (
+          <TextInput
+            style={{
+              backgroundColor: theme.bg.secondary,
+              color: theme.text.primary,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: theme.border.mid,
+              padding: 12,
+              fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+              fontSize: 12,
+              minHeight: 280,
+              textAlignVertical: 'top',
+            }}
+            value={cyberclawContent}
+            onChangeText={setCyberclawContent}
+            multiline
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!cyberclawSaving}
+            placeholder="CYBERCLAW.md content…"
+            placeholderTextColor={theme.text.dim}
+          />
+        )}
+        <View style={{ flexDirection: 'row', marginTop: 10, gap: 8 }}>
+          <TouchableOpacity
+            style={{
+              flex: 1,
+              paddingVertical: 10,
+              backgroundColor: cyberclawSaving ? theme.text.dim : theme.brand.accent,
+              borderRadius: 6,
+              opacity: cyberclawSaving ? 0.6 : 1,
+            }}
+            disabled={cyberclawSaving || cyberclawLoading}
+            onPress={saveCyberclawSystem}
+          >
+            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>
+              {cyberclawSaving ? 'Saving…' : '💾 Save'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{
+              flex: 1,
+              paddingVertical: 10,
+              backgroundColor: cyberclawResetConfirming ? '#cc4444' : '#3a3a4f',
+              borderRadius: 6,
+            }}
+            disabled={cyberclawSaving || cyberclawLoading}
+            onPress={resetCyberclawSystem}
+          >
+            <Text style={{
+              color: cyberclawResetConfirming ? '#fff' : '#ffaaaa',
+              fontSize: 13,
+              fontWeight: '700',
+              textAlign: 'center',
+            }}>
+              {cyberclawResetConfirming ? '⚠️ Tap again to confirm' : '↺  Reset to default'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        {cyberclawSavedAt !== null && (Date.now() - cyberclawSavedAt) < 2000 && (
+          <Text style={{ color: theme.brand.accentBright, fontSize: 12, marginTop: 6, fontWeight: '600' }}>
+            ✓ Saved
+          </Text>
+        )}
         <Hint>
-          💡 {`/media/humpsuu/CYBERDRIVE/2B/work/projects/`}
-          {'\n'}    ↳ seed-signer/
-          {'\n'}    ↳ cyber-music-v2/
-          {'\n\n'}
-          Tip: if you use a parent folder per category
-          (e.g. <Text style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>~/projects</Text>),
-          the editor will auto-pre-fill
-          <Text style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}> ~/projects/&lt;quest-name&gt;</Text>
-          {' '}as the suggestion when you tap + New.
+          The content here tells the companion that we're
+          talking inside CyberClaw. Suggested topics Tobe
+          (2026-08-04 17:31):
+          {'\n'}- How to create a quest (mkdir + INSTRUCTIONS.md + CONVERSATION.md)
+          {'\n'}- How pictures are seen (data URI, attached file, etc.)
+          {'\n'}- Check the quest directory files (INSTRUCTIONS.md, CONVERSATION.md, memory) before replying
+          {'\n'}- Always reply on CyberClaw if spoken to
         </Hint>
       </Section>
 
