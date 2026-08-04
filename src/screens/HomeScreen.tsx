@@ -811,6 +811,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // thinking indicator "disappears after i went into
   // another app and back again".
   const thinkingStickyRef = useRef(false);
+  // v3.10.133: long-wait escalation refs.
+  //   - thinkingStartedAtRef: timestamp the typing bubble went
+  //     up, so we can show "still working..." / "taking longer
+  //     than usual..." escalations at 30s/90s/4min. Without
+  //     this, the mobile user sees the same generic
+  //     "Clawsuu is thinking..." string for the whole wait and
+  //     has no signal that progress is being made. Tobe
+  //     2026-08-04 wanted observable progress on long waits.
+  //   - thinkingEscalateTimerRef: the currently-armed escalation
+  //     setTimeout. Cleared on agent-message arrival (the
+  //     bubble goes away) or on a fresh typing=true (the bubble
+  //     text resets and the timer re-arms).
+  const thinkingStartedAtRef = useRef<number | null>(null);
+  const thinkingEscalateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
@@ -1854,9 +1868,34 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         if (thinkingStickyRef.current && !fullscreenRef.current) {
           const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
           const name = a?.name || 'Companion';
-          setChatVoiceStatus(`${name} is thinking...`);
+          // v3.10.133: pick the right "still working" label based
+          // on how long the bubble has been up. Without this, a
+          // foreground transition from a long wait would reset
+          // the text to "is thinking..." even when we're already
+          // past 30s/90s/4min into the wait — visually a
+          // regression because the user just lost the
+          // escalation context. Use the same 30s/90s/4min
+          // thresholds as the onTyping escalation.
+          const elapsed = thinkingStartedAtRef.current ? (Date.now() - thinkingStartedAtRef.current) : 0;
+          let label = 'is thinking...';
+          if (elapsed >= 240000) label = 'is taking very long (model may retry in the background)...';
+          else if (elapsed >= 90000) label = 'is taking longer than usual...';
+          else if (elapsed >= 30000) label = 'is still working...';
+          setChatVoiceStatus(`${name} ${label}`);
           setIsThinking(true);
           setArenaThinking(true);
+          // Re-arm the next escalation if we just transitioned
+          // to a new tier (e.g. user backgrounded at 60s, came
+          // back, we just rendered "is still working..." at 60s,
+          // but the next tier ("taking longer than usual...") is
+          // at 90s — we still have 30s on the original timer, so
+          // it's fine; no new timer needed. If the original
+          // timer already fired and was a no-op because
+          // thinkingStickyRef was already false at that moment,
+          // the next tier is now stranded. That's a
+          // contradiction because we just re-applied sticky=true,
+          // so the no-op couldn't have happened. Leave the
+          // existing timer to fire as scheduled.).
         }
         // Came back to foreground - restart listener with foreground (lenient) threshold
         if (!isWakeWordModeRef.current && !fullscreenRef.current) {
@@ -2189,8 +2228,26 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // it's a user message echo from the desktop, the
       // sticky flag is also reset (it'll be set again on
       // the next typing:true).
+      //
+      // v3.10.133: same clearing now handles the new
+      // long-wait escalate timer (and the started-at ref).
+      // Without this, a {active:true} escalation that
+      // scheduled a 30s/90s/4min setTimeout would keep
+      // firing after the bubble already went away — the
+      // pre-v3.10.133 mobile design relied on the bubble
+      // vanishing via explicit typing=false, so any
+      // active timer was cleared implicitly with the
+      // bubble's render. Now that typing=false is a no-op,
+      // we have to clear the timer explicitly. Same effect
+      // for the started-at ref (so the next typing:true
+      // restarts the clock from zero).
       if (!incoming.isUser) {
         thinkingStickyRef.current = false;
+        thinkingStartedAtRef.current = null;
+        if (thinkingEscalateTimerRef.current) {
+          clearTimeout(thinkingEscalateTimerRef.current);
+          thinkingEscalateTimerRef.current = null;
+        }
         setIsThinking(false);
         setArenaThinking(false);
         setChatVoiceStatus(null);
@@ -2351,6 +2408,44 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
         const name = a?.name || 'Companion';
         setChatVoiceStatus(`${name} is thinking...`);
+        // v3.10.133: stamp the moment the indicator went up so
+        // the long-wait escalation (below) can flip the text to
+        // "still working..." after 30s, 90s, and 4min. The
+        // desktop already escalates via the typing bubble text,
+        // but the mobile receives the bubble verbatim — for
+        // long tasks where the desktop is wedged on a sub-task
+        // (Tobe 2026-08-04: "there is a small delay or issue on
+        // mobile with the clawsuu is thinking still"), the
+        // mobile user sees the same generic string for the
+        // whole wait. The mobile-side escalation gives them
+        // observable progress.
+        thinkingStartedAtRef.current = Date.now();
+        // Cancel any previous long-wait timer; restart fresh.
+        if (thinkingEscalateTimerRef.current) {
+          clearTimeout(thinkingEscalateTimerRef.current);
+          thinkingEscalateTimerRef.current = null;
+        }
+        // Schedule the escalation chain. Each timer re-reads
+        // the agent name so it can fire even after a tab switch.
+        const scheduleNext = (delayMs: number, label: string) => {
+          thinkingEscalateTimerRef.current = setTimeout(() => {
+            // Only escalate if the bubble is STILL up — i.e.
+            // the desktop is still typing (sticky ref). If we
+            // already cleared (agent message arrived, error
+            // arrived, etc.), no-op.
+            if (!thinkingStickyRef.current) return;
+            if (fullscreenRef.current) return; // don't override voice-mode status
+            const a2 = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
+            const name2 = a2?.name || 'Companion';
+            setChatVoiceStatus(`${name2} ${label}`);
+          }, delayMs);
+        };
+        // 30s: 'still working...' (covers typical tool-use waits)
+        scheduleNext(30000, 'is still working...');
+        // 90s: 'taking longer than usual'
+        scheduleNext(90000, 'is taking longer than usual...');
+        // 4 min: 'taking very long — may retry soon'
+        scheduleNext(240000, 'is taking very long (model may retry in the background)...');
       }
       // v3.10.108: keep the thinking bubble sticky across
       // app foreground/background cycles. Tobe's 2026-07-29
@@ -2369,14 +2464,41 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // visible until the next agent message or an explicit
       // {active:false} arrives, regardless of foreground
       // transitions.
+      //
+      // v3.10.133: when the desktop sends {active:false} we
+      // still KEEP the bubble visible. Reasoning: the desktop
+      // side sometimes clears typing slightly before the agent
+      // reply round-trips through `addChatMsg('agent', ...)`,
+      // OR the typing=false arrives while the reply is still
+      // in flight (Tobe 2026-08-04: "It says that he is
+      // thinking for about 5-10 seconds, then it takes some
+      // time before the reply comes"). With strict
+      // server-authoritative clearing, the bubble would vanish
+      // mid-flight and the user thinks the agent died.
+      //
+      // New rule: typing=false is informational only. Clear
+      // the bubble ONLY when a real terminal event lands:
+      //   (a) an agent message arrives via onChat
+      //       (appendAgentMessage path)
+      //   (b) the user sends a new message (which will
+      //       fire its own typing=true shortly, replacing the
+      //       bubble)
+      //   (c) onSendError fires (e.g. audio_input error)
       // Set a client-side sticky flag the moment we receive
-      // {active:true}; clear it ONLY on {active:false} OR when
-      // a fresh agent message arrives via appendAgentMessage.
+      // {active:true}; clear it ONLY when a real terminal
+      // event lands. {active:false} from the desktop does
+      // NOT clear the sticky flag on its own.
       if (msg.active) {
         thinkingStickyRef.current = true;
-      } else {
-        thinkingStickyRef.current = false;
+        thinkingStartedAtRef.current = Date.now();
       }
+      // v3.10.133: explicit {active:false} is now a no-op
+      // on its own. The bubble stays until an agent message
+      // or error arrives. The desktop still sends it so the
+      // renderer-side 'isThinking' flag mirrors the desktop's
+      // state, but the user-visible text persists. See the
+      // onChat handler below for the agent-message clearing
+      // path.
     };
 
     // v3.10.87: tool-call events from the desktop's
@@ -2916,6 +3038,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
     return () => {
       remoteToolHandler.destroy();
+      // v3.10.133: cancel any pending long-wait escalation
+      // timer before tearing down listeners — otherwise an
+      // unmount mid-wait leaves a dangling setTimeout that
+      // tries to setState on an unmounted component.
+      try { if (thinkingEscalateTimerRef.current) clearTimeout(thinkingEscalateTimerRef.current); } catch {}
+      thinkingEscalateTimerRef.current = null;
       try { wakeSub?.remove?.(); } catch {}
       try { wakeOpenSub?.remove?.(); } catch {}
       try { debugSub?.remove?.(); } catch {}

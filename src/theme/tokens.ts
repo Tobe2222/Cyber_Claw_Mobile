@@ -106,8 +106,16 @@ export const darkTheme = {
     // makes it pop harder against the deeper bg.primary
     // (#050510 vs the old #0a0a0a). Cyberpunk-neon.
     accent: '#ff8c1a',
-    accentDim: '#cc5528',
-    accentBright: '#ffaa3f',
+    // v3.10.133: bumped from #cc5528 to #ffaa3f for chat
+    // text legibility on the deep-space bg.primary (#050510).
+    // The dim orange was hard to read on the dark chat
+    // background — Tobe 2026-08-04: 'we need to brighten
+    // the companion text, its hard to see in dark mode,
+    // the Orange is too dark'. accentBright (#ffaa3f) is
+    // bright enough to be legible at body text sizes (13px)
+    // while still reading as CyberClaw orange (not yellow).
+    accentDim: '#ffaa3f',
+    accentBright: '#ffc66d',
     accentGlow: 'rgba(255,140,26,0.5)',
 
     // v3.10.119: neon cyan, brighter.
@@ -226,7 +234,13 @@ export const lightTheme = {
     // becomes sky-blue so non-primary CTAs don't shout
     // orange.
     accent: '#f7931a',        // CyberClaw orange (the brand)
-    accentDim: '#cc5528',
+    // v3.10.133: bumped from #cc5528 to #d97e0e for chat
+    // text legibility in light mode. The previous
+    // #cc5528 was readable but visually heavy — bumped to
+    // a slightly brighter, warmer orange so companion
+    // messages pop the same way the dark-mode companion
+    // text does after the v3.10.133 fix.
+    accentDim: '#d97e0e',
     accentBright: '#3d8fc4',  // sky blue for secondary actions
     accentGlow: 'rgba(247,147,26,0.18)',
 
@@ -367,7 +381,10 @@ export const forestTheme = {
     // becomes bark-brown so secondary actions don't shout
     // orange over the green/brown scene.
     accent: '#f7931a',        // CyberClaw orange
-    accentDim: '#cc5528',
+    // v3.10.133: bumped from #cc5528 to #d97e0e for chat
+    // text legibility in forest mode. Same rationale as
+    // light mode — see lightTheme.accentDim above.
+    accentDim: '#d97e0e',
     accentBright: '#d4b896',  // pale bark for secondary actions
     accentGlow: 'rgba(247,147,26,0.30)',
 
