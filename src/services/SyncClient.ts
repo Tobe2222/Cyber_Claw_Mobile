@@ -408,6 +408,29 @@ class SyncClient {
     this.send({ type: 'save_quest_instructions', questId, content });
   }
 
+  // v3.10.135: per-quest conversation log. The
+  // desktop has three IPCs (`quests:append-conversation-log`,
+  // `quests:get-conversation-log`,
+  // `quests:get-conversation-file`,
+  // `quests:clear-conversation-log`) which the mobile
+  // can call directly through the WS bridge. The
+  // desktop stores the conversation in BOTH a
+  // JSON array (for fast LLM context injection) AND
+  // a per-quest markdown file at
+  // <quest.directory>/CONVERSATION.md (the canonical
+  // long-term store, co-located with the project
+  // files). The mobile uses these for the future
+  // "View past conversations" UI on QuestsScreen.
+  getConversationLog(questId: string) {
+    this.send({ type: 'request_quest_conversation_log', questId });
+  }
+  getConversationFile(questId: string) {
+    this.send({ type: 'request_quest_conversation_file', questId });
+  }
+  clearConversationLog(questId: string) {
+    this.send({ type: 'clear_quest_conversation_log', questId });
+  }
+
   // v3.10.103: ask the desktop for a companion's soul.md.
   // Read-only — the desktop's Companion Forge is the editor.
   // Desktop replies with { type: 'companion_soul', agentId,
