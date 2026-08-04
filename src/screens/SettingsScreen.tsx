@@ -210,6 +210,17 @@ export default function SettingsScreen({
   // `cyberclaw-smart-silence` (read in
   // SimpleAudioRecorder.start).
   const [smartSilence, setSmartSilence] = useState<boolean>(true);
+  // v3.10.134: per-device default quest directory.
+  // Tobe 2026-08-04 13:58: 'add a quest directory in
+  // the settings, and when a new quest is created
+  // the user creates a new directory within the
+  // specified quest directory, with the name of the
+  // quest.' Stored alongside the rest of the
+  // SettingsScreen tuning in
+  // `cyberclaw-mobile-settings` under the
+  // `defaultQuestDir` key. Mobile-only — the desktop
+  // doesn't need this value.
+  const [defaultQuestDir, setDefaultQuestDir] = useState<string>('');
   // v3.4.7: fgThreshold/bgThreshold state + UI removed.
   // The Match Thresholds UI control was a low-level knob for
   // the v3.1 sample-matching wake detector. Since v3.1.95 we
@@ -627,6 +638,45 @@ export default function SettingsScreen({
       sub.remove();
     };
   }, [availableCompanions.length]);
+
+  // v3.10.134: hydrate the default quest directory
+  // from `cyberclaw-mobile-settings.defaultQuestDir`.
+  // Stored under the JSON settings blob (not as a
+  // flat AsyncStorage key) because the older
+  // settings in this file also live in JSON under
+  // that key — consistency wins over a one-off flat
+  // key. Returns empty string by default.
+  useEffect(() => {
+    AsyncStorage.getItem('cyberclaw-mobile-settings').then((raw) => {
+      if (!raw) return;
+      try {
+        const settings = JSON.parse(raw);
+        if (typeof settings?.defaultQuestDir === 'string') {
+          setDefaultQuestDir(settings.defaultQuestDir);
+        }
+      } catch { /* malformed — ignore */ }
+    });
+  }, []);
+
+  // v3.10.134: persist the default quest directory.
+  // Reads the existing JSON settings blob, merges
+  // the field, writes back atomically. Fire-and-
+  // forget with an Alert if AsyncStorage is
+  // unavailable (rare — typically permission
+  // issues on storage).
+  const saveDefaultQuestDir = async () => {
+    try {
+      const raw = await AsyncStorage.getItem('cyberclaw-mobile-settings');
+      const settings = raw ? (JSON.parse(raw) || {}) : {};
+      settings.defaultQuestDir = defaultQuestDir.trim();
+      await AsyncStorage.setItem(
+        'cyberclaw-mobile-settings',
+        JSON.stringify(settings),
+      );
+    } catch (e: any) {
+      Alert.alert('Save failed', `Could not save default quest directory: ${e?.message || 'unknown error'}`);
+    }
+  };
 
   // ── Initial load ──────────────────────────────────────────────
   useEffect(() => {
@@ -1888,6 +1938,85 @@ export default function SettingsScreen({
             <OptionBtn key={v.id} active={voiceApiVoice === v.id} label={v.label} onPress={() => setVoiceApiVoiceAndSave(v.id)} />
           ))}
         </View>
+      </Section>
+
+      {/* v3.10.134: per-device default quest
+          directory. When the user creates a new
+          quest from the Quests screen, the editor
+          pre-fills the suggested path as
+          `<defaultDir>/<sanitized-quest-name>`
+          (computed in QuestsScreen). The user can
+          accept, edit, or clear. Tobe 2026-08-04
+          13:58: 'Perhaps we should add a quest
+          directory in the settings, and when a new
+          quest is created the user creates a new
+          directory within the specified quest
+          directory, with the name of the quest,
+          or the user can select an existing
+          directory.' Mobile-only — the desktop
+          doesn't need to know this value.
+
+          Stored under cyberclaw-mobile-settings
+          alongside the other tuning. Not validated
+          on save (the path might not exist on this
+          device yet; that's the desktop's job to
+          mkdir when the quest lands).
+          SettingsScreen is a top-level page on
+          App.tsx so this lives here, not in
+          CompanionSettingsScreen. */}
+      <Section title="Quests" desc="Default paths for new quests created on this phone.">
+        <Label>📁 Default quest directory</Label>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+          <TextInput
+            style={{
+              flex: 1,
+              backgroundColor: theme.bg.secondary,
+              color: theme.text.primary,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: theme.border.mid,
+              padding: 10,
+              fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+              fontSize: 13,
+            }}
+            value={defaultQuestDir}
+            onChangeText={setDefaultQuestDir}
+            placeholder="/media/humpsuu/CYBERDRIVE/2B/work/projects"
+            placeholderTextColor={theme.text.dim}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
+            style={{
+              marginLeft: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              backgroundColor: theme.brand.accent,
+              borderRadius: 6,
+            }}
+            onPress={saveDefaultQuestDir}
+          >
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Save</Text>
+          </TouchableOpacity>
+        </View>
+        <Hint>
+          Where new projects get rooted. Leave empty to skip
+          the suggestion when creating a quest. Path is
+          used as a suggestion only — the desktop (or the
+          quest editor) decides what actually gets created.
+        </Hint>
+        <SubTitle>Path examples</SubTitle>
+        <Hint>
+          💡 {`/media/humpsuu/CYBERDRIVE/2B/work/projects/`}
+          {'\n'}    ↳ seed-signer/
+          {'\n'}    ↳ cyber-music-v2/
+          {'\n\n'}
+          Tip: if you use a parent folder per category
+          (e.g. <Text style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>~/projects</Text>),
+          the editor will auto-pre-fill
+          <Text style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}> ~/projects/&lt;quest-name&gt;</Text>
+          {' '}as the suggestion when you tap + New.
+        </Hint>
       </Section>
 
       {/* ── About footer ──────────────────────────────────────── */}

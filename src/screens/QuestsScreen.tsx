@@ -444,6 +444,21 @@ export default function QuestsScreen({
     setError(null);
     syncClient.deleteQuest?.(id);
   };
+  // v3.10.134: toggle a quest's status between 'active'
+  // and 'completed' from the card list, not the editor.
+  // Tobe 2026-08-04 13:58: 'we can just add a complete
+  // sign in the quest overview right beside the delete
+  // Instead.' A quest with status='completed' still
+  // appears in the list (we don't auto-delete it) so
+  // the user can see finished work at a glance and
+  // un-complete it if they tapped by mistake.
+  // Toggling reuses handleUpdateQuest — the desktop's
+  // onUpdateQuest is a plain Object.assign, so a
+  // partial update with just `{status}` is enough.
+  const handleToggleComplete = (id: string, currentlyCompleted: boolean) => {
+    setError(null);
+    handleUpdateQuest(id, { status: currentlyCompleted ? 'active' : 'completed' });
+  };
   const handleMarkGoalDone = (id: string, goalIndex: number, completed: boolean) => {
     setError(null);
     syncClient.markQuestGoalDone?.(id, goalIndex, completed);
@@ -863,6 +878,39 @@ export default function QuestsScreen({
                       </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
+                      // v3.10.134: complete/incomplete toggle
+                      // button. Sits between SetActive (☆)
+                      // and Delete (✕). Tapping it swaps
+                      // status between 'completed' and
+                      // 'active' without leaving the list.
+                      // The icon flips between 🏁 (completed)
+                      // and ◻️ (open) so the user gets an
+                      // at-a-glance read of which quests are
+                      // already done.
+                      style={[
+                        styles.cardActionBtn,
+                        !firstBroadcastReceived && styles.cardActionBtnDisabled,
+                        // Highlight when the quest IS
+                        // completed so the user can scan
+                        // the list for finished work.
+                        q.status === 'completed' && styles.cardCompleteBtnActive,
+                      ]}
+                      onPress={(e) => {
+                        e?.stopPropagation?.();
+                        if (!firstBroadcastReceived) return;
+                        handleToggleComplete(q.id, q.status === 'completed');
+                      }}
+                    >
+                      <Text style={[
+                        styles.cardActionText,
+                        q.status === 'completed'
+                          ? styles.cardCompleteBtnTextActive
+                          : styles.cardCompleteBtnText,
+                      ]}>
+                        {q.status === 'completed' ? '🏁' : '◻️'}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
                       // v3.10.73: same staleness guard as
                       // ✏️ and the set-active button. delete_quest
                       // with a stale id silently no-ops which
@@ -1001,11 +1049,31 @@ export default function QuestsScreen({
                 // and broadcasts the new quest; the handler
                 // in the useEffect above closes the editor
                 // when the next broadcast arrives.
+                //
+                // v3.10.134 bug fix: the previous version
+                // read `editorOpen.goals` instead of
+                // `updates.goals` — `editorOpen` was the
+                // empty stub we initialized on "+ New" with
+                // `goals: []`, so the user's freshly-typed
+                // steps never made it to the wire. Tobe
+                // 2026-08-04 13:58: 'the steps that i layed
+                // in when creating it are gone for some
+                // reason.' The cause was here: the editor's
+                // local `goals` state was filled in but
+                // thrown away at save time because the
+                // create path read from a different source.
+                // Use `updates.goals` (the editor's cleaned
+                // + trimmed + filtered array) for both
+                // create and update so the two paths stay
+                // symmetric.
                 if (!editorOpen.id) {
                   syncClient.createQuest?.({
                     name: updates.name,
                     description: updates.description,
-                    goals: Array.isArray(editorOpen.goals) ? editorOpen.goals : [],
+                    goals: Array.isArray(updates.goals) ? updates.goals : [],
+                    directory: typeof updates.directory === 'string' && updates.directory.trim()
+                      ? updates.directory.trim()
+                      : undefined,
                   });
                 } else {
                   handleUpdateQuest(editorOpen.id, updates);
@@ -1186,7 +1254,70 @@ function QuestEditorBody({
   // Save bundles them into an updates object.
   const [name, setName] = useState(quest.name || '');
   const [description, setDescription] = useState(quest.description || '');
-  const [status, setStatus] = useState<'active' | 'completed'>(quest.status || 'active');
+  // v3.10.134: status is no longer editor-editable. The
+  // "complete / active" state lives on the quest card
+  // list (a 🏁 button next to delete — same control the
+  // mobile's already used for the detail-modal badge).
+  // Tobe 2026-08-04 13:58: 'We dont need to have that
+  // status active or complete there, we can just add a
+  // complete sign in the quest overview right beside the
+  // delete Instead.' The status is still READ inside the
+  // editor (used to render the directory hint + the
+  // confirmation prompt wording for an already-completed
+  // quest) but no longer mutated here.
+  // v3.10.134: project directory is now editable for NEW
+  // quests. Pre-filled with a `<settingsDir>/<sanitized-
+  // name>` suggestion when the user has set a default
+  // quest directory in Settings; the user can edit, paste,
+  // or leave blank. Tobe: 'add a quest directory in the
+  // settings, and when a new quest is created the user
+  // creates a new directory within the specified quest
+  // directory, with the name of the quest.' Mobile-only
+  // change — the field is a string the desktop stores
+  // verbatim (no need for a folder picker on mobile,
+  // which would need desktop cooperation and is out of
+  // scope here).
+  const [directory, setDirectory] = useState<string>(() => {
+    if (!isNew) return quest.directory || '';
+    // For new quests, start blank. The pre-filled
+    // suggestion is computed and shown as a hint
+    // below the input; the user taps a button to
+    // accept it. This keeps the input itself
+    // clearly empty until the user opts in.
+    return '';
+  });
+  const [directorySuggestion, setDirectorySuggestion] = useState<string>('');
+  useEffect(() => {
+    // v3.10.134: compute the suggested directory path
+    // when the editor opens for a new quest. Combines
+    // the Settings.defaultQuestDir (if set) with a
+    // filesystem-safe version of the quest name. We
+    // keep the input itself empty so the user has to
+    // explicitly opt in — pre-filling was confusing
+    // because the desktop would mkdir the directory
+    // even if the user only meant to change the name.
+    if (!isNew) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const settingsRaw = await AsyncStorage.getItem('cyberclaw-mobile-settings');
+        if (cancelled) return;
+        const settings = settingsRaw ? JSON.parse(settingsRaw) : {};
+        const base = (settings?.defaultQuestDir || '').trim();
+        const safeName = (quest.name || name || 'unnamed-quest')
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+        setDirectorySuggestion(base ? `${base.replace(/\/+$/, '')}/${safeName}` : '');
+      } catch {
+        // settings parse failed or AsyncStorage unavailable;
+        // leave suggestion empty so the UI just hides the
+        // suggestion row.
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew]);
   // v3.10.74: goal list is now editable in the editor.
   // Each entry is { text: string, completed: boolean }.
   // We normalize string[] legacy entries on load. The
@@ -1238,31 +1369,64 @@ function QuestEditorBody({
           multiline
           numberOfLines={3}
         />
-        <Text style={styles.editorFieldLabel}>Status</Text>
-        <View style={styles.editorStatusRow}>
-          <TouchableOpacity
-            style={[
-              styles.editorStatusChip,
-              status === 'active' && styles.editorStatusChipActive,
-            ]}
-            onPress={() => setStatus('active')}
-          >
-            <Text style={styles.editorStatusChipText}>
-              {status === 'active' ? '⚔️' : '  '} Active
+        {/* v3.10.134: removed the Status (Active/Completed)
+            row from the editor. Tobe: 'We dont need to have
+            that status active or complete there, we can just
+            add a complete sign in the quest overview right
+            beside the delete Instead.' The status is now
+            toggled from a 🏁 button on the quest card. The
+            active marker (☆) is unchanged — still set from
+            the same card button. */}
+        {/* v3.10.134: project directory field for NEW
+            quests. Pre-fill suggestion based on the
+            Settings.defaultQuestDir + sanitized quest name.
+            For existing quests we still show the current
+            directory (read-only) so the user can see where
+            the desktop is looking, but we don't let it be
+            edited in the editor — changing a quest's
+            directory mid-flight is a heavy operation (the
+            desktop would need to move QUEST_INSTRUCTIONS.md
+            + the conversation-log hint) and is out of scope
+            here. Users wanting to move a directory should
+            delete + recreate. */}
+        {isNew && (
+          <>
+            <Text style={styles.editorFieldLabel}>📁 Project directory</Text>
+            <TextInput
+              style={styles.editorInput}
+              value={directory}
+              onChangeText={setDirectory}
+              placeholder="(optional) path on this device or remote host"
+              placeholderTextColor="#666"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {directorySuggestion && directorySuggestion !== directory && (
+              <View style={styles.editorDirectorySuggestion}>
+                <Text style={styles.editorDirectorySuggestionText}>
+                  💡 Suggested: <Text style={styles.editorDirectorySuggestionPath}>
+                    {directorySuggestion}
+                  </Text>
+                </Text>
+                <TouchableOpacity
+                  style={styles.editorDirectorySuggestionBtn}
+                  onPress={() => setDirectory(directorySuggestion)}
+                >
+                  <Text style={styles.editorDirectorySuggestionBtnText}>← Use</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            <Text style={styles.editorDirectoryHelpText}>
+              Optional. Set a default in Settings → Quest directory, or leave blank
+              to add later via the desktop.
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.editorStatusChip,
-              status === 'completed' && styles.editorStatusChipActive,
-            ]}
-            onPress={() => setStatus('completed')}
-          >
-            <Text style={styles.editorStatusChipText}>
-              {status === 'completed' ? '🏁' : '  '} Completed
-            </Text>
-          </TouchableOpacity>
-        </View>
+          </>
+        )}
+        {!isNew && !!quest.directory && (
+          <Text style={styles.editorDirectoryHint}>
+            📁 {quest.directory}
+          </Text>
+        )}
         {/* v3.10.74: removed the "Active" toggle (the
             double-active bug Tobe reported). The "this
             is THE active quest" flag is now set
@@ -1273,11 +1437,11 @@ function QuestEditorBody({
             "active" highlighted AND HIVE_CONTROL had
             the ACTIVE badge — they meant different
             things but looked the same. */}
-        {!!quest.directory && (
-          <Text style={styles.editorDirectoryHint}>
-            📁 {quest.directory}
-          </Text>
-        )}
+        {/* v3.10.134: the read-only directory hint for
+            EXISTING quests now lives in the same JSX
+            block as the editable input for NEW quests
+            (above this comment) so the two paths don't
+            drift. */}
 
         {/* v3.10.74: goal list editor. One TextInput per
             step, plus remove + add buttons. The mobile
@@ -1413,12 +1577,36 @@ function QuestEditorBody({
             const cleanedGoals = goals
               .map((g) => ({ text: g.text.trim(), completed: g.completed }))
               .filter((g) => g.text.length > 0);
+            // v3.10.134: status is no longer editor-editable,
+            // so we don't include it in `updates` here. The
+            // quest keeps whatever status it had on the
+            // desktop (the parent's onSave only sends the
+            // fields it actually needs to update). For new
+            // quests the desktop defaults new ones to status:
+            // 'active' so the field falls into place
+            // automatically.
+            //
+            // Directory handling: for NEW quests we pass
+            // the user's free-text value (trimmed; empty
+            // string → undefined so the desktop doesn't
+            // store a stray empty path). For EXISTING
+            // quests we still don't send directory —
+            // editing is intentionally read-only in the
+            // editor (see the directory block above). The
+            // desktop ignores directory on update either
+            // way, but explicitly NOT sending the field
+            // for existing quests means a typo in the
+            // editor can't accidentally rewrite the
+            // stored path.
             const updates: Record<string, any> = {
               name: name.trim() || quest.name,
               description: description.trim(),
-              status,
               goals: cleanedGoals,
             };
+            if (isNew) {
+              const trimmedDir = directory.trim();
+              if (trimmedDir) updates.directory = trimmedDir;
+            }
             onSave(updates);
             // v3.10.102: if the user edited the
             // instructions textarea, send the file to
@@ -2250,6 +2438,23 @@ const styles = StyleSheet.create({
   cardActionTextDelete: {
     color: '#a55',
   },
+  // v3.10.134: complete-toggle button styles (the
+  // 🏁 in the card action row). Inactive (open)
+  // state uses a muted fill; active (completed)
+  // uses the orange brand color so the user can
+  // see finished quests at a glance.
+  cardCompleteBtnActive: {
+    backgroundColor: 'rgba(255,140,26,0.18)',
+    borderColor: '#ff8c1a',
+    borderWidth: 1,
+  },
+  cardCompleteBtnText: {
+    color: '#5a5e78',
+  },
+  cardCompleteBtnTextActive: {
+    color: '#ff8c1a',
+    fontWeight: '700',
+  },
 
   // v3.10.82: detail-modal footer (Close + Edit). Both
   // buttons get flex: 1 so they share width equally.
@@ -2547,6 +2752,53 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 12,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  // v3.10.134: directory-suggestion hint for NEW
+  // quests. Shows the suggested path inline (so the
+  // user sees what filling in would do), with a "←
+  // Use" button to copy it into the input. The
+  // suggestion comes from
+  // Settings.defaultQuestDir + sanitized quest name;
+  // see the editor's directory useEffect.
+  editorDirectorySuggestion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    backgroundColor: '#1a1a2e',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#2a2a3f',
+  },
+  editorDirectorySuggestionText: {
+    color: '#9a9eb8',
+    fontSize: 11,
+    flex: 1,
+    lineHeight: 16,
+  },
+  editorDirectorySuggestionPath: {
+    color: '#00f0ff',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 11,
+  },
+  editorDirectorySuggestionBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#2a2a3f',
+    borderRadius: 4,
+    marginLeft: 8,
+  },
+  editorDirectorySuggestionBtnText: {
+    color: '#ff8c1a',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  editorDirectoryHelpText: {
+    color: '#5a5e78',
+    fontSize: 10,
+    marginTop: 6,
+    fontStyle: 'italic',
   },
   // v3.10.102: per-quest project instructions field in
   // the editor. Same monospace + dark theme as the
