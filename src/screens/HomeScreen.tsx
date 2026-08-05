@@ -1382,10 +1382,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // screenshot in v3.10.70 had no companion reply
         // for treats because there was no path at all —
         // this is the new path.
-        syncClient.send(JSON.stringify({
+        // v3.10.137: pass the object directly to
+        // syncClient.send() — it already calls
+        // JSON.stringify internally. The previous
+        // syncClient.send(JSON.stringify({...})) double-
+        // stringified, so the desktop's JSON.parse
+        // returned the inner string, msg.type was
+        // undefined, and the case dispatch silently
+        // fell through. That's why no companion reaction
+        // fired even though the WebView→RN handoff
+        // worked correctly. Tobe 2026-08-05 12:45.
+        syncClient.send({
           type: 'arena_treat_placed',
           treat: msg.treat,
-        }));
+        });
       }
       if (msg.type === 'treat_eaten') {
         // v3.10.72: companion ate a treat. Forward to
@@ -1393,10 +1403,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // good. Thanks!"). Mirrors the desktop's
         // promptCompanionEat(eatenType) callback that
         // fires from inside the seek-and-eat logic.
-        syncClient.send(JSON.stringify({
+        // v3.10.137: same double-stringify fix as
+        // treat_placed above.
+        syncClient.send({
           type: 'arena_treat_eaten',
           treat: msg.treat,
-        }));
+        });
       }
     } catch {}
   }, [closeFullscreen, onOpenQuests]);
