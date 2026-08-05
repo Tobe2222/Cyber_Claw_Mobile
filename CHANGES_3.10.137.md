@@ -114,3 +114,35 @@ the wrong shape, or as here, double-stringifies.
 `cd cyberclaw-mobile && ./build-android.sh` to
 produce a new APK. Tobe needs to install v3.10.137
 on his phone for the fix to take effect.
+---
+
+## Build artifacts
+
+Tobe's local build environment was missing `ninja`
+and the Android SDK's `cmake/3.22.1` package. Fixed:
+
+```bash
+# Download prebuilt ninja
+curl -sSL "https://github.com/ninja-build/ninja/releases/download/v1.13.0/ninja-linux.zip" -o /tmp/ninja.zip
+mkdir -p ~/.local/bin && unzip -q /tmp/ninja.zip -d ~/.local/bin && chmod +x ~/.local/bin/ninja
+export PATH="$HOME/.local/bin:$PATH"
+
+# Install Android SDK CMake
+curl -sSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip
+mkdir -p /home/humpsuu/Android/Sdk/cmdline-tools/latest
+unzip -q /tmp/cmdline-tools.zip -d /tmp/ext && mv /tmp/ext/cmdline-tools/* /home/humpsuu/Android/Sdk/cmdline-tools/latest/
+export ANDROID_HOME=/home/humpsuu/Android/Sdk
+export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+yes | sdkmanager --licenses > /dev/null 2>&1
+sdkmanager --install "cmake;3.22.1"
+```
+
+Then:
+```bash
+cd CyberClawMobile/android
+./gradlew assembleRelease
+# APK at: android/app/build/outputs/apk/release/app-release.apk
+```
+
+APK uploaded to v3.10.137 release on GitHub for
+direct download. Tobe 2026-08-05 14:03.
