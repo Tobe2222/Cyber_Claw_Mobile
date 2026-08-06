@@ -1166,7 +1166,15 @@ body.wake-mode #bg-menu { display: none !important; }
               // Notify RN so the desktop can post
               // "I just ate an apple, give a happy
               // reaction" via promptCompanionReaction.
-              notifyRN({ type: 'treat_eaten', treat: edible.type });
+              // v3.10.138: include `companionId` so the desktop
+              // can route the chat reaction to the actual eater
+              // (instead of whichever companion's chat tab is
+              // open). Tobe 2026-08-06: "track which companion
+              // that actually eats the food and make it comment
+              // it". Without this, dropping food near lamasuu
+              // would still get a clawsuu reply if clawsuu is the
+              // active chat tab.
+              notifyRN({ type: 'treat_eaten', treat: edible.type, companionId: c.id });
               // Hearts after the nom.
               setTimeout(() => {
                 if (companionEmoji) return;
@@ -1794,7 +1802,35 @@ body.wake-mode #bg-menu { display: none !important; }
     // ("I just gave you an apple. What do you
     // think?") so the AI text reply matches the
     // visual reaction.
-    notifyRN({ type: 'treat_placed', treat: treatType });
+    // v3.10.138: include `companionId` so the desktop
+    // knows which sprite the food was dropped near.
+    // We pick the closest companion (L∞ distance,
+    // matching the eat threshold of 200px from the
+    // seek loop above) — same logic that decides who
+    // eats it. Falls back to undefined if no companion
+    // is in range; the desktop then uses its
+    // existing activeChatAgentId fallback.
+    let nearestC = null;
+    let nearestDist = Infinity;
+    for (const comp of companions) {
+      const [fw, fh] = comp.data.frameSize;
+      const dw = fw * comp.scale;
+      const dh = fh * comp.scale;
+      const ccx = comp.x + dw / 2;
+      const ccy = comp.y + dh / 2;
+      const tx = cx + 14;  // treat center
+      const ty = cy + 14;
+      const d = Math.max(Math.abs(tx - ccx), Math.abs(ty - ccy));  // L∞
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestC = comp;
+      }
+    }
+    notifyRN({
+      type: 'treat_placed',
+      treat: treatType,
+      ...(nearestC && nearestDist <= 300 ? { companionId: nearestC.id } : {}),
+    });
     return true;
   }
 

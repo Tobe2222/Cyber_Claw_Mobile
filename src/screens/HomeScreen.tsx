@@ -1392,9 +1392,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // fell through. That's why no companion reaction
         // fired even though the WebView→RN handoff
         // worked correctly. Tobe 2026-08-05 12:45.
+        // v3.10.138: forward the arena's `companionId`
+        // (which sprite the food was dropped near) so the
+        // desktop can route the chat reaction to that
+        // companion specifically, instead of defaulting
+        // to whichever companion's chat tab is open.
         syncClient.send({
           type: 'arena_treat_placed',
           treat: msg.treat,
+          ...(msg.companionId ? { companionId: msg.companionId } : {}),
         });
       }
       if (msg.type === 'treat_eaten') {
@@ -1405,9 +1411,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // fires from inside the seek-and-eat logic.
         // v3.10.137: same double-stringify fix as
         // treat_placed above.
+        // v3.10.138: forward the arena's `companionId`
+        // (which sprite actually ate it) so the desktop
+        // routes the reaction to the right companion's
+        // chat. Tobe 2026-08-06: "track which companion
+        // that actually eats the food and make it
+        // comment it".
         syncClient.send({
           type: 'arena_treat_eaten',
           treat: msg.treat,
+          ...(msg.companionId ? { companionId: msg.companionId } : {}),
         });
       }
     } catch {}
@@ -4228,6 +4241,36 @@ useEffect(() => {
                   </Text>
                 </TouchableOpacity>
               )}
+              {/* v3.10.138: persistent "jump to bottom" button.
+                  Distinct from the unread badge above (which only
+                  shows when chatUnreadCount > 0 and is centered).
+                  This one is a small circular ⬇ icon pinned to the
+                  LOWER RIGHT of the chat list and is visible
+                  whenever the user is NOT at the bottom — regardless
+                  of whether there are new messages. Tobe's report
+                  2026-08-06 10:52: "add a go to bottom button in
+                  the lower right side of the chat".
+
+                  Why both: the unread badge is the celebratory
+                  "you have new messages!" affordance (centered,
+                  wider, mentions the count). The persistent
+                  button is the always-available scroll handle for
+                  long history scrolls — even when there are no new
+                  messages, the user might be 200 lines up reading
+                  old context and want a quick way back down. */}
+              {!chatAtBottom && (
+                <TouchableOpacity
+                  style={styles.chatJumpToBottomBtn}
+                  onPress={() => {
+                    chatRef.current?.scrollToEnd({ animated: true });
+                    setChatUnreadCount(0);
+                  }}
+                  accessibilityLabel="Jump to latest message"
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.chatJumpToBottomText}>↓</Text>
+                </TouchableOpacity>
+              )}
             <FlatList
               ref={chatRef}
               data={messages}
@@ -5604,6 +5647,40 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 16,
     overflow: 'hidden',
+  },
+  // v3.10.138: persistent circular jump-to-bottom button. Pinned
+  // to the lower-right of the chat list (overlays the scrollable
+  // content). Only visible when !chatAtBottom (so it never gets
+  // in the way of the latest message). Distinct from the unread
+  // badge above: this is the always-available scroll handle, not
+  // a "new messages" indicator. Lower-right placement (right: 12,
+  // bottom: 12 + insets.bottom) so it doesn't collide with the
+  // centered unread badge or the bottom-left companion-emoji
+  // overlay.
+  chatJumpToBottomBtn: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 11,  // one above the unread badge (zIndex 10)
+    // Subtle drop shadow so the button reads as floating above
+    // the chat content rather than embedded in it.
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  chatJumpToBottomText: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '700',
+    lineHeight: 22,  // vertical-center the ↓ glyph in the 40px circle
   },
   // v3.10.36: cross-companion chat banner. Shown above
   // the input row when OTHER agents have new messages
