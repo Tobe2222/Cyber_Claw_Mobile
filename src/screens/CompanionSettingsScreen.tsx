@@ -76,6 +76,20 @@ type Companion = {
   name: string;
   emoji?: string | null;
   icon?: string | null;
+  // v3.10.139: companion skill XP + levels, mirrored from
+  // the desktop's companion-stats.json. The desktop sends
+  // these via the existing `agents_list` broadcast payload
+  // (added in desktop v3.2.84). Same shape as the desktop
+  // `getStats` IPC returns:
+  //   { level, xp, xpTotal, skills: { <name>: { level, xp } } }
+  // Missing on legacy agents / subagents → we render an
+  // "Empty" section in the Skills panel.
+  skills?: {
+    level: number;
+    xp: number;
+    xpTotal: number;
+    skills: Record<string, { level: number; xp: number }>;
+  } | null;
 };
 
 export default function CompanionSettingsScreen({
@@ -389,11 +403,46 @@ export default function CompanionSettingsScreen({
               name: a.name,
               emoji: a.emoji || null,
               icon: a.icon || null,
+              // v3.10.139: pass through the skills payload
+              // (desktop v3.2.84 adds this to agents_list).
+              // Null for legacy agents that haven't broadcast
+              // a fresh payload yet — the Skills section
+              // renders an empty state in that case.
+              skills: a.skills ?? null,
             })));
           }
         }
       } catch (_) {}
     })();
+  }, []);
+
+  // v3.10.139: also subscribe to live agents_list broadcasts
+  // so the Skills section refreshes when the desktop awards
+  // XP (the desktop re-broadcasts after every addXP, see
+  // desktop v3.2.84 app.js sendChat). Without this, opening
+  // the Companion Settings before XP is awarded (or never
+  // closing it across an award) would show stale numbers.
+  useEffect(() => {
+    const handler = (msg: any) => {
+      if (!msg?.agents || !Array.isArray(msg.agents)) return;
+      setAvailableCompanions(prev => {
+        // Merge by id so we keep any companions that arrived
+        // via cache but haven't been re-broadcast yet.
+        const byId = new Map(prev.map(c => [c.id, c]));
+        for (const a of msg.agents) {
+          byId.set(a.id, {
+            id: a.id,
+            name: a.name,
+            emoji: a.emoji || null,
+            icon: a.icon || null,
+            skills: a.skills ?? null,
+          });
+        }
+        return Array.from(byId.values());
+      });
+    };
+    syncClient.on('agents_list', handler);
+    return () => { syncClient.off?.('agents_list', handler); };
   }, []);
 
   // Hydrate wake greeting
@@ -834,6 +883,94 @@ export default function CompanionSettingsScreen({
     ? `Trained: "${activeWake.displayName || activeWake.phrase}"`
     : 'No active wake on this phone — open Wake Sets to manage trained phrases';
 
+  // v3.10.139: skills section renderer. Renders the
+  // companion's skill XP + levels per skill as a list
+  // of rows. View-only — tapping a row does nothing.
+  // Kept inline (not its own component) because it's
+  // ~50 lines and only used here.
+  function renderSkillsSection() {
+    // v3.10.139: SKILL_DEFS mirrors the desktop's
+    // SKILL_DEFS in main.js (v3.2.84). If the desktop
+    // adds/renames a category, mirror the change here.
+    // The renderer doesn't get this list via the
+    // broadcast because it's static + small; sending it
+    // over the wire would be more "accurate" but Tobe
+    // asked for "easy and less accurate".
+    const SKILL_DEFS = [
+      { name: 'Building',     icon: '🔧' },
+      { name: 'Writing',      icon: '✍️'  },
+      { name: 'Design',       icon: '🎨' },
+      { name: 'Analysis',     icon: '📊' },
+      { name: 'Strategy',     icon: '🗺️'  },
+      { name: 'Research',     icon: '🔍' },
+      { name: 'Communication', icon: '💬' },
+      { name: 'Game',         icon: '🎮' },
+      { name: 'General',      icon: '✨' },
+    ];
+
+    // helper: XP curve mirrors the desktop's
+    // xpForLevel() in main.js — 100 * 1.5^(level-1).
+    // Level 1 = 100 XP to next, level 2 = 150, level 3 = 225.
+    const xpForLevel = (level: number) =>
+      Math.floor(100 * Math.pow(1.5, Math.max(1, level) - 1));
+
+    // Sort: highest XP first (most "skilled" at top),
+    // ties broken by name. The "General" fallback is
+    // always last if it has any XP.
+    const skillRows = SKILL_DEFS
+      .map(def => {
+        const s = companion?.skills?.skills?.[def.name];
+        return s ? { ...def, level: s.level, xp: s.xp } : null;
+      })
+      .filter((r): r is { name: string; icon: string; level: number; xp: number } => r !== null)
+      .sort((a, b) => {
+        const xpDiff = b.xp - a.xp;
+        if (xpDiff !== 0) return xpDiff;
+        return a.name.localeCompare(b.name);
+      });
+
+    return (
+      <View style={styles.skillsSection}>
+        <View style={styles.skillsSectionHeader}>
+          <Text style={styles.skillsSectionIcon}>⭐</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.skillsSectionTitle}>
+              Skills {companion?.skills ? `· Lv.${companion.skills.level}` : ''}
+            </Text>
+            <Text style={styles.skillsSectionDesc}>
+              XP earned by helping with chats. Just for fun.
+            </Text>
+          </View>
+        </View>
+
+        {(!companion?.skills || skillRows.length === 0) ? (
+          <View style={styles.skillsEmpty}>
+            <Text style={styles.skillsEmptyText}>
+              No skills earned yet. Chat with {companion?.name || 'this companion'} to start gaining XP.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.skillsList}>
+            {skillRows.map(s => {
+              const xpNeeded = xpForLevel(s.level);
+              const pct = Math.min(100, (s.xp / xpNeeded) * 100);
+              return (
+                <View key={s.name} style={styles.skillRow}>
+                  <Text style={styles.skillRowIcon}>{s.icon}</Text>
+                  <Text style={styles.skillRowName}>{s.name}</Text>
+                  <Text style={styles.skillRowLevel}>{s.level}</Text>
+                  <View style={styles.skillRowBar}>
+                    <View style={[styles.skillRowFill, { width: `${pct}%` }]} />
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </View>
+    );
+  }
+
   // Dispatch
   if (companionViewPhase === 'wake') {
     return renderCompanionWakePage(companion);
@@ -957,6 +1094,21 @@ export default function CompanionSettingsScreen({
               </View>
               <Text style={styles.phaseCardArrow}>›</Text>
             </TouchableOpacity>
+
+            {/* v3.10.139: Skills section. Read-only display
+                of the companion's XP + levels per skill,
+                mirrored from the desktop's
+                companion-stats.json. The desktop awards
+                XP via classifyTask() on each chat reply
+                (desktop v3.2.84) and re-broadcasts
+                agents_list so this section updates live.
+
+                View-only by design — see Tobe's
+                2026-08-07 ask: "Just make it easy and
+                less accurate. Its just for fun". Tapping
+                a skill doesn't open anything; the rows
+                are decorative. */}
+            {renderSkillsSection()}
 
             {/* v3.7.0: per-companion Voice settings. Engine +
                 voice picker. Gated on the global "✨ Enable API
@@ -2163,4 +2315,55 @@ const styles = StyleSheet.create({
   radioBullet: { color: '#10b981', fontSize: 18, width: 18, textAlign: 'center' },
   radioTitle: { color: '#fff', fontSize: 15, fontWeight: '500' },
   radioSub: { color: '#9aa0b4', fontSize: 12, marginTop: 2 },
+  // v3.10.139: Skills section. Mirrors the desktop
+  // inspect panel's skill rows (pixel-arena rs-skill-row)
+  // but adapted for the mobile dark theme. View-only.
+  skillsSection: {
+    backgroundColor: '#0f1626',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#f7931a',
+    padding: 14,
+    marginVertical: 6,
+  },
+  skillsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  skillsSectionIcon: { fontSize: 22 },
+  skillsSectionTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  skillsSectionDesc: { color: '#9aa0b4', fontSize: 12, marginTop: 2 },
+  skillsEmpty: {
+    backgroundColor: 'rgba(247,147,26,0.08)',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(247,147,26,0.2)',
+    borderStyle: 'dashed',
+  },
+  skillsEmptyText: { color: '#888', fontSize: 12, fontStyle: 'italic', textAlign: 'center' },
+  skillsList: { gap: 6 },
+  skillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#111',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    gap: 8,
+  },
+  skillRowIcon: { fontSize: 16, width: 22, textAlign: 'center' },
+  skillRowName: { color: '#fff', fontSize: 13, flex: 1 },
+  skillRowLevel: { color: '#f7931a', fontSize: 12, fontWeight: '700', minWidth: 28, textAlign: 'right' },
+  skillRowBar: {
+    height: 4,
+    backgroundColor: '#222',
+    borderRadius: 2,
+    overflow: 'hidden',
+    flexBasis: 80,
+    flexGrow: 1,
+  },
+  skillRowFill: { height: '100%', backgroundColor: '#f7931a' },
 });
