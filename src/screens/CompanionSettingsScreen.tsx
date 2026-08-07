@@ -874,19 +874,19 @@ export default function CompanionSettingsScreen({
     }
   }, [availableCompanions, companionId, onBack]);
 
-  // v3.10.140: when the active companion changes
+  // v3.10.144: when the active companion changes
   // (e.g. user taps a different companion in the list
   // while this screen is still mounted), re-inject
-  // setAgents + setCentered so the WebView shows the
-  // new companion.
+  // setActive + setAgents so the WebView shows the
+  // new companion. The source URI is STATIC (no
+  // companion ID), so the WebView doesn't re-mount
+  // on switch — we just swap the rendered companion
+  // in place.
   //
   // MUST live BEFORE the `if (!companion) return` block
   // below — putting any hook after a conditional return
-  // breaks React's hook-order invariant (more hooks on
-  // some renders than others → "Rendered more hooks"
-  // crash). Dep array uses companionId (the prop) which
-  // is always defined, and we look up the companion
-  // object fresh inside the effect body.
+  // breaks React's hook-order invariant. Dep array uses
+  // companionId (the prop) which is always defined.
   //
   // Dep array is just [companionId, availableCompanions.length]
   // — NOT the full array. We need availableCompanions to
@@ -896,6 +896,15 @@ export default function CompanionSettingsScreen({
   // because that would re-fire on every agents_list
   // broadcast (XP awards trigger re-broadcasts every chat
   // reply), spamming setAgents into the WebView.
+  //
+  // Race-condition fix: setAgents is ASYNC (it awaits
+  // loadImage for each animation). We must wait for it
+  // to resolve before calling setCentered, otherwise
+  // setCentered sees an empty companions array and
+  // renders nothing. Tobe saw this on 3.10.143 — the
+  // arena flashed for a millisecond then went black.
+  // Fix: await the setAgents promise inside the
+  // injected IIFE before calling setCentered.
   useEffect(() => {
     const c = availableCompanions.find(x => x.id === companionId);
     if (!c || !viewWebViewRef.current) return;
@@ -905,12 +914,16 @@ export default function CompanionSettingsScreen({
       sprite: (c as any).sprite || null,
       scale: (c as any).scale || null,
     }];
+    // v3.10.144: setActive first (sets activeId so
+    // setAgents uses the right filter), then await
+    // setAgents, then setCentered. The whole chain
+    // is one async IIFE.
     viewWebViewRef.current.injectJavaScript(
-      `(function(){` +
-        `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)});` +
-        `setTimeout(function(){` +
-          `window.Arena && window.Arena.setCentered(true);` +
-        `}, 50);` +
+      `(async function(){` +
+        `if (!window.Arena) return;` +
+        `window.Arena.setActive(${JSON.stringify(c.id)});` +
+        `await window.Arena.setAgents(${JSON.stringify(slim)});` +
+        `window.Arena.setCentered(true);` +
       `})(); true;`
     );
   }, [companionId, availableCompanions.length]);
@@ -1073,114 +1086,59 @@ export default function CompanionSettingsScreen({
   // same animations as the home arena is to embed
   // arena.html.
   function renderCompanionViewWindow() {
+    // v3.10.144: source URI includes the URL params
+    // arena.html parses at boot:
+    //   - ?mode=wake → adds wake-mode body class
+    //     (hides arena controls)
+    //   - ?centered=true → read at boot, used when
+    //     setCentered() is called later
+    //   - ?onlyActive=true → setAgents filters to
+    //     just the active companion
+    //
+    // Source URI is STATIC (no companion ID) so the
+    // WebView doesn't re-mount on companion switch.
+    // The companion is set via setActive + setAgents
+    // injection in onLoadEnd + the companion-change
+    // useEffect. URL params alone don't add a
+    // companion to the array — only setAgents does.
+    const sourceUri = `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile&mode=wake&centered=true&onlyActive=true`;
+
     return (
       <View style={styles.viewWindow}>
         <WebView
           ref={viewWebViewRef}
-          // v3.10.140: same cache-buster pattern as
-          // HomeScreen. arena.html is bundled in the
-          // APK assets; bumping ARENA_HTML_VERSION
-          // forces a fresh fetch after an app upgrade.
-          source={{ uri: `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile` }}
+          source={{ uri: sourceUri }}
           style={{ width: VIEW_BOX_W, height: VIEW_BOX_H, backgroundColor: '#0a0a2e' }}
           scrollEnabled={false}
           bounces={false}
           javaScriptEnabled
           allowFileAccess
           originWhitelist={['*']}
-          // v3.10.143: capture arena events so we can
-          // debug the empty-view problem. arena.html
-          // sends 'arena_loaded' when the catalog is
-          // ready, 'arena_resize' on viewport changes,
-          // etc. Without this handler we have no
-          // visibility into what's happening inside the
-          // WebView. For now we just log to console
-          // (the Log tab will surface these via the
-          // adb logcat or React Native debugger).
-          onMessage={(e) => {
-            try {
-              const msg = JSON.parse(e.nativeEvent.data);
-              // Surface to the React Native log. Useful
-              // when connected to a debugger; harmless
-              // otherwise (Android just swallows it).
-              console.log('[CompanionViewWindow] arena msg:', JSON.stringify(msg));
-            } catch (_) { /* ignore non-JSON */ }
-          }}
+          // v3.10.144: arena.html events treated as
+          // no-ops. The settings view is read-only.
+          onMessage={() => { /* ignore */ }}
+          // v3.10.144: on first load, inject
+          // setActive + setAgents + setCentered for
+          // the initial companion. The useEffect
+          // handles subsequent companion switches
+          // (without re-loading the WebView).
           onLoadEnd={() => {
-            // v3.10.143: chain all injection into a
-            // SINGLE injectJavaScript call. Previously
-            // I called it twice in quick succession;
-            // the second call could land before the
-            // first's promises resolve, leading to
-            // dropped init/setAgents calls.
-            //
-            // Flow inside the WebView:
-            //   1. wait for arena_loaded (catalog ready)
-            //   2. hide controls (wake-mode body class)
-            //   3. init canvas with our dimensions
-            //   4. setAgents with this companion
-            //   5. setCentered(true) so the companion
-            //      is centered (no wandering)
-            //
-            // The arena_loaded event fires synchronously
-            // at boot from loadCatalog() — so by the time
-            // onLoadEnd fires (after the WebView finishes
-            // page load), catalog IS set. But we still
-            // want to wait for the bg image to load before
-            // drawing, which is why we listen for
-            // arena_bg_loaded. We don't strictly need bg
-            // for centered mode (companion renders over
-            // bg), so we don't gate on it.
-            //
-            // Debug logs every step so we can see in
-            // adb logcat what's happening:
-            //   "[CompanionViewWindow] <step> <details>"
-            const slim = companion ? [{
-              id: companion.id,
-              name: companion.name,
-              sprite: (companion as any).sprite || null,
-              scale: (companion as any).scale || null,
-            }] : null;
-
-            const allInOne = `
-(function(){
-  console.log('[CompanionViewWindow] inject start, catalog=' + (window.Arena ? 'ready' : 'NOT READY'));
-  console.log('[CompanionViewWindow] companion=${companion ? companion.id : 'none'} sprite=${companion ? ((companion as any).sprite || 'null') : 'none'} scale=${companion ? ((companion as any).scale || 'null') : 'none'}');
-  // 1. hide arena controls (mirrors wake-mode body class)
-  document.body.classList.add('wake-mode');
-  // 2. init canvas with our box dimensions
-  if (window.Arena && window.Arena.init) {
-    window.Arena.init(${VIEW_BOX_W}, ${VIEW_BOX_H});
-    console.log('[CompanionViewWindow] init(' + ${VIEW_BOX_W} + ', ' + ${VIEW_BOX_H} + ') called');
-  } else {
-    console.log('[CompanionViewWindow] window.Arena.init MISSING');
-  }
-  // 3. setAgents with this companion
-  ${slim ? `
-  if (window.Arena && window.Arena.setAgents) {
-    const slim = ${JSON.stringify(slim)};
-    console.log('[CompanionViewWindow] calling setAgents with ' + JSON.stringify(slim));
-    window.Arena.setAgents(slim);
-    console.log('[CompanionViewWindow] companion count after setAgents: ' + (window.Arena.getCompanionCount ? window.Arena.getCompanionCount() : '?'));
-    // 4. setCentered(true) — filter to this companion + center
-    setTimeout(function(){
-      if (window.Arena && window.Arena.setCentered) {
-        window.Arena.setCentered(true);
-        console.log('[CompanionViewWindow] setCentered(true) called, final count: ' + (window.Arena.getCompanionCount ? window.Arena.getCompanionCount() : '?'));
-      } else {
-        console.log('[CompanionViewWindow] setCentered MISSING');
-      }
-    }, 150);
-  } else {
-    console.log('[CompanionViewWindow] window.Arena.setAgents MISSING');
-  }
-  ` : `
-  console.log('[CompanionViewWindow] no companion, skipping setAgents');
-  `}
-})();
-true;
-`;
-            viewWebViewRef.current?.injectJavaScript(allInOne);
+            const c = availableCompanions.find(x => x.id === companionId);
+            if (!c) return;
+            const slim = [{
+              id: c.id,
+              name: c.name,
+              sprite: (c as any).sprite || null,
+              scale: (c as any).scale || null,
+            }];
+            viewWebViewRef.current?.injectJavaScript(
+              `(async function(){` +
+                `if (!window.Arena) return;` +
+                `window.Arena.setActive(${JSON.stringify(c.id)});` +
+                `await window.Arena.setAgents(${JSON.stringify(slim)});` +
+                `window.Arena.setCentered(true);` +
+              `})(); true;`
+            );
           }}
         />
       </View>
@@ -1202,6 +1160,31 @@ true;
   // pattern gives Tobe the "see current values on the main
   // page" UX he wanted without re-implementing the whole
   // picker.
+  // v3.10.144: trait id → display label. Mirrors the
+  // TRAITS table in CompanionEditScreen.tsx (which is
+  // the editor). Keeping this local for now — a future
+  // refactor could move TRAITS to a shared module
+  // (e.g. src/services/traits.ts) so both screens
+  // share one source of truth. For now, duplicated
+  // and labeled to keep them in sync.
+  //
+  // The id values MUST match what the desktop's
+  // sprite_config_sync whitelist accepts (see
+  // src/sync-server.js on the desktop) — those are
+  // the canonical strings that go into
+  // sprites.json.
+  const TRAIT_LABELS: Record<string, string> = {
+    sassy: '😏 Sassy',
+    curious: '🔍 Curious',
+    lazy: '😴 Lazy',
+    cheerful: '🌟 Cheerful',
+    foodobsessed: '🍖 Food-obsessed',
+    dramatic: '🎭 Dramatic',
+    stoic: '🗿 Stoic',
+    adventurous: '⚔️ Adventurous',
+    goblin: '👺 Goblin',
+  };
+
   function renderBehaviourCard(companion: Companion) {
     const sc = (companion as any).spriteConfig || {};
     const spriteName = sc.pixelCompanionId
@@ -1209,10 +1192,7 @@ true;
       : 'Default';
     const scale = typeof sc.scale === 'number' ? sc.scale : '?';
     const chattiness = typeof sc.chattiness === 'number' ? sc.chattiness : 3;
-    const traits: string[] = Array.isArray(sc.traits) ? sc.traits : [];
-    const traitsText = traits.length > 0
-      ? traits.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ')
-      : 'None';
+    const traitIds: string[] = Array.isArray(sc.traits) ? sc.traits : [];
 
     return (
       <View style={styles.behaviourCard}>
@@ -1238,10 +1218,6 @@ true;
           <Text style={styles.behaviourValue}>{scale}</Text>
         </View>
         <View style={styles.behaviourRow}>
-          <Text style={styles.behaviourLabel}>Traits</Text>
-          <Text style={styles.behaviourValue} numberOfLines={1}>{traitsText}</Text>
-        </View>
-        <View style={styles.behaviourRow}>
           <Text style={styles.behaviourLabel}>Chattiness</Text>
           <View style={styles.behaviourChattinessBar}>
             <View style={styles.behaviourChattinessTrack}>
@@ -1256,6 +1232,32 @@ true;
               ))}
             </View>
             <Text style={styles.behaviourChattinessNum}>{chattiness}</Text>
+          </View>
+        </View>
+        {/* v3.10.144: traits as wrap chips. Was a
+            comma-separated string that got truncated
+            ("Curious, Foodobsessed, Dramatic, Stoic, A...").
+            Tobe: "make better use of the space for
+            the traits, one should see all with their
+            associated emoji for a quick view". Each
+            trait is a small chip with its emoji. Chips
+            wrap to next line when they run out of
+            width — so the user always sees all
+            selected traits regardless of how many. */}
+        <View style={styles.behaviourRow}>
+          <Text style={styles.behaviourLabel}>Traits</Text>
+          <View style={styles.traitsChips}>
+            {traitIds.length === 0 ? (
+              <Text style={styles.traitsEmpty}>None selected</Text>
+            ) : (
+              traitIds.map(id => (
+                <View key={id} style={styles.traitChip}>
+                  <Text style={styles.traitChipText}>
+                    {TRAIT_LABELS[id] || id}
+                  </Text>
+                </View>
+              ))
+            )}
           </View>
         </View>
       </View>
@@ -2717,6 +2719,26 @@ const styles = StyleSheet.create({
   },
   behaviourChattinessTickActive: { backgroundColor: '#f7931a' },
   behaviourChattinessNum: { color: '#f7931a', fontSize: 12, fontWeight: '700', minWidth: 16, textAlign: 'right' },
+  // v3.10.144: traits as wrap chips. Tobe wanted to
+  // see all traits with their emoji, not a truncated
+  // comma-separated string. Chips wrap to next line
+  // when they overflow, so all traits stay visible.
+  traitsChips: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  traitsEmpty: { color: '#666', fontSize: 12, fontStyle: 'italic' },
+  traitChip: {
+    backgroundColor: 'rgba(247,147,26,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(247,147,26,0.4)',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  traitChipText: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
   // v3.10.142: collapsed settings card. Single row per
   // setting (Wake/Exit/Voice). Shows current value
   // inline + chevron. Tap → existing sub-page.
