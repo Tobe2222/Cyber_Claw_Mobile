@@ -852,6 +852,47 @@ export default function CompanionSettingsScreen({
     }
   }, [availableCompanions, companionId, onBack]);
 
+  // v3.10.140: when the active companion changes
+  // (e.g. user taps a different companion in the list
+  // while this screen is still mounted), re-inject
+  // setAgents + setCentered so the WebView shows the
+  // new companion.
+  //
+  // MUST live BEFORE the `if (!companion) return` block
+  // below — putting any hook after a conditional return
+  // breaks React's hook-order invariant (more hooks on
+  // some renders than others → "Rendered more hooks"
+  // crash). Dep array uses companionId (the prop) which
+  // is always defined, and we look up the companion
+  // object fresh inside the effect body.
+  //
+  // Dep array is just [companionId, availableCompanions.length]
+  // — NOT the full array. We need availableCompanions to
+  // be populated BEFORE the effect can find the companion
+  // (so we depend on its length, which changes only when
+  // the list grows). We do NOT depend on the array contents
+  // because that would re-fire on every agents_list
+  // broadcast (XP awards trigger re-broadcasts every chat
+  // reply), spamming setAgents into the WebView.
+  useEffect(() => {
+    const c = availableCompanions.find(x => x.id === companionId);
+    if (!c || !viewWebViewRef.current) return;
+    const slim = [{
+      id: c.id,
+      name: c.name,
+      sprite: (c as any).sprite || null,
+      scale: (c as any).scale || null,
+    }];
+    viewWebViewRef.current.injectJavaScript(
+      `(function(){` +
+        `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)});` +
+        `setTimeout(function(){` +
+          `window.Arena && window.Arena.setCentered(true);` +
+        `}, 50);` +
+      `})(); true;`
+    );
+  }, [companionId, availableCompanions.length]);
+
   // Resolve companionId → companion object. If stale
   // (deleted from cache) show a placeholder while the
   // effect above fires onBack().
@@ -869,41 +910,6 @@ export default function CompanionSettingsScreen({
       </View>
     );
   }
-
-  // v3.10.140: when the active companion changes
-  // (e.g. user taps a different companion in the list
-  // while this screen is still mounted), re-inject
-  // setAgents + setCentered so the WebView shows the
-  // new companion. The arena state is already set on
-  // first load (see onLoadEnd in renderCompanionViewWindow
-  // below); this effect just keeps it in sync.
-  //
-  // We guard on `companion?.id` so the WebView only
-  // re-injects when the active companion actually changes.
-  // Without the guard, every render that re-creates the
-  // companion object would trigger a re-inject (which is
-  // wasteful — the WebView gets the same data).
-  useEffect(() => {
-    if (!companion || !viewWebViewRef.current) return;
-    const slim = [{
-      id: companion.id,
-      name: companion.name,
-      sprite: (companion as any).sprite || null,
-      scale: (companion as any).scale || null,
-    }];
-    // Wrap setAgents in a small async block so the WebView
-    // has time to process setAgents before setCentered runs
-    // (setCentered filters companions array; needs the new
-    // agent present first).
-    viewWebViewRef.current.injectJavaScript(
-      `(function(){` +
-        `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)});` +
-        `setTimeout(function(){` +
-          `window.Arena && window.Arena.setCentered(true);` +
-        `}, 50);` +
-      `})(); true;`
-    );
-  }, [companion?.id]);
 
   // v3.10.2: per-companion status lines for the
   // overview cards. Computed after the early
