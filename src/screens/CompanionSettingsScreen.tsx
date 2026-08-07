@@ -32,10 +32,11 @@ import {
 } from 'react-native';
 // v3.10.140: animated sprite view at the top of the
 // settings screen. Uses the same arena.html WebView as
-// HomeScreen, but in a small fixed-size container with
-// setCentered(true) so the companion is centered and
-// cropped (no scrolling). See renderCompanionViewWindow
-// below.
+// HomeScreen, but in a small fixed-size container.
+// v3.10.146: removed setCentered(true) so the
+// companion walks naturally (animates) instead of
+// being frozen in place at scale=10. See
+// renderCompanionViewWindow below.
 import { WebView } from 'react-native-webview';
 const { WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -420,8 +421,9 @@ export default function CompanionSettingsScreen({
 
   // v3.10.140: WebView ref for the animated sprite view
   // at the top of the settings page. Used to inject
-  // JavaScript on companion switch (setAgents with the
-  // new companion, setCentered(true) to re-center).
+  // JavaScript on companion switch (setActive +
+  // setAgents with the new companion; no setCentered
+  // since v3.10.146 so the companion keeps animating).
   const viewWebViewRef = useRef<WebView>(null);
 
   // Hydrate companion list from local cache
@@ -952,33 +954,45 @@ export default function CompanionSettingsScreen({
   // broadcast (XP awards trigger re-broadcasts every chat
   // reply), spamming setAgents into the WebView.
   //
-  // Race-condition fix: setAgents is ASYNC (it awaits
-  // loadImage for each animation). We must wait for it
-  // to resolve before calling setCentered, otherwise
-  // setCentered sees an empty companions array and
-  // renders nothing. Tobe saw this on 3.10.143 — the
-  // arena flashed for a millisecond then went black.
-  // Fix: await the setAgents promise inside the
-  // injected IIFE before calling setCentered.
+  // v3.10.146: no longer call setCentered. The previous
+  // version had a race condition where setCentered fired
+  // before setAgents finished loading sprites. We now let
+  // the companion walk naturally (no setCentered), so the
+  // race is moot. The await on setAgents is still
+  // important: if we inject setActive before setAgents
+  // finishes, the setActive call would set activeId
+  // against an empty companions array. Awaiting
+  // setAgents ensures the companion is built before we
+  // proceed.
   useEffect(() => {
     const c = availableCompanions.find(x => x.id === companionId);
     if (!c || !viewWebViewRef.current) return;
+    const spriteName = (c as any).sprite || (c as any).spriteConfig?.pixelCompanionId;
+    if (!spriteName) return;
     const slim = [{
       id: c.id,
       name: c.name,
-      sprite: (c as any).sprite || null,
-      scale: (c as any).scale || null,
+      sprite: spriteName,
+      // v3.10.146: force scale=4 (mobile-scale 2 →
+      // 64px) regardless of what the desktop
+      // broadcast. The desktop scale is for the
+      // desktop arena, which is much larger; the
+      // mobile settings view window is tiny and
+      // needs a fixed reasonable size. 64px on a
+      // 240x200 box is comfortable (about 1/3 of
+      // the width).
+      scale: 4,
     }];
-    // v3.10.144: setActive first (sets activeId so
-    // setAgents uses the right filter), then await
-    // setAgents, then setCentered. The whole chain
-    // is one async IIFE.
+    // v3.10.146: do NOT call setCentered. That
+    // would force scale=10 and freeze the
+    // companion in place. We want animation.
+    // setActive + setAgents only; the companion
+    // will walk around the box at scale 2.
     viewWebViewRef.current.injectJavaScript(
       `(async function(){` +
         `if (!window.Arena) return;` +
         `window.Arena.setActive(${JSON.stringify(c.id)});` +
         `await window.Arena.setAgents(${JSON.stringify(slim)});` +
-        `window.Arena.setCentered(true);` +
       `})(); true;`
     );
   }, [companionId, availableCompanions.length]);
@@ -1126,12 +1140,15 @@ export default function CompanionSettingsScreen({
 
   // v3.10.140: animated sprite view window. A small
   // WebView rendering arena.html with the active
-  // companion in setCentered(true) mode. The companion
-  // plays its idle/walk animation, but stays centered
-  // in the box (no scrolling, no wandering). Controls
-  // are hidden via the wake-mode body class so the
-  // view is just the companion against the arena's
-  // background.
+  // companion. v3.10.146: no longer uses
+  // setCentered(true) — that forced scale=10 and
+  // froze the companion, showing only a giant
+  // front-facing idle frame. Now the companion
+  // walks naturally at scale 4 (mobile-scale 2,
+  // 64px) so the user can see the walk
+  // animation. Controls are hidden via the
+  // wake-mode body class so the view is just the
+  // companion against the arena's background.
   //
   // Why a WebView instead of a static Image? Tobe
   // (2026-08-07): "I want a window to view the
@@ -1145,10 +1162,18 @@ export default function CompanionSettingsScreen({
     // arena.html parses at boot:
     //   - ?mode=wake → adds wake-mode body class
     //     (hides arena controls)
-    //   - ?centered=true → read at boot, used when
-    //     setCentered() is called later
     //   - ?onlyActive=true → setAgents filters to
     //     just the active companion
+    //
+    // v3.10.146: REMOVED centered=true from the URL
+    // params. Tobe's feedback (20:20): the centered
+    // mode forces scale=10 (giant) and freezes the
+    // companion (vx=0, vy=0) which means only a
+    // single front-facing idle frame is visible. We
+    // want to see the companion's animations, so we
+    // leave it un-centered and let it walk around
+    // at scale 4 (mobile-scale 2, 64px on a 240x200
+    // box).
     //
     // Source URI is STATIC (no companion ID) so the
     // WebView doesn't re-mount on companion switch.
@@ -1156,7 +1181,7 @@ export default function CompanionSettingsScreen({
     // injection in onLoadEnd + the companion-change
     // useEffect. URL params alone don't add a
     // companion to the array — only setAgents does.
-    const sourceUri = `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile&mode=wake&centered=true&onlyActive=true`;
+    const sourceUri = `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile&mode=wake&onlyActive=true`;
 
     // v3.10.145: fallback display. If the WebView
     // fails to load (e.g. arena.html missing from
@@ -1195,25 +1220,52 @@ export default function CompanionSettingsScreen({
           onMessage={() => { /* ignore */ }}
           // v3.10.145: track load state. arena.html
           // fires `arena_loaded` once the catalog is
-          // ready. If we don't see that within 2
-          // seconds, mark the WebView as failed
-          // (probably arena.html couldn't load) so
-          // the placeholder stays visible.
+          // v3.10.146: Tobe's feedback (20:20):
+          // "I want a window to view the companion,
+          // how it looks on the arena, its
+          // animations" — the previous approach
+          // used setCentered(true) which forces
+          // scale=10 (huge, fills the whole box)
+          // AND freezes the companion in place with
+          // vx=0, vy=0. Result: a giant
+          // front-facing idle sprite that doesn't
+          // move.
+          //
+          // New approach: do NOT use setCentered.
+          // Set scale to 4 (which the arena halves
+          // to mobile-scale 2 → 64px on a 240x200
+          // box) and let the companion walk
+          // naturally. The walk animation plays
+          // continuously, the user sees the
+          // companion in motion against the arena
+          // background.
+          //
+          // The downside: the companion wanders
+          // around the box, not always centered.
+          // That's the trade-off for showing
+          // animations. If the user wants a static
+          // centered view, we can add a future
+          // option.
           onLoadEnd={() => {
             const c = availableCompanions.find(x => x.id === companionId);
             if (!c) return;
+            const spriteName = (c as any).sprite || (c as any).spriteConfig?.pixelCompanionId;
+            if (!spriteName) return;
             const slim = [{
               id: c.id,
               name: c.name,
-              sprite: (c as any).sprite || null,
-              scale: (c as any).scale || null,
+              sprite: spriteName,
+              scale: 4, // arena mobile-scale = 2 → 64px
             }];
             viewWebViewRef.current?.injectJavaScript(
               `(async function(){` +
                 `if (!window.Arena) return;` +
                 `window.Arena.setActive(${JSON.stringify(c.id)});` +
                 `await window.Arena.setAgents(${JSON.stringify(slim)});` +
-                `window.Arena.setCentered(true);` +
+                // Deliberately do NOT call
+                // setCentered(true) — that would
+                // force scale=10 and freeze the
+                // companion. We want animation.
               `})(); true;`
             );
           }}
