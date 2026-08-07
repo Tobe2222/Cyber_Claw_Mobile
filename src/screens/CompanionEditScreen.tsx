@@ -233,6 +233,60 @@ export default function CompanionEditScreen({
       if (msg.agentId !== companionId) return;
       setSaving(false);
       setSavedAt(Date.now());
+      // v3.10.146: also persist the agents list to cache
+      // on save success. Bug Tobe hit: edited chattiness
+      // to 2, saved, returned to CompanionSettingsScreen,
+      // still showed 1. Root cause: the cache
+      // (`cyberclaw-agents-cache`) is only written by
+      // HomeScreen and CompanionSettingsScreen's
+      // agents_list listener. While CompanionEditScreen
+      // is open, both are unmounted. The next
+      // agents_list broadcast arrives, the desktop
+      // updates its in-memory state, but the cache
+      // doesn't get the new value. When the user
+      // taps back, CompanionSettingsScreen re-hydrates
+      // from the stale cache.
+      //
+      // Fix: CompanionEditScreen proactively updates
+      // the cache when the save succeeds. It reads the
+      // current cache, finds this companion, merges the
+      // patch (the values the user just saved), and
+      // writes back. The companion-stats in the cache
+      // might be slightly stale (XP, sleep state) but
+      // those update on the next agents_list broadcast
+      // when the user returns to CompanionSettingsScreen.
+      try {
+        AsyncStorage.getItem('cyberclaw-agents-cache').then(raw => {
+          if (!raw) return;
+          const list = JSON.parse(raw);
+          if (!Array.isArray(list)) return;
+          const idx = list.findIndex((x: any) => x.id === companionId);
+          if (idx === -1) return;
+          // Merge the saved patch into the cached
+          // agent. The patch only has the fields the
+          // user changed; preserve everything else.
+          const spriteConfig = Object.assign(
+            {},
+            list[idx].spriteConfig || {},
+            {
+              pixelCompanionId,
+              scale: Math.max(1, Math.min(8, scale)),
+              traits: Array.from(traits),
+              chattiness: Math.max(1, Math.min(5, chattiness)),
+            },
+          );
+          list[idx] = Object.assign({}, list[idx], {
+            // Top-level fields the broadcast carries:
+            sprite: pixelCompanionId || list[idx].sprite,
+            scale: Math.max(1, Math.min(8, scale)),
+            chattiness: Math.max(1, Math.min(5, chattiness)),
+            spriteConfig,
+            // name only if non-empty
+            ...(name.trim() ? { name: name.trim() } : {}),
+          });
+          AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(list)).catch(() => {});
+        }).catch(() => {});
+      } catch (_) { /* cache is best-effort */ }
       // The cache write also happens on the next agents_list
       // broadcast (SyncServer re-broadcasts after every save).
       // Show a brief toast-like banner.

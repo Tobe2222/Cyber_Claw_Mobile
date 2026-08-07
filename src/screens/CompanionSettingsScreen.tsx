@@ -109,6 +109,15 @@ type Companion = {
     chattiness?: number;
     customName?: string;
   } | null;
+  // v3.10.146: top-level sprite + chattiness fields from
+  // the broadcast payload. These are DUPLICATES of the
+  // same values in spriteConfig (the desktop sends both),
+  // but reading from the top level is cheaper than
+  // diving into spriteConfig. The view-window label
+  // uses `sprite`; future renderers might use
+  // `chattiness` for a quick-readout.
+  sprite?: string | null;
+  chattiness?: number | null;
 };
 
 export default function CompanionSettingsScreen({
@@ -439,6 +448,17 @@ export default function CompanionSettingsScreen({
               // a separate IPC round-trip. Null/undefined for
               // legacy agents without a spriteConfig field.
               spriteConfig: a.spriteConfig ?? null,
+              // v3.10.146: also pass through top-level
+              // sprite + chattiness from the broadcast
+              // payload. The view-window label reads
+              // (companion as any).sprite to confirm which
+              // sprite is rendering. The cache hydration
+              // was missing these — the label showed
+              // "default sprite" even when the agent
+              // had pixelCompanionId set. Bug Tobe hit
+              // 2026-08-07 19:30.
+              sprite: a.sprite || null,
+              chattiness: typeof a.chattiness === 'number' ? a.chattiness : null,
             })));
           }
         }
@@ -471,6 +491,11 @@ export default function CompanionSettingsScreen({
             // when the user saves changes via the edit
             // route and the desktop re-broadcasts).
             spriteConfig: a.spriteConfig ?? null,
+            // v3.10.146: also pass through top-level
+            // sprite + chattiness (see cache hydration
+            // comment above for why).
+            sprite: a.sprite || null,
+            chattiness: typeof a.chattiness === 'number' ? a.chattiness : null,
           });
         }
         return Array.from(byId.values());
