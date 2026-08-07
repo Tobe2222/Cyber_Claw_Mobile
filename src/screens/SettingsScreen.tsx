@@ -933,6 +933,43 @@ export default function SettingsScreen({
       setCyberclawLoading(false);
     };
     syncClient.on('cyberclaw_system', onCyberclawSystem);
+
+    // v3.10.150: also subscribe to agents_list broadcasts
+    // and REPLACE the cache + local state with the
+    // broadcast's authoritative list. Tobe's report
+    // (2026-08-08 00:50): "behaviour settings are out of
+    // sync... selections are all off. And chattiness
+    // is set to 3. First of all i dont think they are
+    // that on the desktop." The mobile was showing
+    // stale cache data (the user-edited values from
+    // the desktop were never reflected because the
+    // SettingsScreen only read from cache and never
+    // updated it from the live broadcast). CompanionSettingsScreen
+    // already does this; SettingsScreen needs to too
+    // since it's the entry point where the user
+    // picks which companion to edit.
+    //
+    // We REPLACE (not merge) so legacy entries like
+    // 'anthropic-clawsuu' get cleaned out automatically
+    // — the desktop no longer broadcasts them, so
+    // they shouldn't be in the mobile's view.
+    const onAgentsList = (msg: any) => {
+      if (!msg?.agents || !Array.isArray(msg.agents)) return;
+      AsyncStorage.setItem(
+        'cyberclaw-agents-cache',
+        JSON.stringify(msg.agents),
+      ).catch(() => {});
+      // Refresh local state so the list of
+      // companions in the Settings UI shows the
+      // latest names/sprites immediately.
+      setAvailableCompanions(msg.agents.map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        emoji: a.emoji || null,
+        icon: a.icon || null,
+      })));
+    };
+    syncClient.on('agents_list', onAgentsList);
     // v3.10.136: fire the initial fetch once on mount
     // and again whenever the WS connection comes back.
     // The desktop's reply lands in the listener above,
@@ -947,6 +984,8 @@ export default function SettingsScreen({
     return () => {
       syncClient.off('state_change', onStateChange);
       syncClient.off('cyberclaw_system', onCyberclawSystem);
+      // v3.10.150: cleanup the agents_list listener too.
+      syncClient.off('agents_list', onAgentsList);
     };
   }, []);
 
