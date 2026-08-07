@@ -97,6 +97,18 @@ type Companion = {
     xpTotal: number;
     skills: Record<string, { level: number; xp: number }>;
   } | null;
+  // v3.10.142: companion sprite configuration mirrored
+  // from the desktop's sprites.json. Fields used by the
+  // Behaviour card on this page (sprite + scale + traits
+  // + chattiness). The edit screen (separate route) has
+  // its own hydration; this is just for read-only display.
+  spriteConfig?: {
+    pixelCompanionId?: string;
+    scale?: number;
+    traits?: string[];
+    chattiness?: number;
+    customName?: string;
+  } | null;
 };
 
 export default function CompanionSettingsScreen({
@@ -422,6 +434,11 @@ export default function CompanionSettingsScreen({
               // a fresh payload yet — the Skills section
               // renders an empty state in that case.
               skills: a.skills ?? null,
+              // v3.10.142: pass through spriteConfig so the
+              // Behaviour card can show current values without
+              // a separate IPC round-trip. Null/undefined for
+              // legacy agents without a spriteConfig field.
+              spriteConfig: a.spriteConfig ?? null,
             })));
           }
         }
@@ -449,6 +466,11 @@ export default function CompanionSettingsScreen({
             emoji: a.emoji || null,
             icon: a.icon || null,
             skills: a.skills ?? null,
+            // v3.10.142: pass through spriteConfig on
+            // live broadcasts too (Behaviour card updates
+            // when the user saves changes via the edit
+            // route and the desktop re-broadcasts).
+            spriteConfig: a.spriteConfig ?? null,
           });
         }
         return Array.from(byId.values());
@@ -1004,17 +1026,26 @@ export default function CompanionSettingsScreen({
             </Text>
           </View>
         ) : (
-          <View style={styles.skillsList}>
+          // v3.10.142: compact 2-col grid. Was a vertical
+          // list (one row per skill) which felt heavy
+          // under the sprite view window. Two columns
+          // keeps the section to ~4-5 rows tall no matter
+          // how many skills are earned.
+          <View style={styles.skillsGrid}>
             {skillRows.map(s => {
               const xpNeeded = xpForLevel(s.level);
               const pct = Math.min(100, (s.xp / xpNeeded) * 100);
               return (
-                <View key={s.name} style={styles.skillRow}>
-                  <Text style={styles.skillRowIcon}>{s.icon}</Text>
-                  <Text style={styles.skillRowName}>{s.name}</Text>
-                  <Text style={styles.skillRowLevel}>{s.level}</Text>
-                  <View style={styles.skillRowBar}>
-                    <View style={[styles.skillRowFill, { width: `${pct}%` }]} />
+                <View key={s.name} style={styles.skillGridCell}>
+                  <Text style={styles.skillGridIcon}>{s.icon}</Text>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.skillGridRow}>
+                      <Text style={styles.skillGridName} numberOfLines={1}>{s.name}</Text>
+                      <Text style={styles.skillGridLevel}>Lv.{s.level}</Text>
+                    </View>
+                    <View style={styles.skillGridBar}>
+                      <View style={[styles.skillGridFill, { width: `${pct}%` }]} />
+                    </View>
                   </View>
                 </View>
               );
@@ -1100,6 +1131,115 @@ export default function CompanionSettingsScreen({
     );
   }
 
+  // v3.10.142: Behaviour card. Shows the companion's
+  // sprite + scale + traits + chattiness as a read-only
+  // summary card, with an Edit button that opens the
+  // existing CompanionEditScreen route (where the user
+  // can change sprite/scale/traits/chattiness).
+  //
+  // Why a separate route instead of an inline editor?
+  // The full edit screen (CompanionEditScreen) has a
+  // sprite grid, multiple sliders, a traits multi-select,
+  // and soul/memory previews — ~1000 lines of UI. Folding
+  // it all into an inline expansion here would balloon
+  // this file. The card-on-page + Edit-button-on-route
+  // pattern gives Tobe the "see current values on the main
+  // page" UX he wanted without re-implementing the whole
+  // picker.
+  function renderBehaviourCard(companion: Companion) {
+    const sc = (companion as any).spriteConfig || {};
+    const spriteName = sc.pixelCompanionId
+      ? (sc.pixelCompanionId.charAt(0).toUpperCase() + sc.pixelCompanionId.slice(1))
+      : 'Default';
+    const scale = typeof sc.scale === 'number' ? sc.scale : '?';
+    const chattiness = typeof sc.chattiness === 'number' ? sc.chattiness : 3;
+    const traits: string[] = Array.isArray(sc.traits) ? sc.traits : [];
+    const traitsText = traits.length > 0
+      ? traits.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ')
+      : 'None';
+
+    return (
+      <View style={styles.behaviourCard}>
+        <View style={styles.behaviourHeader}>
+          <Text style={styles.behaviourTitle}>🎨 Behaviour</Text>
+          <TouchableOpacity
+            onPress={() => onOpenCompanionEdit?.({
+              companionId: companion.id,
+              companionName: companion.name,
+              emoji: companion.emoji || companion.icon || null,
+            })}
+            style={styles.behaviourEditBtn}
+          >
+            <Text style={styles.behaviourEditBtnText}>Edit ›</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.behaviourRow}>
+          <Text style={styles.behaviourLabel}>Sprite</Text>
+          <Text style={styles.behaviourValue}>{spriteName}</Text>
+        </View>
+        <View style={styles.behaviourRow}>
+          <Text style={styles.behaviourLabel}>Scale</Text>
+          <Text style={styles.behaviourValue}>{scale}</Text>
+        </View>
+        <View style={styles.behaviourRow}>
+          <Text style={styles.behaviourLabel}>Traits</Text>
+          <Text style={styles.behaviourValue} numberOfLines={1}>{traitsText}</Text>
+        </View>
+        <View style={styles.behaviourRow}>
+          <Text style={styles.behaviourLabel}>Chattiness</Text>
+          <View style={styles.behaviourChattinessBar}>
+            <View style={styles.behaviourChattinessTrack}>
+              {[1, 2, 3, 4, 5].map(n => (
+                <View
+                  key={n}
+                  style={[
+                    styles.behaviourChattinessTick,
+                    n <= chattiness && styles.behaviourChattinessTickActive,
+                  ]}
+                />
+              ))}
+            </View>
+            <Text style={styles.behaviourChattinessNum}>{chattiness}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  // v3.10.142: compact settings card. Just shows the
+  // current value inline + chevron + tap to navigate to
+  // the existing sub-page (which already exists for
+  // wake/exit/voice). Replaces the old verbose cards
+  // that showed "Greeting, trained wake words, train a
+  // new wake phrase" sub-text — Tobe wanted a cleaner
+  // overview where each setting is one row, current
+  // value inline.
+  function renderSettingsCard(opts: {
+    emoji: string;
+    title: string;
+    currentValue: string | null;
+    onPress: () => void;
+    borderColor?: string;
+  }) {
+    return (
+      <TouchableOpacity
+        style={[styles.settingsCard, opts.borderColor ? { borderColor: opts.borderColor } : null]}
+        onPress={opts.onPress}
+      >
+        <Text style={styles.settingsCardEmoji}>{opts.emoji}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.settingsCardTitle}>{opts.title}</Text>
+          {opts.currentValue ? (
+            <Text style={styles.settingsCardValue} numberOfLines={1}>
+              {opts.currentValue}
+            </Text>
+          ) : null}
+        </View>
+        <Text style={styles.settingsCardArrow}>›</Text>
+      </TouchableOpacity>
+    );
+  }
+
   // Dispatch
   if (companionViewPhase === 'wake') {
     return renderCompanionWakePage(companion);
@@ -1113,6 +1253,17 @@ export default function CompanionSettingsScreen({
   return renderCompanionOverview(companion);
 
   // Overview (cards)
+  // v3.10.142: redesigned layout per Tobe 2026-08-07.
+  // Order top→bottom:
+  //   1. Animated sprite view window (v3.10.140)
+  //   2. Skills grid (compact, 2-col) — moved up
+  //   3. Behaviour card (sprite/scale/traits/chattiness
+  //      current values + Edit button → existing
+  //      CompanionEditScreen route)
+  //   4. Separator
+  //   5. Settings cards (Wake, Exit, Voice) — collapsed
+  //      to "current value + chevron", tap → existing
+  //      sub-pages
   function renderCompanionOverview(companion: Companion) {
     return (
       <View style={styles.container}>
@@ -1127,147 +1278,64 @@ export default function CompanionSettingsScreen({
             <View style={{ width: 60 }} />
           </View>
 
-          {/* v3.10.140: animated sprite view window at the
-              top of the page. arena.html WebView with
-              setCentered(true) so the companion plays its
-              idle animation in a fixed-size box. */}
+          {/* 1. v3.10.140: animated sprite view window */}
           {renderCompanionViewWindow()}
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{companion.name} settings</Text>
-            <Text style={styles.sectionDesc}>
-              Wake word, exit phrase, greeting, and reply for {companion.name}.
-            </Text>
-            <Hint>Tap a card to open its settings.</Hint>
+          {/* 2. v3.10.139 + 3.10.142: skills grid (compact,
+              moved up from below Exit card) */}
+          {renderSkillsSection()}
 
-            {/* v3.10.94: Personalize card is now FIRST. Tobe's
-                v3.10.93 feedback: "put this companion edit in
-                the top of the companion settings". The card
-                opens the full CompanionEditScreen route with
-                sprite picker + scale + traits + chattiness.
-                The sub-line now reflects the v3.10.93 UI
-                change: no LLM options on mobile (those live
-                on the desktop), so we drop "model" from the
-                description. */}
-            <TouchableOpacity
-              style={[styles.phaseCard, { borderColor: '#f7931a' }]}
-              onPress={() => onOpenCompanionEdit?.({
-                companionId: companion.id,
-                companionName: companion.name,
-                emoji: companion.emoji || companion.icon || null,
-              })}
-            >
-              <Text style={styles.phaseCardEmoji}>✏️</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.phaseCardTitle}>Edit / Personalize</Text>
-                <Text style={styles.phaseCardSub}>
-                  Sprite, scale, traits, and chattiness for {companion.name}
-                </Text>
-              </View>
-              <Text style={styles.phaseCardArrow}>›</Text>
-            </TouchableOpacity>
+          {/* 3. v3.10.142: behaviour card (current values
+              + Edit button) */}
+          {renderBehaviourCard(companion)}
 
-            <TouchableOpacity
-              style={[styles.phaseCard, { borderColor: '#3b82f6' }]}
-              onPress={() => setCompanionViewPhase('wake')}
-            >
-              <Text style={styles.phaseCardEmoji}>🎤</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.phaseCardTitle}>Wake settings</Text>
-                <Text style={styles.phaseCardSub}>
-                  Greeting, trained wake words, train a new wake phrase
-                </Text>
-                {/*
-                  v3.10.1: show wake status here on the
-                  per-companion page (Tobe: "It should
-                  not say anything there but rather in
-                  the wake and exit section when the
-                  companion is clicked"). Two lines:
-                  one for the active wake phrase (if
-                  any), one for the existence of any
-                  trained phrases. Falls back to "Not
-                  trained" / "Default X" hints when the
-                  user hasn't trained anything.
-                */}
-                {wakeStatusLine ? (
-                  <Text style={[styles.phaseCardSub, { color: '#10b981', marginTop: 6, fontStyle: 'italic' }]}>
-                    {wakeStatusLine}
-                  </Text>
-                ) : null}
-              </View>
-              <Text style={styles.phaseCardArrow}>›</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.phaseCard, { borderColor: '#f7931a' }]}
-              onPress={() => setCompanionViewPhase('exit')}
-            >
-              <Text style={styles.phaseCardEmoji}>🚪</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.phaseCardTitle}>Exit settings</Text>
-                <Text style={styles.phaseCardSub}>
-                  Exit reply, trained exit phrases, train a new exit phrase
-                </Text>
-                {/*
-                  v3.10.1: same pattern as the Wake
-                  card. Two flavors: "Trained: thanks"
-                  when PerCompanionExitPicker found a
-                  trained phrase, "Default: thanks"
-                  when only the v3.7.1 default
-                  voiceExitPhrase is in use. The exit
-                  phrase is also reflected in the
-                  Voice Settings voiceExitPhrase
-                  control, but showing it once in the
-                  per-companion list keeps the user
-                  oriented without having to drill in.
-                */}
-                {exitStatusLine ? (
-                  <Text style={[styles.phaseCardSub, { color: '#10b981', marginTop: 6, fontStyle: 'italic' }]}>
-                    {exitStatusLine}
-                  </Text>
-                ) : null}
-              </View>
-              <Text style={styles.phaseCardArrow}>›</Text>
-            </TouchableOpacity>
-
-            {/* v3.10.139: Skills section. Read-only display
-                of the companion's XP + levels per skill,
-                mirrored from the desktop's
-                companion-stats.json. The desktop awards
-                XP via classifyTask() on each chat reply
-                (desktop v3.2.84) and re-broadcasts
-                agents_list so this section updates live.
-
-                View-only by design — see Tobe's
-                2026-08-07 ask: "Just make it easy and
-                less accurate. Its just for fun". Tapping
-                a skill doesn't open anything; the rows
-                are decorative. */}
-            {renderSkillsSection()}
-
-            {/* v3.7.0: per-companion Voice settings. Engine +
-                voice picker. Gated on the global "✨ Enable API
-                speech" master toggle when Premium API is
-                selected (falls back to Local). API keys are
-                global, shared across all companions. */}
-            <TouchableOpacity
-              style={[styles.phaseCard, { borderColor: '#10b981' }]}
-              onPress={() => setCompanionViewPhase('voice')}
-            >
-              <Text style={styles.phaseCardEmoji}>🔊</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.phaseCardTitle}>Voice settings</Text>
-                <Text style={styles.phaseCardSub}>
-                  Engine (Local / Premium API) and voice for {companion.name}
-                </Text>
-              </View>
-              <Text style={styles.phaseCardArrow}>›</Text>
-            </TouchableOpacity>
-
-            {/* v3.7.6: Quests moved to its own top-level screen
-                (QuestsScreen.tsx). Tap the 📜 Quests button on
-                the arena to open it. */}
+          {/* 4. v3.10.142: visual separator between the
+              "about this companion" sections (view +
+              skills + behaviour) and the "settings"
+              sections (wake/exit/voice) */}
+          <View style={styles.overviewSeparator}>
+            <Text style={styles.overviewSeparatorText}>SETTINGS</Text>
           </View>
+
+          {/* 5. v3.10.142: collapsed settings cards.
+              Each shows the current value inline +
+              chevron. Tap → existing sub-page (which
+              already has the full editor). */}
+
+          {renderSettingsCard({
+            emoji: '🎤',
+            title: 'Wake',
+            currentValue: wakeStatusLine || 'Not trained',
+            onPress: () => setCompanionViewPhase('wake'),
+            borderColor: '#3b82f6',
+          })}
+
+          {renderSettingsCard({
+            emoji: '🚪',
+            title: 'Exit',
+            currentValue: exitStatusLine || 'Not trained',
+            onPress: () => setCompanionViewPhase('exit'),
+            borderColor: '#f7931a',
+          })}
+
+          {renderSettingsCard({
+            emoji: '🔊',
+            title: 'Voice',
+            // v3.10.142: show current voice + engine.
+            // Reads from the per-companion voice state
+            // hydrated earlier in the screen. Falls back
+            // to "Not set" if neither has a value.
+            currentValue:
+              vcEngine === 'api' && vcApiVoice
+                ? `Premium API · ${vcApiVoice}`
+                : vcLocalId && vcLocalId !== 'default'
+                ? `Local · ${vcLocalId}`
+                : 'Local · Default',
+            onPress: () => setCompanionViewPhase('voice'),
+            borderColor: '#10b981',
+          })}
+
+          <View style={{ height: 24 }} />
         </ScrollView>
       </View>
     );
@@ -2523,26 +2591,105 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   skillsEmptyText: { color: '#888', fontSize: 12, fontStyle: 'italic', textAlign: 'center' },
-  skillsList: { gap: 6 },
-  skillRow: {
+  // v3.10.142: compact 2-col grid replaces the vertical
+  // list (skillsList + skillRow*). Each cell is a
+  // fixed-aspect box with icon + name + Lv + thin bar.
+  // flexWrap:'wrap' + width:'48%' gives us 2 cols on
+  // phones (one column would be too narrow for name+lv).
+  skillsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  skillGridCell: {
+    width: '48%',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#111',
     borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    gap: 6,
+  },
+  skillGridIcon: { fontSize: 14, width: 18, textAlign: 'center' },
+  skillGridRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  skillGridName: { color: '#fff', fontSize: 11, flex: 1, marginRight: 4 },
+  skillGridLevel: { color: '#f7931a', fontSize: 10, fontWeight: '700' },
+  skillGridBar: {
+    height: 3,
+    backgroundColor: '#222',
+    borderRadius: 1.5,
+    overflow: 'hidden',
+    marginTop: 2,
+  },
+  skillGridFill: { height: '100%', backgroundColor: '#f7931a' },
+  // v3.10.142: behaviour card. Read-only summary of
+  // sprite/scale/traits/chattiness with an Edit button
+  // that navigates to the existing CompanionEditScreen.
+  behaviourCard: {
+    backgroundColor: '#0f1626',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#f7931a',
+    padding: 14,
+    marginVertical: 6,
+  },
+  behaviourHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  behaviourTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  behaviourEditBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    backgroundColor: '#f7931a',
+    borderRadius: 6,
+  },
+  behaviourEditBtnText: { color: '#000', fontSize: 12, fontWeight: '700' },
+  behaviourRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+  },
+  behaviourLabel: { color: '#888', fontSize: 12, width: 90 },
+  behaviourValue: { color: '#fff', fontSize: 13, flex: 1 },
+  behaviourChattinessBar: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 8 },
+  behaviourChattinessTrack: { flexDirection: 'row', gap: 3, flex: 1 },
+  behaviourChattinessTick: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#222',
+    borderRadius: 3,
+  },
+  behaviourChattinessTickActive: { backgroundColor: '#f7931a' },
+  behaviourChattinessNum: { color: '#f7931a', fontSize: 12, fontWeight: '700', minWidth: 16, textAlign: 'right' },
+  // v3.10.142: collapsed settings card. Single row per
+  // setting (Wake/Exit/Voice). Shows current value
+  // inline + chevron. Tap → existing sub-page.
+  settingsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f1626',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginVertical: 4,
+    gap: 10,
+  },
+  settingsCardEmoji: { fontSize: 22 },
+  settingsCardTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  settingsCardValue: { color: '#10b981', fontSize: 11, marginTop: 2, fontStyle: 'italic' },
+  settingsCardArrow: { color: '#888', fontSize: 22, marginLeft: 4 },
+  // v3.10.142: visual separator between the "about this
+  // companion" sections (view + skills + behaviour) and
+  // the "settings" sections (wake/exit/voice). Just a
+  // small label + line.
+  overviewSeparator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    marginBottom: 8,
     gap: 8,
   },
-  skillRowIcon: { fontSize: 16, width: 22, textAlign: 'center' },
-  skillRowName: { color: '#fff', fontSize: 13, flex: 1 },
-  skillRowLevel: { color: '#f7931a', fontSize: 12, fontWeight: '700', minWidth: 28, textAlign: 'right' },
-  skillRowBar: {
-    height: 4,
-    backgroundColor: '#222',
-    borderRadius: 2,
-    overflow: 'hidden',
-    flexBasis: 80,
-    flexGrow: 1,
-  },
-  skillRowFill: { height: '100%', backgroundColor: '#f7931a' },
+  overviewSeparatorText: { color: '#666', fontSize: 10, fontWeight: '700', letterSpacing: 1.5 },
 });
