@@ -512,19 +512,27 @@ export default function CompanionSettingsScreen({
   // the cache hydration reads from) goes stale while
   // the user is on a sub-screen like CompanionEditScreen.
   //
-  // Bug Tobe hit on 3.10.142: edited chattiness to 1,
-  // saved, returned to CompanionSettingsScreen, still
-  // showed 2. Root cause: the broadcast was received
-  // (and applied to in-memory state), but the cache
-  // was only written by HomeScreen. If the user wasn't
-  // on HomeScreen when the broadcast arrived, the cache
-  // stayed stale. On remount, the screen hydrated from
-  // the stale cache.
+  // v3.10.147: REPLACE the cache with the broadcast's
+  // list (not merge). The desktop's agents_list is the
+  // authoritative list of companions. Merging with
+  // the cache's old data led to legacy entries
+  // (e.g. 'anthropic-clawsuu' from when that was the
+  // id convention) sticking around forever, even though
+  // the desktop no longer broadcasts them. Tobe hit
+  // this on 2026-08-07 23:23: opened the companion
+  // settings page and saw TWO Clawsuu entries (one
+  // with sprite=boar from the legacy entry, one with
+  // sprite=deer from the current one). Tap the wrong
+  // one and the edit went to a different agent id
+  // than the view was showing.
   //
-  // Fix: CompanionSettingsScreen also persists the
-  // agents list when it receives a fresh broadcast.
-  // This is cheap (small JSON) and only fires on
-  // actual agents_list messages, not on renders.
+  // The broadcast's list IS the source of truth —
+  // agents no longer being broadcast are intentionally
+  // removed. Replacement (not merge) is the correct
+  // semantic. This also fixes the "stale chattiness"
+  // bug: with merge, the cache kept the old chattiness
+  // value even after a fresh broadcast; with replace,
+  // the cache reflects the latest broadcast.
   useEffect(() => {
     const persistHandler = (msg: any) => {
       if (!msg?.agents || !Array.isArray(msg.agents)) return;
@@ -973,15 +981,13 @@ export default function CompanionSettingsScreen({
       id: c.id,
       name: c.name,
       sprite: spriteName,
-      // v3.10.146: force scale=4 (mobile-scale 2 →
-      // 64px) regardless of what the desktop
-      // broadcast. The desktop scale is for the
-      // desktop arena, which is much larger; the
-      // mobile settings view window is tiny and
-      // needs a fixed reasonable size. 64px on a
-      // 240x200 box is comfortable (about 1/3 of
-      // the width).
-      scale: 4,
+      // v3.10.147: Tobe's feedback "slightly too
+      // big" at scale 4 (mobile-scale 2 = 64px).
+      // Drop to scale 3 → mobile-scale 1 (floor
+      // from 1.5) → 32px. About 1/8 of the box
+      // width. The companion is still visible
+      // and animating, just smaller.
+      scale: 3,
     }];
     // v3.10.146: do NOT call setCentered. That
     // would force scale=10 and freeze the
@@ -1255,7 +1261,14 @@ export default function CompanionSettingsScreen({
               id: c.id,
               name: c.name,
               sprite: spriteName,
-              scale: 4, // arena mobile-scale = 2 → 64px
+              // v3.10.147: Tobe's feedback (23:23):
+              // "slightly too big" at scale 4
+              // (mobile-scale 2 = 64px). Drop to
+              // scale 3 → mobile-scale 1 (floor
+              // from 1.5) → 32px. About 1/8 of
+              // the box width. Smaller but still
+              // visible.
+              scale: 3,
             }];
             viewWebViewRef.current?.injectJavaScript(
               `(async function(){` +
