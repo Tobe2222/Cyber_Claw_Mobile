@@ -1104,8 +1104,26 @@ body.wake-mode #bg-menu { display: none !important; }
       // so the frame-advance code at the end of this loop
       // body runs and cycles the idle frames).
       if (c._centered) {
-        c.animation = 'idle';
-        c.direction = 0;  // face camera
+        // v3.10.149: do NOT force state=idle here.
+        // The previous code forced c.animation = 'idle'
+        // and c.direction = 0, which meant centered
+        // mode only ever showed one frame (the first
+        // idle frame, facing the camera). Tobe's
+        // feedback (2026-08-08 00:50): "Clawsuu is not
+        // showing all its animations."
+        //
+        // Now: only force direction=0 (always face
+        // camera in centered mode — that's the "camera
+        // locked on him" behavior the user wants).
+        // The state machine runs normally, so the
+        // companion cycles through idle/walk/attack
+        // frames. vx=vy=0 (set by setCentered) keeps
+        // the companion in place — the camera doesn't
+        // follow him walking, the camera just shows
+        // the animation. This gives the user all the
+        // animations visible at 70% size, centered,
+        // with the camera fixed.
+        c.direction = 0;
       } else {
         c.stateTimer -= dt;
 
@@ -1709,7 +1727,11 @@ body.wake-mode #bg-menu { display: none !important; }
       // view — the name label and status overlay are still
       // visible).
       const c = companions[0];
-      c.scale = 10;
+      // v3.10.149: use CENTERED_SCALE (defaults to
+      // 10, but can be overridden via ?centeredScale=N
+      // URL param). The mobile settings view uses
+      // centeredScale=5 (~70% of 240x200 box).
+      c.scale = CENTERED_SCALE;
       const [fw, fh] = c.data.frameSize;
       const dw = fw * c.scale;
       const dh = fh * c.scale;
@@ -1717,9 +1739,16 @@ body.wake-mode #bg-menu { display: none !important; }
       c.y = (canvas.height - dh) / 2;
       c.vx = 0;
       c.vy = 0;
-      c.state = 'idle';
+      // v3.10.149: do NOT force c.state = 'idle'.
+      // The state machine will pick a random state
+      // (60% idle, 28% walk, 12% other) and cycle
+      // through all animations. Combined with the
+      // update() loop change (don't force
+      // animation='idle' when _centered), the
+      // companion now shows walk, attack, run, etc.
+      // while still being camera-locked.
       c.direction = 0;
-      c._centered = true;  // signal to update() to skip state machine
+      c._centered = true;  // signal to update() to skip the wander/walk cycle
       c._positioned = true;
     }
     layout();
@@ -1923,7 +1952,12 @@ body.wake-mode #bg-menu { display: none !important; }
         c.y = (canvas.height - dh) / 2;
         c.vx = 0;
         c.vy = 0;
-        c.state = 'idle';
+        // v3.10.149: do NOT force c.state = 'idle'.
+        // The state machine will pick a random
+        // state and cycle through all animations.
+        // Combined with the update() loop change,
+        // the companion now shows walk/attack/run
+        // while still being camera-locked.
         c.direction = 0;
         c._centered = true;
         c._positioned = true;
