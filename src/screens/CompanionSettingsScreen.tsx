@@ -1088,43 +1088,99 @@ export default function CompanionSettingsScreen({
           javaScriptEnabled
           allowFileAccess
           originWhitelist={['*']}
-          // v3.10.140: deliberately NO onMessage handler.
-          // The WebView's treat-drop + arena controls would
-          // send messages we don't want to handle here (we
-          // don't want users dragging treats onto the
-          // settings view). If arena.html tries to send a
-          // message, RN logs a warning but doesn't crash.
+          // v3.10.143: capture arena events so we can
+          // debug the empty-view problem. arena.html
+          // sends 'arena_loaded' when the catalog is
+          // ready, 'arena_resize' on viewport changes,
+          // etc. Without this handler we have no
+          // visibility into what's happening inside the
+          // WebView. For now we just log to console
+          // (the Log tab will surface these via the
+          // adb logcat or React Native debugger).
+          onMessage={(e) => {
+            try {
+              const msg = JSON.parse(e.nativeEvent.data);
+              // Surface to the React Native log. Useful
+              // when connected to a debugger; harmless
+              // otherwise (Android just swallows it).
+              console.log('[CompanionViewWindow] arena msg:', JSON.stringify(msg));
+            } catch (_) { /* ignore non-JSON */ }
+          }}
           onLoadEnd={() => {
-            // 1. Hide arena controls (mirrors the wake-mode
-            //    body class which HomeScreen uses for the
-            //    fullscreen arena).
-            // 2. Init canvas with our box dimensions.
-            // 3. Set this companion as the only one.
-            // 4. Center them so they don't wander.
-            const initJs = [
-              `document.body.classList.add('wake-mode');`,
-              `window.Arena && window.Arena.init(${VIEW_BOX_W}, ${VIEW_BOX_H});`,
-            ].join(' ');
-            viewWebViewRef.current?.injectJavaScript(initJs);
+            // v3.10.143: chain all injection into a
+            // SINGLE injectJavaScript call. Previously
+            // I called it twice in quick succession;
+            // the second call could land before the
+            // first's promises resolve, leading to
+            // dropped init/setAgents calls.
+            //
+            // Flow inside the WebView:
+            //   1. wait for arena_loaded (catalog ready)
+            //   2. hide controls (wake-mode body class)
+            //   3. init canvas with our dimensions
+            //   4. setAgents with this companion
+            //   5. setCentered(true) so the companion
+            //      is centered (no wandering)
+            //
+            // The arena_loaded event fires synchronously
+            // at boot from loadCatalog() — so by the time
+            // onLoadEnd fires (after the WebView finishes
+            // page load), catalog IS set. But we still
+            // want to wait for the bg image to load before
+            // drawing, which is why we listen for
+            // arena_bg_loaded. We don't strictly need bg
+            // for centered mode (companion renders over
+            // bg), so we don't gate on it.
+            //
+            // Debug logs every step so we can see in
+            // adb logcat what's happening:
+            //   "[CompanionViewWindow] <step> <details>"
+            const slim = companion ? [{
+              id: companion.id,
+              name: companion.name,
+              sprite: (companion as any).sprite || null,
+              scale: (companion as any).scale || null,
+            }] : null;
 
-            if (companion) {
-              const slim = [{
-                id: companion.id,
-                name: companion.name,
-                sprite: (companion as any).sprite || null,
-                scale: (companion as any).scale || null,
-              }];
-              // setAgents then setCentered, with a small
-              // delay so setCentered sees the new agent.
-              viewWebViewRef.current?.injectJavaScript(
-                `(function(){` +
-                  `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)});` +
-                  `setTimeout(function(){` +
-                    `window.Arena && window.Arena.setCentered(true);` +
-                  `}, 80);` +
-                `})(); true;`
-              );
-            }
+            const allInOne = `
+(function(){
+  console.log('[CompanionViewWindow] inject start, catalog=' + (window.Arena ? 'ready' : 'NOT READY'));
+  console.log('[CompanionViewWindow] companion=${companion ? companion.id : 'none'} sprite=${companion ? ((companion as any).sprite || 'null') : 'none'} scale=${companion ? ((companion as any).scale || 'null') : 'none'}');
+  // 1. hide arena controls (mirrors wake-mode body class)
+  document.body.classList.add('wake-mode');
+  // 2. init canvas with our box dimensions
+  if (window.Arena && window.Arena.init) {
+    window.Arena.init(${VIEW_BOX_W}, ${VIEW_BOX_H});
+    console.log('[CompanionViewWindow] init(' + ${VIEW_BOX_W} + ', ' + ${VIEW_BOX_H} + ') called');
+  } else {
+    console.log('[CompanionViewWindow] window.Arena.init MISSING');
+  }
+  // 3. setAgents with this companion
+  ${slim ? `
+  if (window.Arena && window.Arena.setAgents) {
+    const slim = ${JSON.stringify(slim)};
+    console.log('[CompanionViewWindow] calling setAgents with ' + JSON.stringify(slim));
+    window.Arena.setAgents(slim);
+    console.log('[CompanionViewWindow] companion count after setAgents: ' + (window.Arena.getCompanionCount ? window.Arena.getCompanionCount() : '?'));
+    // 4. setCentered(true) — filter to this companion + center
+    setTimeout(function(){
+      if (window.Arena && window.Arena.setCentered) {
+        window.Arena.setCentered(true);
+        console.log('[CompanionViewWindow] setCentered(true) called, final count: ' + (window.Arena.getCompanionCount ? window.Arena.getCompanionCount() : '?'));
+      } else {
+        console.log('[CompanionViewWindow] setCentered MISSING');
+      }
+    }, 150);
+  } else {
+    console.log('[CompanionViewWindow] window.Arena.setAgents MISSING');
+  }
+  ` : `
+  console.log('[CompanionViewWindow] no companion, skipping setAgents');
+  `}
+})();
+true;
+`;
+            viewWebViewRef.current?.injectJavaScript(allInOne);
           }}
         />
       </View>
