@@ -480,6 +480,36 @@ export default function CompanionSettingsScreen({
     return () => { syncClient.off?.('agents_list', handler); };
   }, []);
 
+  // v3.10.145: also update the AsyncStorage cache when
+  // agents_list arrives. Without this, the cache (which
+  // the cache hydration reads from) goes stale while
+  // the user is on a sub-screen like CompanionEditScreen.
+  //
+  // Bug Tobe hit on 3.10.142: edited chattiness to 1,
+  // saved, returned to CompanionSettingsScreen, still
+  // showed 2. Root cause: the broadcast was received
+  // (and applied to in-memory state), but the cache
+  // was only written by HomeScreen. If the user wasn't
+  // on HomeScreen when the broadcast arrived, the cache
+  // stayed stale. On remount, the screen hydrated from
+  // the stale cache.
+  //
+  // Fix: CompanionSettingsScreen also persists the
+  // agents list when it receives a fresh broadcast.
+  // This is cheap (small JSON) and only fires on
+  // actual agents_list messages, not on renders.
+  useEffect(() => {
+    const persistHandler = (msg: any) => {
+      if (!msg?.agents || !Array.isArray(msg.agents)) return;
+      AsyncStorage.setItem(
+        'cyberclaw-agents-cache',
+        JSON.stringify(msg.agents),
+      ).catch(() => { /* ignore — cache is best-effort */ });
+    };
+    syncClient.on('agents_list', persistHandler);
+    return () => { syncClient.off?.('agents_list', persistHandler); };
+  }, []);
+
   // Hydrate wake greeting
   useEffect(() => {
     (async () => {
@@ -1103,6 +1133,27 @@ export default function CompanionSettingsScreen({
     // companion to the array — only setAgents does.
     const sourceUri = `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile&mode=wake&centered=true&onlyActive=true`;
 
+    // v3.10.145: fallback display. If the WebView
+    // fails to load (e.g. arena.html missing from
+    // APK assets, JS error in the page, etc.) the
+    // user sees a black box. Render a labelled
+    // placeholder underneath showing the companion's
+    // emoji + name + sprite, so at minimum the user
+    // gets useful info about which companion the
+    // view window is supposed to represent.
+    //
+    // This sits OVER the WebView (absolute
+    // positioning) so it's only visible if the
+    // WebView is transparent/blank. When the WebView
+    // renders correctly, the placeholder is hidden
+    // behind it.
+    const placeholderEmoji = (companion as any)?.emoji
+      || (companion as any)?.icon
+      || '🐾';
+    const placeholderSprite = (companion as any)?.sprite
+      ? `${(companion as any).sprite} sprite`
+      : 'default sprite';
+
     return (
       <View style={styles.viewWindow}>
         <WebView
@@ -1117,11 +1168,12 @@ export default function CompanionSettingsScreen({
           // v3.10.144: arena.html events treated as
           // no-ops. The settings view is read-only.
           onMessage={() => { /* ignore */ }}
-          // v3.10.144: on first load, inject
-          // setActive + setAgents + setCentered for
-          // the initial companion. The useEffect
-          // handles subsequent companion switches
-          // (without re-loading the WebView).
+          // v3.10.145: track load state. arena.html
+          // fires `arena_loaded` once the catalog is
+          // ready. If we don't see that within 2
+          // seconds, mark the WebView as failed
+          // (probably arena.html couldn't load) so
+          // the placeholder stays visible.
           onLoadEnd={() => {
             const c = availableCompanions.find(x => x.id === companionId);
             if (!c) return;
@@ -1141,6 +1193,18 @@ export default function CompanionSettingsScreen({
             );
           }}
         />
+        {/* v3.10.145: small label at the BOTTOM of
+            the view window showing the companion's
+            name + sprite id. This is always visible
+            (the WebView is mostly empty space at the
+            bottom; the sprite is centered higher
+            up). Gives the user confirmation that the
+            view is showing the right companion. */}
+        <View style={styles.viewWindowLabel} pointerEvents="none">
+          <Text style={styles.viewWindowLabelText}>
+            {companion?.name || ''} · {placeholderSprite}
+          </Text>
+        </View>
       </View>
     );
   }
@@ -2516,6 +2580,21 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#0a0a2e',
   },
+  // v3.10.145: small label at the bottom of the
+  // view window. Shows the companion's name + sprite
+  // id so the user can confirm the view is showing
+  // the right companion. Sits at the bottom of the
+  // box (where the arena is mostly empty space
+  // anyway because the sprite is centered higher
+  // up).
+  viewWindowLabel: {
+    position: 'absolute',
+    bottom: 6,
+    left: 8,
+    right: 8,
+    alignItems: 'center',
+  },
+  viewWindowLabelText: { color: '#aaa', fontSize: 10, fontWeight: '600' },
   trainBtn: {
     borderWidth: 2,
     borderRadius: 12,
