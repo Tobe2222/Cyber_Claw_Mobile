@@ -1909,7 +1909,13 @@ body.wake-mode #bg-menu { display: none !important; }
     if (companions.length > 0) {
       const c = companions[0];
       if (enabled) {
-        c.scale = 10;
+        // v3.10.148: use CENTERED_SCALE (defaults
+        // to 10, but can be overridden via
+        // ?centeredScale=N URL param). The mobile
+        // settings view uses centeredScale=5 so
+        // the boar at 32x32 frame is 160px (≈ 70%
+        // of the 240x200 box width).
+        c.scale = CENTERED_SCALE;
         const [fw, fh] = c.data.frameSize;
         const dw = fw * c.scale;
         const dh = fh * c.scale;
@@ -2250,6 +2256,15 @@ body.wake-mode #bg-menu { display: none !important; }
   const URL_PARAMS = new URLSearchParams(location.search);
   const ONLY_ACTIVE = URL_PARAMS.get('onlyActive') === 'true';
   const CENTERED = URL_PARAMS.get('centered') === 'true';
+  // v3.10.148: companion scale in centered mode. Tobe's
+  // feedback (23:40): "It should have the boar occupy
+  // like 70% of the view screen". Default 10 (fills
+  // the canvas for a 32x32 frame at 320px). The mobile
+  // settings view uses 5 (~70% of a 240x200 box).
+  const CENTERED_SCALE = (() => {
+    const v = parseFloat(URL_PARAMS.get('centeredScale') || '10');
+    return (v > 0 && v <= 20) ? v : 10;
+  })();
 
   // v3.1.51: read ?mode=wake and add the wake-mode class to body
   // (moved here from the WAKE_MODE flag init so the class is set

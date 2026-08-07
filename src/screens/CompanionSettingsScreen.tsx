@@ -981,24 +981,23 @@ export default function CompanionSettingsScreen({
       id: c.id,
       name: c.name,
       sprite: spriteName,
-      // v3.10.147: Tobe's feedback "slightly too
-      // big" at scale 4 (mobile-scale 2 = 64px).
-      // Drop to scale 3 → mobile-scale 1 (floor
-      // from 1.5) → 32px. About 1/8 of the box
-      // width. The companion is still visible
-      // and animating, just smaller.
-      scale: 3,
+      // scale is overridden by setCentered(true)
+      // via the ?centeredScale=5 URL param. This
+      // value is just a sensible default for the
+      // pre-centered state.
+      scale: 5,
     }];
-    // v3.10.146: do NOT call setCentered. That
-    // would force scale=10 and freeze the
-    // companion in place. We want animation.
-    // setActive + setAgents only; the companion
-    // will walk around the box at scale 2.
+    // v3.10.148: re-inject setCentered(true) to
+    // keep the companion centered after a
+    // companion switch. The companion is at
+    // CENTERED_SCALE (5) which fills ~70% of the
+    // 240x200 box width.
     viewWebViewRef.current.injectJavaScript(
       `(async function(){` +
         `if (!window.Arena) return;` +
         `window.Arena.setActive(${JSON.stringify(c.id)});` +
         `await window.Arena.setAgents(${JSON.stringify(slim)});` +
+        `window.Arena.setCentered(true);` +
       `})(); true;`
     );
   }, [companionId, availableCompanions.length]);
@@ -1181,13 +1180,26 @@ export default function CompanionSettingsScreen({
     // at scale 4 (mobile-scale 2, 64px on a 240x200
     // box).
     //
+    // v3.10.148: RE-ADD centered=true but with
+    // centeredScale=5 so the boar fills ~70% of the
+    // box. Tobe's feedback (23:40): "the boar should
+    // occupy like 70% of the view screen. And the
+    // camera should be fixed on him, making him
+    // always in the middle. Its just a zoom of him
+    // in the arena."
+    //
+    // Previous (3.10.140–3.10.147) had the companion
+    // walking around at small scale. That was wrong
+    // — the user wants a fixed zoom, not a wandering
+    // sprite.
+    //
     // Source URI is STATIC (no companion ID) so the
     // WebView doesn't re-mount on companion switch.
     // The companion is set via setActive + setAgents
     // injection in onLoadEnd + the companion-change
     // useEffect. URL params alone don't add a
     // companion to the array — only setAgents does.
-    const sourceUri = `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile&mode=wake&onlyActive=true`;
+    const sourceUri = `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile&mode=wake&onlyActive=true&centered=true&centeredScale=5`;
 
     // v3.10.145: fallback display. If the WebView
     // fails to load (e.g. arena.html missing from
@@ -1261,24 +1273,29 @@ export default function CompanionSettingsScreen({
               id: c.id,
               name: c.name,
               sprite: spriteName,
-              // v3.10.147: Tobe's feedback (23:23):
-              // "slightly too big" at scale 4
-              // (mobile-scale 2 = 64px). Drop to
-              // scale 3 → mobile-scale 1 (floor
-              // from 1.5) → 32px. About 1/8 of
-              // the box width. Smaller but still
-              // visible.
-              scale: 3,
+              // scale is ignored when setCentered(true)
+              // is called — arena.html overrides it
+              // with CENTERED_SCALE (5 for the mobile
+              // settings view, via the ?centeredScale=5
+              // URL param). The scale field here is
+              // just a placeholder for the
+              // pre-centered state.
+              scale: 5,
             }];
             viewWebViewRef.current?.injectJavaScript(
               `(async function(){` +
                 `if (!window.Arena) return;` +
                 `window.Arena.setActive(${JSON.stringify(c.id)});` +
                 `await window.Arena.setAgents(${JSON.stringify(slim)});` +
-                // Deliberately do NOT call
-                // setCentered(true) — that would
-                // force scale=10 and freeze the
-                // companion. We want animation.
+                // v3.10.148: RE-ADD setCentered(true).
+                // Previous v3.10.146–3.10.147 removed
+                // this because the implicit scale=10
+                // was too big. Now arena.html reads
+                // ?centeredScale from the URL params
+                // and uses 5 instead of 10, giving
+                // the user a boar at ~70% of the
+                // 240x200 box width.
+                `window.Arena.setCentered(true);` +
               `})(); true;`
             );
           }}
