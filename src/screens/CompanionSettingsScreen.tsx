@@ -28,8 +28,15 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Alert, Platform, NativeModules, BackHandler,
-  AppState,
+  AppState, Dimensions,
 } from 'react-native';
+// v3.10.140: animated sprite view at the top of the
+// settings screen. Uses the same arena.html WebView as
+// HomeScreen, but in a small fixed-size container with
+// setCentered(true) so the companion is centered and
+// cropped (no scrolling). See renderCompanionViewWindow
+// below.
+import { WebView } from 'react-native-webview';
 const { WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 // v3.10.0: OpenWakeWordTrainer / ExitPhraseTrainer /
@@ -389,6 +396,12 @@ export default function CompanionSettingsScreen({
   // missing from a populated cache and we already auto-
   // backed out, so we don't loop onBack in render.
   const hasAutoBackedRef = useRef(false);
+
+  // v3.10.140: WebView ref for the animated sprite view
+  // at the top of the settings page. Used to inject
+  // JavaScript on companion switch (setAgents with the
+  // new companion, setCentered(true) to re-center).
+  const viewWebViewRef = useRef<WebView>(null);
 
   // Hydrate companion list from local cache
   useEffect(() => {
@@ -857,6 +870,41 @@ export default function CompanionSettingsScreen({
     );
   }
 
+  // v3.10.140: when the active companion changes
+  // (e.g. user taps a different companion in the list
+  // while this screen is still mounted), re-inject
+  // setAgents + setCentered so the WebView shows the
+  // new companion. The arena state is already set on
+  // first load (see onLoadEnd in renderCompanionViewWindow
+  // below); this effect just keeps it in sync.
+  //
+  // We guard on `companion?.id` so the WebView only
+  // re-injects when the active companion actually changes.
+  // Without the guard, every render that re-creates the
+  // companion object would trigger a re-inject (which is
+  // wasteful — the WebView gets the same data).
+  useEffect(() => {
+    if (!companion || !viewWebViewRef.current) return;
+    const slim = [{
+      id: companion.id,
+      name: companion.name,
+      sprite: (companion as any).sprite || null,
+      scale: (companion as any).scale || null,
+    }];
+    // Wrap setAgents in a small async block so the WebView
+    // has time to process setAgents before setCentered runs
+    // (setCentered filters companions array; needs the new
+    // agent present first).
+    viewWebViewRef.current.injectJavaScript(
+      `(function(){` +
+        `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)});` +
+        `setTimeout(function(){` +
+          `window.Arena && window.Arena.setCentered(true);` +
+        `}, 50);` +
+      `})(); true;`
+    );
+  }, [companion?.id]);
+
   // v3.10.2: per-companion status lines for the
   // overview cards. Computed after the early
   // return so `companion` is guaranteed to be
@@ -971,6 +1019,81 @@ export default function CompanionSettingsScreen({
     );
   }
 
+  // v3.10.140: animated sprite view window. A small
+  // WebView rendering arena.html with the active
+  // companion in setCentered(true) mode. The companion
+  // plays its idle/walk animation, but stays centered
+  // in the box (no scrolling, no wandering). Controls
+  // are hidden via the wake-mode body class so the
+  // view is just the companion against the arena's
+  // background.
+  //
+  // Why a WebView instead of a static Image? Tobe
+  // (2026-08-07): "I want a window to view the
+  // companion, how it looks on the arena, its
+  // animations." The pixel-arena renders sprite
+  // animations via canvas — the only way to get the
+  // same animations as the home arena is to embed
+  // arena.html.
+  function renderCompanionViewWindow() {
+    return (
+      <View style={styles.viewWindow}>
+        <WebView
+          ref={viewWebViewRef}
+          // v3.10.140: same cache-buster pattern as
+          // HomeScreen. arena.html is bundled in the
+          // APK assets; bumping ARENA_HTML_VERSION
+          // forces a fresh fetch after an app upgrade.
+          source={{ uri: `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile` }}
+          style={{ width: VIEW_BOX_W, height: VIEW_BOX_H, backgroundColor: '#0a0a2e' }}
+          scrollEnabled={false}
+          bounces={false}
+          javaScriptEnabled
+          allowFileAccess
+          originWhitelist={['*']}
+          // v3.10.140: deliberately NO onMessage handler.
+          // The WebView's treat-drop + arena controls would
+          // send messages we don't want to handle here (we
+          // don't want users dragging treats onto the
+          // settings view). If arena.html tries to send a
+          // message, RN logs a warning but doesn't crash.
+          onLoadEnd={() => {
+            // 1. Hide arena controls (mirrors the wake-mode
+            //    body class which HomeScreen uses for the
+            //    fullscreen arena).
+            // 2. Init canvas with our box dimensions.
+            // 3. Set this companion as the only one.
+            // 4. Center them so they don't wander.
+            const initJs = [
+              `document.body.classList.add('wake-mode');`,
+              `window.Arena && window.Arena.init(${VIEW_BOX_W}, ${VIEW_BOX_H});`,
+            ].join(' ');
+            viewWebViewRef.current?.injectJavaScript(initJs);
+
+            if (companion) {
+              const slim = [{
+                id: companion.id,
+                name: companion.name,
+                sprite: (companion as any).sprite || null,
+                scale: (companion as any).scale || null,
+              }];
+              // setAgents then setCentered, with a small
+              // delay so setCentered sees the new agent.
+              viewWebViewRef.current?.injectJavaScript(
+                `(function(){` +
+                  `window.Arena && window.Arena.setAgents(${JSON.stringify(slim)});` +
+                  `setTimeout(function(){` +
+                    `window.Arena && window.Arena.setCentered(true);` +
+                  `}, 80);` +
+                `})(); true;`
+              );
+            }
+          }}
+        />
+      </View>
+    );
+  }
+
   // Dispatch
   if (companionViewPhase === 'wake') {
     return renderCompanionWakePage(companion);
@@ -997,6 +1120,12 @@ export default function CompanionSettingsScreen({
             </Text>
             <View style={{ width: 60 }} />
           </View>
+
+          {/* v3.10.140: animated sprite view window at the
+              top of the page. arena.html WebView with
+              setCentered(true) so the companion plays its
+              idle animation in a fixed-size box. */}
+          {renderCompanionViewWindow()}
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{companion.name} settings</Text>
@@ -2104,6 +2233,31 @@ function testDesktopVoice() {
   Alert.alert('🔊 Sent to desktop', 'The desktop should speak the test phrase.');
 }
 
+// v3.10.140: animated sprite view window at the top
+// of the settings page. The companion renders inside a
+// small arena.html WebView with setCentered(true), so it
+// stays centered in the container instead of wandering
+// around like in the home arena.
+//
+// Dimensions: a square-ish 240x200 fixed-size box keeps
+// the companion visible regardless of phone aspect
+// ratio. arena.html's canvas fills 100% of its container,
+// so we just need to pass the right init(W, H).
+//
+// Why a fixed-size box instead of the home arena's
+// "fill remaining space" pattern? The home arena needs
+// the room because companions wander. The settings view
+// uses setCentered(true) which pins the companion to the
+// canvas center, so a small box is fine.
+const VIEW_BOX_W = 240;
+const VIEW_BOX_H = 200;
+// v3.10.140: same cache-buster as HomeScreen (arena.html
+// doesn't get re-fetched on app upgrade unless we bump
+// the version query param). Bumping this means a fresh
+// WebView will pull the latest arena.html even if the
+// Android WebView has it cached.
+const ARENA_HTML_VERSION = '3.10.140';
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   // v3.4.5: bumped paddingTop from 16 → 50 on BOTH Android
@@ -2210,6 +2364,25 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     flex: 1,
     textAlign: 'center',
+  },
+  // v3.10.140: animated sprite view window. A small
+  // box at the top of the page containing an arena.html
+  // WebView. The companion renders at 100% of this box
+  // (no scaling beyond arena's own internal sprite size)
+  // because arena.html's canvas fills its container.
+  // overflow:hidden ensures arena.html's 100vh canvas
+  // doesn't bleed past the box on devices with rounded
+  // screen corners or other overflow weirdness.
+  viewWindow: {
+    width: VIEW_BOX_W,
+    height: VIEW_BOX_H,
+    alignSelf: 'center',
+    marginVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#f7931a',
+    overflow: 'hidden',
+    backgroundColor: '#0a0a2e',
   },
   trainBtn: {
     borderWidth: 2,
