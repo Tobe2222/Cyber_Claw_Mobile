@@ -1635,7 +1635,28 @@ export default function SettingsScreen({
               visual grouping match the conceptual grouping.
               Tobe's feedback after v3.4.6: the divider was
               still too subtle. */}
-          <Section title="🐾 Companions" desc="Tap a companion to configure their wake phrase, exit phrase, greeting, and reply.">
+          {/*
+            v3.10.138: section header emoji now follows the
+            active companion's emoji/icon so it visibly
+            tracks which companion is active. Tobe's
+            feedback after v3.10.137: the static 🐾 header
+            didn't update when he switched from Clawsuu (🦌)
+            back to a boar companion — it stayed 🦌 (or,
+            before this change, the static 🐾 never moved
+            at all). Now it resolves to the active
+            companion's emoji, falling back to 🐾 if no
+            companion is set or none has an emoji/icon yet.
+          */}
+          <Section
+            title={`${
+              (() => {
+                const activeId = activeWakeCompanionId || availableCompanions[0]?.id;
+                const active = availableCompanions.find(c => c.id === activeId);
+                return active?.emoji || active?.icon || '🐾';
+              })()
+            } Companions`}
+            desc="Tap a companion to configure their wake phrase, exit phrase, greeting, and reply."
+          >
             {availableCompanions.length === 0 ? (
               <View style={styles.trainedPickerHint}>
                 <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
