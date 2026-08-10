@@ -1442,11 +1442,24 @@ function QuestEditorBody({
         />
         {directorySuggestion && directorySuggestion !== directory && (
           <View style={styles.editorDirectorySuggestion}>
-            <Text style={styles.editorDirectorySuggestionText}>
-              💡 Suggested: <Text style={styles.editorDirectorySuggestionPath}>
-                {directorySuggestion}
+            <View style={styles.editorDirectorySuggestionTextWrap}>
+              <Text style={styles.editorDirectorySuggestionText}>
+                💡 Suggested:{' '}
+                {/* v3.10.153: tap the path to copy it (the "← Use" button
+                    still sets the field; this is for the "I want to grab
+                    the path and put it somewhere else" case). */}
+                <Text
+                  style={styles.editorDirectorySuggestionPath}
+                  onPress={() => {
+                    Clipboard.setString(directorySuggestion);
+                    Alert.alert('Copied', directorySuggestion);
+                  }}
+                  suppressHighlighting={false}
+                >
+                  {directorySuggestion}
+                </Text>
               </Text>
-            </Text>
+            </View>
             <TouchableOpacity
               style={styles.editorDirectorySuggestionBtn}
               onPress={() => setDirectory(directorySuggestion)}
@@ -2879,8 +2892,14 @@ const styles = StyleSheet.create({
   editorDirectorySuggestionText: {
     color: '#9a9eb8',
     fontSize: 11,
-    flex: 1,
     lineHeight: 16,
+  },
+  // v3.10.153: wrapper so the tappable path text can size itself
+  // without forcing the parent <Text> to shrink-to-fit (which would
+  // break line wrapping on long paths).
+  editorDirectorySuggestionTextWrap: {
+    flex: 1,
+    paddingRight: 6,
   },
   editorDirectorySuggestionPath: {
     color: '#00f0ff',
