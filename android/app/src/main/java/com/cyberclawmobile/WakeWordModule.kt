@@ -3629,6 +3629,17 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    // v3.10.155: track which engine package we ended up
+    // binding to, so listInstalledVoices() can report the
+    // right voice set + listInstalledEngines() can label
+    // it. Null = default engine (or not yet bound).
+    private var ttsEnginePackage: String? = null
+    // v3.10.155: the currently selected voice id (the
+    // short name like 'slt', 'clb', 'bdl', or whatever the
+    // native engine returned from TextToSpeech.Voice.getName).
+    // Null = use the engine's default voice for the
+    // current locale.
+    private var ttsCurrentVoiceName: String? = null
     // v3.1.89: track whether voice data has actually
     // finished loading. TextToSpeech.onInit returns SUCCESS
     // as soon as the engine binds, but voice data for the
@@ -3640,6 +3651,28 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     // backpressure, and the JS-side fallback timeout
     // covers the worst-case cold-start delay.
     private var ttsVoicesReady = false
+
+    // v3.10.155: known TTS engine package names in
+    // preference order. When the default engine bind fails
+    // (very common on GrapheneOS / CalyxOS / LineageOS where
+    // RHVoice is installed but not set as the system
+    // default), we walk this list and try binding each
+    // one by package name. First one that returns SUCCESS
+    // wins. This means RHVoice works out of the box on
+    // Tobe's setup without him having to dig through
+    // Android Settings → Accessibility → Text-to-speech.
+    //
+    // Order matters: RHVoice first (recommended for
+    // degoogled ROMs), then Google TTS (stock Android),
+    // then Samsung (Galaxy devices), then eSpeak NG
+    // (lightweight fallback). The list is static — adding
+    // a new engine means adding a line here.
+    private val knownTtsEnginePackages = listOf(
+        "com.github.olga_yakovleva.rhvoice.android",
+        "com.google.android.tts",
+        "com.samsung.android.tts.engine",
+        "com.reecedunn.espeak",
+    )
 
     private fun getTts(onReady: (TextToSpeech) -> Unit, onError: (String) -> Unit) {
         // If engine exists and is bound, just hand it over
@@ -3662,7 +3695,18 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
         // short delay (~1000ms) catches that race; if the
         // second attempt also fails, give up and let the
         // JS-side WebView speechSynthesis fallback run.
+        //
+        // v3.10.155: if the default-engine retry BOTH fail
+        // (the common GrapheneOS case where RHVoice is
+        // installed but not bound as system default), walk
+        // knownTtsEnginePackages and try binding by package
+        // name. First one that returns SUCCESS wins. This
+        // means Tobe can install RHVoice from F-Droid and
+        // have CyberClaw just work without him having to
+        // dig into Android Settings → Accessibility →
+        // Text-to-speech output → Preferred engine.
         var attempt = 0
+        var knownPkgIndex = 0
         // The JS-side fallback timer is anchored to the
         // FIRST bind attempt's start time, not the per-
         // attempt time. If both attempts fail within 1s
@@ -3672,13 +3716,34 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
             attempt++
             tts?.shutdown()
             ttsVoicesReady = false
-            tts = TextToSpeech(reactContext) { status ->
+            // The constructor varies based on whether
+            // we're trying the default engine (attempt 1-2,
+            // no package arg) or a known package (attempt 3+,
+            // pass packageName). The 3-arg constructor is
+            // the only way to bind to a specific TTS engine
+            // on Android — without it we always get the
+            // system default.
+            val bindPackage: String? = if (attempt <= 2) {
+                null
+            } else {
+                // attempt-3 → index 0, attempt-4 → index 1, ...
+                val idx = attempt - 3
+                if (idx < knownTtsEnginePackages.size) knownTtsEnginePackages[idx] else null
+            }
+            val onInit: (Int) -> Unit = { status ->
                 ttsReady = status == TextToSpeech.SUCCESS
                 if (ttsReady) {
                     tts?.language = Locale.US
                     tts?.setSpeechRate(0.95f)
                     tts?.setPitch(1.1f)
-                    emitDebug("info", "TTS init OK (attempt $attempt), calling onReady")
+                    ttsEnginePackage = bindPackage
+                    // v3.10.155: reapply the persisted voice
+                    // selection on every (re)bind, since
+                    // setVoice is engine-scoped. If the user
+                    // picked SLT last time and we just bound
+                    // to a fresh engine, restore it.
+                    applyPersistedVoice()
+                    emitDebug("info", "TTS init OK (attempt $attempt, package=${bindPackage ?: "default"}), calling onReady")
                     onReady(tts!!)
                 } else {
                     // v3.1.83: notify the caller of init failure
@@ -3689,7 +3754,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                     // resolved AND never rejected, and the JS
                     // catch + WebView speechSynthesis fallback
                     // never ran. The greeting was silently dropped.
-                    emitDebug("error", "TTS init failed (attempt $attempt): status=$status")
+                    emitDebug("error", "TTS init failed (attempt $attempt, package=${bindPackage ?: "default"}): status=$status")
                     if (attempt < 2) {
                         // v3.10.39: retry once after 1000ms
                         // — the Android TTS service often
@@ -3704,14 +3769,56 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                         handler.postDelayed({
                             attemptBind()
                         }, 1000L)
+                    } else if (bindPackage != null && knownPkgIndex < knownTtsEnginePackages.size) {
+                        // v3.10.155: try next known engine
+                        // after 500ms. RHVoice / Google TTS /
+                        // Samsung / eSpeak NG — whatever's
+                        // actually installed wins. If
+                        // bindPackage is non-null we already
+                        // attempted that package, so bump
+                        // knownPkgIndex and try the next one.
+                        // The very first known-engine attempt
+                        // (attempt == 3) doesn't increment the
+                        // index — we just retry the first
+                        // known package to give it the same
+                        // cold-start race protection as the
+                        // default engine.
+                        if (attempt >= 4) knownPkgIndex++
+                        handler.postDelayed({
+                            attemptBind()
+                        }, 500L)
+                    } else if (bindPackage == null && knownTtsEnginePackages.isNotEmpty()) {
+                        // v3.10.155: default engine retry
+                        // exhausted. Try known packages.
+                        knownPkgIndex = 0
+                        handler.postDelayed({
+                            attemptBind()
+                        }, 500L)
                     } else {
-                        // Second attempt also failed —
-                        // surface the error to the caller
-                        // (JS-side WebView speechSynthesis
-                        // fallback will take over).
-                        onError("TTS init failed: status=$status")
+                        // All attempts failed. Surface to
+                        // caller. JS-side install prompt
+                        // (one-time at App.tsx mount, not at
+                        // speak time) handles the user UX.
+                        onError("TTS init failed: status=$status (tried ${attempt} attempts including ${knownTtsEnginePackages.size} known engines)")
                     }
                 }
+            }
+            tts = if (bindPackage != null) {
+                // 3-arg constructor: bind to a specific TTS
+                // engine by package name. This is the ONLY
+                // way to use RHVoice on a device that has
+                // it installed but a different engine set as
+                // system default (the usual case on
+                // GrapheneOS).
+                try {
+                    TextToSpeech(reactContext, onInit, bindPackage)
+                } catch (e: Exception) {
+                    emitDebug("error", "TextToSpeech(package=$bindPackage) threw: ${e.message}")
+                    onInit(-1)
+                    return@attemptBind
+                }
+            } else {
+                TextToSpeech(reactContext, onInit)
             }
         }
         attemptBind()
@@ -3777,6 +3884,222 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun stopSpeaking(promise: Promise) {
         tts?.stop()
         promise.resolve(null)
+    }
+
+    // v3.10.155: list all installed TTS engines that we
+    // know how to bind to (plus the system default, if
+    // one is set). Used by the App.tsx probe at boot to
+    // show the user what's available + decide whether to
+    // prompt for install. Returns an array of
+    // {packageName, label, isDefault} so the JS side can
+    // label them nicely in any future UI.
+    //
+    // Walks knownTtsEnginePackages and checks each via
+    // PackageManager.getPackageInfo (which throws
+    // NameNotFoundException for uninstalled packages).
+    // Also queries the system's default engine via
+    // Settings.Secure.TTS_DEFAULT_SYNTH so we can mark
+    // the bound one in the UI.
+    @ReactMethod fun listInstalledTtsEngines(promise: Promise) {
+        try {
+            val pm = reactContext.packageManager
+            val defaultEngine = android.provider.Settings.Secure.getString(
+                reactContext.contentResolver,
+                android.provider.Settings.Secure.TTS_DEFAULT_SYNTH
+            )
+            val engines = mutableListOf<HashMap<String, Any>>()
+            // Include the system default first if it's set
+            // and not already in our known list.
+            if (!defaultEngine.isNullOrEmpty() &&
+                defaultEngine !in knownTtsEnginePackages) {
+                val label = try {
+                    val info = pm.getPackageInfo(defaultEngine, 0)
+                    info.applicationInfo?.let {
+                        pm.getApplicationLabel(it).toString()
+                    } ?: defaultEngine
+                } catch (_: Exception) {
+                    defaultEngine
+                }
+                engines.add(HashMap<String, Any>().apply {
+                    put("packageName", defaultEngine)
+                    put("label", label)
+                    put("isDefault", true)
+                })
+            }
+            for (pkg in knownTtsEnginePackages) {
+                try {
+                    val info = pm.getPackageInfo(pkg, 0)
+                    val label = info.applicationInfo?.let {
+                        pm.getApplicationLabel(it).toString()
+                    } ?: pkg
+                    engines.add(HashMap<String, Any>().apply {
+                        put("packageName", pkg)
+                        put("label", label)
+                        put("isDefault", pkg == defaultEngine)
+                    })
+                } catch (_: Exception) {
+                    // Not installed. Skip silently — the
+                    // JS probe only needs to know what IS
+                    // installed, not what isn't.
+                }
+            }
+            promise.resolve(engines)
+        } catch (e: Exception) {
+            promise.reject("TTS_LIST_ENGINES_ERROR", e.message)
+        }
+    }
+
+    // v3.10.155: pick a specific voice by name (case-
+    // insensitive substring match against
+    // TextToSpeech.Voice.getName()). Persists to
+    // SharedPreferences so the choice survives engine
+    // rebinds. Pass null/empty to clear (revert to
+    // engine default voice).
+    //
+    // Names like 'slt', 'clb', 'bdl' work directly with
+    // RHVoice because that's what RHVoice.Voice.getName()
+    // returns. For Google TTS the names are longer
+    // (e.g. 'en-US-Wavenet-F'); we still match by
+    // substring so users can type partial names.
+    //
+    // Resolves with the actually-applied voice name
+    // (which may differ from the requested name if no
+    // exact match was found), or rejects with
+    // TTS_NOT_READY if the engine isn't bound yet.
+    @ReactMethod fun setTtsVoice(name: String?, promise: Promise) {
+        if (tts == null || !ttsReady) {
+            promise.reject("TTS_NOT_READY", "Engine not bound yet — call prewarmTts first")
+            return
+        }
+        val targetName = name?.trim()?.takeIf { it.isNotEmpty() }
+        // Persist the choice so applyPersistedVoice() can
+        // reapply it after engine rebinds.
+        val prefs = reactContext.getSharedPreferences("cyberclaw_tts", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putString("voice_name", targetName ?: "").apply()
+        try {
+            applyPersistedVoice()
+            promise.resolve(ttsCurrentVoiceName)
+        } catch (e: Exception) {
+            promise.reject("TTS_SET_VOICE_ERROR", e.message)
+        }
+    }
+
+    // v3.10.155: return the currently applied voice name
+    // (whatever applyPersistedVoice() last set). Null =
+    // engine default. Used by the JS picker to show the
+    // current selection after a hot-reload or engine
+    // rebind.
+    @ReactMethod fun getCurrentTtsVoice(promise: Promise) {
+        promise.resolve(ttsCurrentVoiceName)
+    }
+
+    // v3.10.155: list voices available on the bound TTS
+    // engine. Returns an array of {name, locale, quality,
+    // isNetwork} for the UI to render. Requires the
+    // engine to be bound (uses tts.voices which is only
+    // populated after onInit). Returns an empty array if
+    // the engine isn't bound or has no voices yet.
+    //
+    // onInit's voices callback is async — voices may
+    // arrive a few hundred ms after SUCCESS. We retry
+    // internally with a short timeout if voices are empty
+    // at first call, so JS gets the full list.
+    @ReactMethod fun listInstalledTtsVoices(promise: Promise) {
+        if (tts == null || !ttsReady) {
+            promise.reject("TTS_NOT_READY", "Engine not bound yet — call prewarmTts first")
+            return
+        }
+        try {
+            // Try to harvest voices immediately. If empty,
+            // schedule a 600ms retry — the voices callback
+            // typically fires 100-500ms after onInit SUCCESS.
+            val harvest = {
+                val voices = tts?.voices ?: emptySet()
+                // v3.10.155: Voice.quality is an Int on
+                // most Android API levels (it's the
+                // legacy constant from
+                // TextToSpeech.EngineInfo). On API 31+
+                // it's a typed enum but the int values
+                // match the legacy constants (200 = default,
+                // 300 = high). Map them here instead of
+                // referencing the constants directly so
+                // we compile across API levels.
+                val out = voices.map { v ->
+                    HashMap<String, Any>().apply {
+                        put("name", v.name ?: "")
+                        put("locale", v.locale?.toLanguageTag() ?: "")
+                        put("quality", when (v.quality) {
+                            300 -> "high"
+                            200 -> "default"
+                            else -> "unknown"
+                        })
+                        put("isNetwork", v.isNetworkConnectionRequired)
+                    }
+                }
+                out
+            }
+            val first = harvest()
+            if (first.isNotEmpty()) {
+                promise.resolve(first)
+            } else {
+                // Voices not loaded yet. Wait briefly.
+                handler.postDelayed({
+                    try {
+                        promise.resolve(harvest())
+                    } catch (e: Exception) {
+                        promise.reject("TTS_LIST_VOICES_ERROR", e.message)
+                    }
+                }, 600L)
+            }
+        } catch (e: Exception) {
+            promise.reject("TTS_LIST_VOICES_ERROR", e.message)
+        }
+    }
+
+    // v3.10.155: re-apply the persisted voice choice
+    // against the currently-bound engine. Called from
+    // getTts() after every successful bind so a freshly
+    // bound engine doesn't lose the user's voice
+    // selection. No-op if the engine has no voices yet
+    // or the persisted name is empty.
+    private fun applyPersistedVoice() {
+        val engine = tts ?: return
+        if (!ttsReady) return
+        val prefs = reactContext.getSharedPreferences("cyberclaw_tts", android.content.Context.MODE_PRIVATE)
+        val savedName = prefs.getString("voice_name", "") ?: ""
+        if (savedName.isEmpty()) {
+            ttsCurrentVoiceName = null
+            return
+        }
+        val voices = engine.voices ?: emptySet()
+        if (voices.isEmpty()) {
+            // Voices still loading. Try again in 500ms.
+            handler.postDelayed({ applyPersistedVoice() }, 500L)
+            return
+        }
+        // Prefer exact match (RHVoice names are exact:
+        // 'slt', 'clb', 'bdl'). Fall back to case-
+        // insensitive substring match so 'nova' or
+        // 'en-US-Wavenet-F' partial names also work.
+        val exact = voices.firstOrNull { it.name.equals(savedName, ignoreCase = true) }
+        val partial = exact ?: voices.firstOrNull {
+            it.name.contains(savedName, ignoreCase = true)
+        }
+        if (partial != null) {
+            val result = engine.setVoice(partial)
+            if (result == TextToSpeech.SUCCESS) {
+                ttsCurrentVoiceName = partial.name
+                emitDebug("info", "TTS voice restored: ${partial.name} (locale=${partial.locale})")
+            } else {
+                emitDebug("error", "engine.setVoice(${partial.name}) returned $result")
+            }
+        } else {
+            emitDebug("warn", "TTS voice '$savedName' not found on bound engine; available: ${voices.joinToString { it.name }}")
+            // Clear the stale preference so the next save
+            // doesn't keep trying to apply a missing voice.
+            prefs.edit().remove("voice_name").apply()
+            ttsCurrentVoiceName = null
+        }
     }
 
     // v3.1.87: initialize the Android TextToSpeech engine

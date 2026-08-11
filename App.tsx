@@ -4,7 +4,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  SafeAreaView, StyleSheet, NativeModules, NativeEventEmitter, AppState,
+  SafeAreaView, StyleSheet, NativeModules, NativeEventEmitter, AppState, Alert,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -170,6 +170,117 @@ export default function App(): React.JSX.Element {
         }
       })
       .catch(() => {});
+  }, []);
+
+  // v3.10.155: probe TTS at app start, NOT at speak time.
+  // The old approach surfaced an Alert.alert mid-voice-mode
+  // (or worse, mid-exit), which felt like the app complaining
+  // after the fact. Tobe (2026-08-11): 'First of all it
+  // should check and or ask for such things for it to open
+  // Instead of saying it after.' We probe once on boot,
+  // prewarm the engine so the first speak doesn't have to
+  // wait for cold-start, and if no engines are installed
+  // we prompt ONCE (per dismissal cooldown).
+  //
+  // Prompt-suppression: ttsPromptDismissedAt is stored in
+  // AsyncStorage. If the user tapped "Later" within the last
+  // 7 days, we don't re-prompt (they made their choice).
+  // After 7 days we prompt again in case they installed
+  // something off-app and want to retry.
+  const ttsPromptCooldownMs = 7 * 24 * 60 * 60 * 1000;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const WakeWordModule = (NativeModules as any).WakeWordModule;
+      if (!WakeWordModule) return;
+      // 1. Prewarm the engine so the first speak after
+      //    wake doesn't have to wait for cold-start.
+      //    This is the v3.1.87 call that already runs in
+      //    some flows — we run it again here so the probe
+      //    works even if nothing else has triggered it.
+      try {
+        await WakeWordModule.prewarmTts();
+      } catch (_) {
+        // prewarm failed — fall through to the probe so
+        // the prompt can still fire if needed.
+      }
+      if (cancelled) return;
+      // 2. List installed engines. If at least one is
+      //    available, we're good — the native side already
+      //    tried to auto-bind to one during prewarm.
+      let engines: any[] = [];
+      try {
+        engines = await WakeWordModule.listInstalledTtsEngines();
+      } catch (_) {
+        // Probe itself failed. Treat as no engines so we
+        // don't silently miss the prompt.
+      }
+      if (cancelled) return;
+      if (engines.length > 0) {
+        // At least one known engine is installed. The
+        // native side will have auto-bound during prewarm
+        // (via the knownTtsEnginePackages walk in getTts).
+        // Log for diagnostics + restore any persisted
+        // voice selection so the picker reflects reality.
+        const labels = engines.map((e: any) => `${e.label}${e.isDefault ? '*' : ''}`).join(', ');
+        console.log(`[TTS probe] installed engines: ${labels}`);
+        // Re-apply the user's voice selection against the
+        // freshly-bound engine. prewarmTts already does
+        // this via applyPersistedVoice, but if prewarm
+        // failed (e.g. engine wasn't bound on the first
+        // pass) we want to retry now that we know we have
+        // one.
+        try {
+          await WakeWordModule.getCurrentTtsVoice();
+        } catch (_) {}
+        return;
+      }
+      // 3. No engines installed. Check the dismissal
+      //    cooldown before prompting.
+      let lastDismissed = 0;
+      try {
+        const raw = await AsyncStorage.getItem('cyberclaw-tts-prompt-dismissed-at');
+        if (raw) lastDismissed = parseInt(raw, 10) || 0;
+      } catch (_) {}
+      if (cancelled) return;
+      if (lastDismissed && Date.now() - lastDismissed < ttsPromptCooldownMs) {
+        console.log(`[TTS probe] no engines; prompt suppressed (dismissed ${Math.round((Date.now() - lastDismissed) / 86400000)}d ago, cooldown 7d)`);
+        return;
+      }
+      // 4. Show the prompt. ONE button: "Install" opens
+      //    the F-Droid / Play Store intent. "Later" sets
+      //    the dismissal timestamp + closes the dialog.
+      //    No "Cancel" — that was Tobe's complaint about
+      //    the previous prompt.
+      const proceedWithInstall = () => {
+        WakeWordModule.installTtsData().catch(() => {});
+      };
+      const dismissForAWhile = () => {
+        AsyncStorage.setItem(
+          'cyberclaw-tts-prompt-dismissed-at',
+          String(Date.now()),
+        ).catch(() => {});
+      };
+      // Small delay so the prompt lands after the home
+      // screen has mounted — otherwise the Alert can race
+      // the navigation and show before there's anywhere
+      // to return to.
+      setTimeout(() => {
+        if (cancelled) return;
+        Alert.alert(
+          'No TTS engine',
+          'CyberClaw needs a Text-to-Speech engine for spoken voice replies. ' +
+          'On stock Android use Google TTS. ' +
+          'On GrapheneOS / degoogled ROMs install RHVoice (recommended, more natural) or eSpeak NG from F-Droid. ' +
+          'Open the system installer?',
+          [
+            { text: 'Later', style: 'cancel', onPress: dismissForAWhile },
+            { text: 'Install', onPress: proceedWithInstall },
+          ],
+        );
+      }, 2500);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // v3.10.23: restore the persisted global speaker

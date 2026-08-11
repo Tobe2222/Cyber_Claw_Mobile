@@ -876,6 +876,29 @@ export default function CompanionSettingsScreen({
       engine: vcEngine,
       localId: vcLocalId,
     });
+    // v3.10.155: apply the voice selection to the native
+    // engine IMMEDIATELY, not just on next app start. The
+    // old code only wrote to AsyncStorage; the next speak()
+    // call would still use the engine default until the
+    // app was killed and relaunched (applyPersistedVoice
+    // only ran during getTts bind). Now the user hears the
+    // change within the same session, on the very next
+    // speak. If the engine isn't bound yet (probe at boot
+    // found nothing) this is a no-op — the persisted voice
+    // gets applied on the next successful bind.
+    const wm = (NativeModules as any).WakeWordModule;
+    if (wm?.setTtsVoice) {
+      try {
+        const applied = await wm.setTtsVoice(vcLocalId);
+        console.log(`[Voice] applied voice "${applied ?? '(default)'}" for ${companionId}`);
+      } catch (e: any) {
+        // Engine not bound yet is the common case (probe
+        // is still running or found nothing). The
+        // persisted value will be re-applied on the next
+        // bind. Log so we can diagnose from logcat.
+        console.log(`[Voice] setTtsVoice deferred: ${e?.message || e}`);
+      }
+    }
     setVcSavedAt(Date.now());
   }, [companionId, vcEngine, vcLocalId]);
 

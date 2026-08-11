@@ -161,12 +161,11 @@ export default function WakeModeScreen({
   // resumes so the next silence period can fire again.
   const silenceFiredRef = useRef<boolean>(false);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
-  // v3.10.48: guard so the no-TTS-engine install Alert
-  // prompts at most once per voice-mode session. Reset
-  // on remount (new session). Without this guard a
-  // user with a missing TTS engine would see the
-  // Alert on every turn.
-  const ttsInstallPromptedRef = useRef<boolean>(false);
+  // v3.10.155: ttsInstallPromptedRef REMOVED. The
+  // no-TTS-engine prompt moved to App.tsx's mount-time
+  // probe (runs once at app start, 7-day dismissal
+  // cooldown). The speak-time path no longer shows any
+  // Alert — it just logs the failure and falls back.
   const wakeWordBusyRef = useRef(false);
   const appStateRef = useRef<string>(AppState.currentState);
   const exitRef = useRef(onExit);
@@ -467,62 +466,32 @@ export default function WakeModeScreen({
             // skins or devices where the user uninstalled
             // the default engine.
             //
-            // v3.10.48: also offer to launch the system
-            // TTS install activity (Google TTS / eSpeak
-            // NG). Previously the log said 'install one'
-            // but the user had to leave the app and find
-            // the install flow themselves. Now the Alert
-            // has an Install button that calls
-            // WakeWordModule.installTtsData() which
-            // launches the system intent directly.
-            // Only shown ONCE per voice-mode session
-            // (ttsInstallPromptedRef guards repeat
-            // prompts) so a user who dismisses the
-            // dialog isn't nagged on every turn.
+            // v3.10.155: REMOVED the post-failure Alert.
+            // Tobe (2026-08-11) complained that the
+            // prompt fired mid-exit, after voice mode was
+            // already closing — 'it should check and or
+            // ask for such things for it to open Instead
+            // of saying it after'. The prompt now lives
+            // in App.tsx's mount-time probe (runs once at
+            // app start, with a 7-day dismissal
+            // cooldown). If we still get TTS_INIT_FAILED
+            // here it just means the auto-bind couldn't
+            // find a working engine either — log it and
+            // fall back to WebView speechSynthesis (which
+            // is also a no-op on degoogled devices but at
+            // least lets the JS promise settle cleanly
+            // instead of leaving the listener hanging).
             const code = err?.code || '';
-            if (code === 'TTS_INIT_FAILED' && /status=-1/.test(err?.message || '')) {
-              addVoiceLog('🔊 ❌ no TTS engine — install one');
-              // Don't bother with the WebView fallback
-              // here — speechSynthesis is also a no-op on
-              // these devices. Just resolve immediately
-              // so the listener can start.
+            if (code === 'TTS_INIT_FAILED') {
+              addVoiceLog(`🔊 ❌ TTS init failed (engine probe ran at boot; auto-bind failed): ${err?.message || err}`);
               done('no-tts-engine');
-              // v3.10.48: prompt to install (once per
-              // session). The native install activity
-              // opens the system TTS picker.
-              // v3.10.49: copy now includes engine
-              // recommendations. Stock Android Pixel
-              // users typically have Google TTS
-              // preinstalled — they'd never see this
-              // prompt. Users on degoogled ROMs
-              // (GrapheneOS, CalyxOS, LineageOS without
-              // microG) need to install one
-              // themselves. Per the GrapheneOS usage
-              // guide (grapheneos.org/usage) the two
-              // community-recommended engines are
-              // RHVoice (more natural voices, good for
-              // assistant replies) and eSpeak NG
-              // (lighter, supports Direct Boot). For
-              // our short "Working..." cue we don't
-              // need boot-time speech, so RHVoice is
-              // the better pick when both are
-              // available. The hint is included in the
-              // Alert body so the user knows what to
-              // pick from the system picker / F-Droid
-              // without having to leave the app and
-              // research.
-              const wm = (NativeModules as any).WakeWordModule;
-              if (wm?.installTtsData && !ttsInstallPromptedRef.current) {
-                ttsInstallPromptedRef.current = true;
-                Alert.alert(
-                  'No TTS engine',
-                  'CyberClaw needs a Text-to-Speech engine for spoken responses. On stock Android use Google TTS. On GrapheneOS or other degoogled ROMs install RHVoice (recommended, more natural) or eSpeak NG from F-Droid. Open the system installer?',
-                  [
-                    { text: 'Later', style: 'cancel' },
-                    { text: 'Install', onPress: () => { wm.installTtsData().catch(() => {}); } },
-                  ],
-                );
-              }
+              // Try the WebView fallback anyway. On stock
+              // Android it works (via system Google TTS).
+              // On degoogled ROMs it's a no-op, but
+              // speechSynthesis.speak() still resolves.
+              try {
+                speakViaWebView();
+              } catch (_) {}
               return;
             }
             addVoiceLog(`🔊 native failed: ${err?.message || err}`);
