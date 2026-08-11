@@ -27,6 +27,7 @@ import syncClient from '../services/SyncClient';
 import { getSimpleAudioRecorder } from '../services/SimpleAudioRecorder';
 import { getVAD, resetVAD } from '../services/SileroVAD';
 import { loadVoiceSettings, DEFAULT_SILENCE_MS } from '../services/VoiceSettings';
+import { promptIfMissingTtsEngine } from '../services/TtsPrompt';
 import { matchExitPhrase } from '../services/ExitPhraseMatcher';
 import { extractAudioFeatures, matchAgainstTraining, matchAgainstAllCompanions, AudioFeatures } from '../services/AudioSampleMatcher';
 import { base64ToInt16Array } from '../services/AudioUtils';
@@ -812,6 +813,19 @@ export default function WakeModeScreen({
       }
       cancelWorkingCue();
     };
+  }, []);
+
+  // v3.10.159: lazy TTS availability check, fired the
+  // first time the user opens voice mode. No alert at
+  // app mount — only when the user is actively engaging
+  // with a TTS-dependent feature. If they have an engine
+  // installed + bindable, no prompt fires (returns
+  // false). If not, the helper shows the alert with a
+  // 90-day dismissal cooldown. Tobe (2026-08-11 17:28):
+  // 'it should only ask when one is trying to use a
+  // feature it depends on'.
+  useEffect(() => {
+    promptIfMissingTtsEngine('wake-mode-open').catch(() => {});
   }, []);
 
   // Apply Wake Mode visual style to the WebView. We do this once on

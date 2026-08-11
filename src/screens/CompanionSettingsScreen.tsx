@@ -56,6 +56,7 @@ import {
   loadVoiceFor, saveVoiceFor, clearVoiceFor,
   loadVoiceSettings, saveSilenceMs,
 } from '../services/VoiceSettings';
+import { promptIfMissingTtsEngine } from '../services/TtsPrompt';
 import {
   LOCAL_VOICES,
   VoiceEngine,
@@ -644,6 +645,20 @@ export default function CompanionSettingsScreen({
     })();
     return () => { cancelled = true; };
   }, [companionId]);
+
+  // v3.10.159: when the user enters this companion's
+  // voice settings page (companionViewPhase === 'voice'),
+  // run the lazy TTS availability check. The screen
+  // itself mounts the voice page on phase enter; we key
+  // off the phase so the prompt fires once per entry,
+  // not on every render of the screen. Tobe (2026-08-11
+  // 17:28): 'it should only ask when one is trying to
+  // use a feature it depends on'.
+  useEffect(() => {
+    if (companionViewPhase === 'voice') {
+      promptIfMissingTtsEngine('companion-voice-page').catch(() => {});
+    }
+  }, [companionViewPhase]);
 
   // v3.7.3: listen for the desktop's companion_settings_sync
   // broadcast. If the desktop has a per-companion silence
