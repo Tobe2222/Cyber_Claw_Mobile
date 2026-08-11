@@ -771,20 +771,40 @@ export default function WakeModeScreen({
         // A truncated spoken phrase is acceptable — the
         // non-verbal cue always plays to completion.
         if (cueCancelled) return;
-        // TTS-render the working speech via the same
-        // Android TTS engine the greetings + exit replies
-        // use. The voice is Android's default (different
-        // from the companion's voice) — fast (typically
-        // 200-400ms for a short phrase), no network, but
-        // audibly distinct. The user accepted this in the
-        // design discussion; chime-only is the alternative.
+        // v3.10.162: play the working speech from the
+        // piper cache if available, fall back to speak()
+        // (Android TTS) on cache miss. The cache is warmed
+        // by App.tsx on mount + whenever the user changes
+        // the working speech phrase in Settings. Tobe
+        // (2026-08-11 22:22): 'the goal is to build as
+        // local as possible' — keeping piper as the single
+        // voice across greeting + working + AI response +
+        // exit reply removes the jarring Android-TTS voice
+        // switch mid-session.
         try {
-          await speakRef.current?.(speech);
+          const { getCachedWorkingSpeechPath } = require('../services/WorkingSpeechAudioCache');
+          const { playAudioFile } = require('../services/AudioPlayer');
+          const cached = await getCachedWorkingSpeechPath(speech);
+          if (cached) {
+            // Piper audio — same voice as the rest of the
+            // session. Plays through the shared
+            // audioPlayerFinished plumbing so the
+            // cue/busy bookkeeping stays consistent.
+            addLogEntry(`🧠 Working speech (piper cache): "${speech}"`, 'debug');
+            await playAudioFile(cached);
+          } else {
+            // Cache miss — fall back to Android TTS. This
+            // is rare (happens only on the very first turn
+            // after the user changes the phrase, before
+            // the desktop synthesis arrives). The first
+            // turn is audibly distinct from subsequent
+            // turns; acceptable tradeoff for keeping the
+            // architecture simple.
+            addLogEntry(`🧠 Working speech (TTS fallback, cache miss): "${speech}"`, 'debug');
+            await speakRef.current?.(speech);
+          }
         } catch (e: any) {
-          // TTS engine missing or refused — fall back
-          // to silence. The visual 'thinking' status is
-          // still up.
-          addLogEntry(`Working speech TTS failed: ${e?.message || e}`, 'warn');
+          addLogEntry(`Working speech playback failed: ${e?.message || e}`, 'warn');
         }
       })();
       await Promise.race([

@@ -517,6 +517,22 @@ class SyncClient {
     this.send({ type: 'request_exit_reply_audio', text });
   }
 
+  // v3.10.162: ask the desktop to synthesize the working
+  // speech audio and stream it back. Mirror of
+  // requestGreetingAudio, routed through a different
+  // requestId ('working_speech') so the desktop response
+  // is written to the working-speech cache (via
+  // WorkingSpeechAudioCache). The mobile's
+  // playWorkingSpeechAndCue() reads from this cache first
+  // so the working cue uses piper voice, not Android TTS.
+  // Tobe (2026-08-11 22:22): 'the goal is to build as
+  // local as possible' — keeping piper as the single
+  // voice across greeting + working + response + exit
+  // reply.
+  requestWorkingSpeechAudio(text: string) {
+    this.send({ type: 'request_working_audio', text });
+  }
+
   setCompanionId(companionId: string) {
     this.send({ type: 'set_companion_id', companionId });
   }
@@ -813,6 +829,14 @@ class SyncClient {
         // cache write and cause duplicate playback.
         if (msg.requestId === 'exit_reply') {
           this.emit('exit_reply_audio', msg);
+          break;
+        }
+        // v3.10.162: same routing for the working speech.
+        // Re-emit on 'working_speech_audio' so
+        // WorkingSpeechAudioCache can write the file
+        // without racing the AI-reply playback path.
+        if (msg.requestId === 'working_speech') {
+          this.emit('working_speech_audio', msg);
           break;
         }
         this.emit('audio_response', msg);

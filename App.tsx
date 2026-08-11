@@ -29,6 +29,7 @@ import CompanionEditScreen from './src/screens/CompanionEditScreen';
 import QuestsScreen from './src/screens/QuestsScreen';
 import syncClient from './src/services/SyncClient';
 import { saveGreetingAudio } from './src/services/GreetingAudioCache';
+import { saveWorkingSpeechAudio } from './src/services/WorkingSpeechAudioCache';
 import {
   migrateLegacyTurnCueKey,
   migrateV3_10_154_dropCloudTts,
@@ -522,6 +523,52 @@ export default function App(): React.JSX.Element {
     };
     syncClient.on('greeting_audio', onGreetingAudio);
     return () => { syncClient.off?.('greeting_audio', onGreetingAudio); };
+  }, []);
+
+  // v3.10.162: working speech audio cache listener. Same
+  // pattern as onGreetingAudio — the desktop's piper
+  // synthesis comes back tagged requestId='working_speech'
+  // and SyncClient re-emits it on the 'working_speech_audio'
+  // channel. We write to the persistent cache so the next
+  // voice-mode turn can play piper voice instead of falling
+  // back to Android TTS.
+  useEffect(() => {
+    const onWorkingSpeechAudio = async (msg: any) => {
+      const phrase = msg?.text;
+      if (!phrase) {
+        console.warn('[App] Working speech audio received without text, dropping');
+        return;
+      }
+      const path = await saveWorkingSpeechAudio(phrase, msg.audioBase64);
+      if (path) {
+        console.log(`[App] Working speech audio cached: ${path.split('/').pop()}`);
+      } else {
+        console.warn('[App] Failed to save working speech audio');
+      }
+    };
+    syncClient.on('working_speech_audio', onWorkingSpeechAudio);
+    return () => { syncClient.off?.('working_speech_audio', onWorkingSpeechAudio); };
+  }, []);
+
+  // v3.10.162: pre-warm the working speech cache on app
+  // start. Reads the current working speech phrase from
+  // AsyncStorage and asks the desktop to synthesize it
+  // (fire-and-forget). After the first warm-up the cache
+  // hits every time. Tobe (2026-08-11 22:22): 'the goal
+  // is to build as local as possible' — using desktop
+  // piper means consistent voice across greeting +
+  // working + response + exit reply.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { WORKING_SPEECH_KEY, DEFAULT_WORKING_SPEECH } = require('./src/services/VoiceSettings');
+        const phrase = (await AsyncStorage.getItem(WORKING_SPEECH_KEY)) || DEFAULT_WORKING_SPEECH;
+        if (phrase && phrase.trim() && phrase.trim() !== 'off') {
+          const { ensureWorkingSpeechCached } = require('./src/services/WorkingSpeechAudioCache');
+          ensureWorkingSpeechCached(phrase.trim());
+        }
+      } catch (_) {}
+    })();
   }, []);
 
   // Load companion id from storage so WakeModeScreen renders the right sprite

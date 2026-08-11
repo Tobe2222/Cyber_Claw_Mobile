@@ -1137,6 +1137,24 @@ export default function SettingsScreen({
       try {
         await AsyncStorage.setItem('cyberclaw-voice-working-speech', trimmed);
         setWorkingSpeechSavedAt(Date.now());
+        // v3.10.162: re-warm the piper cache for the new
+        // phrase. Without this the cache would still
+        // hold the old phrase's audio and the user would
+        // hear the old TTS until they restarted the app.
+        // The cache write races the request — the desktop
+        // reply comes back async and populates the cache
+        // before the next voice-mode turn (typically
+        // minutes later), so the next play() finds the
+        // new file. If the user opens voice mode before
+        // the new file lands, playWorkingSpeechAndCue
+        // falls back to speak() (Android TTS) for that
+        // one turn, then settles into piper.
+        if (trimmed && trimmed !== 'off') {
+          try {
+            const { ensureWorkingSpeechCached } = require('../services/WorkingSpeechAudioCache');
+            ensureWorkingSpeechCached(trimmed);
+          } catch (_) {}
+        }
       } catch (_) {}
     }, 600);
   };
