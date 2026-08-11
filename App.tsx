@@ -172,6 +172,31 @@ export default function App(): React.JSX.Element {
       .catch(() => {});
   }, []);
 
+  // v3.10.157: one-time migration to seed the mobile's
+  // defaultQuestDir setting with the desktop's system-wide
+  // default. Without this, an empty "New quest" directory
+  // input on the mobile lands at ~/quests/<name>, while
+  // the desktop lands at /media/humpsuu/CYBERDRIVE/2B/work/projects/<name>.
+  // Tobe (2026-08-11): 'no i wanted the quest dir in the
+  // projects folder, with the rest'. Idempotent — only
+  // seeds if the user hasn't already configured their
+  // own value. The user can override at any time via the
+  // Settings page (TODO: UI not built yet — see
+  // VoiceSettings.ts pattern for where to add it).
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('cyberclaw-mobile-settings');
+        const s = raw ? JSON.parse(raw) : {};
+        if (typeof s.defaultQuestDir !== 'string' || !s.defaultQuestDir.trim()) {
+          s.defaultQuestDir = '/media/humpsuu/CYBERDRIVE/2B/work/projects';
+          await AsyncStorage.setItem('cyberclaw-mobile-settings', JSON.stringify(s));
+          console.log('[Migration v3.10.157] seeded defaultQuestDir = /media/humpsuu/CYBERDRIVE/2B/work/projects');
+        }
+      } catch (_) {}
+    })();
+  }, []);
+
   // v3.10.155: probe TTS at app start, NOT at speak time.
   // The old approach surfaced an Alert.alert mid-voice-mode
   // (or worse, mid-exit), which felt like the app complaining
