@@ -1,23 +1,41 @@
 /**
- * VoiceCatalog — shared voice + provider catalog.
+ * VoiceCatalog — local TTS voices only.
  *
- * v3.7.0: extracted from SettingsScreen.tsx so the per-companion
- * voice picker in CompanionSettingsScreen.tsx can render the
- * same options. Both the global Settings screen and each
- * companion's voice sub-page consume this list.
+ * v3.10.154: stripped cloud TTS scaffolding. ElevenLabs / Google
+ * Cloud TTS were decorative — the desktop never honored them,
+ * they shipped broken, and they didn't match the local-first
+ * direction. All TTS now routes through the device's Android
+ * TextToSpeech engine, which is whatever the user has installed
+ * (Google TTS, RHVoice, eSpeak NG, Samsung TTS, etc.).
+ *
+ * What the user picks here is just a label. The actual voice
+ * comes from the device's installed TTS engine. We map
+ * user-friendly labels to one of a small set of well-known
+ * canonical voice names that ship with the most common
+ * Android TTS engines:
+ *
+ *   - 'default'           The system default voice
+ *   - 'male' / 'female'   Gender aliases resolved at the
+ *                         native layer to the first installed
+ *                         voice matching the requested locale
+ *                         + gender
+ *
+ * For RHVoice specifically (the degoogled / F-Droid option
+ * Tobe uses on GrapheneOS), the canonical voice names match:
+ *   - 'slt'   female, US English
+ *   - 'clb'   male, US English (deep)
+ *   - 'bdl'   male, US English (lighter)
+ *
+ * The picker can grow with voice names from real installed
+ * engines in a future version — for now this fixed catalog
+ * covers the most common Android TTS installations without
+ * needing a native bridge just to render a list.
  *
  * The catalog is the source of truth for:
  *   - LOCAL_VOICES: device-language aliases for Android's
  *     on-device TTS engine. The actual voice comes from the
- *     user's installed TTS engine — these are picker labels.
- *   - PREMIUM_PROVIDERS: cloud TTS providers (ElevenLabs,
- *     Google Cloud TTS) and their available voices.
- *
- * v3.6.2 note: the API keys (ElevenLabs) live in the global
- * 🔑 API keys section, not per-companion. The premium picker
- * is gated on the global "✨ Enable API speech" toggle. The
- * per-companion setting only chooses which engine + voice
- * each companion uses, not which key.
+ *     user's installed TTS engine — these are picker labels
+ *     resolved by the native TextToSpeech engine.
  */
 
 export type VoiceId = string;
@@ -25,51 +43,41 @@ export type VoiceId = string;
 export type LocalVoice = {
   id: VoiceId;
   label: string;
+  /** Hint shown next to the label so the user knows which
+   *  engine this voice comes from. Used by the Settings UI
+   *  to help the user understand why a particular voice is
+   *  available / not available. */
+  engineHint?: string;
 };
 
-export type PremiumVoice = {
-  id: VoiceId;
-  label: string;
-};
-
-export type PremiumProvider = {
-  id: VoiceId;
-  label: string;
-  voices: PremiumVoice[];
-};
-
-/** Android on-device TTS voice aliases. The actual voice comes
- *  from the user's installed TTS engine. */
+/** Local TTS voices. The actual voice comes from the user's
+ *  installed TTS engine. These are picker labels mapped to
+ *  well-known voice names. */
 export const LOCAL_VOICES: LocalVoice[] = [
-  { id: 'default', label: '🎙️ System Default' },
-  { id: 'male',    label: '👨 Male' },
-  { id: 'female',  label: '👩 Female' },
+  { id: 'default', label: '🎙️ System Default', engineHint: 'uses whatever the OS picked' },
+  // RHVoice canonical English voices. Tobe uses RHVoice on
+  // GrapheneOS — these are the three English voices RHVoice
+  // ships by default. If RHVoice isn't installed, the native
+  // bridge falls back to the system default.
+  { id: 'slt', label: '👩 SLT — Female, US English (RHVoice)', engineHint: 'RHVoice required' },
+  { id: 'clb', label: '👨 CLB — Male, US English, deep (RHVoice)', engineHint: 'RHVoice required' },
+  { id: 'bdl', label: '👨 BDL — Male, US English, lighter (RHVoice)', engineHint: 'RHVoice required' },
+  // Generic gender aliases. Resolved by the native layer to
+  // the first voice matching the requested gender in the
+  // current locale. Works with any TTS engine (Google TTS,
+  // Samsung TTS, etc.) that has at least one male + one
+  // female voice installed.
+  { id: 'female', label: '👩 Female (auto)', engineHint: 'first female voice in current locale' },
+  { id: 'male',   label: '👨 Male (auto)',   engineHint: 'first male voice in current locale' },
 ];
 
-/** Cloud TTS providers + their voices. The desktop bridge to
- *  consume these on the synthesis side ships in v3.7.0. */
-export const PREMIUM_PROVIDERS: PremiumProvider[] = [
-  { id: 'elevenlabs', label: 'ElevenLabs', voices: [
-    { id: 'nova',    label: '✨ Nova (Female — bright)' },
-    { id: 'alloy',   label: '🎙️ Alloy (Male — friendly)' },
-    { id: 'echo',    label: '🌊 Echo (Male — deep)' },
-    { id: 'fable',   label: '📖 Fable (Female — storyteller)' },
-    { id: 'onyx',    label: '⚫ Onyx (Male — smooth)' },
-    { id: 'shimmer', label: '✨ Shimmer (Female — warm)' },
-  ]},
-  { id: 'google', label: 'Google Cloud TTS', voices: [
-    { id: 'en-US-Neural2-A', label: '🗣️ A (Female)' },
-    { id: 'en-US-Neural2-C', label: '🗣️ C (Female)' },
-    { id: 'en-US-Neural2-E', label: '🗣️ E (Male)' },
-  ]},
-];
-
-/** Engine a companion can pick. 'default' means "use whatever
- *  the global master voiceEngine is". */
-export type VoiceEngine = 'local' | 'api' | 'default';
+/** Engine a companion can pick. v3.10.154 simplified to just
+ *  local — there is no API/cloud option anymore. 'default'
+ *  still exists as a sentinel meaning "use the global master
+ *  voice id", preserved so the per-companion override / global
+ *  fallback semantics in VoiceSettings.ts still work. */
+export type VoiceEngine = 'local' | 'default';
 
 export const DEFAULT_VOICE_ENGINE: VoiceEngine = 'default';
 
 export const DEFAULT_LOCAL_VOICE_ID: VoiceId = 'default';
-export const DEFAULT_API_PROVIDER_ID: VoiceId = 'elevenlabs';
-export const DEFAULT_API_VOICE_ID: VoiceId = 'nova';

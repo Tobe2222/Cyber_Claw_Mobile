@@ -47,16 +47,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // longer imports them — only their trigger buttons
 // remain.
 // v3.7.0: per-companion voice settings (engine + voice id,
-// both Local and Premium API paths). The catalog of available
-// voices is shared with the global Settings screen via
-// VoiceCatalog.ts.
+// local TTS only — Premium API scaffolding removed in
+// v3.10.154). The catalog of available voices is shared
+// with the (now-vacated) global Settings screen via
+// VoiceCatalog.ts. LOCAL_VOICES is the source of truth for
+// what the user can pick.
 import {
   loadVoiceFor, saveVoiceFor, clearVoiceFor,
   loadVoiceSettings, saveSilenceMs,
 } from '../services/VoiceSettings';
 import {
   LOCAL_VOICES,
-  PREMIUM_PROVIDERS,
   VoiceEngine,
 } from '../services/VoiceCatalog';
 // v3.10.25: shared "Test wake" panel (the wake page
@@ -149,7 +150,9 @@ export default function CompanionSettingsScreen({
   // detail view. null = overview (cards). 'wake' / 'exit'
   // = sub-page for that phase.
   // v3.7.0: 'voice' added — per-companion voice engine +
-  // voice picker (Local / Premium API / Use global default).
+  // voice picker (Use global default / Per-companion override
+  // → pick a specific Android TTS voice). v3.10.154 stripped
+  // the Premium API option; only local TTS is selectable now.
   // v3.7.6: 'quests' removed — Quests is now a top-level
   // screen (QuestsScreen.tsx) accessed from the arena button.
   const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | null>(null);
@@ -187,11 +190,14 @@ export default function CompanionSettingsScreen({
   // renderCompanionExitPage pattern. Hydration re-runs
   // when the active companionId changes, mirroring the
   // voiceExitPhrase rehydration below.
+  // v3.10.154: stripped cloud-TTS scaffolding. Voice state
+  // is now just engine + local voice id. The 'api' engine
+  // is gone; 'default' is the inheritance sentinel (means
+  // "use the global master localId"), and 'local' means
+  // "use my per-companion override". loadVoiceFor() resolves
+  // 'default' → 'local' so consumers don't have to.
   const [vcEngine, setVcEngine] = useState<VoiceEngine>('default');
   const [vcLocalId, setVcLocalId] = useState<string>('default');
-  const [vcApiProvider, setVcApiProvider] = useState<string>('elevenlabs');
-  const [vcApiVoice, setVcApiVoice] = useState<string>('nova');
-  const [vcGlobalApiEnabled, setVcGlobalApiEnabled] = useState<boolean>(false);
   const [vcSavedAt, setVcSavedAt] = useState<number | null>(null);
   const vcLoadedRef = useRef(false);
 
@@ -601,18 +607,21 @@ export default function CompanionSettingsScreen({
       let storedEngine: VoiceEngine = 'default';
       try {
         const raw = await AsyncStorage.getItem(`cyberclaw-voice-engine-${companionId}`);
-        if (raw === 'local' || raw === 'api' || raw === 'default') {
-          storedEngine = raw;
+        // v3.10.154: 'api' is no longer a valid engine.
+        // Anyone still storing it (pre-migration user) gets
+        // forced to 'default' which then inherits whatever
+        // the global master is. Keeps the type narrow.
+        if (raw === 'local') {
+          storedEngine = 'local';
+        } else if (raw === 'default') {
+          storedEngine = 'default';
+        } else {
+          storedEngine = 'default';
         }
       } catch (_) {}
-      const globalEngine = await AsyncStorage.getItem('cyberclaw-voice-engine').catch(() => null);
-      const apiGloballyEnabled = globalEngine === 'api';
       if (cancelled) return;
       setVcEngine(storedEngine);
       setVcLocalId(cfg.localId);
-      setVcApiProvider(cfg.apiProvider);
-      setVcApiVoice(cfg.apiVoice);
-      setVcGlobalApiEnabled(apiGloballyEnabled);
       vcLoadedRef.current = true;
     })();
     return () => { cancelled = true; };
@@ -866,11 +875,9 @@ export default function CompanionSettingsScreen({
     await saveVoiceFor(companionId, {
       engine: vcEngine,
       localId: vcLocalId,
-      apiProvider: vcApiProvider,
-      apiVoice: vcApiVoice,
     });
     setVcSavedAt(Date.now());
-  }, [companionId, vcEngine, vcLocalId, vcApiProvider, vcApiVoice]);
+  }, [companionId, vcEngine, vcLocalId]);
 
   const resetToGlobal = useCallback(async () => {
     await clearVoiceFor(companionId);
@@ -878,8 +885,6 @@ export default function CompanionSettingsScreen({
     // Reload effective values from globals.
     const cfg = await loadVoiceFor(companionId);
     setVcLocalId(cfg.localId);
-    setVcApiProvider(cfg.apiProvider);
-    setVcApiVoice(cfg.apiVoice);
     setVcSavedAt(Date.now());
   }, [companionId]);
 
@@ -1554,10 +1559,10 @@ export default function CompanionSettingsScreen({
             // Reads from the per-companion voice state
             // hydrated earlier in the screen. Falls back
             // to "Not set" if neither has a value.
+            // v3.10.154: stripped 'api' engine branch —
+            // there's only local TTS now.
             currentValue:
-              vcEngine === 'api' && vcApiVoice
-                ? `Premium API · ${vcApiVoice}`
-                : vcLocalId && vcLocalId !== 'default'
+              vcLocalId && vcLocalId !== 'default'
                 ? `Local · ${vcLocalId}`
                 : 'Local · Default',
             onPress: () => setCompanionViewPhase('voice'),
@@ -1937,12 +1942,13 @@ export default function CompanionSettingsScreen({
   // had hooks, which broke React's hook accounting when the
   // user navigated away.
   function renderCompanionVoicePage(companion: Companion) {
-    // Resolve the effective engine for the "what would actually
-    // be used right now?" status row.
-    const effectiveEngine: 'local' | 'api' =
-      vcEngine === 'default'
-        ? (vcGlobalApiEnabled ? 'api' : 'local')
-        : vcEngine;
+    // Resolve the effective voice id for the "what would
+    // actually be used right now?" status row. v3.10.154:
+    // there is only one engine (local) now; we just show
+    // whether the user has a per-companion override or is
+    // inheriting the global master.
+    const effectiveLocalId: string =
+      vcEngine === 'local' ? vcLocalId : 'default';
 
     return (
       <View style={styles.container}>
@@ -1967,8 +1973,8 @@ export default function CompanionSettingsScreen({
               of the global voice engine and voice choice.
             </Text>
 
-            <SubTitle>Engine</SubTitle>
-            <Hint>📱 Local uses the device's Android TTS engine (free, offline). ✨ Premium API uses cloud voices (ElevenLabs / Google Cloud TTS) — requires the global 🔑 API keys setup and the ✨ API speech master toggle to be on.</Hint>
+            <SubTitle>Voice</SubTitle>
+            <Hint>📱 Uses the device's Android TTS engine — Google TTS, RHVoice, eSpeak NG, Samsung TTS, or whatever you have installed. Always free, always offline.</Hint>
             <View style={{ marginVertical: 6 }}>
               <TouchableOpacity
                 onPress={() => setVcEngine('default')}
@@ -1977,7 +1983,7 @@ export default function CompanionSettingsScreen({
                 <Text style={styles.radioBullet}>{vcEngine === 'default' ? '◉' : '○'}</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.radioTitle}>🌐 Use global default</Text>
-                  <Text style={styles.radioSub}>Inherit whatever the global master is set to right now.</Text>
+                  <Text style={styles.radioSub}>Inherit whatever the global master local voice is set to right now.</Text>
                 </View>
               </TouchableOpacity>
               <TouchableOpacity
@@ -1986,32 +1992,13 @@ export default function CompanionSettingsScreen({
               >
                 <Text style={styles.radioBullet}>{vcEngine === 'local' ? '◉' : '○'}</Text>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.radioTitle}>📱 Local (free)</Text>
-                  <Text style={styles.radioSub}>Android TTS, always available.</Text>
-                </View>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => vcGlobalApiEnabled && setVcEngine('api')}
-                disabled={!vcGlobalApiEnabled}
-                style={[
-                  styles.radioRow,
-                  vcEngine === 'api' && styles.radioRowActive,
-                  !vcGlobalApiEnabled && { opacity: 0.4 },
-                ]}
-              >
-                <Text style={styles.radioBullet}>{vcEngine === 'api' ? '◉' : '○'}</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.radioTitle}>✨ Premium API</Text>
-                  <Text style={styles.radioSub}>
-                    {vcGlobalApiEnabled
-                      ? 'Cloud TTS (ElevenLabs / Google). Uses the global API key.'
-                      : 'Disabled — turn on ✨ API speech in the global 🔑 API keys section first.'}
-                  </Text>
+                  <Text style={styles.radioTitle}>📱 Per-companion override</Text>
+                  <Text style={styles.radioSub}>Pick a specific voice below for {companion.name}.</Text>
                 </View>
               </TouchableOpacity>
             </View>
 
-            {effectiveEngine === 'local' ? (
+            {vcEngine === 'local' && (
               <>
                 <SubTitle>Local voice</SubTitle>
                 <View style={{ marginVertical: 6 }}>
@@ -2022,37 +2009,12 @@ export default function CompanionSettingsScreen({
                       style={[styles.radioRow, vcLocalId === v.id && styles.radioRowActive]}
                     >
                       <Text style={styles.radioBullet}>{vcLocalId === v.id ? '◉' : '○'}</Text>
-                      <Text style={[styles.radioTitle, { flex: 1 }]}>{v.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </>
-            ) : (
-              <>
-                <SubTitle>Premium API voice</SubTitle>
-                <Hint>Provider and voice for {companion.name}.</Hint>
-                <View style={{ marginVertical: 6 }}>
-                  {PREMIUM_PROVIDERS.map(p => (
-                    <TouchableOpacity
-                      key={p.id}
-                      onPress={() => setVcApiProvider(p.id)}
-                      style={[styles.radioRow, vcApiProvider === p.id && styles.radioRowActive]}
-                    >
-                      <Text style={styles.radioBullet}>{vcApiProvider === p.id ? '◉' : '○'}</Text>
-                      <Text style={[styles.radioTitle, { flex: 1 }]}>{p.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <SubTitle>Voice</SubTitle>
-                <View style={{ marginVertical: 6 }}>
-                  {PREMIUM_PROVIDERS.find(p => p.id === vcApiProvider)?.voices.map(v => (
-                    <TouchableOpacity
-                      key={v.id}
-                      onPress={() => setVcApiVoice(v.id)}
-                      style={[styles.radioRow, vcApiVoice === v.id && styles.radioRowActive]}
-                    >
-                      <Text style={styles.radioBullet}>{vcApiVoice === v.id ? '◉' : '○'}</Text>
-                      <Text style={[styles.radioTitle, { flex: 1 }]}>{v.label}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.radioTitle]}>{v.label}</Text>
+                        {v.engineHint && (
+                          <Text style={styles.radioSub}>{v.engineHint}</Text>
+                        )}
+                      </View>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -2097,9 +2059,8 @@ export default function CompanionSettingsScreen({
 
             <View style={{ height: 1, backgroundColor: '#333', marginVertical: 16 }} />
             <Hint>
-              Currently: <Text style={{ color: '#10b981', fontWeight: '600' }}>{effectiveEngine === 'api' ? 'Premium API' : 'Local'}</Text>
-              {effectiveEngine === 'local' && ` — ${LOCAL_VOICES.find(v => v.id === vcLocalId)?.label || vcLocalId}`}
-              {effectiveEngine === 'api' && ` — ${vcApiProvider} / ${vcApiVoice}`}
+              Currently using: <Text style={{ color: '#10b981', fontWeight: '600' }}>{LOCAL_VOICES.find(v => v.id === effectiveLocalId)?.label || effectiveLocalId}</Text>
+              {vcEngine === 'default' && ' (inheriting global)'}
             </Hint>
 
             <TouchableOpacity
@@ -2788,7 +2749,8 @@ const styles = StyleSheet.create({
   // OWW detector handles enrollment silently in
   // the background).
   // v3.7.0: radio-style row for the per-companion voice picker.
-  // Reused for engine (Use global default / Local / Premium API)
+  // v3.10.154: reused for engine (Use global default / Per-companion override).
+  // The old third option (Premium API) is gone.
   // and for the voice lists under each engine.
   radioRow: {
     flexDirection: 'row',

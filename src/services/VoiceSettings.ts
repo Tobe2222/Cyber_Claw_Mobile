@@ -219,20 +219,33 @@ export const getExitSamplesKey = (companionId: string, phrase: string) =>
   `cyberclaw-exit-samples-${companionId}-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 
 /**
- * v3.7.0: per-companion voice settings (engine + voice id,
- * for both Local and Premium API paths). Companion-specific
- * overrides let the user pick a different voice per
- * companion (e.g. Lamasuu = Male, Clawsuu = Female) without
- * changing the global default.
+ * v3.10.154: per-companion voice settings stripped of all
+ * cloud / API scaffolding. ElevenLabs and Google Cloud TTS
+ * were decorative (desktop never honored them, never even
+ * had an ElevenLabs client). All TTS now routes through the
+ * device's Android TextToSpeech engine.
+ *
+ * Companion-specific overrides let the user pick a different
+ * voice per companion (e.g. Lamasuu = Male, Clawsuu = Female)
+ * without changing the global default.
  *
  * Each per-companion key is independent. A missing key means
  * "use the global default" — see loadVoiceFor() below.
  *
  * Keys:
- *   - cyberclaw-voice-engine-<companionId>       'local' | 'api' | 'default'
- *   - cyberclaw-voice-local-id-<companionId>     voice id (e.g. 'male', 'female')
- *   - cyberclaw-voice-api-provider-<companionId> provider id (e.g. 'elevenlabs')
- *   - cyberclaw-voice-api-voice-<companionId>    voice id (e.g. 'nova')
+ *   - cyberclaw-voice-engine-<companionId>       'local' | 'default'
+ *   - cyberclaw-voice-local-id-<companionId>     voice id
+ *                                                (e.g. 'slt', 'clb', 'bdl',
+ *                                                'male', 'female', 'default')
+ *
+ * Obsolete keys (removed in v3.10.154, cleared on first launch
+ * by migrateV3_10_154_dropCloudTts() below):
+ *   - cyberclaw-voice-api-provider-<companionId>  (was ElevenLabs / Google)
+ *   - cyberclaw-voice-api-voice-<companionId>     (was the voice id)
+ *   - cyberclaw-voice-api-provider               (global)
+ *   - cyberclaw-voice-api-voice                  (global)
+ *   - cyberclaw-voice-api-key                    (ElevenLabs key)
+ *   - cyberclaw-voice-engine='api'               (forces back to 'default')
  */
 export const getVoiceEngineKey = (companionId: string) =>
   `cyberclaw-voice-engine-${companionId}`;
@@ -240,32 +253,24 @@ export const getVoiceEngineKey = (companionId: string) =>
 export const getVoiceLocalIdKey = (companionId: string) =>
   `cyberclaw-voice-local-id-${companionId}`;
 
-export const getVoiceApiProviderKey = (companionId: string) =>
-  `cyberclaw-voice-api-provider-${companionId}`;
-
-export const getVoiceApiVoiceKey = (companionId: string) =>
-  `cyberclaw-voice-api-voice-${companionId}`;
-
 /**
- * v3.7.0: a resolved voice config for one companion, with
+ * v3.10.154: a resolved voice config for one companion, with
  * every field guaranteed non-null. If the per-companion
  * override is missing, the corresponding global default is
  * used instead.
  *
- *   engine:    'local' | 'api'
+ *   engine:    'local' | 'default' (always resolves to 'local'
+ *              for callers; 'default' is just the inheritance
+ *              sentinel and never escapes loadVoiceFor)
  *   localId:   one of LOCAL_VOICES[].id
- *   apiProvider: one of PREMIUM_PROVIDERS[].id
- *   apiVoice:  one of PREMIUM_PROVIDERS[].voices[].id
  *
  * The 'default' engine value (stored when the user picks
  * "Use global default") is resolved here to the effective
  * engine, so consumers don't have to special-case it.
  */
 export type ResolvedVoiceConfig = {
-  engine: 'local' | 'api';
+  engine: 'local';
   localId: string;
-  apiProvider: string;
-  apiVoice: string;
 };
 
 /**
@@ -533,96 +538,81 @@ export async function clearExitSamples(companionId: string, phrase: string): Pro
 }
 
 /**
- * v3.7.0: load the resolved voice config for a companion.
+ * v3.10.154: load the resolved voice config for a companion.
  *
- * Reads the four per-companion keys. For each field, if the
+ * Reads the two per-companion keys. For each field, if the
  * per-companion key is missing, falls back to the global
- * default (the keys the v3.6.2 API keys section writes:
- * voiceEngine, voiceLocalId, voiceApiProvider, voiceApiVoice).
+ * default (the keys the v3.6.2 Settings screen writes:
+ * cyberclaw-voice-engine, cyberclaw-voice-local).
  *
- * The 'default' engine value is resolved to the effective
- * engine so the consumer doesn't have to special-case it.
- * If the global engine is also 'default' (legacy v3.6.2 user
- * who never picked one), we fall back to 'local' so the
- * resolved config is always usable.
+ * The 'default' engine value is resolved to 'local' so the
+ * consumer doesn't have to special-case it. There is no 'api'
+ * engine anymore.
  */
 export async function loadVoiceFor(companionId: string): Promise<ResolvedVoiceConfig> {
   let rawEngine: string | null = null;
   let rawLocalId: string | null = null;
-  let rawApiProvider: string | null = null;
-  let rawApiVoice: string | null = null;
   let globalEngine: string | null = null;
   let globalLocalId: string | null = null;
-  let globalApiProvider: string | null = null;
-  let globalApiVoice: string | null = null;
   try {
-    [rawEngine, rawLocalId, rawApiProvider, rawApiVoice] = await Promise.all([
+    [rawEngine, rawLocalId] = await Promise.all([
       AsyncStorage.getItem(getVoiceEngineKey(companionId)),
       AsyncStorage.getItem(getVoiceLocalIdKey(companionId)),
-      AsyncStorage.getItem(getVoiceApiProviderKey(companionId)),
-      AsyncStorage.getItem(getVoiceApiVoiceKey(companionId)),
     ]);
   } catch (_) {}
   try {
-    [globalEngine, globalLocalId, globalApiProvider, globalApiVoice] = await Promise.all([
+    [globalEngine, globalLocalId] = await Promise.all([
       AsyncStorage.getItem('cyberclaw-voice-engine'),
       AsyncStorage.getItem('cyberclaw-voice-local'),
-      AsyncStorage.getItem('cyberclaw-voice-api-provider'),
-      AsyncStorage.getItem('cyberclaw-voice-api-voice'),
     ]);
   } catch (_) {}
 
-  // Resolve engine: per-companion 'default' falls back to global.
-  let effectiveEngine: 'local' | 'api';
-  if (rawEngine === 'local' || rawEngine === 'api') {
-    effectiveEngine = rawEngine;
-  } else if (globalEngine === 'local' || globalEngine === 'api') {
-    effectiveEngine = globalEngine;
-  } else {
-    effectiveEngine = 'local';
-  }
+  // Resolve engine: per-companion 'default' falls back to global,
+  // anything non-'local' (including the obsolete 'api') falls
+  // back to 'local'. There is no 'api' engine anymore.
+  const effectiveEngine: 'local' =
+    (rawEngine === 'local' || globalEngine === 'local') ? 'local' : 'local';
 
   return {
     engine: effectiveEngine,
     localId: rawLocalId || globalLocalId || 'default',
-    apiProvider: rawApiProvider || globalApiProvider || 'elevenlabs',
-    apiVoice: rawApiVoice || globalApiVoice || 'nova',
   };
 }
 
 /**
- * v3.7.0: persist a companion's voice config. Pass any field
+ * v3.10.154: persist a companion's voice config. Pass any field
  * as undefined to leave it unchanged; pass an explicit value
  * to set it (including the empty string to clear a per-
  * companion override, reverting to the global default).
+ *
+ * The 'api' engine value is normalized to 'default' so any
+ * leftover callers from v3.7.0–v3.10.153 that still pass
+ * engine: 'api' don't write an invalid value to disk.
  */
 export async function saveVoiceFor(
   companionId: string,
   patch: {
-    engine?: 'local' | 'api' | 'default';
+    engine?: 'local' | 'default';
     localId?: string;
-    apiProvider?: string;
-    apiVoice?: string;
   },
 ): Promise<void> {
   const ops: Array<Promise<void>> = [];
   if (patch.engine !== undefined) {
-    ops.push(AsyncStorage.setItem(getVoiceEngineKey(companionId), patch.engine));
+    // v3.10.154: 'api' is no longer a valid engine. Anyone
+    // passing it gets 'default' instead — keeps the type
+    // permissive for transitional callers, but never
+    // persists an invalid value.
+    const safeEngine: 'local' | 'default' = patch.engine === 'local' ? 'local' : 'default';
+    ops.push(AsyncStorage.setItem(getVoiceEngineKey(companionId), safeEngine));
   }
   if (patch.localId !== undefined) {
     ops.push(AsyncStorage.setItem(getVoiceLocalIdKey(companionId), patch.localId));
-  }
-  if (patch.apiProvider !== undefined) {
-    ops.push(AsyncStorage.setItem(getVoiceApiProviderKey(companionId), patch.apiProvider));
-  }
-  if (patch.apiVoice !== undefined) {
-    ops.push(AsyncStorage.setItem(getVoiceApiVoiceKey(companionId), patch.apiVoice));
   }
   await Promise.all(ops);
 }
 
 /**
- * v3.7.0: clear the per-companion voice overrides for one
+ * v3.10.154: clear the per-companion voice overrides for one
  * companion, reverting to the global defaults. The TTS layer
  * will pick up the global values again.
  */
@@ -630,9 +620,104 @@ export async function clearVoiceFor(companionId: string): Promise<void> {
   await Promise.all([
     AsyncStorage.removeItem(getVoiceEngineKey(companionId)),
     AsyncStorage.removeItem(getVoiceLocalIdKey(companionId)),
-    AsyncStorage.removeItem(getVoiceApiProviderKey(companionId)),
-    AsyncStorage.removeItem(getVoiceApiVoiceKey(companionId)),
   ]);
+}
+
+/**
+ * v3.10.154: one-time migration that drops all the
+ * cloud-TTS scaffolding. Runs on app start (App.tsx
+ * initial-load effect). Idempotent — safe to call on every
+ * launch.
+ *
+ * What it does:
+ *   1. Walks all AsyncStorage keys for the legacy cloud-TTS
+ *      ones (per-companion + global) and removes them.
+ *   2. Any per-companion or global engine value of 'api'
+ *      gets rewritten to 'default' (so the user with
+ *      engine='api' falls back to whatever the global master
+ *      voice is, instead of staying stuck on a now-invalid
+ *      engine).
+ *   3. Any per-companion or global localId of 'nova' (the
+ *      ElevenLabs Nova voice default from v3.6.x) gets
+ *      rewritten to 'default' — Nova is no longer a valid
+ *      voice id and would otherwise fail to resolve.
+ *
+ * Returns a small summary so callers can log the migration
+ * for debugging ("cleared 4 cloud-tts keys, normalized 2
+ * engines, normalized 1 voice id").
+ */
+export async function migrateV3_10_154_dropCloudTts(): Promise<{
+  clearedKeys: number;
+  normalizedEngines: number;
+  normalizedVoiceIds: number;
+}> {
+  const result = { clearedKeys: 0, normalizedEngines: 0, normalizedVoiceIds: 0 };
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    // The legacy keys to clear outright. They have no
+    // meaning after v3.10.154 — keeping them around would
+    // just be dead weight in AsyncStorage.
+    const legacyKeys = allKeys.filter(k =>
+      k === 'cyberclaw-voice-api-provider' ||
+      k === 'cyberclaw-voice-api-voice' ||
+      k === 'cyberclaw-voice-api-key' ||
+      k.startsWith('cyberclaw-voice-api-provider-') ||
+      k.startsWith('cyberclaw-voice-api-voice-')
+    );
+    if (legacyKeys.length > 0) {
+      // AsyncStorage v3 renamed multiRemove → removeMany.
+      // Cast to any to avoid pulling type changes into
+      // every caller — the runtime method exists in both
+      // versions of the library.
+      await (AsyncStorage as any).removeMany
+        ? (AsyncStorage as any).removeMany(legacyKeys)
+        : (AsyncStorage as any).multiRemove(legacyKeys);
+      result.clearedKeys = legacyKeys.length;
+    }
+    // Normalize any engine value of 'api' to 'default'.
+    // Two scopes: global + per-companion.
+    const tryNormalizeEngine = async (key: string) => {
+      try {
+        const raw = await AsyncStorage.getItem(key);
+        if (raw === 'api') {
+          await AsyncStorage.setItem(key, 'default');
+          result.normalizedEngines++;
+        }
+      } catch (_) {}
+    };
+    await tryNormalizeEngine('cyberclaw-voice-engine');
+    const engineKeys = allKeys.filter(k =>
+      k.startsWith('cyberclaw-voice-engine-') &&
+      // skip the ones we already migrated above
+      k !== 'cyberclaw-voice-api-provider' &&
+      k !== 'cyberclaw-voice-api-voice'
+    );
+    for (const k of engineKeys) {
+      await tryNormalizeEngine(k);
+    }
+    // Normalize any voice id of 'nova' (the ElevenLabs Nova
+    // default) back to 'default'. Nova isn't a valid local
+    // voice id and would render as a broken picker entry.
+    const tryNormalizeVoiceId = async (key: string) => {
+      try {
+        const raw = await AsyncStorage.getItem(key);
+        if (raw === 'nova') {
+          await AsyncStorage.setItem(key, 'default');
+          result.normalizedVoiceIds++;
+        }
+      } catch (_) {}
+    };
+    await tryNormalizeVoiceId('cyberclaw-voice-local');
+    const localIdKeys = allKeys.filter(k => k.startsWith('cyberclaw-voice-local-id-'));
+    for (const k of localIdKeys) {
+      await tryNormalizeVoiceId(k);
+    }
+  } catch (_) {
+    // Migration is best-effort. If AsyncStorage throws
+    // (shouldn't happen, but defensive), the next launch
+    // will retry.
+  }
+  return result;
 }
 
 /**

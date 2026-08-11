@@ -101,10 +101,11 @@
  *                            today; ambient daily recording in a
  *                            future release.
  *   6. 🤖 Agent Reach      — Remote permissions (file/app/location/camera)
- *   8. 🔑 API keys         — Global API keys (ElevenLabs) + the
- *                            master "✨ API speech" toggle that
- *                            gates per-companion engine selection
- *                            in v3.7.0.
+ *
+ * v3.10.154: the old section 8 (🔑 API keys / ElevenLabs /
+ * API speech toggle) was removed. Voice selection now lives
+ * exclusively per-companion in CompanionSettingsScreen,
+ * backed by the device's Android TextToSpeech engine.
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -160,11 +161,10 @@ type PermStatus = 'granted' | 'denied' | 'never_ask_again' | 'unknown';
 // can reuse it. This screen imports the same list.
 // v3.7.1: LOCAL_VOICES removed from this import. The local
 // voice picker now lives in CompanionSettingsScreen (per-
-// companion). This screen keeps PREMIUM_PROVIDERS because
-// the 🔑 API keys section still has the global provider +
-// default-voice pickers (used as fallbacks for companions
-// that have no per-companion override).
-import { PREMIUM_PROVIDERS } from '../services/VoiceCatalog';
+// companion). v3.10.154: PREMIUM_PROVIDERS import dropped —
+// the cloud TTS scaffolding (ElevenLabs / Google Cloud TTS)
+// is gone. The 🔑 API keys section was deleted from this
+// screen at the same time.
 
 export default function SettingsScreen({
   onBack,
@@ -485,25 +485,19 @@ export default function SettingsScreen({
   }, [availableCompanions.length, activeWakeCompanionId]);
 
   // ── Voice & Speech ────────────────────────────────────────────
-  // v3.1.75: single engine toggle (local vs premium API) replaces
-  // the two-always-visible sub-sections. Local TTS uses Android's
-  // v3.7.1: voiceLocalId state removed. With per-companion
-  // voice pickers in CompanionSettingsScreen, the local-voice
-  // choice lives per-companion (vcLocalId in the voice sub-page).
-  // The global 'cyberclaw-voice-local' AsyncStorage key is still
-  // read by loadVoiceFor() as a fallback when a companion has no
-  // per-companion override — we just don't surface it in this
-  // screen's UI anymore.
+  // v3.10.154: ALL cloud-TTS scaffolding removed. ElevenLabs /
+  // Google Cloud TTS were decorative — the desktop never
+  // honored them, they didn't ship. All TTS now routes through
+  // the device's Android TextToSpeech engine. Per-companion
+  // voice pickers live in CompanionSettingsScreen; this screen
+  // no longer has a voice section at all (the old one was
+  // inseparable from the deleted API keys block).
   //
-  // Premium API settings below remain global (one key, one
-  // provider default, one default API voice — see the 🔑 API
-  // keys section). They serve as fallbacks for per-companion
-  // overrides.
-  const [voiceEngine, setVoiceEngine] = useState<'local' | 'api'>('local');
-  // Premium API settings (placeholder — not yet wired to the desktop)
-  const [voiceApiProvider, setVoiceApiProvider] = useState('elevenlabs');
-  const [voiceApiKey, setVoiceApiKey] = useState('');
-  const [voiceApiVoice, setVoiceApiVoice] = useState('nova');
+  // The global 'cyberclaw-voice-engine' AsyncStorage key is
+  // still read by loadVoiceFor() as the inheritance root for
+  // companions without a per-companion override, but we no
+  // longer surface it in this UI — it's an implementation
+  // detail now.
 
   // ── Agent Reach ───────────────────────────────────────────────
   const [remotePerms, setRemotePerms] = useState<RemotePermissions>({
@@ -884,17 +878,10 @@ export default function SettingsScreen({
     // Voice settings (new in v3.1.13)
     // v3.1.75: cyberclaw-voice-engine replaces cyberclaw-voice-local.
     // On first load, migrate: if voice-engine isn't set but the old
-    // voice-local key is, derive engine from it (true → local, false → api).
-    AsyncStorage.getItem('cyberclaw-voice-engine').then(v => {
-      if (v === 'local' || v === 'api') { setVoiceEngine(v); return; }
-      AsyncStorage.getItem('cyberclaw-voice-local').then(old => {
-        setVoiceEngine(old === 'false' ? 'api' : 'local');
-      });
-    });
-    AsyncStorage.getItem('cyberclaw-voice-local-id').then(v => { if (v) setVoiceLocalId(v); });
-    AsyncStorage.getItem('cyberclaw-voice-api-provider').then(v => { if (v) setVoiceApiProvider(v); });
-    AsyncStorage.getItem('cyberclaw-voice-api-key').then(v => { if (v) setVoiceApiKey(v); });
-    AsyncStorage.getItem('cyberclaw-voice-api-voice').then(v => { if (v) setVoiceApiVoice(v); });
+    // v3.10.154: cloud-TTS state removed — no per-screen
+    // loads for voiceApiProvider / voiceApiKey / voiceApiVoice.
+    // voiceEngine is now an implementation detail read by
+    // loadVoiceFor(), not surfaced in this UI.
 
     syncClient.loadSaved().then(({ host }) => { if (host) setHostIp(host); });
     getPermissions().then(p => setRemotePerms(p)).catch(() => {});
@@ -1207,36 +1194,19 @@ export default function SettingsScreen({
   // voice" boolean is now derived from voiceEngine: local enabled iff
   // voiceEngine === 'local'. The old cyberclaw-voice-local key is
   // read on first load as a migration fallback (see the useEffect
-  // below) but never written again.
-  const setVoiceEngineAndSave = async (v: 'local' | 'api') => {
-    setVoiceEngine(v);
-    await AsyncStorage.setItem('cyberclaw-voice-engine', v);
-  };
-  // v3.7.1: setVoiceLocalIdAndSave removed. Local-voice
-  // choice is now per-companion (handled in CompanionSettingsScreen
-  // via saveVoiceFor). The global 'cyberclaw-voice-local'
-  // AsyncStorage key is still read by loadVoiceFor() as a
-  // fallback for companions with no per-companion override,
-  // but we no longer write it from this screen.
-  const setVoiceApiProviderAndSave = async (v: string) => {
-    setVoiceApiProvider(v);
-    await AsyncStorage.setItem('cyberclaw-voice-api-provider', v);
-    // Reset voice to first available for this provider
-    const firstVoice = PREMIUM_PROVIDERS.find(p => p.id === v)?.voices[0].id;
-    if (firstVoice) {
-      setVoiceApiVoice(firstVoice);
-      await AsyncStorage.setItem('cyberclaw-voice-api-voice', firstVoice);
-    }
-  };
-  const setVoiceApiKeyAndSave = async (v: string) => {
-    setVoiceApiKey(v);
-    await AsyncStorage.setItem('cyberclaw-voice-api-key', v);
-  };
-  const setVoiceApiVoiceAndSave = async (v: string) => {
-    setVoiceApiVoice(v);
-    await AsyncStorage.setItem('cyberclaw-voice-api-voice', v);
-  };
-
+  // v3.10.154: ALL of these removed — no per-screen state
+  // for voice engine / provider / voice / key, no UI to bind
+  // them to.
+  //   setVoiceEngineAndSave        — engine is now an
+  //                                  implementation detail
+  //                                  read by loadVoiceFor()
+  //   setVoiceApiProviderAndSave   — no API providers anymore
+  //   setVoiceApiKeyAndSave        — no API key anymore
+  //   setVoiceApiVoiceAndSave      — no API voice anymore
+  // Migration runs once on App.tsx mount (see
+  // migrateV3_10_154_dropCloudTts) and clears all the related
+  // AsyncStorage keys + normalizes any legacy 'api' engine
+  // values back to 'default'.
   // v3.7.1: testLocalVoice + testDesktopVoice moved out of
   // this screen. The global Voice & Speech section is gone
   // (per-companion voice pickers in CompanionSettingsScreen
@@ -2092,55 +2062,17 @@ export default function SettingsScreen({
         </View>
       </Section>
 
-      {/* ── 🔑 API keys ─────────────────────────────────────────
-          v3.6.2: lifted out of the Voice & Speech section.
-          API keys are GLOBAL — one key covers the device,
-          and any companion that has API voice selected
-          (v3.7.0) uses the same key. The "✨ API speech"
-          master toggle below gates whether the v3.7.0
-          per-companion engine picker will even offer the
-          "Premium API" option. Today the toggle is
-          informational — the bridge that consumes the key
-          on the desktop side is still pending — but the
-          key is stored locally so it'll be picked up the
-          moment the bridge lands. */}
-      <Section title="🔑 API keys" desc="Global keys. One key covers all companions that use the matching service.">
-        <SubTitle>ElevenLabs (premium TTS)</SubTitle>
-        <Hint>Used for cloud TTS when a companion has Premium API voice selected. Stored locally in AsyncStorage; never leaves the device except as a request to ElevenLabs.</Hint>
-        <Label>ElevenLabs API key</Label>
-        <TextInput
-          style={styles.input}
-          value={voiceApiKey}
-          onChangeText={setVoiceApiKeyAndSave}
-          placeholder="Paste your API key"
-          placeholderTextColor="#555"
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <SubTitle>✨ API speech (master toggle)</SubTitle>
-        <Toggle
-          title="Enable API speech"
-          sub="When on, companions can be configured to use premium API voices (v3.7.0). When off, all companions are restricted to the local Android TTS engine."
-          value={voiceEngine === 'api'}
-          onValueChange={(v) => setVoiceEngineAndSave(v ? 'api' : 'local')}
-        />
-        <SubTitle>Provider</SubTitle>
-        <Hint>Which cloud TTS provider the API key above is for. (Selection is persisted today; the desktop bridge that consumes it ships with v3.7.0.)</Hint>
-        <View style={styles.optionRow}>
-          {PREMIUM_PROVIDERS.map(p => (
-            <OptionBtn key={p.id} active={voiceApiProvider === p.id} label={p.label} onPress={() => setVoiceApiProviderAndSave(p.id)} />
-          ))}
-        </View>
-        <Label>Default API voice</Label>
-        <Hint>Used as the default voice for new companions that pick Premium API. Each companion can override this in their settings page (v3.7.0).</Hint>
-        <View style={styles.optionRow}>
-          {PREMIUM_PROVIDERS.find(p => p.id === voiceApiProvider)?.voices.map(v => (
-            <OptionBtn key={v.id} active={voiceApiVoice === v.id} label={v.label} onPress={() => setVoiceApiVoiceAndSave(v.id)} />
-          ))}
-        </View>
-      </Section>
-
+      {/* v3.10.154: 🔑 API keys section removed entirely.
+          ElevenLabs / Google Cloud TTS were decorative —
+          the desktop never honored them, they shipped
+          broken. Voice selection now happens per-companion
+          in CompanionSettingsScreen against the device's
+          Android TextToSpeech engine (Google TTS, RHVoice,
+          eSpeak NG, Samsung TTS, etc.). The migration
+          migrateV3_10_154_dropCloudTts() runs on App.tsx
+          mount and clears any leftover API-key AsyncStorage
+          values, so users who had keys saved don't end up
+          with secrets lingering on disk. */}
       {/* v3.10.134: per-device default quest
           directory. When the user creates a new
           quest from the Quests screen, the editor

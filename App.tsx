@@ -29,7 +29,10 @@ import CompanionEditScreen from './src/screens/CompanionEditScreen';
 import QuestsScreen from './src/screens/QuestsScreen';
 import syncClient from './src/services/SyncClient';
 import { saveGreetingAudio } from './src/services/GreetingAudioCache';
-import { migrateLegacyTurnCueKey } from './src/services/VoiceSettings';
+import {
+  migrateLegacyTurnCueKey,
+  migrateV3_10_154_dropCloudTts,
+} from './src/services/VoiceSettings';
 
 const { WakeWordModule } = NativeModules;
 
@@ -147,6 +150,26 @@ export default function App(): React.JSX.Element {
   // the legacy key on the next app start.
   useEffect(() => {
     migrateLegacyTurnCueKey().catch(() => {});
+  }, []);
+
+  // v3.10.154: one-time cloud-TTS cleanup. Runs on the
+  // first launch of the new build. Idempotent. Clears the
+  // legacy ElevenLabs API key + provider/voice keys +
+  // rewrites any engine='api' values back to 'default'
+  // + rewrites any localId='nova' (ElevenLabs default)
+  // back to 'default'. After this runs the AsyncStorage
+  // is clean of all cloud-TTS state and the Settings /
+  // CompanionSettings UI matches the on-disk reality.
+  useEffect(() => {
+    migrateV3_10_154_dropCloudTts()
+      .then((r) => {
+        if (r.clearedKeys || r.normalizedEngines || r.normalizedVoiceIds) {
+          console.log(
+            `[Migration v3.10.154] cloud-TTS cleanup: cleared ${r.clearedKeys} keys, normalized ${r.normalizedEngines} engines, normalized ${r.normalizedVoiceIds} voice ids`,
+          );
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // v3.10.23: restore the persisted global speaker
