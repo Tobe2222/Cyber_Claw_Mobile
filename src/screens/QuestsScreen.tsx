@@ -1067,6 +1067,24 @@ export default function QuestsScreen({
                 // create and update so the two paths stay
                 // symmetric.
                 if (!editorOpen.id) {
+                  // v3.10.156: forward the user's
+                  // defaultQuestDir from cyberclaw-mobile-
+                  // settings so the desktop can pick the
+                  // same default location the mobile
+                  // suggests in its 'Suggested:' hint.
+                  // Without this, an empty directory input
+                  // would land the quest at ~/quests/<name>
+                  // instead of the user's intended default.
+                  let defaultQuestDir: string | undefined;
+                  try {
+                    const raw = await AsyncStorage.getItem('cyberclaw-mobile-settings');
+                    if (raw) {
+                      const s = JSON.parse(raw);
+                      if (typeof s?.defaultQuestDir === 'string' && s.defaultQuestDir.trim()) {
+                        defaultQuestDir = s.defaultQuestDir.trim();
+                      }
+                    }
+                  } catch (_) {}
                   syncClient.createQuest?.({
                     name: updates.name,
                     description: updates.description,
@@ -1074,6 +1092,7 @@ export default function QuestsScreen({
                     directory: typeof updates.directory === 'string' && updates.directory.trim()
                       ? updates.directory.trim()
                       : undefined,
+                    defaultQuestDir,
                   });
                 } else {
                   handleUpdateQuest(editorOpen.id, updates);

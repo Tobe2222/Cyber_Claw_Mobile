@@ -382,7 +382,17 @@ class SyncClient {
   markQuestGoalDone(id: string, goalIndex: number, completed: boolean) {
     this.send({ type: 'mark_quest_goal_done', id, goalIndex, completed });
   }
-  createQuest(quest: { name?: string; description?: string; directory?: string; goals?: any[] }) {
+  createQuest(quest: {
+    name?: string;
+    description?: string;
+    directory?: string;
+    defaultQuestDir?: string; // v3.10.156: forwarded so the
+                              // desktop's auto-derive can pick
+                              // the user's preferred default
+                              // location instead of always
+                              // falling back to ~/quests/<name>
+    goals?: any[];
+  }) {
     this.send({ type: 'create_quest', quest });
   }
 
