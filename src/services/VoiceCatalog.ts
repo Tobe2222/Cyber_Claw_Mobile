@@ -8,6 +8,14 @@
  * TextToSpeech engine, which is whatever the user has installed
  * (Google TTS, RHVoice, eSpeak NG, Samsung TTS, etc.).
  *
+ * v3.10.163: the dominant path is now desktop-piper synthesis
+ * (see WorkingSpeechAudioCache + the greeting + exit-reply
+ * caches). The mobile voice picker below is used only for
+ * the Android-TTS fallback when a piper cache miss happens
+ * — typically never, since the working-speech cache is warmed
+ * on app start. Piper voices are configured at the desktop
+ * (Settings → TTS Voice, 3 female + 3 male as of v3.2.92).
+ *
  * What the user picks here is just a label. The actual voice
  * comes from the device's installed TTS engine. We map
  * user-friendly labels to one of a small set of well-known
