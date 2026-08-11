@@ -294,7 +294,27 @@ export default function WakeModeScreen({
   const lastWsStateRef = useRef<string>('unknown');
   const lastSendErrorRef = useRef<{ type: string; reason: string; at: number } | null>(null);
 
-  const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'listening' : 'listening');
+  // v3.10.160: initialize voiceStatus so the visible
+  // status text doesn't flash 'listening' / 'YOUR TURN'
+  // before the greeting plays. v3.10.155 (and earlier)
+  // hardcoded 'listening' here, which meant the cycle
+  // text on the screen and the '🎤 YOUR TURN' sub-label
+  // appeared the instant voice mode opened, racing the
+  // greeting audio. Tobe (2026-08-11 18:38): 'when i open
+  // voice mode that it says your turn right away. It
+  // should wait for the que sound and the companion to
+  // finish hes greeting. The que is on point but not the
+  // text in this case.'
+  //
+  // The async useEffect below plays the greeting, waits
+  // for the cue, then sets voiceStatus='listening' before
+  // starting the recording turn. So the correct initial
+  // state is 'greeting' (which renders '🔊 Greeting...'
+  // in the cycle text and hides the 'YOUR TURN' sub-
+  // label, which is gated on voiceStatus === 'listening').
+  // Wake Mode uses the separate wake-listener path so it
+  // doesn't have this race; it stays at 'listening'.
+  const [voiceStatus, setVoiceStatus] = useState<string>(voiceMode ? 'greeting' : 'listening');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
   // v3.1.80: two-phase wake. When Wake Mode opens (NOT
   // voice mode), we play the greeting first and the wake
@@ -973,10 +993,20 @@ export default function WakeModeScreen({
         // turn". The settle + cue give the speaker buffer
         // time to drain AND the user a clear audio signal
         // that the mic is about to be live.
+        //
+        // v3.10.160: skip the settle delay if no greeting
+        // was played. The settle exists to drain the
+        // speaker buffer after the LAST audio — with no
+        // greeting there's nothing to drain, and waiting
+        // 4s in 'greeting' status with no audio playing
+        // looks broken. The cue still runs so the user
+        // always gets the audio signal.
         try {
-          await new Promise((resolve) =>
-            setTimeout(resolve, RESPONSE_SETTLE_DELAY_MS),
-          );
+          if (greetingText) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, RESPONSE_SETTLE_DELAY_MS),
+            );
+          }
           await playTurnCueAndWait();
         } catch (_) {
           // settle/cue is best-effort; the recording turn
@@ -1415,7 +1445,11 @@ export default function WakeModeScreen({
           addLogEntry(`Wake Mode: ${MAX_CONSECUTIVE_EMPTY_ROUNDS} consecutive empty rounds — exiting voice mode`, 'info');
           addVoiceLog(`🚪 No speech for ${empty} rounds — exiting voice mode`);
           consecutiveEmptyRoundsRef.current = 0;
-          exitRef.current();
+          // v3.10.160: play the exit phrase before closing
+          // + 1500ms delay so the audio actually plays.
+          // Same rationale as the exit-phrase listener.
+          playExitReplyRef.current?.().catch(() => {});
+          setTimeout(() => exitRef.current(), 1500);
           return;
         }
         if (voiceMode) {
@@ -1932,9 +1966,11 @@ export default function WakeModeScreen({
                 // forget) before closing. The 400ms delay
                 // gives the local TTS engine a chance to
                 // start producing audio before the screen
-                // tears down.
+                // tears down. v3.10.160: bumped from 400ms
+                // to 1500ms — see comment in the exit-phrase
+                // listener above for the full rationale.
                 playExitReply().catch(() => {});
-                setTimeout(() => exitRef.current(), 400);
+                setTimeout(() => exitRef.current(), 1500);
               }
               resolve(matched);
             }
@@ -2040,8 +2076,11 @@ export default function WakeModeScreen({
           );
           addVoiceLog(`👋 LLM gibberish → closing voice mode`);
           // v3.2.29: play the exit reply before closing.
+          // v3.10.160: bumped from 400ms to 1500ms so the
+          // TTS actually produces audio before the screen
+          // unmounts.
           playExitReply().catch(() => {});
-          setTimeout(() => exitRef.current?.(), 400);
+          setTimeout(() => exitRef.current?.(), 1500);
           return;
         }
       }
@@ -2361,8 +2400,29 @@ export default function WakeModeScreen({
       addLogEntry(`👋 Exit ML detected (${(e.score * 100).toFixed(0)}%)`, 'info');
       addVoiceLogRef.current?.(`👋 Exit ML (${(e.score * 100).toFixed(0)}%) → closing`);
       if (voiceMode) {
+        // v3.10.160: extended the close delay from
+        // 400ms to 1500ms so the exit phrase TTS has
+        // time to actually start playing before the
+        // screen unmounts. Tobe (2026-08-11 18:38):
+        // 'Its sound was lower than the greeting on
+        // opening for some reason.' Cause: at 400ms the
+        // WebView was tearing down + losing audio focus
+        // before the native TTS engine produced the
+        // first sample, so Android ducked the audio or
+        // the utterance got truncated mid-phrase — the
+        // user heard a quieter / cut-off syllable.
+        //
+        // 1500ms is long enough for the native engine
+        // to start producing audio (typical cold start
+        // is 50-200ms; on RHVoice with voice data
+        // loading it can be 800ms+). The screen stays
+        // visually open during this window — the user
+        // already said the exit phrase so they're not
+        // interacting with the UI; the brief extra
+        // hang-time is invisible to them but lets the
+        // audio actually play at full volume.
         playExitReplyRef.current?.().catch(() => {});
-        setTimeout(() => exitRef.current(), 400);
+        setTimeout(() => exitRef.current(), 1500);
       } else {
         // Plain wake mode + exit phrase = dismiss the wake
         // mode overlay. Same as a single close-button tap.
@@ -2800,7 +2860,14 @@ export default function WakeModeScreen({
           plays the exit reply before closing. Fire-and-
           forget: the close happens immediately, the audio
           plays in the background. */}
-      <TouchableOpacity style={styles.closeButton} onPress={() => { playExitReply().catch(() => {}); onExit(); }}>
+      <TouchableOpacity style={styles.closeButton} onPress={() => {
+        // v3.10.160: same delay as the exit-phrase path
+        // above. Without this the close button also
+        // truncates the goodbye audio because onExit()
+        // unmounts the screen synchronously.
+        playExitReply().catch(() => {});
+        setTimeout(() => onExit(), 1500);
+      }}>
         <Text style={styles.closeButtonText}>✕</Text>
       </TouchableOpacity>
     </View>
