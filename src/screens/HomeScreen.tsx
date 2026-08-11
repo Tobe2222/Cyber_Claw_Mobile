@@ -2607,15 +2607,25 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
         const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-response-${Date.now()}.${ext}`;
         await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
-        addLogEntry(`🔊 Written to ${tmpPath}, calling startPlayer`, 'info');
+        addLogEntry(`🔊 Written to ${tmpPath}, calling playCachedGreeting`, 'info');
 
         // If in voice mode, set status to 'playing'
         if (fullscreenRef.current) {
           setVoiceStatus('playing');
         }
 
+        // v3.10.161: use the shared playCachedGreeting
+        // helper for consistent audio focus + lifecycle
+        // handling across all desktop-synthesized audio
+        // (greeting, response, exit reply, attachment
+        // viewer). Previously we inlined startPlayer
+        // here AND in WakeModeScreen, both with their
+        // own lifecycle quirks. Centralizing on one
+        // helper means a fix in one place applies
+        // everywhere.
         try {
-          await WakeWordModule.startPlayer(tmpPath, false);
+          const { playAudioFile } = require('../services/AudioPlayer');
+          await playAudioFile(tmpPath);
           addLogEntry('🔊 startPlayer resolved OK', 'info');
         } catch (playerErr: any) {
           addLogEntry(`🔊 startPlayer ERROR: ${playerErr?.message}`, 'error');

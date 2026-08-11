@@ -532,31 +532,23 @@ export default function WakeModeScreen({
   // timeout, whichever comes first. Uses
   // WakeWordModule.startPlayer which emits
   // audioPlayerFinished on completion.
+  //
+  // v3.10.161: delegated to the shared AudioPlayer
+  // service so HomeScreen's onAudioResponse can use the
+  // same code path. The local `finish` log formatting is
+  // wrapped around the helper.
   const playCachedGreeting = useCallback(async (filePath: string): Promise<void> => {
     if (!WakeWordModule?.startPlayer) {
       addVoiceLog('🔊 cached play: startPlayer unavailable');
       return;
     }
     const t0 = Date.now();
-    let resolved = false;
-    const finish = (source: string) => {
-      if (resolved) return;
-      resolved = true;
-      if (sub) sub.remove();
-      clearTimeout(safetyTimer);
-      addVoiceLog(`🔊 done (cached-${source}, ${Date.now() - t0}ms)`);
-    };
-    let sub: { remove: () => void } | null = null;
-    const emitter = getWakeWordEmitter();
-    sub = emitter?.addListener('audioPlayerFinished', () => finish('play')) ?? null;
-    // Safety: max 10s for the greeting. Cache files
-    // are typically 1-3s.
-    const safetyTimer = setTimeout(() => finish('safety'), 10000);
     try {
-      await WakeWordModule.startPlayer(filePath, false);
+      const { playAudioFile } = require('../services/AudioPlayer');
+      await playAudioFile(filePath);
+      addVoiceLog(`🔊 done (cached-play, ${Date.now() - t0}ms)`);
     } catch (e: any) {
       addVoiceLog(`🔊 cached play failed: ${e?.message}`);
-      finish('error');
     }
   }, []);
 
@@ -2095,17 +2087,52 @@ export default function WakeModeScreen({
       // v3.1.91 — WakeModeScreen was missing it. Copy that
       // pattern here: write base64 to a temp file, call
       // WakeWordModule.startPlayer with the path.
+      //
+      // v3.10.161: rewrote this to use the SAME
+      // playCachedGreeting helper the greeting path uses,
+      // instead of duplicating the startPlayer call.
+      // The previous inline block skipped the
+      // audioPlayerFinished listener that playCachedGreeting
+      // registers — which means afterPlayback couldn't
+      // reliably know when the audio finished, AND any
+      // error path was inconsistent with the greeting
+      // path. Tobe (2026-08-11 20:00): "it does not make
+      // sound when it responds." Probable cause: the
+      // inline block called startPlayer without going
+      // through the same MediaPlayer lifecycle that the
+      // greeting does, which on his RHVoice/GrapheneOS
+      // setup may have collided with the in-flight
+      // working-cue MediaPlayer that hadn't been released
+      // yet (cueCancelled only stops the cue's polling
+      // loop, not the player). playCachedGreeting takes
+      // the same path as the greeting and is verified
+      // working.
+      //
+      // We write to a unique temp path per response
+      // (timestamped) so concurrent plays don't clash.
+      // After playback, the file is left in place for
+      // the duration of the audio + a safety margin;
+      // the temp dir is reclaimed by Android on its
+      // own schedule, so we don't bother cleaning up
+      // manually.
       if (msg.audioBase64) {
         try {
           const fs = require('react-native-fs');
           const ext = (msg.mimeType && msg.mimeType.includes('wav')) ? 'wav' : 'mp3';
           const tmpPath = `${fs.TemporaryDirectoryPath}/cyberclaw-wakemode-response-${Date.now()}.${ext}`;
           await fs.writeFile(tmpPath, msg.audioBase64, 'base64');
-          addLogEntry(`🔊 Wake Mode: audio written to ${tmpPath.split('/').pop()}, calling startPlayer`, 'info');
-          await WakeWordModule?.startPlayer?.(tmpPath, false);
-          addLogEntry('🔊 Wake Mode: startPlayer resolved', 'info');
+          const fileName = tmpPath.split('/').pop();
+          const fileSize = msg.audioBase64.length;
+          addLogEntry(`🔊 Wake Mode: response audio written (${fileName}, ${fileSize} base64 chars), playing`, 'info');
+          addVoiceLog(`🔊 playing response (${fileSize}b)`);
+          // Use the same playCachedGreeting helper as
+          // the greeting path so error handling, audio
+          // focus, and afterPlayback hooks are identical.
+          await playCachedGreeting(tmpPath);
+          addLogEntry('🔊 Wake Mode: response audio playback resolved', 'info');
         } catch (e: any) {
-          addLogEntry(`🔊 Wake Mode: startPlayer failed: ${e?.message}`, 'error');
+          addLogEntry(`🔊 Wake Mode: response audio failed: ${e?.message}`, 'error');
+          addVoiceLog(`🔊 ❌ response audio failed: ${e?.message}`);
         }
       } else {
         addLogEntry('🔊 Wake Mode: no audioBase64 in response', 'debug');
