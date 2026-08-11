@@ -1042,7 +1042,7 @@ export default function QuestsScreen({
               isNew={!editorOpen.id}
               insets={insets}
               onClose={() => setEditorOpen(null)}
-              onSave={(updates) => {
+              onSave={async (updates) => {
                 // v3.8.1: if we opened the editor for a new
                 // quest (empty id), call createQuest instead
                 // of updateQuest. The desktop assigns the id
