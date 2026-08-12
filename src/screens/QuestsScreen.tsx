@@ -1850,32 +1850,6 @@ function QuestDetailBody({
           drops into the editor so the user can add
           one. */}
 
-      <View style={styles.modalSection}>
-        <Text style={styles.modalSectionTitle}>
-          📁 Project directory
-        </Text>
-        {quest.directory ? (
-          <Text
-            style={[styles.modalSectionBody, styles.modalDirectoryText]}
-            selectable
-            onPress={() => onEdit?.()}
-          >
-            {quest.directory}
-            <Text style={styles.modalDirectoryEditHint}>
-              {' '}(tap to edit)
-            </Text>
-          </Text>
-        ) : (
-          <Text
-            style={styles.modalSectionBody}
-            onPress={() => onEdit?.()}
-          >
-            <Text style={styles.modalDirectoryEmpty}>
-              (no directory — tap to set)
-            </Text>
-          </Text>
-        )}
-      </View>
 
       {/* v3.10.101: per-quest instructions. Shown
           read-only on the mobile. The desktop's quest
@@ -1973,7 +1947,14 @@ function QuestDetailBody({
         <View style={styles.modalSection}>
           <Text style={styles.modalSectionTitle}>Project directory</Text>
           <TouchableOpacity
-            onPress={() => Clipboard.setString(quest.directory!)}
+            onPress={() => {
+              Clipboard.setString(quest.directory!);
+              // v3.10.159: surface the copy result so the
+              // user knows it worked. Without this, tapping
+              // the path silently copies to clipboard and
+              // the user has no idea the action took.
+              Alert.alert('Copied', quest.directory);
+            }}
             style={styles.modalDirBox}
           >
             <Text style={styles.modalDirPath} selectable>
@@ -2290,24 +2271,6 @@ const styles = StyleSheet.create({
     color: '#cfd2e0',
     fontSize: 14,
     lineHeight: 20,
-  },
-  // v3.10.136: directory row in the detail modal.
-  // Uses a monospace font so paths are readable,
-  // and a muted "(tap to edit)" hint that doubles
-  // as the visual affordance for opening the editor.
-  modalDirectoryText: {
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 13,
-  },
-  modalDirectoryEditHint: {
-    color: '#7a809a',
-    fontSize: 11,
-    fontStyle: 'italic',
-  },
-  modalDirectoryEmpty: {
-    color: '#7a809a',
-    fontSize: 13,
-    fontStyle: 'italic',
   },
   // v3.10.101: per-quest instructions display. The
   // path is shown in a monospace font with a muted
