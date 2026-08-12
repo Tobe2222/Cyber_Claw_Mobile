@@ -99,6 +99,17 @@ jobs:
         # the upload doesn't succeed. Built-in retry is 3 attempts
         # for transient HTTP errors.
         #
+        # draft: false is REQUIRED. softprops defaults to
+        # draft: true, which means the release gets created
+        # but never surfaces on the public Tags page (drafts
+        # are only visible to authenticated users with write
+        # access). The download dropdown on the Tags page
+        # only lists non-draft release assets. 4 v3.10.165
+        # runs silently created draft releases until I
+        # noticed and manually published the v3.10.165
+        # release via gh release edit --draft=false on
+        # 2026-08-12.
+        #
         # Note: github.ref_name is already prefixed with "v" (e.g.
         # "v3.10.165"). tag_name uses the ref directly; the
         # display name strips the leading "v" so the release
@@ -111,5 +122,6 @@ jobs:
           generate_release_notes: true
           files: CyberClaw-Android-${{ github.ref_name }}.apk
           fail_on_unmatched_files: true
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
