@@ -533,6 +533,34 @@ class SyncClient {
     this.send({ type: 'request_working_audio', text });
   }
 
+  // v3.10.165: TTS voice picker mirror. Asks the desktop
+  // for its piper voice list + the current selection. The
+  // mobile's voice picker is rendered from this list so
+  // the mobile and the desktop can't drift apart — if the
+  // desktop adds a voice, the mobile gets it on the next
+  // refresh. Response handled in the 'tts_settings' case
+  // below; the picker reads from the 'tts_settings' event.
+  requestTtsSettings() {
+    this.send({ type: 'request_tts_settings' });
+  }
+
+  // v3.10.165: set the desktop's piper voice. The mobile
+  // sends the picked voice id; the desktop writes
+  // localStorage.cyberclaw-settings.ttsVoice and broadcasts
+  // 'tts_settings_changed' to all connected mobiles. The
+  // picker updates its checkmark on receipt, and the
+  // next TTS synthesis (greeting, working, response, exit
+  // reply) uses the new voice.
+  //
+  // Note: this REPLACES the legacy WakeWordModule.setTtsVoice
+  // call which only changed the *Android* TTS engine's
+  // local voice. The Android TTS path is the device-TTS
+  // fallback we want to avoid; the piper path is the
+  // established architecture.
+  setTtsVoice(voice: string) {
+    this.send({ type: 'set_tts_voice', voice });
+  }
+
   setCompanionId(companionId: string) {
     this.send({ type: 'set_companion_id', companionId });
   }
@@ -921,6 +949,32 @@ class SyncClient {
         break;
 
       case 'pong':
+        break;
+
+      // v3.10.165: TTS voice picker mirror. Response to
+      // requestTtsSettings() with the desktop's piper list
+      // + current selection. Shape: { ok, voices, current,
+      // error, ts }. Emitted as 'tts_settings' for the
+      // picker to render.
+      case 'tts_settings':
+        console.log('[SyncClient] Received tts_settings ok=' + msg.ok + ' voices=' + (msg.voices?.length || 0) + ' current=' + msg.current);
+        this.emit('tts_settings', msg);
+        break;
+      // v3.10.165: ack of setTtsVoice(). Shape:
+      // { ok, current, error, ts }. Emitted so the picker
+      // can show a saved toast or revert on failure.
+      case 'tts_voice_set':
+        console.log('[SyncClient] Received tts_voice_set ok=' + msg.ok + ' current=' + msg.current);
+        this.emit('tts_voice_set', msg);
+        break;
+      // v3.10.165: desktop broadcasts tts_settings_changed
+      // when the voice changes (e.g. from another connected
+      // mobile, or from the desktop's own settings). Pickers
+      // refresh their checkmark on receipt. Shape: { current,
+      // ts }.
+      case 'tts_settings_changed':
+        console.log('[SyncClient] Received tts_settings_changed current=' + msg.current);
+        this.emit('tts_settings_changed', msg);
         break;
 
       case 'companion_id':

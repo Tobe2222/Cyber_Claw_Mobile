@@ -1775,6 +1775,41 @@ export default function SettingsScreen({
                 tick up as they use voice mode. */}
             <VoiceEnrollmentBar variant="compact" />
 
+            {/* v3.10.165: dedicated reset button so the
+                user can wipe the speaker profile and the
+                20/20 sample count without scrolling for
+                the Clear-profile button inside the
+                enrollment panel. Tobe hit the locked
+                20/20 state on 2026-08-12 and had no
+                visible way to start fresh. */}
+            <View style={{ marginTop: 8, marginBottom: 4 }}>
+              <TouchableOpacity
+                style={styles.saveAudioBtn}
+                onPress={() => {
+                  Alert.alert(
+                    'Delete voice samples?',
+                    'Wipes the speaker profile + all 20 enrolled samples. The wake word will respond to anyone again until you re-enroll.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Delete',
+                        style: 'destructive',
+                        onPress: async () => {
+                          try {
+                            await WakeWordModule?.clearSpeakerEnrollment?.();
+                          } catch (e: any) {
+                            console.warn('[Settings] clearSpeakerEnrollment failed:', e?.message);
+                          }
+                        },
+                      },
+                    ],
+                  );
+                }}
+              >
+                <Text style={styles.saveAudioBtnText}>🗑️ Delete voice samples & start fresh</Text>
+              </TouchableOpacity>
+            </View>
+
             {/*
               v3.10.66: explicit speaker-enrollment panel,
               moved from each companion's wake settings

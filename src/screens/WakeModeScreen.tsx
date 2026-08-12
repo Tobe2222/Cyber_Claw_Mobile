@@ -1131,6 +1131,38 @@ export default function WakeModeScreen({
             }
           }
 
+          // v3.10.165: pre-warm the exit-reply too.
+          // The exit-reply was previously synthesized
+          // on first close, which fell back to the
+          // device-TTS engine (different voice, quieter
+          // than piper). Pre-warming in parallel with
+          // the greeting ensures the desktop piper
+          // cache is warm before the user closes voice
+          // mode, so the exit reply plays through
+          // piper (the established architecture), not
+          // the device-TTS fallback. Tobe 2026-08-12:
+          // "the exit which uses fallback still since
+          // it much quieter."
+          let prewarmExitPhrase = 'Goodbye!';
+          try {
+            const storedExit = await AsyncStorage.getItem('cyberclaw-exit-reply-phrase');
+            if (storedExit !== null && storedExit.trim()) {
+              prewarmExitPhrase = storedExit;
+            }
+          } catch (_) {}
+          if (prewarmExitPhrase && prewarmExitPhrase.trim()) {
+            const { getCachedExitReplyPath, ensureExitReplyCached } = require('../services/ExitReplyAudioCache');
+            try {
+              const prewarmExitCached = await getCachedExitReplyPath(prewarmExitPhrase);
+              if (prewarmExitCached) {
+                addVoiceLog(`🔊 exit reply cached ✓ (${prewarmExitCached.split('/').pop()})`);
+              } else {
+                addVoiceLog(`🔊 pre-warming exit reply via desktop...`);
+                ensureExitReplyCached(prewarmExitPhrase).catch(() => {});
+              }
+            } catch (_) {}
+          }
+
           // v3.1.80 / v3.1.85: two-phase wake. Play the
           // greeting first, then start the listener after
           // the greeting actually finishes speaking. The

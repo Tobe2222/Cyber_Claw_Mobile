@@ -202,6 +202,72 @@ export default function CompanionSettingsScreen({
   const [vcSavedAt, setVcSavedAt] = useState<number | null>(null);
   const vcLoadedRef = useRef(false);
 
+  // v3.10.165: live voice list from the desktop. null =
+  // not loaded yet (picker shows the LOCAL_VOICES fallback
+  // with a "Loading from desktop..." hint). Populated on
+  // mount via syncClient.requestTtsSettings() and refreshed
+  // whenever the desktop broadcasts tts_settings_changed.
+  const [voiceList, setVoiceList] = useState<Array<{ id: string; label: string; desc: string; group?: string }> | null>(null);
+  const [desktopVoice, setDesktopVoice] = useState<string>('lessac');
+
+  // v3.10.165: tap a voice in the picker. Updates the
+  // local state immediately (responsive UI) and sends
+  // set_tts_voice to the desktop. The desktop writes
+  // localStorage.cyberclaw-settings.ttsVoice and broadcasts
+  // tts_settings_changed to all connected mobiles. The
+  // broadcast handler below updates desktopVoice.
+  const onPickVoice = useCallback((voiceId: string) => {
+    setVcLocalId(voiceId);
+    // Optimistic local save: also write to AsyncStorage
+    // so the picker reflects the choice even if the
+    // desktop is offline. The next request_tts_settings
+    // response (or the broadcast) will confirm or revert.
+    saveVoiceFor(companionId, { engine: vcEngine, localId: voiceId }).catch(() => {});
+    if (syncClient?.connected) {
+      syncClient.setTtsVoice(voiceId);
+    }
+  }, [companionId, vcEngine]);
+
+  // v3.10.165: subscribe to TTS voice events from the
+  // desktop. request_tts_settings response populates
+  // voiceList + sets desktopVoice as the current
+  // selection. tts_settings_changed (sent on every voice
+  // change, including from other mobiles) just updates
+  // desktopVoice. tts_voice_set acks are ignored for now
+  // (the broadcast is the source of truth).
+  useEffect(() => {
+    const onSettings = (msg: any) => {
+      if (msg?.ok && Array.isArray(msg.voices)) {
+        setVoiceList(msg.voices.map((v: any) => ({
+          id: v.id,
+          label: v.label,
+          desc: v.id === v.label ? '' : (v.id.charAt(0).toUpperCase() + v.id.slice(1) + ' — '), // group-prefix
+          group: v.group,
+        })));
+        if (msg.current) setDesktopVoice(msg.current);
+        if (msg.current) setVcLocalId(msg.current);
+      }
+    };
+    const onSettingsChanged = (msg: any) => {
+      if (msg?.current) {
+        setDesktopVoice(msg.current);
+        setVcLocalId(msg.current);
+      }
+    };
+    syncClient?.on?.('tts_settings', onSettings);
+    syncClient?.on?.('tts_settings_changed', onSettingsChanged);
+    // Request on mount. The desktop will respond; if it's
+    // not connected (offline), the fallback LOCAL_VOICES
+    // list stays visible.
+    if (syncClient?.connected) {
+      syncClient.requestTtsSettings();
+    }
+    return () => {
+      syncClient?.off?.('tts_settings', onSettings);
+      syncClient?.off?.('tts_settings_changed', onSettingsChanged);
+    };
+  }, []);
+
   // v3.7.2: per-companion silence timeout. Re-runs the
   // rehydration below on companion switch (mirrors the
   // voice config rehydration). The silence picker in the
@@ -914,6 +980,18 @@ export default function CompanionSettingsScreen({
         console.log(`[Voice] setTtsVoice deferred: ${e?.message || e}`);
       }
     }
+    // v3.10.165: ALSO drive the desktop's piper voice.
+    // The legacy wm.setTtsVoice call above only changes
+    // the Android TTS engine's local voice (the device-TTS
+    // fallback path), not the piper voice the user is
+    // actually hearing. The piper voice lives in the
+    // desktop's localStorage.cyberclaw-settings.ttsVoice
+    // and is changed by sending set_tts_voice over the
+    // sync server.
+    if (syncClient?.connected) {
+      syncClient.setTtsVoice(vcLocalId);
+    }
+
     setVcSavedAt(Date.now());
   }, [companionId, vcEngine, vcLocalId]);
 
@@ -2038,24 +2116,28 @@ export default function CompanionSettingsScreen({
 
             {vcEngine === 'local' && (
               <>
-                <SubTitle>Local voice</SubTitle>
+                <SubTitle>Local voice (piper on the desktop)</SubTitle>
+                <Hint>Picked voice drives the desktop's piper synthesis. The mobile's picker mirrors the desktop dropdown — if the desktop adds a 9th voice, the mobile picks it up on the next refresh.</Hint>
                 <View style={{ marginVertical: 6 }}>
-                  {LOCAL_VOICES.map(v => (
+                  {(voiceList || LOCAL_VOICES).map(v => (
                     <TouchableOpacity
                       key={v.id}
-                      onPress={() => setVcLocalId(v.id)}
+                      onPress={() => onPickVoice(v.id)}
                       style={[styles.radioRow, vcLocalId === v.id && styles.radioRowActive]}
                     >
                       <Text style={styles.radioBullet}>{vcLocalId === v.id ? '◉' : '○'}</Text>
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.radioTitle]}>{v.label}</Text>
-                        {v.engineHint && (
-                          <Text style={styles.radioSub}>{v.engineHint}</Text>
+                        {v.desc && (
+                          <Text style={styles.radioSub}>{v.desc}</Text>
                         )}
                       </View>
                     </TouchableOpacity>
                   ))}
                 </View>
+                {voiceList ? null : (
+                  <Hint>⏳ Loading voices from desktop...</Hint>
+                )}
               </>
             )}
 

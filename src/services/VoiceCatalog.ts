@@ -1,49 +1,36 @@
 /**
- * VoiceCatalog — local TTS voices only.
+ * VoiceCatalog — TTS voices, mirror of the desktop.
  *
  * v3.10.154: stripped cloud TTS scaffolding. ElevenLabs / Google
  * Cloud TTS were decorative — the desktop never honored them,
  * they shipped broken, and they didn't match the local-first
- * direction. All TTS now routes through the device's Android
- * TextToSpeech engine, which is whatever the user has installed
- * (Google TTS, RHVoice, eSpeak NG, Samsung TTS, etc.).
+ * direction.
  *
- * v3.10.163: the dominant path is now desktop-piper synthesis
- * (see WorkingSpeechAudioCache + the greeting + exit-reply
- * caches). The mobile voice picker below is used only for
- * the Android-TTS fallback when a piper cache miss happens
- * — typically never, since the working-speech cache is warmed
- * on app start. Piper voices are configured at the desktop
- * (Settings → TTS Voice, 3 female + 3 male as of v3.2.92).
+ * v3.10.163: the dominant path is now desktop-piper synthesis.
+ * The mobile voice picker used to be a static list of Android
+ * TTS fallback ids (slt / clb / bdl / female / male) that the
+ * mobile wrote to AsyncStorage and the desktop never saw. The
+ * actual piper voice came from the desktop's own
+ * cyberclaw-settings.ttsVoice in localStorage.
  *
- * What the user picks here is just a label. The actual voice
- * comes from the device's installed TTS engine. We map
- * user-friendly labels to one of a small set of well-known
- * canonical voice names that ship with the most common
- * Android TTS engines:
+ * v3.10.165: the mobile picker is now an extension of the
+ * desktop's piper list. The mobile requests the list from the
+ * desktop at app start (request_tts_settings) and renders
+ * whatever the desktop reports. The 8 entries below are a
+ * client-side FALLBACK used only if the desktop doesn't
+ * support v3.10.165+ yet (e.g. on an older desktop or before
+ * the desktop has been restarted with the new IPC). When the
+ * desktop's response arrives, the picker re-renders from that.
  *
- *   - 'default'           The system default voice
- *   - 'male' / 'female'   Gender aliases resolved at the
- *                         native layer to the first installed
- *                         voice matching the requested locale
- *                         + gender
+ * Voices are kept in sync with src/index.html on the desktop
+ * (the settings-tts-voice <select>). If the desktop grows a
+ * voice, the mobile picks it up via the IPC; this fallback
+ * list only matters on cold-start before the IPC response.
  *
- * For RHVoice specifically (the degoogled / F-Droid option
- * Tobe uses on GrapheneOS), the canonical voice names match:
- *   - 'slt'   female, US English
- *   - 'clb'   male, US English (deep)
- *   - 'bdl'   male, US English (lighter)
- *
- * The picker can grow with voice names from real installed
- * engines in a future version — for now this fixed catalog
- * covers the most common Android TTS installations without
- * needing a native bridge just to render a list.
- *
- * The catalog is the source of truth for:
- *   - LOCAL_VOICES: device-language aliases for Android's
- *     on-device TTS engine. The actual voice comes from the
- *     user's installed TTS engine — these are picker labels
- *     resolved by the native TextToSpeech engine.
+ * The actual voice comes from the desktop's piper pipeline
+ * (src/local-ai.js PIPER_VOICES). The mobile picker is just
+ * UI that sends a preference to the desktop via
+ * syncClient.setTtsVoice(voice).
  */
 
 export type VoiceId = string;
@@ -51,32 +38,30 @@ export type VoiceId = string;
 export type LocalVoice = {
   id: VoiceId;
   label: string;
-  /** Hint shown next to the label so the user knows which
-   *  engine this voice comes from. Used by the Settings UI
-   *  to help the user understand why a particular voice is
-   *  available / not available. */
-  engineHint?: string;
+  /** One-line description shown under the label in the
+   *  picker. Kept short so the settings list doesn't bloat. */
+  desc: string;
+  /** "Female" | "Male" — used by the picker to group voices
+   *  in optgroup-like UI. Mirrors the <optgroup> structure
+   *  in the desktop's index.html. */
+  group?: string;
 };
 
-/** Local TTS voices. The actual voice comes from the user's
- *  installed TTS engine. These are picker labels mapped to
- *  well-known voice names. */
+/** Client-side fallback only. The desktop's list (returned
+ *  by request_tts_settings) is the source of truth at
+ *  runtime. This list is shown for ~1s on cold start, or
+ *  when the desktop doesn't support the v3.10.165 IPC yet. */
 export const LOCAL_VOICES: LocalVoice[] = [
-  { id: 'default', label: '🎙️ System Default', engineHint: 'uses whatever the OS picked' },
-  // RHVoice canonical English voices. Tobe uses RHVoice on
-  // GrapheneOS — these are the three English voices RHVoice
-  // ships by default. If RHVoice isn't installed, the native
-  // bridge falls back to the system default.
-  { id: 'slt', label: '👩 SLT — Female, US English (RHVoice)', engineHint: 'RHVoice required' },
-  { id: 'clb', label: '👨 CLB — Male, US English, deep (RHVoice)', engineHint: 'RHVoice required' },
-  { id: 'bdl', label: '👨 BDL — Male, US English, lighter (RHVoice)', engineHint: 'RHVoice required' },
-  // Generic gender aliases. Resolved by the native layer to
-  // the first voice matching the requested gender in the
-  // current locale. Works with any TTS engine (Google TTS,
-  // Samsung TTS, etc.) that has at least one male + one
-  // female voice installed.
-  { id: 'female', label: '👩 Female (auto)', engineHint: 'first female voice in current locale' },
-  { id: 'male',   label: '👨 Male (auto)',   engineHint: 'first male voice in current locale' },
+  // Female
+  { id: 'amy',      label: 'Amy',       desc: 'US, warm & conversational',     group: 'Female' },
+  { id: 'kathleen', label: 'Kathleen',  desc: 'US, clear & professional',      group: 'Female' },
+  { id: 'jenny',    label: 'Jenny',     desc: 'British',                       group: 'Female' },
+  { id: 'kristin',  label: 'Kristin',   desc: 'US, low & breathy',             group: 'Female' },
+  // Male
+  { id: 'lessac',   label: 'Lessac',    desc: 'US, baseline',                  group: 'Male' },
+  { id: 'joe',      label: 'Joe',       desc: 'US, slightly deeper',           group: 'Male' },
+  { id: 'ryan',     label: 'Ryan',      desc: 'US, alternative male',          group: 'Male' },
+  { id: 'sam',      label: 'Sam',       desc: 'US, smooth & warm',             group: 'Male' },
 ];
 
 /** Engine a companion can pick. v3.10.154 simplified to just
@@ -88,4 +73,4 @@ export type VoiceEngine = 'local' | 'default';
 
 export const DEFAULT_VOICE_ENGINE: VoiceEngine = 'default';
 
-export const DEFAULT_LOCAL_VOICE_ID: VoiceId = 'default';
+export const DEFAULT_LOCAL_VOICE_ID: VoiceId = 'lessac';
