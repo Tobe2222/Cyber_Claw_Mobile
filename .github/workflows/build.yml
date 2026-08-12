@@ -89,43 +89,27 @@ jobs:
         run: mv android/app/build/outputs/apk/release/app-release.apk CyberClaw-Android-${{ github.ref_name }}.apk
 
       - name: Upload to GitHub Release
-        # v3.2.25 — retry on transient HttpError. The v3.2.24 build
-        # failed here with "other side closed" because the GitHub
-        # Releases CDN had a hiccup. The retry wraps the upload so
-        # a transient network blip doesn't fail an otherwise-
-        # successful build (the APK is already built; only the
-        # upload failed).
-        uses: nick-fields/retry@v3
+        # v3.10.165: replaced the nick-fields/retry@v3 wrapper
+        # (which was silently swallowing the upload failure —
+        # 4 v3.10.165 runs all reported success but no release
+        # was ever created) with softprops/action-gh-release
+        # directly. This action is the canonical GitHub-release
+        # upload action: it creates-or-updates the release AND
+        # attaches the asset in one call, and it fails loud if
+        # the upload doesn't succeed. Built-in retry is 3 attempts
+        # for transient HTTP errors.
+        #
+        # Note: github.ref_name is already prefixed with "v" (e.g.
+        # "v3.10.165"). tag_name uses the ref directly; the
+        # display name strips the leading "v" so the release
+        # shows as "3.10.165" instead of "v3.10.165" on the
+        # Releases page (the Tags page shows tag_name as-is).
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: CyberClaw-Android-${{ github.ref_name }}.apk
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          max_attempts: 4
-          retry_on: error
-          retry_wait_seconds: 15
-          # v3.2.25: nick-fields/retry requires one of these.
-          # 5 minutes is more than enough for 4 attempts of
-          # upload with 15s waits (worst case ~5 min).
-          timeout_minutes: 5
-          command: |
-            # softprops/action-gh-release handles create-or-update
-            # natively, but we invoke it via the CLI for retry
-            # compatibility (CLI failures retry; nested action
-            # failures do not).
-            set -e
-            # github.ref_name is already prefixed with "v" (e.g.
-            # "v3.2.26"). Don't prepend another v or you get
-            # "vv3.2.26" as the release name. This was the bug
-            # Tobe spotted in v3.2.24-v3.2.26.
-            REF="${{ github.ref_name }}"
-            if gh release view "$REF" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-              # Release exists — upload (replace) the asset.
-              gh release upload "$REF" CyberClaw-Android-${{ github.ref_name }}.apk \
-                --repo "${{ github.repository }}" --clobber
-            else
-              # Release doesn't exist yet — create it.
-              gh release create "$REF" \
-                --repo "${{ github.repository }}" \
-                --title "$REF" \
-                --generate-notes \
-                CyberClaw-Android-${{ github.ref_name }}.apk
-            fi
