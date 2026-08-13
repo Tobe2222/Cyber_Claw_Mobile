@@ -87,9 +87,21 @@ const POLL_INTERVAL_MS = 2000;
 // Fix: in 'active-only' mode (used by WakeModeScreen),
 // the count and bar fill reflect only activeContributions
 // (1 per voice-mode turn), with a smaller threshold
-// (ACTIVE_LOCK_THRESHOLD = 20 turns). Full mode + compact
+// (ACTIVE_LOCK_THRESHOLD turns). Full mode + compact
 // mode in Settings keep the combined view.
-const ACTIVE_LOCK_THRESHOLD = 20;
+//
+// v3.10.166: bumped ACTIVE_LOCK_THRESHOLD from 20 to 100.
+// Tobe (2026-08-13): "the bar says Learning 20/20 for
+// some reason. It should be 104/1000 but i think x/100
+// should be enough, should it not? 100 samples to learn
+// from?" The 20 cap was hitting him after only ~20 voice
+// turns — too few to actually represent the user's voice.
+// 100 turns is a more honest sample size while still
+// remaining visibly progressive in the bar. The native
+// OWW profiling threshold (which gates the actual lock
+// + matchScore usage) is unchanged — this is only the
+// UI progress denominator.
+const ACTIVE_LOCK_THRESHOLD = 100;
 
 type Variant = 'full' | 'compact';
 type Mode = 'combined' | 'active-only';

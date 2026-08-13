@@ -36,6 +36,7 @@
 const fs = require('react-native-fs');
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from './SyncClient';
+import { getCurrentVoiceIdForCache } from './VoiceSettings';
 
 const CACHE_INDEX_KEY = 'cyberclaw-exit-reply-cache-index';
 
@@ -77,28 +78,50 @@ function hashPhrase(phrase: string): string {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-function fileNameForPhrase(phrase: string): string {
-  return `cyberclaw-exit-reply-${hashPhrase(phrase)}.wav`;
+// v3.10.166: cache key includes voice so a voice change
+// in the picker produces a fresh synthesis on the next
+// exit instead of playing the previous-voice WAV. Was
+// just hashPhrase(phrase) before — voice change had no
+// effect until the cache was manually cleared (which
+// the picker didn't do — clearExitReplyCache() had no
+// callers in the codebase).
+function cacheKey(phrase: string, voice: string): string {
+  return `${voice}::${phrase}`;
+}
+
+function fileNameForPhrase(phrase: string, voice: string): string {
+  return `cyberclaw-exit-reply-${hashPhrase(cacheKey(phrase, voice))}.wav`;
 }
 
 // v3.2.29: returns the local file path of the cached
 // exit reply audio for the given phrase, or null if no
 // cache exists. Verifies the file actually exists on
 // disk (in case the index is stale).
+//
+// v3.10.166: takes a voice parameter so the cache is
+// per-(phrase, voice). A voice change in the picker
+// misses the cache, which forces a fresh synthesis
+// against the new desktop piper voice. Voice is
+// resolved internally (per-companion override → global
+// default → 'lessac') when not provided.
 export async function getCachedExitReplyPath(
   phrase: string,
+  voice?: string,
+  companionId?: string,
 ): Promise<string | null> {
   if (!phrase || !phrase.trim()) return null;
+  const resolvedVoice = voice ?? await getCurrentVoiceIdForCache(companionId);
   const index = await loadIndex();
-  const fileName = index[phrase] || fileNameForPhrase(phrase);
+  const key = cacheKey(phrase, resolvedVoice);
+  const fileName = index[key] || fileNameForPhrase(phrase, resolvedVoice);
   const fullPath = `${fs.DocumentDirectoryPath}/${fileName}`;
   try {
     const exists = await fs.exists(fullPath);
     if (!exists) {
       // Index points to a missing file — clean up and
       // treat as a cache miss.
-      if (index[phrase]) {
-        delete index[phrase];
+      if (index[key]) {
+        delete index[key];
         await saveIndex(index);
       }
       return null;
@@ -116,8 +139,20 @@ export async function getCachedExitReplyPath(
 // On a typical cold start the cache is empty so the first
 // close fires a synthesis and falls back to speakText();
 // subsequent closes use the warmed cache.
-export function requestExitReplySynthesis(phrase: string): void {
+//
+// v3.10.166: takes a voice parameter that's sent with
+// the request so the desktop can pick the right piper
+// voice. The mobile-side cache key is keyed by
+// (phrase, voice), so a voice change forces a fresh
+// synthesis. Voice is resolved internally when not
+// provided.
+export async function requestExitReplySynthesis(
+  phrase: string,
+  voice?: string,
+  companionId?: string,
+): Promise<void> {
   if (!phrase || !phrase.trim()) return;
+  const resolvedVoice = voice ?? await getCurrentVoiceIdForCache(companionId);
   if (pendingSynthesis && lastRequestedPhrase === phrase) {
     console.log(`[ExitReplyAudioCache] Synthesis already pending for "${phrase.substring(0, 30)}", skipping duplicate request`);
     return;
@@ -125,8 +160,8 @@ export function requestExitReplySynthesis(phrase: string): void {
   pendingSynthesis = true;
   lastRequestedPhrase = phrase;
   try {
-    console.log(`[ExitReplyAudioCache] Requesting desktop synthesis for "${phrase.substring(0, 40)}"`);
-    syncClient.requestExitReplyAudio(phrase);
+    console.log(`[ExitReplyAudioCache] Requesting desktop synthesis for "${phrase.substring(0, 40)}" (voice=${resolvedVoice})`);
+    syncClient.requestExitReplyAudio(phrase, resolvedVoice);
   } catch (e: any) {
     console.warn('[ExitReplyAudioCache] requestExitReplyAudio failed:', e?.message);
     pendingSynthesis = false;
@@ -136,20 +171,30 @@ export function requestExitReplySynthesis(phrase: string): void {
 // v3.2.29: save the desktop-synthesized audio to permanent
 // storage. Called from the exit_reply_audio event listener.
 // Returns the local file path on success, null on failure.
+//
+// v3.10.166: takes a voice parameter so the saved file
+// is keyed by (phrase, voice). Voice is resolved
+// internally when not provided. The audio_response
+// handler in HomeScreen.tsx forwards msg.voice from the
+// desktop if present, so the cache write uses the same
+// key the desktop synthesized against.
 export async function saveExitReplyAudio(
   phrase: string,
   audioBase64: string,
+  voice?: string,
+  companionId?: string,
 ): Promise<string | null> {
   if (!phrase || !phrase.trim() || !audioBase64) return null;
   pendingSynthesis = false;
-  const fileName = fileNameForPhrase(phrase);
+  const resolvedVoice = voice ?? await getCurrentVoiceIdForCache(companionId);
+  const fileName = fileNameForPhrase(phrase, resolvedVoice);
   const fullPath = `${fs.DocumentDirectoryPath}/${fileName}`;
   try {
     await fs.writeFile(fullPath, audioBase64, 'base64');
     const index = await loadIndex();
-    index[phrase] = fileName;
+    index[cacheKey(phrase, resolvedVoice)] = fileName;
     await saveIndex(index);
-    console.log(`[ExitReplyAudioCache] Saved exit reply audio: ${fullPath} (${audioBase64.length} base64 chars)`);
+    console.log(`[ExitReplyAudioCache] Saved exit reply audio: ${fullPath} (voice=${resolvedVoice}, ${audioBase64.length} base64 chars)`);
     return fullPath;
   } catch (e: any) {
     console.warn('[ExitReplyAudioCache] saveExitReplyAudio failed:', e?.message);
@@ -161,10 +206,18 @@ export async function saveExitReplyAudio(
 // synthesis request (don't await — returns immediately).
 // Returns the cached path if it already exists, or null
 // if a synthesis was requested.
-export async function ensureExitReplyCached(phrase: string): Promise<string | null> {
-  const existing = await getCachedExitReplyPath(phrase);
+//
+// v3.10.166: takes a voice parameter so the cache check
+// is per-(phrase, voice). See getCachedExitReplyPath().
+// Voice is resolved internally when not provided.
+export async function ensureExitReplyCached(
+  phrase: string,
+  voice?: string,
+  companionId?: string,
+): Promise<string | null> {
+  const existing = await getCachedExitReplyPath(phrase, voice, companionId);
   if (existing) return existing;
-  requestExitReplySynthesis(phrase);
+  await requestExitReplySynthesis(phrase, voice, companionId);
   return null;
 }
 

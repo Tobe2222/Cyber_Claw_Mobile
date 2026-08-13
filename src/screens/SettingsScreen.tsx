@@ -1152,7 +1152,11 @@ export default function SettingsScreen({
         if (trimmed && trimmed !== 'off') {
           try {
             const { ensureWorkingSpeechCached } = require('../services/WorkingSpeechAudioCache');
-            ensureWorkingSpeechCached(trimmed);
+            // v3.10.166: now async (resolves voice from
+            // AsyncStorage internally). Fire-and-forget
+            // with .catch so any internal failure is
+            // swallowed like the old sync version was.
+            ensureWorkingSpeechCached(trimmed).catch(() => {});
           } catch (_) {}
         }
       } catch (_) {}
@@ -1183,7 +1187,9 @@ export default function SettingsScreen({
       if (v && v.trim()) {
         try {
           const { ensureGreetingCached } = require('../services/GreetingAudioCache');
-          ensureGreetingCached(v.trim());
+          // v3.10.166: now async; .catch to silence
+          // unhandled rejection.
+          ensureGreetingCached(v.trim()).catch(() => {});
         } catch (_) {}
       }
     }, 600);
@@ -1201,7 +1207,7 @@ export default function SettingsScreen({
       if (v && v.trim()) {
         try {
           const { ensureExitReplyCached } = require('../services/ExitReplyAudioCache');
-          ensureExitReplyCached(v.trim());
+          ensureExitReplyCached(v.trim()).catch(() => {});
         } catch (_) {}
       }
     }, 600);
@@ -1788,7 +1794,7 @@ export default function SettingsScreen({
                 onPress={() => {
                   Alert.alert(
                     'Delete voice samples?',
-                    'Wipes the speaker profile + all 20 enrolled samples. The wake word will respond to anyone again until you re-enroll.',
+                    'Wipes the speaker profile + all enrolled samples. The wake word will respond to anyone again until you re-enroll.',
                     [
                       { text: 'Cancel', style: 'cancel' },
                       {
@@ -1796,7 +1802,23 @@ export default function SettingsScreen({
                         style: 'destructive',
                         onPress: async () => {
                           try {
+                            // v3.10.166: native clear +
+                            // ALSO wipe the JS-side active
+                            // contributions counter so the
+                            // VoiceEnrollmentBar drops to
+                            // 0/N. Before this fix, the
+                            // bar still showed "Learning
+                            // X/Y" with the JS counter
+                            // (e.g. 104) because the
+                            // AsyncStorage
+                            // 'cyberclaw-voice-enrollment-
+                            // active' key was never cleared.
+                            // Tobe (2026-08-13): 'I tried to
+                            // delete but it still says
+                            // 104/1000.'
                             await WakeWordModule?.clearSpeakerEnrollment?.();
+                            await AsyncStorage.removeItem('cyberclaw-voice-enrollment-active');
+                            console.log('[Settings] Cleared native enrollment + JS active contributions');
                           } catch (e: any) {
                             console.warn('[Settings] clearSpeakerEnrollment failed:', e?.message);
                           }

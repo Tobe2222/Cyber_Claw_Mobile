@@ -579,6 +579,29 @@ export async function loadVoiceFor(companionId: string): Promise<ResolvedVoiceCo
   };
 }
 
+// v3.10.166: small helper used by the greeting / exit-reply /
+// working-speech audio caches. Returns the local piper voice
+// id that should be used as the cache key for audio
+// synthesized against the given companion. Falls back to
+// 'lessac' (the desktop's default) if anything goes wrong
+// reading AsyncStorage.
+//
+// The companionId is optional; when omitted, only the global
+// voice (cyberclaw-voice-local) is consulted. When the user
+// hasn't picked a voice, the AsyncStorage value is null and
+// this returns 'lessac'.
+export async function getCurrentVoiceIdForCache(companionId?: string): Promise<string> {
+  try {
+    if (companionId) {
+      const cfg = await loadVoiceFor(companionId);
+      if (cfg.localId && cfg.localId !== 'default') return cfg.localId;
+    }
+    const global = await AsyncStorage.getItem('cyberclaw-voice-local');
+    if (global && global !== 'default') return global;
+  } catch (_) {}
+  return 'lessac';
+}
+
 /**
  * v3.10.154: persist a companion's voice config. Pass any field
  * as undefined to leave it unchanged; pass an explicit value

@@ -2789,14 +2789,22 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onGreetingAudio = (msg: any) => {
       if (msg?.text && msg?.audio) {
         const { saveGreetingAudio } = require('../services/GreetingAudioCache');
-        saveGreetingAudio(msg.text, msg.audio).catch(() => {});
+        // v3.10.166: forward msg.voice from the desktop so
+        // the cache writes to the same (phrase, voice)
+        // slot the desktop synthesized against. If absent,
+        // saveGreetingAudio falls back to the resolved
+        // current voice (via getCurrentVoiceIdForCache).
+        saveGreetingAudio(msg.text, msg.audio, msg.voice).catch(() => {});
       }
     };
     syncClient.on('greeting_audio', onGreetingAudio);
     const onExitReplyAudio = (msg: any) => {
       if (msg?.text && msg?.audio) {
         const { saveExitReplyAudio } = require('../services/ExitReplyAudioCache');
-        saveExitReplyAudio(msg.text, msg.audio).catch(() => {});
+        // v3.10.166: same — forward msg.voice from the
+        // desktop so the cache key matches what was
+        // synthesized. Falls back internally if missing.
+        saveExitReplyAudio(msg.text, msg.audio, msg.voice).catch(() => {});
       }
     };
     syncClient.on('exit_reply_audio', onExitReplyAudio);

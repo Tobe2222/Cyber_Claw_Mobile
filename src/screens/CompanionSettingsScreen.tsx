@@ -924,7 +924,11 @@ export default function CompanionSettingsScreen({
       if (v && v.trim()) {
         try {
           const { ensureGreetingCached } = require('../services/GreetingAudioCache');
-          ensureGreetingCached(v.trim());
+          // v3.10.166: now async (resolves voice from
+          // AsyncStorage internally); fire-and-forget with
+          // .catch so an internal failure doesn't surface
+          // as an unhandled promise rejection.
+          ensureGreetingCached(v.trim()).catch(() => {});
         } catch (_) {}
       }
     }, 600);
@@ -940,7 +944,7 @@ export default function CompanionSettingsScreen({
       if (v && v.trim()) {
         try {
           const { ensureExitReplyCached } = require('../services/ExitReplyAudioCache');
-          ensureExitReplyCached(v.trim());
+          ensureExitReplyCached(v.trim()).catch(() => {});
         } catch (_) {}
       }
     }, 600);
@@ -990,6 +994,33 @@ export default function CompanionSettingsScreen({
     // sync server.
     if (syncClient?.connected) {
       syncClient.setTtsVoice(vcLocalId);
+    }
+
+    // v3.10.166: clear all three piper audio caches so
+    // the next wake / exit / working cue synthesizes with
+    // the NEW voice instead of playing a stale WAV from
+    // the previous voice. The per-(phrase, voice) cache
+    // key (also new in v3.10.166) means new caches won't
+    // collide with old ones, but clearing here means the
+    // user hears the new voice immediately rather than
+    // waiting for the next wake event after the old cache
+    // entry would have been naturally evicted.
+    try {
+      const { clearGreetingCache } = require('../services/GreetingAudioCache');
+      const { clearExitReplyCache } = require('../services/ExitReplyAudioCache');
+      const { clearWorkingSpeechCache: clearWorkingCache } = require('../services/WorkingSpeechAudioCache');
+      // Clear all known phrases — the cache file pattern
+      // is just `cyberclaw-greeting-*.wav` etc., so we
+      // walk the existing AsyncStorage index to find
+      // files to delete. clearGreetingCache / clearExit
+      // ReplyCache / clearWorkingSpeechCache already do
+      // this; they're now safe to call.
+      await clearGreetingCache();
+      await clearExitReplyCache();
+      if (clearWorkingCache) await clearWorkingCache();
+      console.log('[Voice] Cleared piper audio caches after voice change');
+    } catch (e: any) {
+      console.warn('[Voice] Cache clear after voice change failed:', e?.message);
     }
 
     setVcSavedAt(Date.now());

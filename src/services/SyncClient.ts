@@ -501,8 +501,17 @@ class SyncClient {
   // unavailable (no engine installed) — the phone
   // caches the desktop's audio for instant playback on
   // every subsequent wake event.
-  requestGreetingAudio(text: string) {
-    this.send({ type: 'request_greeting_audio', text });
+  //
+  // v3.10.166: optional voice parameter — sent to the
+  // desktop so the requester's intent is explicit. The
+  // desktop's sync-server reads its OWN localStorage
+  // ttsVoice setting for the actual piper call (the
+  // voice param is a hint + a cache-key input on the
+  // mobile side, not an override of the desktop's
+  // configured voice). Default 'lessac' for callers
+  // that haven't been updated yet.
+  requestGreetingAudio(text: string, voice?: string) {
+    this.send({ type: 'request_greeting_audio', text, voice: voice || 'lessac' });
   }
 
   // v3.2.29: ask the desktop to synthesize the exit
@@ -513,8 +522,11 @@ class SyncClient {
   // ExitReplyAudioCache) instead of the greeting cache.
   // Voice mode close plays the cached audio (or falls back
   // to speakText() if no cache yet).
-  requestExitReplyAudio(text: string) {
-    this.send({ type: 'request_exit_reply_audio', text });
+  //
+  // v3.10.166: optional voice parameter, same shape as
+  // requestGreetingAudio.
+  requestExitReplyAudio(text: string, voice?: string) {
+    this.send({ type: 'request_exit_reply_audio', text, voice: voice || 'lessac' });
   }
 
   // v3.10.162: ask the desktop to synthesize the working
@@ -529,8 +541,10 @@ class SyncClient {
   // local as possible' — keeping piper as the single
   // voice across greeting + working + response + exit
   // reply.
-  requestWorkingSpeechAudio(text: string) {
-    this.send({ type: 'request_working_audio', text });
+  //
+  // v3.10.166: optional voice parameter, same shape.
+  requestWorkingSpeechAudio(text: string, voice?: string) {
+    this.send({ type: 'request_working_audio', text, voice: voice || 'lessac' });
   }
 
   // v3.10.165: TTS voice picker mirror. Asks the desktop
