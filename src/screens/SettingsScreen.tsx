@@ -127,16 +127,20 @@ import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
 // 2026-08-14 ask was to compact it into a single button in
 // settings that opens this screen.
 import SendWordScreen from '../components/SendWordScreen';
-// v3.10.167: ClassifierTestPanel no longer rendered inline in
-// SettingsScreen — SendWordScreen owns the send-word test UI
-// and the wake/exit tests live in CompanionSettingsScreen.
 // v3.10.24: shared global speaker-profile bar (full
 // variant) at the top of the Voice mode section.
 import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
-import ActiveEnrollmentPanel from '../components/ActiveEnrollmentPanel';
-// v3.10.167: ClassifierTestPanel no longer rendered inline in
-// SettingsScreen — SendWordScreen owns the send-word test UI
-// and the wake/exit tests live in CompanionSettingsScreen.
+// v3.10.168: dedicated page for voice training. The inline
+// ActiveEnrollmentPanel block in the Voice mode section was
+// 100+ lines; per Tobe's 2026-08-14 ask, pull the
+// explanation + tier ladder + active enrollment into one
+// screen and compact the Settings entry to a button (hidden
+// once samplesTotal >= 20 — B-threshold).
+import VoiceTrainingScreen from '../components/VoiceTrainingScreen';
+import {
+  shouldShowVoiceTrainingCTA,
+  deriveSpeakerTier,
+} from '../utils/speakerTier';
 import { loadSendModelInfo } from '../services/VoiceSettings';
 import {
   getPermissions,
@@ -199,6 +203,31 @@ export default function SettingsScreen({
 
   // ── Wake Word ─────────────────────────────────────────────────
   const [bgListening, setBgListening] = useState(true);
+  // v3.10.168: lightweight native speaker-status
+  // subscription for the B-threshold CTA hide/show
+  // logic. We only need samplesTotal + profileLocked
+  // to decide whether to render the "🎤 Voice training"
+  // button — no need for the full status object. The
+  // VoiceTrainingScreen itself owns its own status
+  // polling.
+  const [speakerSamplesTotal, setSpeakerSamplesTotal] = useState<number>(0);
+  const [speakerProfileLocked, setSpeakerProfileLocked] = useState<boolean>(false);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const r = await WakeWordModule?.getSpeakerStatus?.();
+        if (cancelled || !r) return;
+        setSpeakerSamplesTotal(r.samplesTotal ?? 0);
+        setSpeakerProfileLocked(!!r.profileLocked);
+      } catch (_) {}
+    };
+    tick();
+    const id = setInterval(tick, 4000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   // v3.10.28: smart-silence toggle. Default ON.
   // When ON (default), the recorder uses RELATIVE
   // silence detection: silence threshold is computed
@@ -347,6 +376,14 @@ export default function SettingsScreen({
   // inside the page (SendWordScreen owns its own
   // showTrainer state).
   const [showSendWordScreen, setShowSendWordScreen] = useState(false);
+  // v3.10.168: dedicated page for voice training. The
+  // Voice mode section's "🎤 Train my voice" block used to
+  // be the inline ActiveEnrollmentPanel (~100 lines) — moved
+  // to its own page so the section can compact to a single
+  // button. The button itself is hidden once samplesTotal
+  // reaches the B-threshold (20) so the explicit 30s pass
+  // stops competing with natural accumulation.
+  const [showVoiceTraining, setShowVoiceTraining] = useState(false);
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [audioSettingsSavedAt, setAudioSettingsSavedAt] = useState<number | null>(null);
 
@@ -1396,6 +1433,18 @@ export default function SettingsScreen({
     );
   }
 
+  // v3.10.168: voice training page. Replaces the inline
+  // ActiveEnrollmentPanel block in the Voice mode section.
+  // The page owns the explanation card + tier ladder +
+  // active enrollment panel + tier-up log.
+  if (showVoiceTraining) {
+    return (
+      <VoiceTrainingScreen
+        onBack={() => setShowVoiceTraining(false)}
+      />
+    );
+  }
+
   // ── Main settings render ─────────────────────────────────────
   // v3.10.36: header (← Back + title) pulled OUT of the
   // ScrollView so it stays anchored at the top during scroll.
@@ -1866,10 +1915,50 @@ export default function SettingsScreen({
               OWW-TFLite only (Vosk processing skipped).
               Battery saver when you're not expecting
               spontaneous wake fires.
+
+              v3.10.168: pulled this whole block out
+              into VoiceTrainingScreen. The Settings
+              entry is now a single button that opens
+              that screen; the button hides when
+              natural accumulation has the user's
+              sample count past the B-threshold (20) —
+              the explicit 30s pass doesn't add value
+              over natural training once we have that
+              many samples, so the button is hidden to
+              keep the Settings page compact (Tobe's
+              2026-08-14 ask).
             */}
             <SubTitle>🗣️ Train my voice</SubTitle>
-            <Hint>Lock the speaker profile in ~30 seconds. After it's locked, wake fires are gated to your voice — other speakers won't trigger the app. Works across all companions (the profile is device-wide).</Hint>
-            <ActiveEnrollmentPanel />
+            <Hint>Lock the speaker profile in ~30 seconds. After it's locked, wake fires are gated to your voice — other speakers won't trigger the app.</Hint>
+            {shouldShowVoiceTrainingCTA({
+              samplesTotal: speakerSamplesTotal,
+              profileLocked: speakerProfileLocked,
+            }) ? (
+              <TouchableOpacity
+                style={[styles.saveAudioBtn, { marginTop: 4 }]}
+                onPress={() => setShowVoiceTraining(true)}
+              >
+                <Text style={styles.saveAudioBtnText}>
+                  {speakerProfileLocked
+                    ? `🎤 Voice profile locked — Tier ${deriveSpeakerTier({ samplesTotal: speakerSamplesTotal, profileLocked: speakerProfileLocked })} · retrain →`
+                    : speakerSamplesTotal > 0
+                      ? `🎤 Continue training (${speakerSamplesTotal}/20 samples) →`
+                      : '🎤 Start voice training →'}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.trainingActiveRow}>
+                <Text style={styles.trainingActiveText}>
+                  ✓ Voice training active — keep talking. Tier{' '}
+                  {deriveSpeakerTier({
+                    samplesTotal: speakerSamplesTotal,
+                    profileLocked: speakerProfileLocked,
+                  })}
+                  , {speakerSamplesTotal.toLocaleString()} samples so far. Clear
+                  profile to retrain from scratch.
+                </Text>
+              </View>
+            )}
 
             {/* v3.10.28: smart-silence toggle. The
                 noise-aware silence detector calibrates
@@ -2802,6 +2891,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // pushing other controls below the fold.
   sendModelSummary: { color: t.brand.success, fontSize: 12, marginTop: 6 },
   sendModelSummaryDim: { color: t.text.dim, fontSize: 12, marginTop: 6, fontStyle: 'italic' },
+  // v3.10.168: collapsed training-active row shown in
+  // place of the "🎤 Start voice training" button once
+  // the user is past the B-threshold (samplesTotal >=
+  // 20). Replaces the previous 100-line inline
+  // ActiveEnrollmentPanel block.
+  trainingActiveRow: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 6,
+    backgroundColor: 'rgba(34, 197, 94, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.25)',
+  },
+  trainingActiveText: { color: t.brand.success, fontSize: 12, lineHeight: 17 },
   aboutFooter: { alignItems: 'center', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: t.bg.tertiary },
   aboutVersion: { color: t.text.dim, fontSize: 12 },
   aboutLink: { color: t.border.strong, fontSize: 11, marginTop: 4 },

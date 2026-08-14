@@ -45,8 +45,15 @@ import {
   Animated,
   Easing,
   NativeModules,
+  TouchableOpacity,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  SpeakerTier,
+  deriveSpeakerTier,
+  progressToNextTier,
+  tierProgressLabel,
+} from '../utils/speakerTier';
 
 const { WakeWordModule } = NativeModules;
 
@@ -109,9 +116,16 @@ type Mode = 'combined' | 'active-only';
 export default function VoiceEnrollmentBar({
   variant = 'full',
   mode = 'combined',
+  onPress,
 }: {
   variant?: Variant;
   mode?: Mode;
+  // v3.10.168: optional tap handler. When set, the
+  // compact pill becomes pressable and opens the
+  // voice-training screen. Used by WakeModeScreen so
+  // the user can tap the bar and learn what each
+  // tier means / start training.
+  onPress?: () => void;
 }) {
   const [status, setStatus] = useState<SpeakerStatus | null>(null);
   const cancelledRef = useRef(false);
@@ -241,36 +255,30 @@ export default function VoiceEnrollmentBar({
   // native prerequisites are met, so the chip
   // stays in the 'learning' state with the
   // non-locked styling.
+  // v3.10.168: bar fill is now driven by
+  // progressToNextTier — the per-tier progress so
+  // each tier transition rewires the denominator
+  // (5 → 100 → 1000 → 5000). The old samplePct /
+  // wakePct / combinedPct math is preserved below
+  // for the label-generation logic (it still needs
+  // the sample and chat counts in the legacy
+  // "Learning X/Y" format for active-only mode).
+  // The new label-line tier display co-exists with
+  // this math; the bar fill is the new tier-based
+  // value.
   const samplePct = Math.min(1, status.samplesTotal / LOCK_THRESHOLD_SAMPLES);
   const wakePct = Math.min(1, status.confirmedWakeFires / LOCK_THRESHOLD_WAKES);
   const activePct = Math.min(1, status.activeContributions / LOCK_THRESHOLD_SAMPLES);
-  // v3.10.37: tie the bar fill to the same combined
-  // count the label displays. Previously the bar
-  // filled on max(samplePct, wakePct, activePct) but
-  // the label showed "+${activeContributions}" — so a
-  // user with 0 passive + 200 active would see
-  // "0+200/1000" with an empty bar. Now both the bar
-  // and the label reflect combinedCount.
   const combinedPct = Math.min(1, (status.samplesTotal + status.activeContributions) / LOCK_THRESHOLD_SAMPLES);
-  // v3.10.46: in 'active-only' mode (voice-mode
-  // compact bar), the count and fill reflect ONLY
-  // activeContributions with a smaller threshold
-  // (ACTIVE_LOCK_THRESHOLD = 20 turns). Showing the
-  // combined count in voice mode is misleading —
-  // voice mode pauses the OWW listener so passive
-  // samples don't accumulate there, but the combined
-  // count would still include pre-voice-mode passive
-  // samples from earlier sessions. The user sees
-  // "100/1000" even after one turn because the 100
-  // came from BEFORE voice mode. Show only the
-  // discrete-turn count in voice mode.
   const activeOnlyPct = Math.min(1, status.activeContributions / ACTIVE_LOCK_THRESHOLD);
   const displayProgress = mode === 'active-only'
     ? activeOnlyPct
     : Math.max(samplePct, wakePct, activePct, combinedPct);
-  const progress = status.profileLocked
-    ? 1
-    : displayProgress;
+  // Kept around in case a future caller wants the
+  // legacy "max-of-buckets" display (e.g. an
+  // analysis tool). Currently unused in the bar;
+  // the bar fill is `progressToNextTier(...)` below.
+  const _legacyProgress = status.profileLocked ? 1 : displayProgress;
 
   // v3.10.37: combined display per Tobe's report:
   // "the learning bar says 0+50/1000 ... it should
@@ -323,29 +331,67 @@ export default function VoiceEnrollmentBar({
   const activeCapped = Math.min(status.activeContributions, ACTIVE_LOCK_THRESHOLD);
   const combinedCapped = Math.min(combinedCount, LOCK_THRESHOLD_SAMPLES);
   const samplesCapped = Math.min(status.samplesTotal, LOCK_THRESHOLD_SAMPLES);
+  // v3.10.168: tier labels replace the old "Learning
+  // X/Y" / "Voice profile locked" numerology. The bar
+  // shows the current tier + progress to the next, so
+  // the user can tell at a glance where they are on
+  // the training ladder.
+  //
+  // Tier ladder: 0 (none) → 1 (locked) → 2 (100+) →
+  // 3 (1000+) → 4 (5000+, finalized). See
+  // src/utils/speakerTier.ts for the full state
+  // machine.
+  //
+  // 'active-only' mode keeps the older 1-per-turn
+  // count for the wake-mode bar (Tobe's v3.10.46
+  // feedback) — the tier display fires in 'combined'
+  // mode and in locked states where active-vs-passive
+  // doesn't matter.
+  const tier: SpeakerTier = deriveSpeakerTier({
+    samplesTotal: status.samplesTotal,
+    profileLocked: status.profileLocked,
+  });
+  // Per-variant label strings. Tier display gives the
+  // user a clear "Tier N · progress" line. The chat
+  // count badge stays on the full variant for users
+  // who want to see voice-mode contributions separate
+  // from passive OWW samples.
+  const tierDisplay = `🎯 Tier ${tier}`;
+  const tierProgress = tierProgressLabel({
+    samplesTotal: status.samplesTotal,
+    currentTier: tier,
+  });
   const fullLabel = status.profileLocked
-    ? `✓ Voice profile locked (${status.samplesTotal} samples)`
-    : mode === 'active-only'
-      ? `🎙 Learning your voice — ${activeCapped}/${ACTIVE_LOCK_THRESHOLD}`
-      : showActive
-        ? `🎙 Learning your voice — ${combinedCapped}/${LOCK_THRESHOLD_SAMPLES}   🎤 ${status.activeContributions} chats`
-        : `🎙 Learning your voice — ${samplesCapped}/${LOCK_THRESHOLD_SAMPLES}`;
+    ? `✓ ${tierDisplay} · ${tierProgress}`
+    : tier === 0
+      ? `🎙 ${tierDisplay} — start training to lock`
+      : mode === 'active-only'
+        ? `🎙 ${tierDisplay} · Learning — ${activeCapped}/${ACTIVE_LOCK_THRESHOLD}`
+        : showActive
+          ? `${tierDisplay} · ${tierProgress}   🎤 ${status.activeContributions} chats`
+          : `${tierDisplay} · ${tierProgress}`;
   const compactLabel = status.profileLocked
-    ? `Voice locked`
-    : mode === 'active-only'
-      ? `Learning ${activeCapped}/${ACTIVE_LOCK_THRESHOLD}`
-      : `Learning ${combinedCapped}/${LOCK_THRESHOLD_SAMPLES}`;
+    ? `${tierDisplay} · locked`
+    : tier === 0
+      ? `${tierDisplay} · Start →`
+      : mode === 'active-only'
+        ? `${tierDisplay} · ${activeCapped}/${ACTIVE_LOCK_THRESHOLD}`
+        : `${tierDisplay} · ${tierProgress}`;
 
   return (
     <BarShell
       variant={variant}
-      progress={progress}
+      progress={progressToNextTier({
+        samplesTotal: status.samplesTotal,
+        currentTier: tier,
+      })}
       shimmerX={shimmerX}
       pulse={pulse}
       locked={status.profileLocked}
       loading={false}
       label={variant === 'full' ? fullLabel : compactLabel}
       matchScore={status.profileLocked ? status.matchScore : null}
+      onPress={onPress}
     />
   );
 }
@@ -359,6 +405,7 @@ function BarShell({
   loading,
   label,
   matchScore,
+  onPress,
 }: {
   variant: Variant;
   progress: number;
@@ -368,6 +415,7 @@ function BarShell({
   loading: boolean;
   label: string | null;
   matchScore: number | null;
+  onPress?: () => void;
 }) {
   const compact = variant === 'compact';
 
@@ -379,20 +427,29 @@ function BarShell({
     // Opacity pulses while learning (gentle, 0.85
     // ↔ 1.0 — barely noticeable, just enough to
     // signal "alive" without being distracting).
-    return (
+    //
+    // v3.10.168: when an onPress is provided
+    // (typically from WakeModeScreen), the pill
+    // becomes a pressable TouchableOpacity that
+    // opens the voice-training screen. Without an
+    // onPress, behavior is unchanged (pointerEvents
+    // none, decorative only).
+    const pillInner = (
       <Animated.View
         style={[
           styles.pill,
           locked && styles.pillLocked,
-          !locked && {
+          !locked && !onPress && {
             // Pulse: gentle opacity oscillation.
+            // Disabled when pressable so the touch
+            // surface feels stable.
             opacity: pulse.interpolate({
               inputRange: [0, 1],
               outputRange: [0.82, 1.0],
             }),
           },
         ]}
-        pointerEvents="none"
+        pointerEvents={onPress ? 'auto' : 'none'}
       >
         <Text style={[styles.pillIcon, locked && styles.pillIconLocked]}>
           {locked ? '✓' : '🎙'}
@@ -417,6 +474,14 @@ function BarShell({
         </View>
       </Animated.View>
     );
+    if (onPress) {
+      return (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
+          {pillInner}
+        </TouchableOpacity>
+      );
+    }
+    return pillInner;
   }
 
   // Full variant: keep the existing labeled-bar layout
