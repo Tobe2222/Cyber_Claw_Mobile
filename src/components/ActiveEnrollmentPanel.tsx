@@ -44,7 +44,16 @@ const enrollmentEvents = WakeWordModule
 
 function showEnrollmentToast(message: string) {
   // Mirror the pattern HomeScreen uses for wake toasts.
-  NativeBackground?.showToast?.(message).catch(() => {});
+  // v3.10.167: defensively optional-chain `.catch()` too.
+  // `NativeBackground?.showToast?.(message)` is undefined when
+  // either NativeBackground is missing OR the showToast method
+  // isn't registered. The previous form crashed with
+  // `Cannot read property 'catch' of undefined` in that case
+  // (Tobe hit it on 2026-08-14 after tapping Stop in the
+  // enrollment panel — the bridge had torn down before the
+  // listener fired). Now the toast becomes a silent no-op
+  // when the method isn't available.
+  NativeBackground?.showToast?.(message)?.catch?.(() => {});
 }
 
 const DEFAULT_DURATION_MS = 30000;
@@ -117,7 +126,11 @@ export default function ActiveEnrollmentPanel() {
         watchdogRef.current = null;
       }
       // Best-effort: stop enrollment if leaving the panel
-      WakeWordModule?.stopActiveEnrollment?.().catch(() => {});
+      // v3.10.167: optional-chain .catch() too — the previous
+      // form crashed with `Cannot read property 'catch' of
+      // undefined` when the native module is torn down before
+      // the unmount cleanup runs (Tobe hit it on 2026-08-14).
+      WakeWordModule?.stopActiveEnrollment?.()?.catch?.(() => {});
     };
   }, []);
 
@@ -198,7 +211,9 @@ export default function ActiveEnrollmentPanel() {
     const watchdog = setTimeout(() => {
       if (running) {
         try {
-          WakeWordModule?.stopActiveEnrollment?.().catch(() => {});
+          // v3.10.167: optional-chain .catch() — see line 130
+          // for the Stop-crash context.
+          WakeWordModule?.stopActiveEnrollment?.()?.catch?.(() => {});
         } catch (_) {}
       }
     }, DEFAULT_DURATION_MS + 3000);
@@ -431,9 +446,13 @@ function StrictModeToggle({ locked }: { locked: boolean }) {
   const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
-    WakeWordModule?.getBgStrictMode?.()
-      .then((v: boolean) => setEnabled(!!v))
-      .catch(() => {});
+    // v3.10.167: optional-chain the .then().catch() chain too.
+    // getBgStrictMode?.() can return undefined if the native
+    // side hasn't registered the method (older APK, bridge
+    // teardown). The previous form crashed with
+    // `Cannot read property 'then' of undefined` on that path.
+    const p = WakeWordModule?.getBgStrictMode?.();
+    p?.then?.((v: boolean) => setEnabled(!!v))?.catch?.(() => {});
   }, []);
 
   const toggle = useCallback(async () => {

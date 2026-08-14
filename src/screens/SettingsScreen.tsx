@@ -121,23 +121,23 @@ import { audioBuffer, DEFAULT_SETTINGS, AudioBufferSettings } from '../services/
 
 import OpenWakeWordTrainer from '../components/OpenWakeWordTrainer';
 import ExitPhraseTrainer from '../components/ExitPhraseTrainer';
-import SendPhraseTrainer from '../components/SendPhraseTrainer';
 import WakeSetManagerScreen from '../components/WakeSetManagerScreen';
+// v3.10.167: dedicated page for the send word. The inline
+// block in the Voice mode section was too noisy — Tobe's
+// 2026-08-14 ask was to compact it into a single button in
+// settings that opens this screen.
+import SendWordScreen from '../components/SendWordScreen';
+// v3.10.167: ClassifierTestPanel no longer rendered inline in
+// SettingsScreen — SendWordScreen owns the send-word test UI
+// and the wake/exit tests live in CompanionSettingsScreen.
 // v3.10.24: shared global speaker-profile bar (full
 // variant) at the top of the Voice mode section.
 import VoiceEnrollmentBar from '../components/VoiceEnrollmentBar';
 import ActiveEnrollmentPanel from '../components/ActiveEnrollmentPanel';
-// v3.10.25: shared "Test send" panel. Same hook + UI
-// as wake/exit — Send lives in the global Voice mode
-// section here, so its test button does too.
-// v3.10.26: NAMED import, not default. The component
-// is `export function ClassifierTestPanel(...)` with
-// no default export. Importing as default gets
-// undefined, which renders as "Element type is
-// invalid: ... but got: undefined" — the crash Tobe
-// hit on Settings screen open in v3.10.26.
-import { ClassifierTestPanel } from '../components/ClassifierTest';
-import { saveSendPhrase, loadSendModelInfo } from '../services/VoiceSettings';
+// v3.10.167: ClassifierTestPanel no longer rendered inline in
+// SettingsScreen — SendWordScreen owns the send-word test UI
+// and the wake/exit tests live in CompanionSettingsScreen.
+import { loadSendModelInfo } from '../services/VoiceSettings';
 import {
   getPermissions,
   setPermission,
@@ -341,9 +341,12 @@ export default function SettingsScreen({
     })();
     return () => { cancelled = true; };
   }, [voiceSendPhrase]);
-  // v3.6.0: send-phrase trainer modal. Mirror of
-  // showExitPhraseTrainer but for the send word.
-  const [showSendPhraseTrainer, setShowSendPhraseTrainer] = useState(false);
+  // v3.10.167: dedicated page for configuring the send word.
+  // Replaces the inline "Manual send voice message" SubTitle
+  // block in the Voice mode section. The trainer is mounted
+  // inside the page (SendWordScreen owns its own
+  // showTrainer state).
+  const [showSendWordScreen, setShowSendWordScreen] = useState(false);
   const [audioSettings, setAudioSettings] = useState<AudioBufferSettings>(DEFAULT_SETTINGS);
   const [audioSettingsSavedAt, setAudioSettingsSavedAt] = useState<number | null>(null);
 
@@ -871,9 +874,13 @@ export default function SettingsScreen({
         } catch {}
       }
     });
-    NativeModules.NativeBackground?.checkWakePermissions?.()
-      .then((p: any) => setWakePerms(p))
-      .catch(() => {});
+    // v3.10.167: optional-chain the .then().catch() chain too.
+    // checkWakePermissions?.() can return undefined when the
+    // native module is missing the method (older APK, bridge
+    // teardown). The previous form crashed with `Cannot read
+    // property 'then' of undefined` on that path.
+    const permPromise = NativeModules.NativeBackground?.checkWakePermissions?.();
+    permPromise?.then?.((p: any) => setWakePerms(p))?.catch?.(() => {});
 
     // Voice settings (new in v3.1.13)
     // v3.1.75: cyberclaw-voice-engine replaces cyberclaw-voice-local.
@@ -1007,7 +1014,14 @@ export default function SettingsScreen({
   const openWakePerm = async (settingsFn: string) => {
     await NativeModules.NativeBackground?.[settingsFn]?.();
     setTimeout(async () => {
-      const p = await NativeModules.NativeBackground?.checkWakePermissions?.().catch(() => null);
+      // v3.10.167: optional-chain .catch() too. The previous form
+      // crashed when checkWakePermissions?.() returned undefined
+      // (e.g. older APK without that method, or bridge torn
+      // down) — same `Cannot read property 'catch' of undefined`
+      // shape as the ActiveEnrollmentPanel Stop-crash Tobe hit
+      // on 2026-08-14.
+      const promise = NativeModules.NativeBackground?.checkWakePermissions?.();
+      const p = promise ? await promise.catch(() => null) : null;
       if (p) setWakePerms(p);
     }, 1000);
   };
@@ -1347,41 +1361,37 @@ export default function SettingsScreen({
     );
   }
 
-  // v3.8.3: send-phrase trainer. Mirror of the exit
-  // trainer but for the global send word. No companionId
-  // needed — the send word is shared across all
-  // companions. v3.8.3 fix: when the trainer completes
-  // successfully, bump `voiceSendPhraseSavedAt` and persist
-  // the trained phrase so the settings UI immediately
-  // reflects "✅ Saved" — previously the trainer just
-  // closed and the user had to manually re-save the
-  // phrase to see the saved indicator. Also stash the
-  // trained timestamp + model path in
-  // getSendSamplesKey(...) so VoiceSettings can read it.
-  if (showSendPhraseTrainer) {
+  // v3.10.167: dedicated send-word page. The Voice mode
+  // section had grown too long and the inline send-word
+  // controls (phrase input + save + train + badge +
+  // classifier test) pushed the cue-sound and
+  // working/thinking blocks below the fold on most
+  // phones. This screen pulls all of it out, leaving
+  // the section with a single button.
+  if (showSendWordScreen) {
     return (
-      <SendPhraseTrainer
-        presetPhrase={voiceSendPhrase || undefined}
-        onCancel={() => setShowSendPhraseTrainer(false)}
-        onComplete={async (ok) => {
-          if (ok) {
-            const trimmed = voiceSendPhrase.trim().toLowerCase();
-            if (trimmed) {
-              try {
-                await saveSendPhrase(trimmed);
-              } catch (_) {}
-              setVoiceSendPhrase(trimmed);
-              setVoiceSendPhraseSavedAt(Date.now());
-              // v3.8.3: refresh the trained-model badge so
-              // the user sees the new model + timestamp
-              // immediately on returning to settings, not
-              // after a screen remount.
-              const info = await loadSendModelInfo(trimmed);
-              if (info) setSendModelInfo(info);
-            }
-          }
-          setShowSendPhraseTrainer(false);
+      <SendWordScreen
+        phrase={voiceSendPhrase}
+        savedAt={voiceSendPhraseSavedAt}
+        modelInfo={sendModelInfo}
+        onPhraseChange={(text) => {
+          // v3.8.3 reactive load: keep the parent's
+          // loadSendModelInfo effect in sync by mirroring
+          // the phrase change here. The parent's useEffect
+          // keyed on voiceSendPhrase will then refresh
+          // sendModelInfo on the next render.
+          setVoiceSendPhrase(text);
         }}
+        onSaved={(trimmed) => {
+          setVoiceSendPhrase(trimmed);
+          setVoiceSendPhraseSavedAt(Date.now());
+          // Refresh model info so the badge updates
+          // immediately after a successful training run.
+          loadSendModelInfo(trimmed).then(info => {
+            if (info) setSendModelInfo(info);
+          });
+        }}
+        onBack={() => setShowSendWordScreen(false)}
       />
     );
   }
@@ -1879,104 +1889,38 @@ export default function SettingsScreen({
               }}
             />
 
-            <SubTitle>✉️ Manual send voice message</SubTitle>
-            <Hint>Backup commit word for voice-mode turns. The primary trigger is silence-detection (the VAD's silence countdown) or gibberish-detection (VAD noise floor). When those miss — e.g. the silence threshold doesn't trip because the audio cuts off mid-word, or the VAD reads low noise as speech — saying this word commits the turn to the LLM by hand. Independent of the exit phrase — send keeps the conversation going, exit closes voice mode. Shared across all companions.</Hint>
-            <Label>Send word</Label>
-            <View style={styles.optionRow}>
-              <TextInput
-                value={voiceSendPhrase}
-                onChangeText={(text) => {
-                  setVoiceSendPhrase(text);
-                  // v3.8.3: refresh the trained-model badge
-                  // for the newly-typed phrase. Cheap (single
-                  // AsyncStorage read) and means switching
-                  // between 'send' and 'magicly' (for example)
-                  // shows the right model timestamp without
-                  // requiring the user to retrain or remount.
-                  const trimmed = text.trim().toLowerCase();
-                  if (trimmed) {
-                    loadSendModelInfo(trimmed).then(info => {
-                      setSendModelInfo(info);
-                    });
-                  } else {
-                    setSendModelInfo(null);
-                  }
-                }}
-                editable={true}
-                style={[styles.input, { flex: 1 }]}
-                autoCapitalize="none"
-                autoCorrect={false}
-                maxLength={40}
-                placeholder="send"
-                placeholderTextColor="#666"
-              />
-              <TouchableOpacity
-                style={[styles.saveAudioBtn, { marginLeft: 8 }]}
-                onPress={async () => {
-                  const trimmed = voiceSendPhrase.trim().toLowerCase();
-                  if (!trimmed) {
-                    Alert.alert('Invalid', 'Send word cannot be empty. Clear it via "Clear" to disable.');
-                    return;
-                  }
-                  await saveSendPhrase(trimmed);
-                  setVoiceSendPhrase(trimmed);
-                  setVoiceSendPhraseSavedAt(Date.now());
-                }}
-              >
-                <Text style={styles.saveAudioBtnText}>
-                  {voiceSendPhraseSavedAt
-                    ? `✅ Saved`
-                    : '💾 Save'}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            {/* v3.10.167: send word moved to its own dedicated
+                page (SendWordScreen). The Voice mode section
+                used to have a 100+ line inline block here
+                covering phrase input, save, train button,
+                trained-model badge, and classifier test.
+                Tobe (2026-08-14): "compact the send word
+                and just make a page out of it with a
+                button for it in the settings." The page
+                owns its own trainer state and re-uses the
+                same shared ClassifierTestPanel. */}
+            <SubTitle>✉️ Send word</SubTitle>
+            <Hint>Backup commit word for voice-mode turns — say it during a turn to commit immediately. Configure the phrase, train a model, and test it on the send-word page.</Hint>
             <TouchableOpacity
-              style={[styles.saveAudioBtn, { marginTop: 8 }]}
-              onPress={() => {
-                setShowSendPhraseTrainer(true);
-              }}
+              style={[styles.saveAudioBtn, { marginTop: 4 }]}
+              onPress={() => setShowSendWordScreen(true)}
             >
-              <Text style={styles.saveAudioBtnText}>🎙️ Train send word (6 samples)</Text>
+              <Text style={styles.saveAudioBtnText}>
+                {voiceSendPhraseSavedAt
+                  ? `✉️ "${voiceSendPhrase.trim() || 'send'}" — tap to manage`
+                  : '✉️ Configure send word →'}
+              </Text>
             </TouchableOpacity>
-
-            {/* v3.8.3: trained-model status badge for the send
-                word. Mirrors the wake trainer's "Listening for:
-                <phrase>" badge so the user can see whether a
-                model is actually installed, when it was
-                trained, and which file. Critical for send —
-                the user typed 'magicly' as the word, then trained
-                it, then looked at settings and had no idea if
-                the model was hot. With this badge, the answer is
-                obvious. */}
             {sendModelInfo ? (
-              <View style={styles.sendModelBadge}>
-                <Text style={styles.sendModelBadgeIcon}>✓</Text>
-                <View style={styles.sendModelBadgeTextWrap}>
-                  <Text style={styles.sendModelBadgeText}>
-                    Listening for "{voiceSendPhrase.trim().toLowerCase()}"
-                  </Text>
-                  <Text style={styles.sendModelBadgeMeta} numberOfLines={1}>
-                    Trained {new Date(sendModelInfo.trainedAt).toLocaleString()}
-                    {sendModelInfo.modelPath ? ` · ${sendModelInfo.modelPath}` : ''}
-                  </Text>
-                </View>
-              </View>
+              <Text style={styles.sendModelSummary}>
+                ✓ Trained {new Date(sendModelInfo.trainedAt).toLocaleDateString()} ·{' '}
+                {sendModelInfo.modelPath || 'model active'}
+              </Text>
             ) : (
-              <View style={styles.sendModelBadge}>
-                <Text style={styles.sendModelBadgeText}>
-                  No trained send model yet — tap "Train send word" to record 6 samples and hot-swap one in.
-                </Text>
-              </View>
+              <Text style={styles.sendModelSummaryDim}>
+                No trained model yet — open the send-word page to record 6 samples.
+              </Text>
             )}
-
-            {/* v3.10.25: per-page classifier test. Send
-                lives in the global Voice mode section
-                (shared across companions), so its test
-                button sits here too. Tap "✉️ Test send",
-                say the trained send word, see the peak
-                score. Same shared ClassifierTestPanel
-                as wake + exit. */}
-            <ClassifierTestPanel kind="send" />
 
             {/* v3.9.8 — your-turn cue sound. Plays after the
                 desktop's audio response finishes and we're
@@ -2851,6 +2795,13 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   sendModelBadgeTextWrap: { flex: 1 },
   sendModelBadgeText: { color: t.text.primary, fontSize: 14, fontWeight: '600' },
   sendModelBadgeMeta: { color: t.text.muted, fontSize: 12, marginTop: 2 },
+  // v3.10.167: compact one-line summary shown in the Voice
+  // mode section's send-word row. The detailed badge moved
+  // to the dedicated SendWordScreen; this is just enough
+  // info to remind the user which model is hot without
+  // pushing other controls below the fold.
+  sendModelSummary: { color: t.brand.success, fontSize: 12, marginTop: 6 },
+  sendModelSummaryDim: { color: t.text.dim, fontSize: 12, marginTop: 6, fontStyle: 'italic' },
   aboutFooter: { alignItems: 'center', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: t.bg.tertiary },
   aboutVersion: { color: t.text.dim, fontSize: 12 },
   aboutLink: { color: t.border.strong, fontSize: 11, marginTop: 4 },
