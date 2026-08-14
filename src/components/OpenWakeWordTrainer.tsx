@@ -389,7 +389,15 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       // was loaded previously.
       const phraseToReactivate = currentTrainedPhrase || currentTrainedPhraseOnMount;
       if (phraseToReactivate) {
-        WakeWordModule?.initOww?.(phraseToReactivate, 0.5)
+        // v3.10.169: bumped default wake threshold from
+        // 0.5 to 0.55 to suppress bucket-A false wakes
+        // (TV/radio blips whose melspec peaks above
+        // threshold briefly). Same nudge as the lazy-
+        // init default at WakeWordModule.kt — both
+        // load paths now use 0.55 by default. The
+        // FIRE-LOG will tell us whether 0.55 is too
+        // aggressive in v3.10.169a.
+        WakeWordModule?.initOww?.(phraseToReactivate, 0.55)
           .catch(() => {})
           .then(() => WakeWordModule?.startOwwListening?.())
           .catch(() => {});
@@ -397,7 +405,11 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
         // No model for this companion — fall back to the bundled
         // pre-trained wake word so Voice Mode at least listens
         // for SOMETHING.
-        WakeWordModule?.initOww?.('hey_jarvis', 0.5)
+        // v3.10.169: same 0.55 nudge as the active-wake
+        // path above. Hey_jarvis default needs to match
+        // the lazy-init default (WakeWordModule.kt v3.10.169)
+        // so all load paths agree.
+        WakeWordModule?.initOww?.('hey_jarvis', 0.55)
           .catch(() => {})
           .then(() => WakeWordModule?.startOwwListening?.())
           .catch(() => {});

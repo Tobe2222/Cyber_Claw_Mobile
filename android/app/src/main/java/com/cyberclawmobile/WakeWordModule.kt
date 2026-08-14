@@ -2551,7 +2551,16 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 owwDetector?.close()
                 val fresh = OpenWakeWordDetector(reactContext)
                 val ok = fresh.loadModels(lazyInitWakeword)
-                fresh.setThreshold(0.5f)
+                // v3.10.169: bumped default from 0.5f to
+                // 0.55f as part of the bucket-A false-wake
+                // tuning. 0.05 nudge culls marginal keyword
+                // matches from TV/radio without affecting
+                // genuine wakes (which peak 0.7-0.9). The
+                // FIRE-LOG introduced this version will
+                // surface whether 0.55 is too aggressive
+                // — if real wakes start missing, we go back
+                // to 0.5 and rely on HIGH_SCORE_RUN 4 alone.
+                fresh.setThreshold(0.55f)
                 if (ok) {
                     owwDetector = fresh
                     owwWakeword = lazyInitWakeword
@@ -2611,7 +2620,20 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                 var highScoreFrames = 0
                 var exitHighScoreFrames = 0
                 var sendHighScoreFrames = 0
-                val HIGH_SCORE_RUN = 3  // 3 consecutive frames above threshold = wake word
+                // v3.10.169: bumped from 3 to 4 to suppress
+                // bucket-A false wakes (TV / radio blips whose
+                // melspec shape peaks briefly above threshold).
+                // A real wake word is 400-600ms of sustained
+                // phonemes (5-7 frames at 80ms each); bumping
+                // to 4 frames (~320ms) culls the 3-frame
+                // spikes that drive bucket A while leaving
+                // real wakes unaffected. Verified by the
+                // FIRE-LOG introduced this version: we'll see
+                // in a week whether any bucket-A fires drop
+                // below 4 frames OR the model sits comfortably
+                // at 5-6 frames per real wake (the latter
+                // means we can bump to 5 next version).
+                val HIGH_SCORE_RUN = 4  // 4 consecutive frames above threshold = wake word
                 val EXIT_HIGH_SCORE_RUN = 3  // 3 consecutive frames above exit threshold = exit phrase
                 // v3.6.0: send classifier runs alongside exit
                 // and wake. SEND_HIGH_SCORE_RUN is the number
@@ -2740,6 +2762,7 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                                 highScoreFrames++
                                 if (highScoreFrames >= HIGH_SCORE_RUN) {
                                     val now = System.currentTimeMillis()
+                                    val pendingWasVoice = pendingEnrollmentSample
                                     if (now - lastWakeAt >= DETECTION_COOLDOWN_MS) {
                                         // v3.10.23: speaker gate.
                                         // If the primary profile
@@ -2759,16 +2782,39 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                                         // embedding from the
                                         // wake-fire moment is in
                                         // the rolling history).
-                                        val pendingWasVoice = pendingEnrollmentSample
                                         if (pendingWasVoice) detector.noteConfirmedWakeFire()
-                                        if (detector.shouldSuppressWakeForSpeaker()) {
-                                            // Not the enrolled
-                                            // user. Don't open voice
-                                            // mode. Log so we can
-                                            // see how often this
-                                            // fires in dev builds.
-                                            val sm = detector.matchRecentSpeaker() ?: 0f
-                                            Log.i("WakeWord", "OWW wake suppressed by speaker gate (match=${"%.2f".format(sm)} < $0.50)")
+                                        val speakerMatch = if (detector.hasPrimaryProfile()) detector.matchRecentSpeaker() else null
+                                        val suppressedBySpeaker = detector.shouldSuppressWakeForSpeaker()
+                                        // v3.10.169: consolidated
+                                        // FIRE-LOG. One line per
+                                        // wake-event decision with
+                                        // every field needed to
+                                        // diagnose bucket-A false
+                                        // wakes in v3.10.169's
+                                        // tuning phase. Logged at
+                                        // INFO so it doesn't drown
+                                        // out WARN/ERROR in
+                                        // logcat. Tobe: `adb logcat
+                                        // -s WakeWord:I`. Tagged
+                                        // `session=fg` so we can
+                                        // tell foreground from
+                                        // background events.
+                                        Log.i(
+                                            "WakeWord",
+                                            String.format(
+                                                "[FIRE-LOG] session=fg peak=%.2f thr=%.2f frames=%d voiceActive=%s speakerMatch=%s outcome=%s model=%s",
+                                                wakeScore,
+                                                threshold,
+                                                highScoreFrames,
+                                                if (pendingWasVoice) "1" else "0",
+                                                speakerMatch?.let { String.format("%.2f", it) } ?: "n/a",
+                                                if (suppressedBySpeaker) "SPEAKER_SUPPRESS" else "FIRE",
+                                                owwWakeword,
+                                            ),
+                                        )
+                                        if (suppressedBySpeaker) {
+                                            val sm = speakerMatch ?: 0f
+                                            Log.i("WakeWord", "OWW wake suppressed by speaker gate (match=${"%.2f".format(sm)} < 0.50)")
                                             highScoreFrames = 0
                                             chunkFill = 0
                                             continue
@@ -2797,6 +2843,27 @@ class WakeWordModule(private val reactContext: ReactApplicationContext) :
                                         // we re-arm cleanly when
                                         // the cooldown expires.
                                         Log.w("WakeWord", "OWW detection suppressed by cooldown (${DETECTION_COOLDOWN_MS - (now - lastWakeAt)}ms remaining)")
+                                        // v3.10.169: also emit a
+                                        // FIRE-LOG for cooldown
+                                        // suppressions so the
+                                        // diagnostic captures
+                                        // every wake decision.
+                                        // Without this, a flurry
+                                        // of duplicates inside
+                                        // the cooldown window
+                                        // would be invisible.
+                                        Log.i(
+                                            "WakeWord",
+                                            String.format(
+                                                "[FIRE-LOG] session=fg peak=%.2f thr=%.2f frames=%d voiceActive=%s speakerMatch=%s outcome=COOLDOWN_SUPPRESS model=%s",
+                                                wakeScore,
+                                                threshold,
+                                                highScoreFrames,
+                                                if (pendingWasVoice) "1" else "0",
+                                                "n/a",
+                                                owwWakeword,
+                                            ),
+                                        )
                                     }
                                     highScoreFrames = 0
                                 }

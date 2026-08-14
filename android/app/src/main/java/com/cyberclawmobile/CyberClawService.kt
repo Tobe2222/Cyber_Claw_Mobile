@@ -48,7 +48,12 @@ class CyberClawService : Service() {
     // trained a wake phrase, this stays null and Vosk
     // is the sole detector.
     private var bgOwwDetector: OpenWakeWordDetector? = null
-    private var bgOwwThreshold: Float = 0.5f
+    // v3.10.169: bumped default from 0.5f to 0.55f
+    // for bucket-A false-wake suppression. Same nudge
+    // as the foreground path at WakeWordModule.kt — see
+    // the comment there for rationale and the FIRE-LOG
+    // tags for data-driven verification.
+    private var bgOwwThreshold: Float = 0.55f
     private var bgOwwBuffer = ShortArray(4096)
     private var bgOwwBufferFill: Int = 0
     private var bgOwwHighFrames: Int = 0
@@ -68,10 +73,11 @@ class CyberClawService : Service() {
     // "cyberclaw-bg-strict-mode" set by the JS UI
     // (Wake Settings > "Strict mode" toggle).
     @Volatile private var strictMode: Boolean = false
-    // Match WakeWordModule.kt's HIGH_SCORE_RUN = 3.
-    // 3 consecutive 80ms frames above threshold means
-    // the wake word has been detected.
-    private val BG_OWW_HIGH_SCORE_RUN = 3
+    // v3.10.169: bumped from 3 to 4 frames to match
+    // WakeWordModule.kt's HIGH_SCORE_RUN bump. Same
+    // bucket-A suppression rationale — see that file's
+    // comment for the data-driven verification plan.
+    private val BG_OWW_HIGH_SCORE_RUN = 4
     // Same cooldown as the foreground OWW thread.
     private val BG_OWW_DETECTION_COOLDOWN_MS = 2000L
     @Volatile private var bgOwwLastWakeAt: Long = 0L
@@ -359,10 +365,34 @@ class CyberClawService : Service() {
                     bgOwwHighFrames++
                     if (bgOwwHighFrames >= BG_OWW_HIGH_SCORE_RUN) {
                         val now = System.currentTimeMillis()
+                        val suppressedBySpeaker = enrollment.shouldSuppressWake()
+                        val speakerMatch = if (suppressedBySpeaker || enrollment.hasProfile()) enrollment.getMatchScore() else null
+                        // v3.10.169: consolidated FIRE-LOG for
+                        // the background path. Same shape as
+                        // the foreground log at
+                        // WakeWordModule.kt: peak / threshold /
+                        // frames / voiceActive / speakerMatch /
+                        // outcome / model. `session=bg` so we
+                        // can grep logcat and split events by
+                        // session. Tobe: `adb logcat -s
+                        // WakeWord:I CyberClawService:I`.
+                        Log.i(
+                            "CyberClawService",
+                            String.format(
+                                "[FIRE-LOG] session=bg peak=%.2f thr=%.2f frames=%d voiceActive=%s speakerMatch=%s outcome=%s model=%s",
+                                wakeScore,
+                                bgOwwThreshold,
+                                bgOwwHighFrames,
+                                "n/a", // BG path doesn't compute per-chunk RMS like FG does
+                                speakerMatch?.let { String.format("%.2f", it) } ?: "n/a",
+                                if (suppressedBySpeaker) "SPEAKER_SUPPRESS" else "FIRE",
+                                "bg-oww",
+                            ),
+                        )
                         if (now - bgOwwLastWakeAt >= BG_OWW_DETECTION_COOLDOWN_MS) {
                             // Speaker gate check (same as Vosk path)
-                            if (enrollment.shouldSuppressWake()) {
-                                val score = enrollment.getMatchScore() ?: 0f
+                            if (suppressedBySpeaker) {
+                                val score = speakerMatch ?: 0f
                                 Log.i("CyberClawService", "BG OWW wake suppressed by speaker gate (match=${"%.2f".format(score)} < 0.50)")
                                 bgOwwHighFrames = 0
                                 continue
@@ -374,6 +404,24 @@ class CyberClawService : Service() {
                             handler.post { openApp() }
                             return
                         }
+                        // v3.10.169: also log cooldown suppress
+                        // so the FIRE-LOG captures every wake
+                        // decision uniformly. Without this, a
+                        // flurry of duplicates in the cooldown
+                        // window would be invisible to the
+                        // diagnostic.
+                        Log.i(
+                            "CyberClawService",
+                            String.format(
+                                "[FIRE-LOG] session=bg peak=%.2f thr=%.2f frames=%d voiceActive=%s speakerMatch=%s outcome=COOLDOWN_SUPPRESS model=%s",
+                                wakeScore,
+                                bgOwwThreshold,
+                                bgOwwHighFrames,
+                                "n/a",
+                                "n/a",
+                                "bg-oww",
+                            ),
+                        )
                         bgOwwHighFrames = 0
                     }
                 } else {

@@ -299,7 +299,14 @@ export function useClassifierTest(
         const wakewordToScore = options?.wakeword;
         if (wakewordToScore && WakeWordModule?.initOww) {
           try {
-            await WakeWordModule.initOww(wakewordToScore, 0.5);
+            // v3.10.169: same 0.55 nudge as the
+            // production paths so the test scorer
+            // matches what the live detector uses.
+            // Without this, test results would say
+            // "match at 0.55" but the live detector
+            // would still consider 0.54 a fire —
+            // confusing. The bump applies uniformly.
+            await WakeWordModule.initOww(wakewordToScore, 0.55);
           } catch (e: any) {
             // v3.10.51: don't silently swallow. Log
             // the error so the test's log tab shows
