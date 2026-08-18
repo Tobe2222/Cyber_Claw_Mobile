@@ -444,21 +444,18 @@ export default function QuestsScreen({
     setError(null);
     syncClient.deleteQuest?.(id);
   };
-  // v3.10.134: toggle a quest's status between 'active'
-  // and 'completed' from the card list, not the editor.
-  // Tobe 2026-08-04 13:58: 'we can just add a complete
-  // sign in the quest overview right beside the delete
-  // Instead.' A quest with status='completed' still
-  // appears in the list (we don't auto-delete it) so
-  // the user can see finished work at a glance and
-  // un-complete it if they tapped by mistake.
-  // Toggling reuses handleUpdateQuest — the desktop's
-  // onUpdateQuest is a plain Object.assign, so a
-  // partial update with just `{status}` is enough.
-  const handleToggleComplete = (id: string, currentlyCompleted: boolean) => {
-    setError(null);
-    handleUpdateQuest(id, { status: currentlyCompleted ? 'active' : 'completed' });
-  };
+  // v3.10.170: removed the card-level complete-toggle
+  // button (and its handleToggleComplete helper). Tobe
+  // (2026-08-18): "no clue what this does but i dont
+  // need it" — the open-state ◻️ emoji read as a
+  // mysterious white square at the bottom-right of
+  // every quest card. Keep the desktop's quest UI as
+  // the source of truth for status flips; the mobile
+  // card list now exposes only the three actions that
+  // already had clear semantics: edit, set active,
+  // delete. Per-quest status is still readable from
+  // the card header (✅ Done / ⚔️ Active) and the
+  // detail modal.
   const handleMarkGoalDone = (id: string, goalIndex: number, completed: boolean) => {
     setError(null);
     syncClient.markQuestGoalDone?.(id, goalIndex, completed);
@@ -787,11 +784,26 @@ export default function QuestsScreen({
                     </Text>
                   )}
 
-                  {/* v3.8.0: action row. Three quick actions
-                      on each card: ⭐ set active (hidden
-                      on the already-active card since the
-                      ACTIVE banner already says it's
-                      active), ✏️ open editor, ✕ delete.
+                  {/* v3.10.170: action row. Three quick actions
+                      on each card: ✏️ edit (left), ⭐ set
+                      active (middle), ✕ delete (right).
+                      The complete-toggle (🏁/◻️) that used to
+                      sit between SetActive and Delete was
+                      removed — Tobe reported on 2026-08-18
+                      that the open-state ◻️ looked like a
+                      "white square at the bottom right of
+                      each quest" with no clear purpose.
+
+                      Layout: tight gap between the three
+                      buttons. Edit and Delete are small
+                      icon-only chips (secondary, infrequent
+                      destructive). SetActive is the prominent
+                      labeled pill in the middle (gold when
+                      inactive, green ✓ Active when the quest
+                      is already active). The flex spacer
+                      from v3.10.83 is gone — the buttons
+                      now sit together as one group.
+
                       Inline TouchableOpacity so the touch
                       is absorbed and doesn't bubble to
                       the card's onPress (which would open
@@ -817,7 +829,6 @@ export default function QuestsScreen({
                     >
                       <Text style={styles.cardActionText}>✏️</Text>
                     </TouchableOpacity>
-                    <View style={{ flex: 1 }} />
                     {/* v3.10.83: prominent "Set as active" button.
                         v3.10.82 moved ☆ to the right but kept it
                         as a small icon-only button. Tobe's
@@ -826,23 +837,23 @@ export default function QuestsScreen({
                         bigger set as active button on the right
                         side of each as i asked for."
 
+                        v3.10.170: moved from the right edge to
+                        the middle. Tobe (2026-08-18): "the set
+                        as active can be in the middle there, so
+                        we have edit to the left, delete on the
+                        right and set as active in middle."
+
                         Now it's a proper labeled button with
                         the star icon + "Set as active" text,
-                        gold-tinted, sits clearly on the right
-                        edge of the action row. When the quest
-                        IS active, replace with a non-interactive
+                        gold-tinted, sits in the middle of the
+                        action row. When the quest IS active,
+                        replace with a non-interactive
                         "✓ Active" label so the user can confirm
                         the state at a glance (the ACTIVE banner
                         at the top of the card is fine for the
                         initial discovery, but the inline label
                         right next to the action button confirms
-                        the current state when scanning cards).
-
-                        The ✕ stays as a small icon-only button
-                        on the far right edge (destructive
-                        actions on the edge, infrequent). ✏️
-                        stays on the left as a small icon-only
-                        button (secondary action). */}
+                        the current state when scanning cards). */}
                     <TouchableOpacity
                       style={[
                         styles.cardSetActiveBtn,
@@ -875,39 +886,6 @@ export default function QuestsScreen({
                         isActive && styles.cardSetActiveBtnTextActive,
                       ]}>
                         {isActive ? 'Active' : 'Set active'}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      // v3.10.134: complete/incomplete toggle
-                      // button. Sits between SetActive (☆)
-                      // and Delete (✕). Tapping it swaps
-                      // status between 'completed' and
-                      // 'active' without leaving the list.
-                      // The icon flips between 🏁 (completed)
-                      // and ◻️ (open) so the user gets an
-                      // at-a-glance read of which quests are
-                      // already done.
-                      style={[
-                        styles.cardActionBtn,
-                        !firstBroadcastReceived && styles.cardActionBtnDisabled,
-                        // Highlight when the quest IS
-                        // completed so the user can scan
-                        // the list for finished work.
-                        q.status === 'completed' && styles.cardCompleteBtnActive,
-                      ]}
-                      onPress={(e) => {
-                        e?.stopPropagation?.();
-                        if (!firstBroadcastReceived) return;
-                        handleToggleComplete(q.id, q.status === 'completed');
-                      }}
-                    >
-                      <Text style={[
-                        styles.cardActionText,
-                        q.status === 'completed'
-                          ? styles.cardCompleteBtnTextActive
-                          : styles.cardCompleteBtnText,
-                      ]}>
-                        {q.status === 'completed' ? '🏁' : '◻️'}
                       </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -2537,23 +2515,6 @@ const styles = StyleSheet.create({
   },
   cardActionTextDelete: {
     color: '#a55',
-  },
-  // v3.10.134: complete-toggle button styles (the
-  // 🏁 in the card action row). Inactive (open)
-  // state uses a muted fill; active (completed)
-  // uses the orange brand color so the user can
-  // see finished quests at a glance.
-  cardCompleteBtnActive: {
-    backgroundColor: 'rgba(255,140,26,0.18)',
-    borderColor: '#ff8c1a',
-    borderWidth: 1,
-  },
-  cardCompleteBtnText: {
-    color: '#5a5e78',
-  },
-  cardCompleteBtnTextActive: {
-    color: '#ff8c1a',
-    fontWeight: '700',
   },
 
   // v3.10.82: detail-modal footer (Close + Edit). Both
