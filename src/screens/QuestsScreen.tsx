@@ -784,25 +784,30 @@ export default function QuestsScreen({
                     </Text>
                   )}
 
-                  {/* v3.10.170: action row. Three quick actions
+                  {/* v3.10.171: action row. Three quick actions
                       on each card: ✏️ edit (left), ⭐ set
                       active (middle), ✕ delete (right).
-                      The complete-toggle (🏁/◻️) that used to
-                      sit between SetActive and Delete was
-                      removed — Tobe reported on 2026-08-18
-                      that the open-state ◻️ looked like a
-                      "white square at the bottom right of
-                      each quest" with no clear purpose.
+                      SetActive floats in the middle by
+                      sandwiching it between two `flex: 1`
+                      spacers so Edit and Delete anchor the
+                      opposite edges of the row. This works
+                      regardless of how wide the SetActive
+                      label is (English "Set active" vs
+                      Norwegian "Aktivér" etc.) — the pill
+                      stays centered.
 
-                      Layout: tight gap between the three
-                      buttons. Edit and Delete are small
-                      icon-only chips (secondary, infrequent
-                      destructive). SetActive is the prominent
-                      labeled pill in the middle (gold when
-                      inactive, green ✓ Active when the quest
-                      is already active). The flex spacer
-                      from v3.10.83 is gone — the buttons
-                      now sit together as one group.
+                      v3.10.170 had only one spacer (between
+                      Edit and SetActive) which left-aligned
+                      the whole row to the left edge. Tobe
+                      caught it immediately: "you little
+                      goblin. Now you put all of it on the
+                      left side." Two spacers fix it.
+
+                      SetActive is the prominent labeled pill
+                      (gold when inactive, green ✓ Active when
+                      the quest is already active). Edit and
+                      Delete are small icon-only chips
+                      (secondary, infrequent destructive).
 
                       Inline TouchableOpacity so the touch
                       is absorbed and doesn't bubble to
@@ -888,6 +893,20 @@ export default function QuestsScreen({
                         {isActive ? 'Active' : 'Set active'}
                       </Text>
                     </TouchableOpacity>
+                    {/* v3.10.171: second flex spacer — pushes the
+                        Delete button to the right edge so the
+                        SetActive pill sits truly in the middle
+                        between Edit (left) and Delete (right).
+                        v3.10.170 removed both spacers thinking
+                        "tight gap between buttons" would put
+                        SetActive in the middle — but without
+                        justification the row just left-aligned
+                        everything crammed together. With one
+                        spacer on each side of SetActive, the
+                        pill floats centered between the two
+                        icon-only chips regardless of label
+                        width. */}
+                    <View style={{ flex: 1 }} />
                     <TouchableOpacity
                       // v3.10.73: same staleness guard as
                       // ✏️ and the set-active button. delete_quest
