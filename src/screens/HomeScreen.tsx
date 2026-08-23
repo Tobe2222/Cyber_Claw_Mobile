@@ -530,7 +530,7 @@ function appendAgentMessage(
 // the currently selected chat companion (activeChatAgentId) back to
 // App.tsx so the App-level state stays in sync. This is what the
 // wake mode / voice mode uses to know which companion to show.
-export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQuests, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onOpenQuests?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
+export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQuests, onOpenSkills, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onOpenQuests?: () => void; onOpenSkills?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
   // v3.10.113: theme-aware container + chrome. The arena
   // (WebView) and chat messages are media content and stay
   // dark — they ship their own backgrounds via the
@@ -1373,6 +1373,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           onOpenQuests();
         } else {
           addLogEntry('📜 Arena Quests ignored — no handler', 'debug');
+        }
+      }
+      if (msg.type === 'skills') {
+        // v3.10.173: arena Skills button → global Skills page
+        // (mirror of the Quests flow). Skills live on the
+        // desktop's left sidebar; on the mobile they get their
+        // own top-level screen so the per-companion toggle UI
+        // doesn't have to share space with companion settings.
+        if (onOpenSkills) {
+          addLogEntry('📚 Arena Skills → global Skills page', 'debug');
+          onOpenSkills();
+        } else {
+          addLogEntry('📚 Arena Skills ignored — no handler', 'debug');
         }
       }
       if (msg.type === 'treat_placed') {

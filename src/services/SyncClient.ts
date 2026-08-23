@@ -360,6 +360,35 @@ class SyncClient {
     this.send({ type: 'request_quests_list' });
   }
 
+  // v3.10.173: skills library — mirror the desktop IPCs over
+  // the sync WebSocket. The mobile gets the same list /
+  // read / create / update / delete / toggle surface as
+  // the desktop's left sidebar.
+  requestSkillsList() {
+    this.send({ type: 'request_skills_list' });
+  }
+  requestSkillRead(skillId: string) {
+    this.send({ type: 'request_skill_read', skillId });
+  }
+  createSkill(payload: { name: string; description?: string; icon?: string; triggers?: string[]; body?: string }) {
+    this.send({ type: 'create_skill', payload });
+  }
+  updateSkill(skillId: string, payload: { name?: string; description?: string; icon?: string; triggers?: string[]; body?: string }) {
+    this.send({ type: 'update_skill', skillId, payload });
+  }
+  deleteSkill(skillId: string) {
+    this.send({ type: 'delete_skill', skillId });
+  }
+  seedStarterSkills() {
+    this.send({ type: 'seed_starter_skills' });
+  }
+  requestEnabledSkills(agentId: string) {
+    this.send({ type: 'request_enabled_skills', agentId });
+  }
+  setEnabledSkills(agentId: string, skillIds: string[]) {
+    this.send({ type: 'set_enabled_skills', agentId, skillIds });
+  }
+
   // v3.8.0: phone-side quest edit. The mobile can now mutate
   // quests over WebSocket. Each method sends the appropriate
   // inbound message to the desktop. The desktop performs the
@@ -922,6 +951,48 @@ class SyncClient {
         //   { questId, ok, content, path, error }
         console.log('[SyncClient] Received quest_instructions for', msg.questId, 'ok=' + msg.ok);
         this.emit('quest_instructions', msg);
+        break;
+
+      // v3.10.173: skills library responses + broadcasts.
+      // Each shape matches the desktop IPC (ok/error/skill).
+      case 'skills_list':
+        console.log('[SyncClient] Received skills_list:', msg.skills?.length, 'skill(s)');
+        this.emit('skills_list', msg);
+        break;
+      case 'skills_list_broadcast':
+        // Desktop pushed this after a create/update/delete.
+        // Refresh the local cache so any open SkillScreen
+        // shows the new list without an explicit re-fetch.
+        console.log('[SyncClient] Received skills_list_broadcast:', msg.skills?.length, 'skill(s)');
+        this.emit('skills_list_broadcast', msg);
+        break;
+      case 'skill_read':
+        console.log('[SyncClient] Received skill_read:', msg.skill?.id, 'ok=' + msg.ok);
+        this.emit('skill_read', msg);
+        break;
+      case 'skill_create_result':
+        console.log('[SyncClient] Received skill_create_result:', msg.ok, msg.skill?.id);
+        this.emit('skill_create_result', msg);
+        break;
+      case 'skill_update_result':
+        console.log('[SyncClient] Received skill_update_result:', msg.ok, msg.skill?.id);
+        this.emit('skill_update_result', msg);
+        break;
+      case 'skill_delete_result':
+        console.log('[SyncClient] Received skill_delete_result:', msg.ok, msg.skillId);
+        this.emit('skill_delete_result', msg);
+        break;
+      case 'skill_seed_result':
+        console.log('[SyncClient] Received skill_seed_result:', msg.ok, msg.seeded?.length, 'seeded');
+        this.emit('skill_seed_result', msg);
+        break;
+      case 'enabled_skills':
+        console.log('[SyncClient] Received enabled_skills for', msg.agentId, ':', msg.enabled?.length);
+        this.emit('enabled_skills', msg);
+        break;
+      case 'enabled_skills_set':
+        console.log('[SyncClient] Received enabled_skills_set for', msg.agentId, 'ok=' + msg.ok);
+        this.emit('enabled_skills_set', msg);
         break;
 
       case 'quest_instructions_saved':

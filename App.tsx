@@ -27,6 +27,7 @@ import CompanionSettingsScreen from './src/screens/CompanionSettingsScreen';
 // 'companion-edit' route from CompanionSettingsScreen.
 import CompanionEditScreen from './src/screens/CompanionEditScreen';
 import QuestsScreen from './src/screens/QuestsScreen';
+import SkillsScreen from './src/screens/SkillsScreen';
 import syncClient from './src/services/SyncClient';
 import { saveGreetingAudio } from './src/services/GreetingAudioCache';
 import { saveWorkingSpeechAudio } from './src/services/WorkingSpeechAudioCache';
@@ -105,7 +106,7 @@ export default function App(): React.JSX.Element {
   const [screen, setScreen] = useState<
     'home' | 'settings' | 'voice-mode' | 'companion' | 'quests' |
     'wake-trainer' | 'wake-manager' | 'exit-trainer' |
-    'companion-edit'
+    'companion-edit' | 'skills'
   >('home');
   // v3.10.0: contexts for the new trainer / manager
   // routes. Set when CompanionSettingsScreen calls a
@@ -606,6 +607,7 @@ export default function App(): React.JSX.Element {
             <HomeScreen
               onOpenSettings={() => setScreen('settings')}
               onOpenVoiceMode={() => setScreen('voice-mode')}
+              onOpenSkills={() => setScreen('skills')}
               // v3.7.6: arena Quests button (top-left of the
               // arena WebView, mirrors Voice Mode at top-right)
               // now opens the global Quests page directly.
@@ -732,6 +734,13 @@ export default function App(): React.JSX.Element {
           )}
           {screen === 'quests' && (
             <QuestsScreen onBack={() => setScreen('home')} />
+          )}
+          {screen === 'skills' && (
+            <SkillsScreen
+              onBack={() => setScreen('home')}
+              activeCompanionId={companionId || undefined}
+              activeCompanionName={agents.find(a => a.id === companionId)?.name}
+            />
           )}
           {screen === 'voice-mode' && (
             <WakeModeScreen
