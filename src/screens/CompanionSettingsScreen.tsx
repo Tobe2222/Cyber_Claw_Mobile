@@ -139,6 +139,16 @@ export default function CompanionSettingsScreen({
   // companion. Lifted to App.tsx as a full-screen route
   // (mirrors the desktop's Companion Forge on mobile).
   onOpenCompanionEdit,
+  // v3.10.174: open the Skills screen scoped to this
+  // companion. The companion settings page is the
+  // ONLY place the Skills screen is reachable from
+  // (Tobe: "Skills in the companion settings,
+  // nowhere else"). Passing companionId +
+  // companionName lets SkillsScreen render the
+  // per-companion toggle pills pre-bound to this
+  // companion, so the user toggles skills for THIS
+  // companion without having to pick one.
+  onOpenSkills,
 }: {
   companionId: string;
   onBack: () => void;
@@ -146,6 +156,7 @@ export default function CompanionSettingsScreen({
   onPushWakeManager: (ctx: { companionId: string; companionName: string }) => void;
   onPushExitTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
   onOpenCompanionEdit?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
+  onOpenSkills?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
 }) {
   // v3.4.4: drill-down phase inside the companion
   // detail view. null = overview (cards). 'wake' / 'exit'
@@ -498,6 +509,18 @@ export default function CompanionSettingsScreen({
   // setAgents with the new companion; no setCentered
   // since v3.10.146 so the companion keeps animating).
   const viewWebViewRef = useRef<WebView>(null);
+
+  // v3.10.174: track whether arena.html's JS has
+  // finished bootstrapping (received arena_loaded).
+  // Once true, the canvas-drawn companion name (above
+  // the centered sprite) is visible, so the React
+  // Native `viewWindowLabel` caption underneath is
+  // redundant. Hiding the caption when arenaReady
+  // keeps the view box clean ("less Clawsuu"). The
+  // caption stays visible during the boot window as a
+  // graceful fallback in case arena.html fails to
+  // load (e.g. asset missing, JS error → black box).
+  const [arenaReady, setArenaReady] = useState(false);
 
   // Hydrate companion list from local cache
   useEffect(() => {
@@ -1154,6 +1177,19 @@ export default function CompanionSettingsScreen({
     );
   }, [companionId, availableCompanions.length]);
 
+  // v3.10.174: NOT resetting arenaReady on companion
+  // switch. The WebView source URI is static (no
+  // companion ID in the URL), so arena.html boots
+  // once per WebView lifetime and arena_loaded fires
+  // once. arenaReady=true persists across companion
+  // switches — which is what we want, because the
+  // canvas name follows the active companion via
+  // setActive (drawn every frame). The caption stays
+  // hidden. On full remount (navigate away and back)
+  // the WebView remounts, arenaReady resets to its
+  // initial false, the caption briefly shows, then
+  // hides again once arena_loaded arrives.
+
   // Resolve companionId → companion object. If stale
   // (deleted from cache) show a placeholder while the
   // effect above fires onBack().
@@ -1250,7 +1286,7 @@ export default function CompanionSettingsScreen({
           <Text style={styles.skillsSectionIcon}>⭐</Text>
           <View style={{ flex: 1 }}>
             <Text style={styles.skillsSectionTitle}>
-              Skills {companion?.skills ? `· Lv.${companion.skills.level}` : ''}
+              Experience {companion?.skills ? `· Lv.${companion.skills.level}` : ''}
             </Text>
             <Text style={styles.skillsSectionDesc}>
               XP earned by helping with chats. Just for fun.
@@ -1387,7 +1423,19 @@ export default function CompanionSettingsScreen({
           originWhitelist={['*']}
           // v3.10.144: arena.html events treated as
           // no-ops. The settings view is read-only.
-          onMessage={() => { /* ignore */ }}
+          // v3.10.174: EXCEPT arena_loaded — flip
+          // arenaReady so the React Native caption can
+          // be hidden (the canvas-drawn name is
+          // sufficient once arena.html has
+          // bootstrapped).
+          onMessage={(event) => {
+            try {
+              const msg = JSON.parse(event.nativeEvent.data || '{}');
+              if (msg && msg.type === 'arena_loaded') {
+                setArenaReady(true);
+              }
+            } catch (_) { /* ignore non-JSON */ }
+          }}
           // v3.10.145: track load state. arena.html
           // fires `arena_loaded` once the catalog is
           // v3.10.146: Tobe's feedback (20:20):
@@ -1458,12 +1506,22 @@ export default function CompanionSettingsScreen({
             (the WebView is mostly empty space at the
             bottom; the sprite is centered higher
             up). Gives the user confirmation that the
-            view is showing the right companion. */}
-        <View style={styles.viewWindowLabel} pointerEvents="none">
-          <Text style={styles.viewWindowLabelText}>
-            {companion?.name || ''} · {placeholderSprite}
-          </Text>
-        </View>
+            view is showing the right companion.
+            v3.10.174: hide the caption once arena.html
+            has finished bootstrapping (arenaReady).
+            The canvas-drawn name above the centered
+            sprite is then visible and the caption
+            duplicates it ("Clawsuu" appears twice in
+            the box). The caption stays visible during
+            the boot window as a fallback if the
+            WebView fails to load (black-box case). */}
+        {(!arenaReady || placeholderSprite === 'default sprite') && (
+          <View style={styles.viewWindowLabel} pointerEvents="none">
+            <Text style={styles.viewWindowLabelText}>
+              {companion?.name || ''} · {placeholderSprite}
+            </Text>
+          </View>
+        )}
       </View>
     );
   }
@@ -1669,6 +1727,43 @@ export default function CompanionSettingsScreen({
           {/* 3. v3.10.142: behaviour card (current values
               + Edit button) */}
           {renderBehaviourCard(companion)}
+
+          {/* v3.10.174: Skills library entry point.
+              Sits between Behaviour and the SETTINGS
+              separator. Tappable card → opens
+              SkillsScreen pre-bound to this companion
+              (per-companion toggle pills work
+              immediately, no companion picker). This
+              is the ONLY place on the mobile where the
+              Skills library is reachable (Tobe: "Skills
+              in the companion settings, nowhere
+              else"). The v3.10.139 Skills → Experience
+              rename above avoids the dual-Skills-label
+              confusion (Experience widget = XP, Skills
+              library = toggleable abilities). */}
+          {onOpenSkills && (
+            <TouchableOpacity
+              style={styles.skillsLibraryCard}
+              onPress={() => onOpenSkills({
+                companionId: companion.id,
+                companionName: companion.name,
+                emoji: companion.emoji || companion.icon || null,
+              })}
+              accessibilityRole="button"
+              accessibilityLabel={`Skills library for ${companion.name}`}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={styles.skillsLibraryIcon}>📚</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.skillsLibraryTitle}>Skills library</Text>
+                  <Text style={styles.skillsLibraryDesc}>
+                    Browse, create, edit, and toggle skills for {companion.name}.
+                  </Text>
+                </View>
+                <Text style={styles.skillsLibraryChevron}>›</Text>
+              </View>
+            </TouchableOpacity>
+          )}
 
           {/* 4. v3.10.142: visual separator between the
               "about this companion" sections (view +
@@ -3001,6 +3096,25 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   behaviourEditBtnText: { color: '#000', fontSize: 12, fontWeight: '700' },
+  // v3.10.174: Skills library entry-point card on
+  // the companion overview. Mirrors the dark card
+  // style of the existing skills/behaviour cards but
+  // with a blue accent to distinguish it as a
+  // navigation target (the existing cards are
+  // information + inline-edit). 16px icon, white
+  // title, gray desc, chevron right.
+  skillsLibraryCard: {
+    backgroundColor: '#0f1626',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+    padding: 14,
+    marginVertical: 6,
+  },
+  skillsLibraryIcon: { fontSize: 22, marginRight: 12 },
+  skillsLibraryTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  skillsLibraryDesc: { color: '#9aa0b4', fontSize: 12, marginTop: 2 },
+  skillsLibraryChevron: { color: '#9aa0b4', fontSize: 22, marginLeft: 8 },
   behaviourRow: {
     flexDirection: 'row',
     alignItems: 'center',

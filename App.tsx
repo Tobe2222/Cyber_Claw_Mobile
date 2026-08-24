@@ -127,6 +127,17 @@ export default function App(): React.JSX.Element {
   const [companionEditCtx, setCompanionEditCtx] = useState<
     { companionId: string; companionName: string; emoji?: string | null } | null
   >(null);
+  // v3.10.174: context for the Skills route when opened
+  // from a companion page. Set by CompanionSettingsScreen
+  // via onOpenSkills, cleared on back. The SkillsScreen
+  // uses these to pre-bind the per-companion toggle pills
+  // to this companion (no companion picker needed). When
+  // opened from somewhere else in the future, the context
+  // is null and SkillsScreen falls back to a no-companion
+  // view (top-level skills only, no toggle pills).
+  const [skillsCtx, setSkillsCtx] = useState<
+    { companionId: string; companionName: string; emoji?: string | null } | null
+  >(null);
   // v3.4.4: id of the companion whose settings are open
   // when screen === 'companion'. Set by SettingsScreen via
   // onOpenCompanion(id).
@@ -607,7 +618,19 @@ export default function App(): React.JSX.Element {
             <HomeScreen
               onOpenSettings={() => setScreen('settings')}
               onOpenVoiceMode={() => setScreen('voice-mode')}
-              onOpenSkills={() => setScreen('skills')}
+              // v3.10.174: removed the
+              // HomeScreen→Skills IPC handler. Tobe
+              // said "Skills in the companion settings,
+              // nowhere else" — the only Skills entry
+              // point is now the new Skills library
+              // card on the companion overview.
+              // arena.html still sends no Skills IPC
+              // (no arena button), so this prop being
+              // absent is invisible to the user. The
+              // prop remains optional on HomeScreen
+              // so future use (e.g. if arena adds a
+              // Skills button later) doesn't need to
+              // change the type.
               // v3.7.6: arena Quests button (top-left of the
               // arena WebView, mirrors Voice Mode at top-right)
               // now opens the global Quests page directly.
@@ -679,6 +702,18 @@ export default function App(): React.JSX.Element {
                 setCompanionEditCtx(ctx);
                 setScreen('companion-edit');
               }}
+              // v3.10.174: Skills library reachable from
+              // the companion settings page. The Skills
+              // screen is bound to this companion so the
+              // per-companion toggle pills work without
+              // a companion picker. Back button on the
+              // Skills screen pops to 'companion' (the
+              // originating screen), NOT 'home' — same
+              // pattern as the trainer/manager sub-routes.
+              onOpenSkills={(ctx) => {
+                setSkillsCtx(ctx);
+                setScreen('skills');
+              }}
             />
           )}
           {screen === 'wake-trainer' && wakeTrainerCtx && (
@@ -736,10 +771,35 @@ export default function App(): React.JSX.Element {
             <QuestsScreen onBack={() => setScreen('home')} />
           )}
           {screen === 'skills' && (
+            // v3.10.174: Skills opened from the
+            // companion settings page is bound to that
+            // companion via skillsCtx (set by
+            // CompanionSettingsScreen.onOpenSkills).
+            // Back button pops back to 'companion', not
+            // 'home', so the user lands on the
+            // originating companion's settings page.
+            // If skillsCtx is null (opened from some
+            // future top-level entry point), we still
+            // bind to the active wake companion as a
+            // sensible default and back pops to 'home'.
             <SkillsScreen
-              onBack={() => setScreen('home')}
-              activeCompanionId={companionId || undefined}
-              activeCompanionName={agents.find(a => a.id === companionId)?.name}
+              onBack={() => {
+                if (skillsCtx) {
+                  setSkillsCtx(null);
+                  setScreen('companion');
+                } else {
+                  setScreen('home');
+                }
+              }}
+              activeCompanionId={
+                skillsCtx?.companionId ||
+                companionId ||
+                undefined
+              }
+              activeCompanionName={
+                skillsCtx?.companionName ||
+                agents.find(a => a.id === companionId)?.name
+              }
             />
           )}
           {screen === 'voice-mode' && (
