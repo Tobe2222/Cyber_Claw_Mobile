@@ -169,6 +169,17 @@ export default function CompanionSettingsScreen({
   // screen (QuestsScreen.tsx) accessed from the arena button.
   const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | null>(null);
 
+  // v3.10.175: Experience card collapsible state.
+  // Collapsed = just the character level bar + chevron
+  // (the default). Tapping the card expands it to show
+  // all 9 category XP bars below (Skyrim-style:
+  // character level is driven by sum of category XP,
+  // tapping the character bar reveals the per-category
+  // breakdown). Persists across re-renders within the
+  // screen so opening the Wake sub-page and coming back
+  // doesn't collapse it again.
+  const [experienceExpanded, setExperienceExpanded] = useState(false);
+
   // Companion list — owned here (not lifted to App.tsx)
   // because this screen needs it to resolve companionId
   // → {name, emoji}. Hydrates from the same AsyncStorage
@@ -1234,11 +1245,38 @@ export default function CompanionSettingsScreen({
     ? `Trained: "${activeWake.displayName || activeWake.phrase}"`
     : 'No active wake on this phone — open Wake Sets to manage trained phrases';
 
-  // v3.10.139: skills section renderer. Renders the
-  // companion's skill XP + levels per skill as a list
-  // of rows. View-only — tapping a row does nothing.
-  // Kept inline (not its own component) because it's
-  // ~50 lines and only used here.
+  // v3.10.175: Skyrim-style Experience card.
+  // The character/companion level is at the top — always
+  // visible. Tapping the card expands to show all 9
+  // category XP bars below (Building / Writing / Design
+  // / Analysis / Strategy / Research / Communication /
+  // Game / General). The character level is driven by
+  // the sum of all category XP (computed on the desktop
+  // via getStats; the mobile just reads companion.skills).
+  //
+  // Previous (v3.10.139–v3.10.174) was confusing:
+  //   - "Experience · Lv.1" with "No skills earned yet"
+  //     inside contradicted itself (Lv.1 with no XP meant
+  //     the level bar was meaningless).
+  //   - Categories were hidden behind the "no skills" empty
+  //     state until the companion earned any XP.
+  //   - The category grid was a 2-col collapsed view with
+  //     no character-level overview.
+  //
+  // Now (v3.10.175):
+  //   - Always show the character bar (Lv + xp/xpToNext +
+  //     lifetime xpTotal).
+  //   - Tap the card → expand to show ALL 9 categories
+  //     (Building/Writing/etc.), each at Lv.1 + 0xp by
+  //     default. Bars are empty but visible — the user
+  //     always sees the breakdown so they know what they
+  //     can earn.
+  //   - No "no skills earned yet" empty state. Categories
+  //     are always shown when companion.skills exists.
+  //   - When companion.skills is null (legacy agent, stats
+  //     not yet populated), show a single muted hint row
+  //     instead of the empty state — keeps the section
+  //     always present so the user knows where to find it.
   function renderSkillsSection() {
     // v3.10.139: SKILL_DEFS mirrors the desktop's
     // SKILL_DEFS in main.js (v3.2.84). If the desktop
@@ -1265,47 +1303,90 @@ export default function CompanionSettingsScreen({
     const xpForLevel = (level: number) =>
       Math.floor(100 * Math.pow(1.5, Math.max(1, level) - 1));
 
+    // v3.10.175: build category rows for ALL 9 categories,
+    // not just ones with XP > 0. Categories with no entry
+    // yet get the desktop's fallback shape (level: 1,
+    // xp: 0) which matches getStats()'s default (the
+    // desktop app.js renderer does the same). This makes
+    // every category visible from the start with an empty
+    // bar — the user sees what's trackable without having
+    // to earn XP first to reveal the structure.
+    //
     // Sort: highest XP first (most "skilled" at top),
     // ties broken by name. The "General" fallback is
-    // always last if it has any XP.
+    // always last if it has any XP — same as before.
     const skillRows = SKILL_DEFS
       .map(def => {
         const s = companion?.skills?.skills?.[def.name];
-        return s ? { ...def, level: s.level, xp: s.xp } : null;
+        // v3.10.175: default { level: 1, xp: 0 } for
+        // categories with no entry yet. The empty bar
+        // shows 0% (correct — 0 / xpForLevel(1) = 0%).
+        return { ...def, level: s?.level ?? 1, xp: s?.xp ?? 0 };
       })
-      .filter((r): r is { name: string; icon: string; level: number; xp: number } => r !== null)
       .sort((a, b) => {
         const xpDiff = b.xp - a.xp;
         if (xpDiff !== 0) return xpDiff;
         return a.name.localeCompare(b.name);
       });
 
+    // Character level bar — read from companion.skills
+    // directly (the desktop computes this from the sum of
+    // category XP, mobile just renders). When companion
+    // has no stats yet (legacy agent or desktop hasn't
+    // run getStats), fall back to level=1 / xp=0 so the
+    // bar is always renderable.
+    const charLevel = companion?.skills?.level ?? 1;
+    const charXp = companion?.skills?.xp ?? 0;
+    const charXpToNext = xpForLevel(charLevel);
+    const charXpTotal = companion?.skills?.xpTotal ?? 0;
+    const charPct = Math.min(100, (charXp / charXpToNext) * 100);
+    const hasStats = !!companion?.skills;
+
     return (
       <View style={styles.skillsSection}>
-        <View style={styles.skillsSectionHeader}>
+        <TouchableOpacity
+          style={styles.skillsSectionHeader}
+          onPress={() => setExperienceExpanded(v => !v)}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: experienceExpanded }}
+          accessibilityLabel={`Experience, level ${charLevel}. Tap to ${experienceExpanded ? 'collapse' : 'expand'} category breakdown.`}
+        >
           <Text style={styles.skillsSectionIcon}>⭐</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.skillsSectionTitle}>
-              Experience {companion?.skills ? `· Lv.${companion.skills.level}` : ''}
-            </Text>
+            <View style={styles.skillGridRow}>
+              <Text style={styles.skillsSectionTitle}>
+                Experience · Lv.{charLevel}
+              </Text>
+              <Text style={styles.skillsSectionXp}>
+                {charXp} / {charXpToNext} XP
+              </Text>
+            </View>
             <Text style={styles.skillsSectionDesc}>
-              XP earned by helping with chats. Just for fun.
+              {hasStats
+                ? `Lifetime ${charXpTotal} XP · tap for categories`
+                : 'Stats syncing from desktop…'}
             </Text>
           </View>
+          <Text style={[styles.skillsSectionChevron, experienceExpanded && styles.skillsSectionChevronOpen]}>
+            ›
+          </Text>
+        </TouchableOpacity>
+
+        {/* v3.10.175: always-visible character XP bar. Lives
+            OUTSIDE the toggle so the user can see their
+            companion's overall progress at a glance, even
+            with the categories collapsed. */}
+        <View style={styles.charBar}>
+          <View style={[styles.charBarFill, { width: `${charPct}%` }]} />
         </View>
 
-        {(!companion?.skills || skillRows.length === 0) ? (
-          <View style={styles.skillsEmpty}>
-            <Text style={styles.skillsEmptyText}>
-              No skills earned yet. Chat with {companion?.name || 'this companion'} to start gaining XP.
-            </Text>
-          </View>
-        ) : (
-          // v3.10.142: compact 2-col grid. Was a vertical
-          // list (one row per skill) which felt heavy
-          // under the sprite view window. Two columns
-          // keeps the section to ~4-5 rows tall no matter
-          // how many skills are earned.
+        {experienceExpanded && (
+          // v3.10.175: per-category breakdown. Shown only
+          // when the user taps the header. 9 rows × ~22px
+          // tall = ~200px of additional vertical space when
+          // expanded. Sort: highest XP first (matches the
+          // desktop's renderer in app.js:1137).
           <View style={styles.skillsGrid}>
             {skillRows.map(s => {
               const xpNeeded = xpForLevel(s.level);
@@ -3025,15 +3106,51 @@ const styles = StyleSheet.create({
     padding: 14,
     marginVertical: 6,
   },
+  // v3.10.175: tappable header now wraps the whole row
+  // (icon + title + xp/desc + chevron). Removed the
+  // explicit marginBottom so the char bar sits flush
+  // under the header.
   skillsSectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginBottom: 12,
   },
   skillsSectionIcon: { fontSize: 22 },
   skillsSectionTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  // v3.10.175: current XP / XP-to-next-level inline with
+  // the title. Replaces the previous "Lv.N" suffix so
+  // the user can see progress at a glance without
+  // expanding.
+  skillsSectionXp: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
   skillsSectionDesc: { color: '#9aa0b4', fontSize: 12, marginTop: 2 },
+  // v3.10.175: chevron that rotates 90° when expanded.
+  // Same chevron style as the settings cards below for
+  // visual consistency.
+  skillsSectionChevron: {
+    color: '#9aa0b4',
+    fontSize: 22,
+    marginLeft: 4,
+    // Rotate 0° by default (collapsed). transform
+    // rotates around the centre of the glyph.
+    transform: [{ rotate: '0deg' }],
+  },
+  skillsSectionChevronOpen: {
+    transform: [{ rotate: '90deg' }],
+  },
+  // v3.10.175: character XP bar — always visible,
+  // even when the card is collapsed. Shows overall
+  // companion progress. Slightly thicker than the
+  // per-category bars (4px vs 3px) to read as the
+  // primary bar.
+  charBar: {
+    height: 6,
+    backgroundColor: '#222',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  charBarFill: { height: '100%', backgroundColor: '#f7931a' },
   skillsEmpty: {
     backgroundColor: 'rgba(247,147,26,0.08)',
     borderRadius: 8,
