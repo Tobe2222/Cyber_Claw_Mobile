@@ -582,8 +582,13 @@ export default function WakeModeScreen({
     const trimmed = phrase.trim();
     // Try cached audio first.
     try {
+      // v3.10.176: pass companionId so the cache resolves
+      // the per-companion voice (otherwise it falls back
+      // to 'lessac' and collides across companions).
       const { getCachedExitReplyPath } = require('../services/ExitReplyAudioCache');
-      const cached = await getCachedExitReplyPath(trimmed);
+      const cached = await getCachedExitReplyPath(
+        trimmed, undefined, companionId,
+      );
       if (cached) {
         addVoiceLog(`🔊 exit reply (cached): "${trimmed}"`);
         // Fire-and-forget: kick off the play but don't
@@ -592,22 +597,42 @@ export default function WakeModeScreen({
         playCachedGreeting(cached).catch(() => {});
         return;
       }
-      // No cache — request a synthesis (fire-and-forget)
-      // AND speak the phrase now as a fallback so the
-      // user hears something immediately. The next
-      // close will use the warmed cache.
+      // No cache — request a synthesis and wait briefly
+      // for the WAV. v3.10.176: dropped the speak() /
+      // Android-TTS fallback because piper is the single
+      // voice across the session (Tobe 2026-08-11: "the
+      // goal is to build as local as possible"). Playing
+      // Android TTS here produced a different voice from
+      // the AI reply piper audio, which is the bug Tobe
+      // reported on 2026-08-26. The next close will use
+      // the warmed cache; this close gets piper or a
+      // short silent gap.
       const { ensureExitReplyCached } = require('../services/ExitReplyAudioCache');
-      ensureExitReplyCached(trimmed).catch(() => {});
-      addVoiceLog(`🔊 exit reply (TTS fallback): "${trimmed}"`);
-      speak(trimmed).catch(() => {});
+      const pending = ensureExitReplyCached(
+        trimmed, undefined, companionId,
+      );
+      const timeout = new Promise<null>((r) =>
+        setTimeout(() => r(null), 4000),
+      );
+      const ready = pending.then(async (p) => {
+        if (!p) return null;
+        // Fire-and-forget — the close happens regardless
+        // and the user is fading out of voice mode.
+        playCachedGreeting(p).catch(() => {});
+        return p;
+      }).catch(() => null);
+      const finalPath = await Promise.race([ready, timeout]);
+      if (!finalPath) {
+        addVoiceLog('🔊 exit reply (piper still synthesizing — skipping audio for this close)');
+      }
     } catch (e: any) {
-      // If anything in the cache module errors out, fall
-      // back to local TTS so the user still hears
-      // something.
-      addVoiceLog(`🔊 exit reply (TTS fallback, error): "${trimmed}"`);
-      speak(trimmed).catch(() => {});
+      // v3.10.176: dropped the speak() fallback here too.
+      // If the cache module errors out, skip the audio —
+      // never fall back to Android TTS, which would use
+      // a different voice from the piper session.
+      addVoiceLog(`� exit reply skipped (cache error: ${e?.message})`);
     }
-  }, [speak]);
+  }, [speak, companionId]);
   playExitReplyRef.current = playExitReply;
 
   // v3.10.13: play the user's chosen turn-cue sound and
@@ -784,7 +809,11 @@ export default function WakeModeScreen({
         try {
           const { getCachedWorkingSpeechPath } = require('../services/WorkingSpeechAudioCache');
           const { playAudioFile } = require('../services/AudioPlayer');
-          const cached = await getCachedWorkingSpeechPath(speech);
+          // v3.10.176: pass companionId so the cache
+          // resolves the per-companion voice.
+          const cached = await getCachedWorkingSpeechPath(
+            speech, undefined, companionId,
+          );
           if (cached) {
             // Piper audio — same voice as the rest of the
             // session. Plays through the shared
@@ -793,15 +822,21 @@ export default function WakeModeScreen({
             addLogEntry(`🧠 Working speech (piper cache): "${speech}"`, 'debug');
             await playAudioFile(cached);
           } else {
-            // Cache miss — fall back to Android TTS. This
-            // is rare (happens only on the very first turn
-            // after the user changes the phrase, before
-            // the desktop synthesis arrives). The first
-            // turn is audibly distinct from subsequent
-            // turns; acceptable tradeoff for keeping the
-            // architecture simple.
-            addLogEntry(`🧠 Working speech (TTS fallback, cache miss): "${speech}"`, 'debug');
-            await speakRef.current?.(speech);
+            // v3.10.176: dropped the Android-TTS fallback.
+            // Piper is the single voice (Tobe 2026-08-11);
+            // playing Android TTS here would be a different
+            // voice from the piper greeting / response /
+            // exit reply. Fire the synthesis so the next
+            // turn uses the cache, and skip audio for this
+            // turn instead.
+            addLogEntry(`🧠 Working speech (piper cache cold — skipping audio): "${speech}"`, 'debug');
+            try {
+              const { ensureWorkingSpeechCached } =
+                require('../services/WorkingSpeechAudioCache');
+              ensureWorkingSpeechCached(
+                speech, undefined, companionId,
+              ).catch(() => {});
+            } catch (_) {}
           }
         } catch (e: any) {
           addLogEntry(`Working speech playback failed: ${e?.message || e}`, 'warn');
@@ -973,14 +1008,43 @@ export default function WakeModeScreen({
           }
         } catch (_) {}
         if (greetingText) {
-          const cachedPath = await getCachedGreetingPath(greetingText);
+          // v3.10.176: pass companionId so the cache
+          // resolves the per-companion voice the user
+          // picked (otherwise it falls back to 'lessac'
+          // and every voice collides on the same slot).
+          const cachedPath = await getCachedGreetingPath(
+            greetingText, undefined, companionId,
+          );
           if (cachedPath) {
             addVoiceLog(`🔊 playing cached (${cachedPath.split('/').pop()})`);
             await playCachedGreeting(cachedPath);
           } else {
-            addVoiceLog('🔊 no cached audio, requesting synthesis');
-            ensureGreetingCached(greetingText).catch(() => {});
-            await speak(greetingText);
+            addVoiceLog('🔊 no cached audio, requesting piper synthesis');
+            // v3.10.176: dropped the speak() fallback
+            // (Android TTS — different voice from piper).
+            // Piper is the single voice across the session
+            // (Tobe 2026-08-11: "the goal is to build as
+            // local as possible"), so the user should hear
+            // piper or nothing. Fire the synthesis and
+            // wait briefly for the WAV. If it doesn't
+            // arrive in 4s, skip the greeting audio for
+            // this turn — the next wake / reopen will use
+            // the warmed cache. The Android-TTS voice
+            // switch mid-session is the bug this fixes.
+            const pending = ensureGreetingCached(
+              greetingText, undefined, companionId,
+            );
+            const timeout = new Promise<void>((r) =>
+              setTimeout(() => r(), 4000),
+            );
+            const ready = pending.then(async (p) => {
+              if (!p) return null;
+              return playCachedGreeting(p).then(() => p);
+            }).catch(() => null);
+            await Promise.race([ready, timeout]);
+            if (!cachedPath) {
+              addVoiceLog('🔊 piper still synthesizing — skipping greeting audio for this turn');
+            }
           }
         }
 
@@ -1281,15 +1345,27 @@ export default function WakeModeScreen({
             // when the engine is missing) and kick off a
             // background synthesis request so the NEXT
             // wake event has a cache to use.
-            const cachedPath = await getCachedGreetingPath(greetingText);
+            // v3.10.176: pass companionId so the cache
+            // resolves the per-companion voice.
+            const cachedPath = await getCachedGreetingPath(
+              greetingText, undefined, companionId,
+            );
             if (cachedPath) {
               addVoiceLog(`🔊 playing cached (${cachedPath.split('/').pop()})`);
               await playCachedGreeting(cachedPath);
             } else {
-              addVoiceLog('🔊 no cached audio, requesting synthesis');
-              // Kick off background synthesis for next time.
-              ensureGreetingCached(greetingText).catch(() => {});
-              await speak(greetingText);
+              addVoiceLog('🔊 no cached audio, requesting piper synthesis');
+              // v3.10.176: dropped the speak() fallback
+              // (Android TTS) — piper is the single voice
+              // (Tobe 2026-08-11). Fire synthesis in the
+              // background so the next wake uses the cache;
+              // skip the greeting audio for this turn
+              // instead of letting Android TTS play a
+              // different voice.
+              ensureGreetingCached(
+                greetingText, undefined, companionId,
+              ).catch(() => {});
+              addVoiceLog('🔊 skipping greeting audio — piper cache cold');
             }
           }
           if (cancelled) return;
