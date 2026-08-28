@@ -255,6 +255,36 @@ interface ChatMessage {
   // entire old history.
   activeQuestId?: string | null;
   activeQuestName?: string | null;
+  // v3.10.177.1: error-only diagnostic metadata attached
+  // when this bubble closes a task session as 'failed'.
+  // Tobe's 2026-08-28 clarification: this is ONLY for
+  // errors. Successful agent replies render normally
+  // without any summary footer, so the renderer only
+  // needs to handle the failed branch.
+  //
+  // The renderer swaps the bubble's visual treatment
+  // with a structured error card (category icon +
+  // duration + captured steps + Retry + Copy buttons).
+  // The original error text is preserved above the card
+  // so no information is lost.
+  //
+  // Undefined on successful bubbles, user bubbles, and
+  // any chat bubble that didn't close a task session.
+  taskSummary?: {
+    status: 'failed';
+    durationMs: number;
+    stepCount: number;
+    // Distinct labels in chronological order. Use
+    // these for the steps list in the renderer.
+    steps: string[];
+    // Error category classified by pattern-match on
+    // the desktop's "Error: <text>" wire format.
+    errorCategory: 'timeout' | 'crash' | 'network' | 'error';
+    // The full error text including the "Error:" prefix.
+    // Preserved in case the renderer wants to show it
+    // again or the user copies it.
+    errorText: string;
+  };
 }
 
 interface LogEntry {
@@ -324,15 +354,188 @@ const getDateBucketLabel = (ts: number): string => {
 
 export const syncLog: LogEntry[] = [];
 const logListeners: ((e: LogEntry) => void)[] = [];
+
+// v3.10.177: per-turn task session tracking. While the
+// agent is "thinking" (typing:true from the desktop), we
+// capture every log entry into a `taskSession`. When the
+// reply arrives (or an error bubble arrives), we close
+// the session and attach a summary to the resulting
+// chat bubble so the user can see:
+//
+//   - how long the task took
+//   - which mobile-side events happened during it
+//     (audio sent, tools referenced in logs, errors
+//     encountered before the bubble)
+//   - whether the task ran to completion or hit a
+//     timeout/crash
+//
+// Why this lives here (vs. inside HomeScreen): HomeScreen
+// unmounts when the user navigates to Settings/Wake mode,
+// but the agent's work continues running on the desktop.
+// Module scope survives unmounts so the captured task
+// session is still there when the user comes back.
+//
+// Captures mobile-side log entries (which include:
+// typing:true, agent_tool events if any, any error
+// log entries from the IPC path, and the agent reply's
+// 📨 arrival log). The desktop's in-app chat pipeline
+// doesn't currently broadcast per-step tool progress
+// (only Discord-routed sessions do, and those are
+// suppressed per v3.2.25). When the desktop wires
+// `task_progress` events for in-app pipelines in the
+// future, the same log capture picks them up with no code
+// change here.
+//
+// Pattern from v3.10.133 (thinkingEscalateTimerRef) and
+// v3.10.120 (chatDraft module-scope) — module scope is
+// the right tool for state that has to outlive a single
+// HomeScreen instance.
+interface TaskStep {
+  ts: number;
+  // Short label like "tool: exec", "audio sent",
+  // "error: timeout", "chat received"
+  label: string;
+  // Original log entry id, for cross-referencing the
+  // full text in the Log tab
+  logId?: string;
+}
+interface TaskSession {
+  id: string;
+  startTs: number;
+  // Snapshot of the user's request at the moment we
+  // opened the session, so the summary bubble can show
+  // "Task: <first 60 chars>..." even after the user has
+  // cleared the input or navigated away.
+  requestText: string;
+  agentId: string;
+  agentName?: string;
+  // Steps captured during the session. Capped at 50 so
+  // a runaway run doesn't blow up.
+  steps: TaskStep[];
+  // End state. 'open' while the agent is still working;
+  // 'done' on agent reply; 'failed' on error bubble or
+  // send_error event.
+  status: 'open' | 'done' | 'failed';
+  endTs?: number;
+  // Final error text (if status === 'failed'). Stored
+  // so the chat bubble renderer can show it without
+  // re-parsing the message.
+  errorText?: string;
+}
+let activeTaskSession: TaskSession | null = null;
+let taskSessionCounter = 0;
+let _lastFinishedTaskSession: TaskSession | null = null;
+
+function startTaskSession(opts: {
+  requestText: string;
+  agentId: string;
+  agentName?: string;
+}): TaskSession {
+  taskSessionCounter += 1;
+  const session: TaskSession = {
+    id: `task-${Date.now()}-${taskSessionCounter}`,
+    startTs: Date.now(),
+    requestText: opts.requestText,
+    agentId: opts.agentId,
+    agentName: opts.agentName,
+    steps: [],
+    status: 'open',
+  };
+  activeTaskSession = session;
+  return session;
+}
+
+function appendTaskStep(step: Omit<TaskStep, 'ts'>): void {
+  if (!activeTaskSession) return;
+  activeTaskSession.steps.push({ ...step, ts: Date.now() });
+  // Cap the array so a long-running task with hundreds
+  // of captured events doesn't grow unbounded.
+  if (activeTaskSession.steps.length > 50) {
+    activeTaskSession.steps.splice(0, activeTaskSession.steps.length - 50);
+  }
+}
+
+function closeTaskSession(status: 'done' | 'failed', errorText?: string): TaskSession | null {
+  const s = activeTaskSession;
+  if (!s) return null;
+  s.status = status;
+  s.endTs = Date.now();
+  s.errorText = errorText;
+  activeTaskSession = null;
+  _lastFinishedTaskSession = s;
+  return s;
+}
+
+// Helper: extract a short tool/action label from a log
+// entry. The log text already has emoji prefixes and
+// abbreviations we want to surface in the task summary.
+function stepLabelFromLogEntry(e: LogEntry): string | null {
+  const t = e.text || '';
+  // Map common patterns from addLogEntry call sites to
+  // compact step labels. We don't try to be exhaustive —
+  // anything we don't recognize just shows as its full
+  // text in the steps list.
+  if (/^🟢 send: pressed/.test(t)) return 'send pressed';
+  if (/^→ \[.+\]/.test(t)) return 'sent chat to desktop';
+  if (/^📨 Chat message received from server/i.test(t)) return 'agent reply arrived';
+  if (/^📨 Adding to chat/i.test(t)) return 'agent reply appended';
+  if (/^🔊 AUDIO RESPONSE ARRIVED/i.test(t)) return 'audio response received';
+  if (/^🎤 Wake detected/i.test(t)) return 'wake detected';
+  if (/🎙️ enterVoiceMode/i.test(t)) return 'voice mode opened';
+  if (/🎙️ Closing fullscreen/i.test(t)) return 'voice mode closed';
+  if (/Voice message sent/i.test(t)) return 'voice message sent';
+  if (/Connect failed/i.test(t)) return 'connect failed';
+  if (/Connect timed out/i.test(t)) return 'connect timed out';
+  if (/^⏱️/.test(t)) return 'timeout marker';
+  if (/^⚠️/.test(t)) return 'warning';
+  if (/^❌/.test(t)) return 'error marker';
+  if (/^⬜/.test(t)) return 'empty input';
+  return null;
+}
+
 export function addLogEntry(text: string, type: LogEntry['type'] = 'info') {
   const e: LogEntry = { id: `${Date.now()}-${Math.random()}`, text, ts: Date.now(), type };
   syncLog.push(e);
   if (syncLog.length > 300) syncLog.splice(0, syncLog.length - 300);
   logListeners.forEach(fn => fn(e));
+  // v3.10.177: when a task session is open, mirror the
+  // entry into it as a step. We do it inline (vs. via a
+  // wrapper function) so every call site automatically
+  // participates — adding a new addLogEntry site doesn't
+  // require updating a tracking list.
+  if (activeTaskSession) {
+    const label = stepLabelFromLogEntry(e);
+    if (label) {
+      appendTaskStep({ label, logId: e.id });
+    } else if (type === 'error' || type === 'warn') {
+      // Errors and warnings we don't recognize still get
+      // captured so the steps list reflects what went
+      // sideways during the task.
+      appendTaskStep({ label: `${type}: ${text.substring(0, 60)}`, logId: e.id });
+    }
+  }
+  return e;
 }
 export function onLogEntry(fn: (e: LogEntry) => void) { logListeners.push(fn); }
 export function offLogEntry(fn: (e: LogEntry) => void) {
   const i = logListeners.indexOf(fn); if (i >= 0) logListeners.splice(i, 1);
+}
+
+// Public helpers for the chat-bubble renderer so it can
+// pull a structured summary off the most recently
+// finished session.
+export function getLastFinishedTaskSession(): TaskSession | null {
+  // Returns the last closed session (we don't keep
+  // history beyond what's needed to render the next
+  // bubble — the Log tab keeps the full record).
+  return _lastFinishedTaskSession;
+}
+export function formatTaskDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return rs === 0 ? `${m}m` : `${m}m ${rs}s`;
 }
 
 // v3.10.120: module-scoped chat draft. Persists the typed
@@ -2260,6 +2463,80 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
       appendAgentMessage(incoming, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      // v3.10.177: classify error bubbles so the chat
+      // can render a structured card with category,
+      // duration, and partial-step list. The desktop
+      // prefixes error bubbles with "Error:" (see
+      // app.js addChatMsg('error', ...) call sites).
+      // We classify into timeout / crash / network /
+      // generic-error based on substring patterns in
+      // the error text.
+      let errorCategory: 'timeout' | 'crash' | 'network' | 'error' | null = null;
+      if (!incoming.isUser && typeof incoming.text === 'string') {
+        const t = incoming.text;
+        if (/^Error:\s/.test(t)) {
+          if (/timed?\s*out/i.test(t) || /timeout/i.test(t)) {
+            errorCategory = 'timeout';
+          } else if (/exited with code \d/i.test(t) || /agent CLI/i.test(t)) {
+            errorCategory = 'crash';
+          } else if (/HTTP request failed|fetch failed|network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(t)) {
+            errorCategory = 'network';
+          } else {
+            errorCategory = 'error';
+          }
+        }
+      }
+      // v3.10.177.1: close the active task session when an
+      // agent reply lands. We do this BEFORE the rest of
+      // the onChat handling so the captured steps are
+      // frozen even if the message processing throws.
+      //
+      // Tobe's 2026-08-28 clarification: this is ONLY for
+      // errors. So we attach `taskSummary` only when the
+      // message classified as an error bubble
+      // (errorCategory is set). Successful replies
+      // render normally with no summary attachment.
+      if (!incoming.isUser) {
+        const finished = closeTaskSession(errorCategory ? 'failed' : 'done', incoming.text);
+        // Attach taskSummary only when the bubble is an
+        // error. The captured steps (from the Log tab
+        // events during typing) let the user see what
+        // the agent had already done before failing.
+        const shouldAttach = !!errorCategory;
+        if (shouldAttach && finished) {
+          const durationMs = (finished.endTs || Date.now()) - finished.startTs;
+          const summary = {
+            status: 'failed' as const,
+            durationMs,
+            stepCount: finished.steps.length,
+            steps: finished.steps.map(s => s.label),
+            errorCategory: errorCategory!,
+            errorText: incoming.text,
+          };
+          // Mutate the bubble we just appended via the
+          // messagesByAgent state for this agent.
+          setMessagesByAgent(prev => {
+            const list = prev[aid] || [];
+            const idx = list.findIndex(m => m.id === incoming.id);
+            if (idx < 0) return prev;
+            const updated = [...list];
+            updated[idx] = { ...updated[idx], taskSummary: summary };
+            return { ...prev, [aid]: updated };
+          });
+          // Also mirror into the flat `messages` array
+          // (used for the active-tab view) if it's the
+          // active agent.
+          if (aid === activeChatAgentIdRef.current) {
+            setMessages(prev => {
+              const idx = prev.findIndex(m => m.id === incoming.id);
+              if (idx < 0) return prev;
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], taskSummary: summary };
+              return updated;
+            });
+          }
+        }
+      }
       // v3.10.108: any new message (user or agent) lands
       // here. If it's an agent message, the typing
       // indicator should clear — the response arrived. If
@@ -2439,6 +2716,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onTyping = (msg: any) => {
       setIsThinking(!!msg.active);
       setArenaThinking(!!msg.active);
+      // v3.10.177: when typing starts (and a session
+      // isn't already open), open one. This catches
+      // voice-mode paths and any future path that
+      // doesn't go through the typed-send button.
+      // The sendMessage() call site also opens a
+      // session; opening twice is fine — the second
+      // start is a no-op when a session is already
+      // open.
+      if (msg.active && !activeTaskSession) {
+        const _a2 = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
+        const _aid2 = activeChatAgentIdRef.current || 'companion';
+        startTaskSession({
+          requestText: '[voice or remote trigger]',
+          agentId: _aid2,
+          agentName: _a2?.name,
+        });
+      }
       if (!fullscreenRef.current && msg.active) {
         // v3.1.16: use the agent's name (from the cached agents
         // list) instead of the hard-coded 'Clawsuu' so the status
@@ -2560,6 +2854,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onAgentTool = (msg: any) => {
       if (!msg || typeof msg.friendly !== 'string') return;
       setChatVoiceStatus(msg.friendly);
+      // v3.10.177: also capture this as a task step so
+      // the structured error/timeout bubble can show
+      // which tools the agent ran before failing. The
+      // desktop currently only emits agent_tool events
+      // for Discord-routed sessions (those are
+      // suppressed per v3.2.25), but if/when that
+      // changes for in-app pipelines, this listener is
+      // already wired up.
+      appendTaskStep({ label: `tool: ${msg.friendly.substring(0, 40)}` });
     };
 
     const onChatHistory = (msg: any) => {
@@ -3077,6 +3380,33 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setChatVoiceStatus(null);
         addLogEntry('Not connected - reconnect and try again', 'error');
       }
+      // v3.10.177: any send_error during an active task
+      // session closes it as failed. We render an
+      // Error: bubble in the chat (mirrors the desktop's
+      // addChatMsg('error', ...) path) so the user sees
+      // the failure inline with their conversation, not
+      // just buried in the Log tab.
+      const finished = activeTaskSession ? closeTaskSession('failed', e?.message || 'send error') : null;
+      if (finished && finished.steps.length > 0) {
+        const aid = activeChatAgentIdRef.current || 'companion';
+        const durationMs = (finished.endTs || Date.now()) - finished.startTs;
+        const errorMsg: ChatMessage = {
+          id: `err-${Date.now()}-${Math.random()}`,
+          text: `Error: ${e?.message || 'send error'}`,
+          isUser: false,
+          agentId: aid,
+          ts: Date.now(),
+          taskSummary: {
+            status: 'failed',
+            durationMs,
+            stepCount: finished.steps.length,
+            steps: finished.steps.map(s => s.label),
+            errorCategory: e?.message?.toLowerCase().includes('connect') ? 'network' : 'error',
+            errorText: e?.message || 'send error',
+          },
+        };
+        appendAgentMessage(errorMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      }
     };
     syncClient.on('send_error', onSendError);
     onLogEntry(onLogUpdate);
@@ -3301,6 +3631,21 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // outside the useCallback closure) can call the latest
     // sendMessage without re-rendering the JSX tree.
     sendMessageRef.current = sendMessage;
+    // v3.10.177: open a task session for this turn. The
+    // session lives across HomeScreen unmounts (Settings,
+    // Wake Mode navigation) and is closed either by the
+    // agent reply landing in onChat, by an error bubble
+    // landing, or by the send_error IPC. The summary
+    // gets attached to the resulting bubble so the user
+    // can see "what happened" in the chat itself, not
+    // just in the Log tab.
+    const _sendAid = activeChatAgentIdRef.current || 'companion';
+    const _sendAgent = (agentsRef.current || []).find(x => x.id === _sendAid);
+    startTaskSession({
+      requestText: inputText.trim() || (pendingAudioPath ? '[voice message]' : '[no text]'),
+      agentId: _sendAid,
+      agentName: _sendAgent?.name,
+    });
     // v3.10.3: kick the active companion awake on any chat
     // submit. The desktop's sendChatMessage() also auto-wakes
     // when the text arrives, but the explicit mobile-side
@@ -3762,6 +4107,118 @@ useEffect(() => {
             style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}
             selectable={true}
           >{item.text}</Text>
+          {/* v3.10.177.1: error-only diagnostic footer.
+              Tobe 2026-08-28 11:51 clarification: this is
+              ONLY for errors. Successful replies should
+              render normally without any badge or extra
+              footer — the user doesn't need a progress
+              recap when the task completed fine.
+
+              When the bubble carries a `taskSummary` with
+              status === 'failed', render a structured card
+              showing category (timeout / crash / network /
+              generic), duration, the captured steps that
+              ran before the failure, and Retry / Copy
+              buttons for recovery. The original error text
+              is preserved above the card so no information
+              is lost.
+
+              Successful bubbles never get any summary
+              attachment in the first place (see onChat
+              handler — taskSummary is only attached when
+              the session closes as 'failed'). For user
+              bubbles this section never renders. */}
+          {item.taskSummary && !item.isUser && item.taskSummary.status === 'failed' && (
+            <View style={styles.taskErrorCard}>
+                <Text style={styles.taskErrorHeader}>
+                  {item.taskSummary.errorCategory === 'timeout' ? '⏱️ Model timed out' :
+                   item.taskSummary.errorCategory === 'crash' ? '💥 Model crashed' :
+                   item.taskSummary.errorCategory === 'network' ? '🌐 Network error' :
+                   '⚠️ Error'}
+                  {'  ·  '}
+                  <Text style={styles.taskErrorDuration}>
+                    failed after {formatTaskDuration(item.taskSummary.durationMs)}
+                  </Text>
+                </Text>
+                {item.taskSummary.stepCount > 0 && (
+                  <View style={styles.taskStepsBlock}>
+                    <Text style={styles.taskStepsHeader}>
+                      {item.taskSummary.stepCount} step{item.taskSummary.stepCount === 1 ? '' : 's'} completed before failure:
+                    </Text>
+                    {item.taskSummary.steps.slice(-6).map((s, idx) => (
+                      <Text key={idx} style={styles.taskStepLine}>• {s}</Text>
+                    ))}
+                  </View>
+                )}
+                {item.taskSummary.stepCount === 0 && (
+                  <Text style={styles.taskStepsHeader}>
+                    No steps captured — the model likely failed before it started.
+                  </Text>
+                )}
+                <View style={styles.taskActionsRow}>
+                  <TouchableOpacity
+                    style={styles.taskActionButton}
+                    onPress={() => {
+                      // v3.10.177: Retry re-fires the
+                      // user's previous message text
+                      // (captured in the task session).
+                      // We prime the input box and
+                      // auto-send it after a brief
+                      // delay so the user can cancel by
+                      // tapping the input if they want
+                      // to edit. The previous bubbles
+                      // stay in the chat history so the
+                      // user has full context.
+                      const last = getLastFinishedTaskSession();
+                      if (!last || !last.requestText || last.requestText === '[voice or remote trigger]') {
+                        addLogEntry('Cannot retry: original message not captured (likely a voice/remote trigger)', 'warn');
+                        setChatVoiceStatus('Cannot retry — original message not captured');
+                        return;
+                      }
+                      setInputText(last.requestText);
+                      setChatVoiceStatus('Retrying...');
+                      addLogEntry(`🔁 Retrying: ${last.requestText.substring(0, 60)}`, 'info');
+                      // Use the same sendMessage path
+                      // the Send button uses.
+                      setTimeout(() => {
+                        try { sendMessageRef.current?.(); } catch (_) {}
+                      }, 300);
+                    }}
+                  >
+                    <Text style={styles.taskActionText}>↻ Retry</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.taskActionButton}
+                    onPress={() => {
+                      // Copy a structured summary to
+                      // the clipboard so the user can
+                      // paste it into a bug report or
+                      // share it. Uses the same clipboard
+                      // helper that the rest of the app
+                      // uses.
+                      const last = getLastFinishedTaskSession();
+                      const parts = [
+                        `[${item.taskSummary!.errorCategory || 'error'}] ${formatTaskDuration(item.taskSummary!.durationMs)}`,
+                        (item.taskSummary!.errorText || item.text || '').replace(/^Error:\s*/, ''),
+                        item.taskSummary!.stepCount > 0
+                          ? `Steps: ${item.taskSummary!.steps.join(', ')}`
+                          : '',
+                      ].filter(Boolean);
+                      const summary = parts.join('\n');
+                      try {
+                        const { default: Clipboard } = require('@react-native-clipboard/clipboard');
+                        Clipboard.setString(summary);
+                        setChatVoiceStatus('Error details copied');
+                      } catch (e) {
+                        addLogEntry(`Clipboard copy failed: ${(e as any)?.message}`, 'error');
+                      }
+                    }}
+                  >
+                    <Text style={styles.taskActionText}>📋 Copy details</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+          )}
           {/* v3.10.20: render attachment previews. Images
               show inline with a tap-to-open-fullscreen
               handler; non-image attachments (audio, video,
@@ -5337,6 +5794,24 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 12, marginBottom: 8, backgroundColor: t.bg.secondary, borderWidth: 1, borderColor: t.border.mid },
   userBubble: { alignSelf: 'flex-end', backgroundColor: t.bg.secondary, borderBottomRightRadius: 4, borderColor: t.brand.cyan, borderWidth: 1.5 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: t.bg.secondary, borderBottomLeftRadius: 4, borderColor: t.brand.accent, borderWidth: 1.5 },
+  // v3.10.177: task summary footer styles. Error-only:
+  //   - taskErrorCard: a structured block for error
+  //     bubbles with category + duration + steps +
+  //     action buttons. Visually distinct from a normal
+  //     error bubble (which was just red text saying
+  //     "Error: ..."); the card format makes it obvious
+  //     what's actionable. Successful replies render
+  //     normally without any summary footer (per
+  //     Tobe's 2026-08-28 clarification).
+  taskErrorCard: { marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: 'rgba(255, 80, 80, 0.08)', borderWidth: 1, borderColor: t.brand.danger },
+  taskErrorHeader: { fontSize: 13, fontWeight: '700', color: t.brand.danger, marginBottom: 6 },
+  taskErrorDuration: { fontWeight: '400', color: t.text.muted },
+  taskStepsBlock: { marginBottom: 8 },
+  taskStepsHeader: { fontSize: 11, color: t.text.muted, marginBottom: 4 },
+  taskStepLine: { fontSize: 11, color: t.text.primary, marginLeft: 4, marginTop: 1 },
+  taskActionsRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  taskActionButton: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: t.bg.tertiary, borderWidth: 1, borderColor: t.border.mid },
+  taskActionText: { fontSize: 11, color: t.brand.cyanDim, fontWeight: '600' },
   agentLabel: { fontSize: 10, fontWeight: '700', marginBottom: 4, color: t.text.muted },
   userLabel: { color: t.brand.cyanDim, fontWeight: 'bold' },
   aiLabel: { color: t.brand.accent, fontWeight: 'bold' },
