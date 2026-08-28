@@ -921,6 +921,24 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // restore the wrong offset.
   const chatRestoreAgentRef = useRef<string | null>(null);
   const chatRestoreOffsetRef = useRef<number | null>(null);
+  // v3.10.178: gate the onLayout scroll-restore until the
+  // AsyncStorage hydrate of `cyberclaw-chat-scroll-byagent`
+  // has completed. Without this gate, there's a race:
+  //   1. FlatList mounts and `onLayout` fires.
+  //   2. The async hydrate effect is still in flight;
+  //      `chatRestoreOffsetRef.current` is still null.
+  //   3. The onLayout handler falls into the
+  //      `else { scrollToEnd() }` branch because no
+  //      restoreOffset is available — yanking the user
+  //      to the bottom even when they had a saved
+  //      scroll-up position.
+  //
+  // Hydrate is fire-and-forget so we can't await it; we
+  // poll the ref a few times with a short backoff before
+  // giving up and falling through. Polling only happens
+  // on the very first onLayout (gated by chatLayoutSeenRef)
+  // so the cost is bounded to a single mount.
+  const chatHydrateDoneRef = useRef(false);
   // v3.10.126: debounce timer for the scroll-offset write.
   // Null = no write pending. Set when a scroll fires; the
   // timer fires once and writes the latest offset to
@@ -1093,6 +1111,24 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           chatRestoreOffsetRef.current = cleaned[activeChatAgentId];
         }
       } catch (_) { /* ignore corrupt storage */ }
+      // v3.10.178: flip the hydrate gate regardless of
+      // whether data was found. The onLayout handler
+      // uses this to know when it's safe to make the
+      // restore decision. Setting it AFTER the await
+      // (instead of synchronously) ensures the FlatList's
+      // synchronous `onLayout` (which can fire before
+      // this useEffect's async work resolves) sees the
+      // gate as `false` and waits. After this fires,
+      // any subsequent polling ticks read the populated
+      // `chatRestoreOffsetRef.current`.
+      //
+      // The AsyncStorage hydrate takes ~5-50ms on a warm
+      // device; the onLayout polling backoff (in onLayout)
+      // waits up to ~600ms before falling through, so we
+      // have a comfortable margin.
+      finally {
+        if (!cancelled) chatHydrateDoneRef.current = true;
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3900,15 +3936,28 @@ useEffect(() => {
   setChatUnreadCount(c => c + 1);
 }, [messages.length]);
 
-// v3.1.16: when the user switches to the chat tab, jump to the
-// newest message so they don't have to manually scroll. This is
-// the "open at the bottom" behavior the user expects. Also clear
-// the unread badge — they're looking at the chat now.
+// v3.10.178: when the user switches to the chat tab, ONLY
+// clear the unread badge — do NOT scroll to end.
+// v3.1.16 / v3.10.111: used to scroll-to-bottom here for
+// "open at the bottom" behaviour. That contradicted
+// Tobe's 2026-08-28 ask: "the chat should just be where
+// it last left off. Just like discord chat behaviour."
+// Discord doesn't scroll-to-bottom on tab re-open — it
+// preserves the channel's scroll position. We now do the
+// same. If the user is mid-history and switches to
+// Settings and back, they stay where they were.
+//
+// The FlatList is conditionally rendered in this screen
+// (see `{activeTab === 'chat' && <FlatList ... />}` at
+// line 4714). On the previous screen the FlatList
+// unmounted when the user leaves the tab and a fresh
+// FlatList mounts when they come back. The save-path
+// (onScroll -> debounced AsyncStorage write at
+// cyberclaw-chat-scroll-byagent) runs while the user
+// scrolls; the restore-path (onLayout / v3.10.178
+// hydrate gate) lands the user where they left off.
 useEffect(() => {
   if (activeTab === 'chat') {
-    if (messages.length > 0) {
-      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
-    }
     setChatUnreadCount(0);
   }
 }, [activeTab]);
@@ -4922,72 +4971,116 @@ useEffect(() => {
                 // leave the scroll position alone — Discord-
                 // style "stay where you left it".
                 //
-                // The fix (preserved from v3.8.6):
-                //   1. Two-attempt scroll (immediate + 250ms) so
-                //      the second attempt runs after the FlatList
-                //      has measured the full content. The second
-                //      attempt is what actually sticks.
-                //   2. setChatAtBottom(true) AFTER the scroll so
-                //      the onContentSizeChange handler doesn't
-                //      fight us and reset to "scrolled up".
+                // v3.10.178: Three changes on top of v3.10.111
+                // to fully match Discord's "stay where you
+                // left off" behaviour:
+                //
+                //   1. RACE FIX. Wait for the AsyncStorage
+                //      hydrate of `cyberclaw-chat-scroll-byagent`
+                //      to complete before deciding whether to
+                //      scroll. Previously the hydrate ran async
+                //      and onLayout fired synchronously — so
+                //      every cold start fell into the
+                //      `else { scrollToEnd }` branch, yanking
+                //      the user to the bottom even when they
+                //      had a saved scroll-up position. We poll
+                //      `chatHydrateDoneRef.current` with a
+                //      short backoff (max ~600ms) before giving
+                //      up. The cost is bounded to the first
+                //      onLayout because `chatLayoutSeenRef`
+                //      latches.
+                //
+                //   2. NO AUTO-SCROLL WHEN NO SAVED OFFSET.
+                //      First-ever open (or no persisted offset
+                //      because the user never scrolled) used to
+                //      fall into a `scrollToEnd()` branch. Now
+                //      we just leave the FlatList at its
+                //      natural initial position (top). Discord
+                //      does the same — it doesn't force-scroll
+                //      to bottom on cold start when there's
+                //      nothing to restore. The "↓ new messages"
+                //      badge (line 4689) is the user's
+                //      affordance to jump to the bottom if
+                //      they want.
+                //
+                //   3. STOP ON TAB SWITCH. Removed the
+                //      `useEffect on [activeTab === 'chat']`
+                //      scroll-to-bottom that v3.10.111 kept
+                //      "for open at the bottom". That effect
+                //      fired on every tab-touch (Settings →
+                //      Chat, etc.) and always scrolled to the
+                //      end, contradicting the "stay where you
+                //      left off" rule. Discord doesn't do this
+                //      either — tab-switching leaves the
+                //      channel's scroll position alone.
                 if (messages.length > 0 && !chatLayoutSeenRef.current) {
                   chatLayoutSeenRef.current = true;
-                  // v3.10.126: restore the persisted scroll
-                  // offset for the active agent if there is
-                  // one. The mount-time hydrate effect set
-                  // chatRestoreOffsetRef to the saved offset
-                  // for the agent that was active at mount.
-                  // If the offset is null/undefined (first
-                  // ever open, or no saved value) we fall back
-                  // to the v3.8.6 / v3.10.111 scroll-to-end
-                  // behavior. This is what Tobe asked for on
-                  // 2026-08-02 17:28: "cant it just stay where
-                  // it got left?"
-                  //
-                  // We schedule the restore at +50ms and +300ms
-                  // to mirror the two-attempt scroll pattern of
-                  // v3.8.6: the second attempt runs after the
-                  // FlatList has fully measured the content
-                  // (so the scrollToOffset doesn't land before
-                  // the message list knows its own height).
-                  const restoreOffset = chatRestoreOffsetRef.current;
-                  if (typeof restoreOffset === 'number' && restoreOffset > 0) {
-                    // The user was scrolled up last time.
-                    // Restore exactly where they were.
-                    chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
-                    setTimeout(() => {
+                  // The restore worker polls the hydrate
+                  // gate and applies the scroll once we know
+                  // whether the user had a saved offset.
+                  // Pulled out as a closure so the polling
+                  // backoff can retry it.
+                  const tryRestore = () => {
+                    const restoreOffset = chatRestoreOffsetRef.current;
+                    if (typeof restoreOffset === 'number' && restoreOffset > 0) {
+                      // The user was scrolled up last time.
+                      // Restore exactly where they were.
                       chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
-                      // v3.10.126: if the restored position
-                      // is now near the bottom of the (possibly
-                      // new) content, treat as caught-up so the
-                      // auto-scroll kicks in for new messages.
-                      // Otherwise leave chatAtBottom false so
-                      // the user can read history without being
-                      // yanked to the bottom on every new msg.
-                      try {
-                        // @ts-ignore — scrollToOffset callbacks
-                        // differ across RN versions; we read the
-                        // position synchronously instead.
-                      } catch {}
-                      // Use getScrollResponder + scrollY via
-                      // window measurement: simpler to schedule
-                      // one more tick and read onScroll's next
-                      // call. For now we leave it false unless
-                      // the user scrolls. The onScroll handler
-                      // will set chatAtBottom=true if they end
-                      // up within 50px of the bottom.
-                    }, 300);
-                    chatRestoreOffsetRef.current = null;
+                      setTimeout(() => {
+                        chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
+                      }, 300);
+                      chatRestoreOffsetRef.current = null;
+                    } else {
+                      // No saved offset (first ever open,
+                      // or user never scrolled, or the
+                      // active agent is different from the
+                      // one the offset was saved under).
+                      // v3.10.178: do NOT auto-scroll.
+                      // Leave the FlatList at its natural
+                      // initial position (top = oldest
+                      // message). The "↓ new messages"
+                      // badge in the footer is the
+                      // user's affordance to jump to the
+                      // bottom if they want.
+                      //
+                      // This is the Discord-equivalent
+                      // default for cold starts: if you
+                      // can't restore, don't pretend you
+                      // know where the user wanted to be.
+                    }
+                  };
+                  if (chatHydrateDoneRef.current) {
+                    // Hydrate already done (rare on cold
+                    // start, but possible if the device is
+                    // blazingly fast or hydrate is cached).
+                    tryRestore();
                   } else {
-                    // First-ever open or no saved offset
-                    // (or the user was at the bottom last
-                    // time). Use the v3.8.6 / v3.10.111
-                    // scroll-to-end.
-                    chatRef.current?.scrollToEnd({ animated: false });
-                    setTimeout(() => {
-                      chatRef.current?.scrollToEnd({ animated: false });
-                      setChatAtBottom(true);
-                    }, 250);
+                    // Hydrate in flight. Poll the gate
+                    // every ~75ms, max 8 attempts
+                    // (~600ms total). After that we
+                    // fall through to "no offset,
+                    // don't scroll". Better to do
+                    // nothing than to yank the user
+                    // to the bottom.
+                    let attempts = 0;
+                    const poll = () => {
+                      if (chatHydrateDoneRef.current) {
+                        tryRestore();
+                        return;
+                      }
+                      if (attempts++ >= 8) {
+                        // Give up — fall through.
+                        // tryRestore will see
+                        // chatRestoreOffsetRef.current
+                        // as null (hydrate timed out or
+                        // was cancelled) and skip the
+                        // auto-scroll.
+                        tryRestore();
+                        return;
+                      }
+                      setTimeout(poll, 75);
+                    };
+                    setTimeout(poll, 0);
                   }
                 }
               }}
