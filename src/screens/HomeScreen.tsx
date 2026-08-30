@@ -832,6 +832,26 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   };
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const [isLandscape, setIsLandscape] = useState(false);
+  // v3.10.180: Set of bubble ids whose error card is
+  // currently collapsed. A card collapses automatically
+  // once the user sends a NEW message after the failure —
+  // the card is stale noise at that point (the user has
+  // moved on to a new turn), so we hide the Retry/Copy
+  // actions and reduce it to a one-line summary. The user
+  // can tap the summary to re-expand if they still want
+  // to retry the failed task.
+  //
+  // Why Set (not an attached field on the bubble): the
+  // collapse is purely a presentational choice and
+  // shouldn't be persisted across app restarts. If the
+  // user reopens the app and sees the same failure card,
+  // it should be expanded again (the failure just
+  // happened from their perspective). Module-scope would
+  // survive an unmount but not a restart, which is fine.
+  //
+  // Why useState (not a ref): the renderer needs to
+  // re-render when the Set changes.
+  const [collapsedTaskCards, setCollapsedTaskCards] = useState<Set<string>>(new Set());
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
   const [companionId, setCompanionId] = useState('boar');
@@ -3649,63 +3669,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
-    // v3.10.179: if the most recent agent bubble is a
-    // failed taskSummary the user may not have seen
-    // yet, snap back to it before sending. Tobe
-    // 2026-08-30 11:56: "the bug report should be visible
-    // before I send something again". We don't block the
-    // send on the scroll completing — the message
-    // queueing and the scroll run in parallel. This is
-    // a best-effort nudge so the next typing bubble
-    // doesn't push the failure card off-screen.
-    try {
-      const aid0 = activeChatAgentIdRef.current || 'companion';
-      const list = (messagesByAgentRef.current || {})[aid0] || [];
-      // Walk backwards from the end. The very last
-      // bubble is the user's just-typed message
-      // (it was appended above before syncClient.sendChat).
-      // Walk past it; the bubble BEFORE that is the
-      // agent reply the user is most likely trying to
-      // follow up on. If that's a failure, snap to it.
-      for (let i = list.length - 2; i >= 0; i--) {
-        const m = list[i];
-        // The bubble directly above the just-typed
-        // user message is the agent reply they're
-        // following up on. If that's a failure, snap
-        // to it. If it's a non-failure agent reply
-        // (success) or a user message, don't snap
-        // backwards — anything older is from a
-        // previous turn and the user has already
-        // seen/acknowledged it.
-        if (m.isUser) break;
-        if (m.taskSummary && m.taskSummary.status === 'failed') {
-          // Found the most recent failure. Try to
-          // scroll to it. Don't await — let the send
-          // continue in parallel.
-          try {
-            chatRef.current?.scrollToIndex({
-              index: i,
-              animated: true,
-              viewPosition: 0.2,
-            });
-          } catch (_) {
-            setTimeout(() => {
-              try {
-                chatRef.current?.scrollToIndex({
-                  index: i,
-                  animated: true,
-                  viewPosition: 0.2,
-                });
-              } catch (__) { /* best-effort */ }
-            }, 120);
-          }
-        }
-        // Either way (failure or success), we've
-        // identified the most recent agent reply —
-        // done.
-        break;
-      }
-    } catch (_) { /* scroll is best-effort */ }
+    // v3.10.180: REMOVED the v3.10.179 pre-send snap
+    // that tried to scroll the chat to the most recent
+    // failed taskSummary card. Tobe's 19:17 feedback:
+    // the card was already visible (it was scrolled to
+    // on arrival — see messages.length effect) and the
+    // snap on send didn't add anything. Worse, the snap
+    // ran AFTER the card had already been auto-collapsed
+    // (which happens in the same messages.length effect
+    // when the user bubble lands), so the snap was
+    // pointing at a card that was now a collapsed pill
+    // — visible-but-noise.
+    //
+    // The right behaviour is: the card is visible on
+    // arrival, it auto-collapses on next-user-message,
+    // and the typing bubble takes over the bottom of
+    // the chat. No pre-send snap needed.
+    //
     // v3.10.110: log every send attempt so we can see
     // when the user presses Send on an empty input.
     // Before this, an empty-tap-Send silently returned
@@ -3964,6 +3944,46 @@ useEffect(() => {
     if (chatAtBottomRef.current) {
       setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
     }
+    // v3.10.180: the user just sent a new message — any
+    // failed taskSummary cards from PRIOR turns are now
+    // stale. Collapse them so the chat doesn't sit on a
+    // loud Retry/Copy button the user has already moved
+    // past. The user can still tap the collapsed card to
+    // re-expand and retry the old task if they want.
+    //
+    // Tobe 2026-08-30 19:17: "That error message still
+    // appears after I sent a new message." — he meant the
+    // card persists as visual noise after the user has
+    // moved on. Collapsing it gives the same information
+    // (the card is still there, scrollable) without the
+    // loud action buttons.
+    //
+    // We only collapse cards that are NOT the most
+    // recent bubble (we don't collapse the card that's
+    // currently in-flight — that one should stay loud).
+    // And we only collapse cards in the SAME agent's
+    // chat list — cross-agent collapses would be
+    // confusing.
+    setCollapsedTaskCards(prev => {
+      let next: Set<string> | null = null;
+      // Walk backwards through messages. Find any
+      // failed taskSummary bubbles and add their ids to
+      // the collapsed set.
+      for (let i = messages.length - 2; i >= 0; i--) {
+        const m = messages[i];
+        if (m.taskSummary && m.taskSummary.status === 'failed') {
+          if (!prev.has(m.id)) {
+            if (!next) next = new Set(prev);
+            next.add(m.id);
+          }
+        }
+        // We could stop at the first user message we
+        // hit (cards from older turns), but actually
+        // cards from any turn should collapse when a
+        // new user message lands. Keep scanning.
+      }
+      return next || prev;
+    });
     return;
   }
   // v3.10.90: increment the unread badge whenever a new message
@@ -4287,8 +4307,33 @@ useEffect(() => {
               attachment in the first place (see onChat
               handler — taskSummary is only attached when
               the session closes as 'failed'). For user
-              bubbles this section never renders. */}
+              bubbles this section never renders.
+
+              v3.10.180: collapsed state. Once the user
+              sends a NEW message after the failure, the
+              card auto-collapses to a one-line "ⓘ failed
+              after X · tap to expand" pill. The Retry /
+              Copy buttons are hidden in collapsed state
+              because they apply to a stale task — the
+              user has moved on. Tap the pill to
+              re-expand and access the actions. */}
           {item.taskSummary && !item.isUser && item.taskSummary.status === 'failed' && (
+            collapsedTaskCards.has(item.id) ? (
+              <TouchableOpacity
+                style={styles.taskErrorCardCollapsed}
+                onPress={() => {
+                  setCollapsedTaskCards(prev => {
+                    const next = new Set(prev);
+                    next.delete(item.id);
+                    return next;
+                  });
+                }}
+              >
+                <Text style={styles.taskErrorCollapsedText}>
+                  ⓘ Failed attempt · {formatTaskDuration(item.taskSummary.durationMs)} ago · tap to expand
+                </Text>
+              </TouchableOpacity>
+            ) : (
             <View style={styles.taskErrorCard}>
                 <Text style={styles.taskErrorHeader}>
                   {item.taskSummary.errorCategory === 'timeout' ? '⏱️ Model timed out' :
@@ -4378,6 +4423,7 @@ useEffect(() => {
                   </TouchableOpacity>
                 </View>
               </View>
+            )
           )}
           {/* v3.10.20: render attachment previews. Images
               show inline with a tap-to-open-fullscreen
@@ -6007,7 +6053,12 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   //     what's actionable. Successful replies render
   //     normally without any summary footer (per
   //     Tobe's 2026-08-28 clarification).
+  // v3.10.180: collapsed variant. A muted single-line
+  // pill that replaces the full card once the user
+  // moves on to a new turn. Tapping re-expands.
   taskErrorCard: { marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: 'rgba(255, 80, 80, 0.08)', borderWidth: 1, borderColor: t.brand.danger },
+  taskErrorCardCollapsed: { marginTop: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, backgroundColor: 'rgba(255, 80, 80, 0.04)', borderWidth: 1, borderColor: 'rgba(255, 80, 80, 0.25)' },
+  taskErrorCollapsedText: { fontSize: 11, color: t.text.muted, fontStyle: 'italic' },
   taskErrorHeader: { fontSize: 13, fontWeight: '700', color: t.brand.danger, marginBottom: 6 },
   taskErrorDuration: { fontWeight: '400', color: t.text.muted },
   taskStepsBlock: { marginBottom: 8 },
