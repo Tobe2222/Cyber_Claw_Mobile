@@ -3649,6 +3649,63 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
+    // v3.10.179: if the most recent agent bubble is a
+    // failed taskSummary the user may not have seen
+    // yet, snap back to it before sending. Tobe
+    // 2026-08-30 11:56: "the bug report should be visible
+    // before I send something again". We don't block the
+    // send on the scroll completing — the message
+    // queueing and the scroll run in parallel. This is
+    // a best-effort nudge so the next typing bubble
+    // doesn't push the failure card off-screen.
+    try {
+      const aid0 = activeChatAgentIdRef.current || 'companion';
+      const list = (messagesByAgentRef.current || {})[aid0] || [];
+      // Walk backwards from the end. The very last
+      // bubble is the user's just-typed message
+      // (it was appended above before syncClient.sendChat).
+      // Walk past it; the bubble BEFORE that is the
+      // agent reply the user is most likely trying to
+      // follow up on. If that's a failure, snap to it.
+      for (let i = list.length - 2; i >= 0; i--) {
+        const m = list[i];
+        // The bubble directly above the just-typed
+        // user message is the agent reply they're
+        // following up on. If that's a failure, snap
+        // to it. If it's a non-failure agent reply
+        // (success) or a user message, don't snap
+        // backwards — anything older is from a
+        // previous turn and the user has already
+        // seen/acknowledged it.
+        if (m.isUser) break;
+        if (m.taskSummary && m.taskSummary.status === 'failed') {
+          // Found the most recent failure. Try to
+          // scroll to it. Don't await — let the send
+          // continue in parallel.
+          try {
+            chatRef.current?.scrollToIndex({
+              index: i,
+              animated: true,
+              viewPosition: 0.2,
+            });
+          } catch (_) {
+            setTimeout(() => {
+              try {
+                chatRef.current?.scrollToIndex({
+                  index: i,
+                  animated: true,
+                  viewPosition: 0.2,
+                });
+              } catch (__) { /* best-effort */ }
+            }, 120);
+          }
+        }
+        // Either way (failure or success), we've
+        // identified the most recent agent reply —
+        // done.
+        break;
+      }
+    } catch (_) { /* scroll is best-effort */ }
     // v3.10.110: log every send attempt so we can see
     // when the user presses Send on an empty input.
     // Before this, an empty-tap-Send silently returned
@@ -3930,6 +3987,60 @@ useEffect(() => {
   // but defensively skipping the scroll when the last message
   // already matches prevents nudging the chat for every
   // miss-and-recover.
+  // v3.10.179: when the new (last) bubble carries a
+  // failed taskSummary, force-scroll to it so the user
+  // sees the diagnostic card immediately — even if they
+  // were scrolled up reading history. Tobe's
+  // 2026-08-30 11:56 feedback: "the bug report card
+  // should be visible before I send something again".
+  // Without this, a failure that arrives while the user
+  // is mid-history stays out of view until they happen
+  // to scroll to the bottom, by which point they may
+  // have already started typing a follow-up and the
+  // typing bubble pushes the error card further
+  // off-screen.
+  //
+  // The trick: scrollToIndex needs the item to be
+  // measured first. We do a small retry loop because
+  // FlatList measures lazily — first attempt often
+  // returns 'item-0' before measurement completes.
+  // Two attempts ~80ms apart is enough on real
+  // hardware; fall back to scrollToEnd if even the
+  // second attempt can't find the item (very rare,
+  // only if the FlatList was just mounted).
+  if (!last.isUser && last.taskSummary && last.taskSummary.status === 'failed') {
+    const failedIndex = messages.length - 1;
+    const scrollToFailed = () => {
+      try {
+        chatRef.current?.scrollToIndex({
+          index: failedIndex,
+          animated: true,
+          viewPosition: 0.2, // a bit below the top so the card is fully visible
+        });
+      } catch (_) {
+        // scrollToIndex throws if the item isn't
+        // measured yet — retry once after a short
+        // delay, then fall back to scrollToEnd.
+        setTimeout(() => {
+          try {
+            chatRef.current?.scrollToIndex({
+              index: failedIndex,
+              animated: true,
+              viewPosition: 0.2,
+            });
+          } catch (__) {
+            chatRef.current?.scrollToEnd({ animated: true });
+          }
+        }, 120);
+      }
+    };
+    // schedule via setTimeout so the FlatList has a
+    // chance to lay out the newly-appended item.
+    setTimeout(scrollToFailed, 50);
+    // also clear unread — they will see it now.
+    setChatUnreadCount(0);
+    return;
+  }
   if (chatAtBottomRef.current) {
     setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
   }
