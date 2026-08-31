@@ -915,6 +915,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // Resets only when the component unmounts (the ref's lifecycle
   // is tied to the FlatList's tree position via the ref hook).
   const chatLayoutSeenRef = useRef(false);
+  // v3.10.181: per-mount latch for the initial scroll decision.
+  // Set to `true` once we've decided where the FlatList should
+  // start (restored to a saved offset, or left at natural top
+  // because nothing was saved). Until then, the
+  // `onContentSizeChange` handler is gated off — otherwise the
+  // first content-size event would unconditionally
+  // `scrollToEnd()` (because `chatAtBottomRef.current` defaults
+  // to `true` on a fresh mount), producing the "starts at top
+  // then snaps to bottom" flash that Tobe reported on
+  // 2026-08-31. Distinct from `chatLayoutSeenRef` (which gates
+  // the now-deprecated onLayout restore) so the two latches
+  // can be retired independently.
+  const chatInitialDecisionRef = useRef(false);
   // v3.10.126: persisted scroll position per agent. The chat
   // is a FlatList with `inverted={false}` (newest at the
   // bottom). When the user navigates away from Home and
@@ -1107,6 +1120,25 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // independent of Lamasuu's. We mirror the loaded map
   // into chatScrollOffsetRef so the onScroll handler can
   // read it without re-renders.
+  //
+  // v3.10.181: NO LONGER captures chatRestoreOffsetRef.current
+  // synchronously here. On a HomeScreen remount (Quests → Back)
+  // the AsyncStorage hydrate runs at component mount, but
+  // `activeChatAgentId` is still `null` at that point — it only
+  // becomes non-null a frame or two later when the desktop's
+  // `agents_list` broadcast arrives. The old synchronous capture
+  // (`if (activeChatAgentId && cleaned[activeChatAgentId] ...`)
+  // always evaluated with the initial null value, so
+  // `chatRestoreOffsetRef.current` was never populated and the
+  // onLayout restore fell through to "no offset, leave at top",
+  // and then the `chatAtBottomRef.current === true` default
+  // clobbered the result with a `scrollToEnd()` on the first
+  // contentSize change — that's the flash Tobe reported on
+  // 2026-08-31.
+  //
+  // The new capture lives in a separate effect below that
+  // watches `activeChatAgentId` and runs the capture AFTER
+  // hydrate has completed (gated on `chatHydrateDoneRef`).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1124,15 +1156,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         }
         chatScrollOffsetRef.current = cleaned;
         setChatScrollOffsetByAgent(cleaned);
-        // Capture the offset for the current active agent so
-        // the FlatList's onLayout handler can restore it.
-        if (activeChatAgentId && cleaned[activeChatAgentId] !== undefined) {
-          chatRestoreAgentRef.current = activeChatAgentId;
-          chatRestoreOffsetRef.current = cleaned[activeChatAgentId];
-        }
       } catch (_) { /* ignore corrupt storage */ }
       // v3.10.178: flip the hydrate gate regardless of
-      // whether data was found. The onLayout handler
+      // whether data was found. The restore handler
       // uses this to know when it's safe to make the
       // restore decision. Setting it AFTER the await
       // (instead of synchronously) ensures the FlatList's
@@ -1143,9 +1169,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // `chatRestoreOffsetRef.current`.
       //
       // The AsyncStorage hydrate takes ~5-50ms on a warm
-      // device; the onLayout polling backoff (in onLayout)
-      // waits up to ~600ms before falling through, so we
-      // have a comfortable margin.
+      // device; the polling backoff (in the new restore
+      // effect below) waits up to ~600ms before falling
+      // through, so we have a comfortable margin.
       finally {
         if (!cancelled) chatHydrateDoneRef.current = true;
       }
@@ -1153,6 +1179,129 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // mount-once load; activeChatAgentId read inside is the initial value
+
+  // v3.10.181: reactive capture of the restore offset for the
+  // CURRENT active agent. Runs whenever `activeChatAgentId`
+  // changes AND the scroll-offset hydrate has already
+  // completed. The capture is one-shot — we latch on the first
+  // non-null activeChatAgentId after hydrate, then ignore
+  // subsequent changes so a mid-flight companion tab switch
+  // doesn't accidentally restore the wrong agent's offset
+  // while the user is mid-scroll.
+  //
+  // Without this, the onLayout/v3.10.178 restore path always
+  // saw `chatRestoreOffsetRef.current === null` on a remount
+  // (because activeChatAgentId was null when the hydrate
+  // effect ran). The fix: defer the capture until the agents
+  // list has loaded. The actual restore decision lives in the
+  // next useEffect (which fires when messages are present).
+  useEffect(() => {
+    if (!chatHydrateDoneRef.current) return; // hydrate not done yet; the polling restore will handle it
+    if (!activeChatAgentId) return;
+    if (chatRestoreOffsetRef.current !== null) return; // already captured
+    const offset = chatScrollOffsetRef.current[activeChatAgentId];
+    if (typeof offset === 'number') {
+      chatRestoreAgentRef.current = activeChatAgentId;
+      chatRestoreOffsetRef.current = offset;
+    }
+    // No setState — purely a ref update, no re-render needed.
+    // The restore useEffect below reads the ref directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatAgentId]);
+
+  // v3.10.181: SINGLE SOURCE OF TRUTH for the initial scroll
+  // position decision on a HomeScreen mount. Fires when:
+  //   1. messages are populated (FlatList will render real
+  //      content), AND
+  //   2. an activeChatAgentId is known (the per-agent offset
+  //      map needs a key), AND
+  //   3. we haven't already decided for this mount
+  //      (chatInitialDecisionRef latch — fires once per mount).
+  //
+  // Polls `chatHydrateDoneRef` with a short backoff so the
+  // AsyncStorage hydrate has a chance to land before we make
+  // the decision. Total budget: ~600ms (8 × 75ms).
+  //
+  // Decision matrix:
+  //   - chatRestoreOffsetRef.current === a real positive number
+  //     → scrollToOffset(savedOffset) (twice: once now, once
+  //       after a 300ms settle because FlatList measures
+  //       lazily). Set chatAtBottomRef based on whether the
+  //       offset was near the bottom, so the next
+  //       contentSize change doesn't clobber the restore.
+  //   - chatRestoreOffsetRef.current === null
+  //     → leave the FlatList at its natural top. No
+  //       auto-scroll. The user can tap the "↓ new messages"
+  //       badge to jump to the bottom if they want.
+  //     (Discord-equivalent default for cold starts with no
+  //     saved position.)
+  useEffect(() => {
+    if (chatInitialDecisionRef.current) return;
+    if (messages.length === 0) return;
+    if (!activeChatAgentId) return;
+    let cancelled = false;
+    const tryRestore = () => {
+      if (cancelled) return;
+      // The decision fires ONCE per mount.
+      chatInitialDecisionRef.current = true;
+      const off = chatRestoreOffsetRef.current;
+      if (typeof off === 'number' && off > 0) {
+        // Smoothly restore to the saved position. Two
+        // scrollToOffsets because FlatList measures lazily —
+        // the first often lands before the full content is
+        // measured, so we re-apply after a 300ms settle.
+        chatRef.current?.scrollToOffset({ offset: off, animated: false });
+        setTimeout(() => {
+          if (cancelled) return;
+          chatRef.current?.scrollToOffset({ offset: off, animated: false });
+        }, 300);
+        // Defer chatAtBottomRef updates to the onScroll event
+        // that the programmatic scrollToOffset will fire.
+        // DON'T pre-compute here — we don't have an accurate
+        // contentSize yet, and a wrong guess would either
+        // (a) wrongly auto-scroll on the next content size
+        // change (if we guess "near bottom" when actually
+        // mid-history) or (b) wrongly suppress auto-scroll
+        // for a future "user is at bottom" message (if we
+        // guess "not at bottom" when actually near it).
+        // The onScroll handler is the source of truth; it
+        // uses e.nativeEvent.contentSize which IS accurate.
+      } else {
+        // No saved offset. Leave the FlatList at its
+        // natural initial position (top of history). Mark
+        // NOT at bottom so the next contentSize change
+        // doesn't snap to the bottom — the user is at the
+        // top, leave them there. (This is the bug Tobe hit:
+        // chatAtBottomRef defaults to true on remount, then
+        // onContentSizeChange's scrollToEnd yanks them to
+        // the bottom right after the natural top paint,
+        // producing the "starts up high then jumps down"
+        // flash.)
+        chatAtBottomRef.current = false;
+        setChatAtBottom(false);
+      }
+      // Clear the restore slot so a mid-mount agent switch
+        // doesn't accidentally re-restore from a stale value.
+      chatRestoreOffsetRef.current = null;
+    };
+    if (chatHydrateDoneRef.current) {
+      tryRestore();
+      return () => { cancelled = true; };
+    }
+    // Hydrate still in flight. Poll the gate up to ~600ms.
+    let attempts = 0;
+    const poll = () => {
+      if (cancelled) return;
+      if (chatHydrateDoneRef.current || attempts++ >= 8) {
+        tryRestore();
+        return;
+      }
+      setTimeout(poll, 75);
+    };
+    setTimeout(poll, 0);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatAgentId, messages.length > 0]);
 
   // v3.1.63: inject setCentered(true) when voice mode
   // (fullscreen) is entered, setCentered(false) when exited.
@@ -1267,6 +1416,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // NOTE: Scroll handled by hasInitialScrolled effect below
 
   // Stop speech and cleanup when component unmounts
+  //
+  // v3.10.181: also flushes the debounced scroll-offset save.
+  // The onScroll handler debounces AsyncStorage writes 250ms,
+  // which is fast enough for normal scroll-and-stop usage but
+  // too slow for "scroll within 250ms of tapping Quests" — the
+  // HomeScreen unmounts before the timer fires and the latest
+  // offset never makes it to storage. Without this flush, the
+  // very next HomeScreen remount would restore the position
+  // from BEFORE the most recent scroll. Sync write on unmount
+  // is fine: AsyncStorage is fast on warm devices, the user is
+  // about to navigate, and we already accepted a sync write on
+  // the agents-cache hydrate path.
   useEffect(() => {
     return () => {
       try {
@@ -1279,6 +1440,26 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       try {
         isWakeWordStoppedRef.current = true;
       } catch {}
+      // Flush any pending debounced scroll-offset write so the
+      // position the user was just at makes it to AsyncStorage
+      // before the component (and the in-memory ref) is gone.
+      if (chatScrollSaveTimerRef.current) {
+        clearTimeout(chatScrollSaveTimerRef.current);
+        chatScrollSaveTimerRef.current = null;
+        try {
+          // Note: AsyncStorage.setItem returns a Promise; on
+          // unmount we fire-and-forget. If the unmount happens
+          // because the user is navigating away, the JS thread
+          // is still alive for a tick or two and the write
+          // lands. If the JS context is being torn down (app
+          // backgrounded), the write may not land; we accept
+          // that — AppState-change flushes are out of scope.
+          AsyncStorage.setItem(
+            'cyberclaw-chat-scroll-byagent',
+            JSON.stringify(chatScrollOffsetRef.current),
+          ).catch(() => {});
+        } catch (_) { /* swallow — best-effort */ }
+      }
     };
   }, []);
 
@@ -5096,6 +5277,23 @@ useEffect(() => {
                 // Auto-scroll to the newest on first render and whenever
                 // the user is already at the bottom when new content
                 // arrives.
+                //
+                // v3.10.181: GATED on `chatInitialDecisionRef.current`.
+                // On a HomeScreen remount, the FlatList mounts with
+                // empty data, then chat history hydrates and the
+                // content size changes. WITHOUT this gate,
+                // `chatAtBottomRef.current` defaults to `true` on a
+                // fresh mount, so the first onContentSizeChange
+                // would unconditionally `scrollToEnd()` — producing
+                // the "starts at top, then snaps to bottom" flash
+                // that Tobe reported on 2026-08-31. The initial
+                // decision (restore-to-saved-offset OR leave-at-top)
+                // is made by the dedicated useEffect above; we
+                // don't start auto-scrolling on content size
+                // changes until that decision has been made AND
+                // `chatAtBottomRef` reflects the user's actual
+                // position.
+                if (!chatInitialDecisionRef.current) return;
                 if (chatAtBottomRef.current) {
                   chatRef.current?.scrollToEnd({ animated: false });
                 }
@@ -5172,73 +5370,59 @@ useEffect(() => {
                 //      channel's scroll position alone.
                 if (messages.length > 0 && !chatLayoutSeenRef.current) {
                   chatLayoutSeenRef.current = true;
-                  // The restore worker polls the hydrate
-                  // gate and applies the scroll once we know
-                  // whether the user had a saved offset.
-                  // Pulled out as a closure so the polling
-                  // backoff can retry it.
-                  const tryRestore = () => {
+                  // v3.10.181: the v3.10.178 tryRestore path is now
+                  // delegated to a dedicated useEffect (the "initial
+                  // scroll decision" effect above) that fires when
+                  // both messages and activeChatAgentId are known
+                  // AND hydrate has finished. That effect is the
+                  // single source of truth for the restore
+                  // decision, gated by `chatInitialDecisionRef`.
+                  //
+                  // Why we keep this onLayout branch at all: to
+                  // (a) maintain the `chatLayoutSeenRef` latch
+                  // (prevents subsequent layouts from
+                  // yanking the user), and (b) handle the rare
+                  // case where the new useEffect hasn't run yet
+                  // — typically only when messages populate
+                  // BEFORE activeChatAgentId (e.g. cached chat
+                  // history loads faster than the WebSocket
+                  // agents_list). In that race, onLayout is the
+                  // FIRST chance to make the decision, and the
+                  // useEffect will see `chatInitialDecisionRef
+                  // === true` and skip itself. Single-decision
+                  // guarantee either way.
+                  if (chatInitialDecisionRef.current) return; // new useEffect already handled it
+                  if (chatHydrateDoneRef.current) {
+                    // Hydrate done but the new useEffect
+                    // hasn't fired yet (messages populated
+                    // without activeChatAgentId yet). Nudge
+                    // things by directly making the decision
+                    // here with the same logic.
+                    chatInitialDecisionRef.current = true;
                     const restoreOffset = chatRestoreOffsetRef.current;
                     if (typeof restoreOffset === 'number' && restoreOffset > 0) {
-                      // The user was scrolled up last time.
-                      // Restore exactly where they were.
                       chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
                       setTimeout(() => {
                         chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
                       }, 300);
-                      chatRestoreOffsetRef.current = null;
+                      // Defer chatAtBottomRef updates to the
+                      // onScroll event that the programmatic
+                      // scrollToOffset will fire on Android.
+                      // (See comment in the new useEffect for
+                      // the reasoning — pre-computing is
+                      // unreliable without an accurate
+                      // contentSize.)
                     } else {
-                      // No saved offset (first ever open,
-                      // or user never scrolled, or the
-                      // active agent is different from the
-                      // one the offset was saved under).
-                      // v3.10.178: do NOT auto-scroll.
-                      // Leave the FlatList at its natural
-                      // initial position (top = oldest
-                      // message). The "↓ new messages"
-                      // badge in the footer is the
-                      // user's affordance to jump to the
-                      // bottom if they want.
-                      //
-                      // This is the Discord-equivalent
-                      // default for cold starts: if you
-                      // can't restore, don't pretend you
-                      // know where the user wanted to be.
+                      // No saved offset → user at natural top.
+                      chatAtBottomRef.current = false;
+                      setChatAtBottom(false);
                     }
-                  };
-                  if (chatHydrateDoneRef.current) {
-                    // Hydrate already done (rare on cold
-                    // start, but possible if the device is
-                    // blazingly fast or hydrate is cached).
-                    tryRestore();
-                  } else {
-                    // Hydrate in flight. Poll the gate
-                    // every ~75ms, max 8 attempts
-                    // (~600ms total). After that we
-                    // fall through to "no offset,
-                    // don't scroll". Better to do
-                    // nothing than to yank the user
-                    // to the bottom.
-                    let attempts = 0;
-                    const poll = () => {
-                      if (chatHydrateDoneRef.current) {
-                        tryRestore();
-                        return;
-                      }
-                      if (attempts++ >= 8) {
-                        // Give up — fall through.
-                        // tryRestore will see
-                        // chatRestoreOffsetRef.current
-                        // as null (hydrate timed out or
-                        // was cancelled) and skip the
-                        // auto-scroll.
-                        tryRestore();
-                        return;
-                      }
-                      setTimeout(poll, 75);
-                    };
-                    setTimeout(poll, 0);
+                    chatRestoreOffsetRef.current = null;
                   }
+                  // Else: hydrate still in flight. The new
+                  // useEffect's polling backoff will make the
+                  // decision within ~600ms. Don't double-fire
+                  // from here.
                 }
               }}
               ListFooterComponent={null} // Disabled: old messages mix with current session
