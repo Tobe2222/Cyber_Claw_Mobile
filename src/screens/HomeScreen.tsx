@@ -897,6 +897,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // when the new content was added.
   const logStickyBottomRef = useRef(true);
   const webViewRef = useRef<WebView>(null);
+  // v3.10.184: latest known WebView container size. We re-inject
+  // Arena.init(w, h) every time onLayout fires (which happens
+  // on tilt, fullscreen toggle, and arena show/hide). Without
+  // this, the arena canvas stays locked to the original
+  // SCREEN_WIDTH × ARENA_HEIGHT set at mount, so treats dropped
+  // after tilt are clamped to stale canvas dims and appear in
+  // the bottom-right corner of the visually-wider arena. See
+  // CHANGES_3.10.184.md for the full repro and reasoning.
+  const webViewSizeRef = useRef<{ w: number; h: number } | null>(null);
   // v3.1.14: chat auto-scroll state — only auto-scroll to the newest
   // message when the user is already at (or near) the bottom of the
   // chat. When they've scrolled up to read history, leave them there
@@ -4860,6 +4869,33 @@ useEffect(() => {
             allowFileAccess
             originWhitelist={['*']}
             onMessage={handleArenaMessage}
+            // v3.10.184: re-init the arena canvas whenever the
+            // WebView's container is laid out (tilt, fullscreen
+            // toggle, arena show/hide). Without this, the canvas
+            // stays at the original SCREEN_WIDTH × ARENA_HEIGHT
+            // set in onLoadEnd, so treats dropped after tilt
+            // land in the bottom-right corner of the
+            // visually-wider arena (the bitmap is still 360 wide
+            // but CSS scales it to 800 — user taps at 700px get
+            // clamped to canvas.width-28=332, then CSS scales
+            // that to ~770/800 = ~96% of the visual width).
+            // Fires before onLoadEnd on the initial mount, so
+            // we also re-read webViewSizeRef in onLoadEnd and
+            // re-init if a layout has already happened.
+            onLayout={(e) => {
+              const { width, height } = e.nativeEvent.layout;
+              if (width <= 0 || height <= 0) return;
+              const prev = webViewSizeRef.current;
+              if (prev && prev.w === width && prev.h === height) return;
+              webViewSizeRef.current = { w: width, h: height };
+              // Only inject if the WebView has finished loading.
+              // On the first onLayout before onLoadEnd, the script
+              // isn't ready yet — we'll re-init in onLoadEnd below.
+              if (webViewRef.current) {
+                const initJs = `window.Arena && window.Arena.init(${width}, ${height}); true;`;
+                webViewRef.current.injectJavaScript(initJs);
+              }
+            }}
             onLoadEnd={() => {
               // v3.1.42: tell the WebView its actual rendered size so
               // it doesn't have to rely on window.innerWidth/Height
@@ -4870,7 +4906,19 @@ useEffect(() => {
               // ARENA_HEIGHT (the configured arena height). The
               // canvas inside the WebView uses these instead of
               // guessing from window.innerHeight.
-              const initJs = `window.Arena && window.Arena.init(${SCREEN_WIDTH}, ${ARENA_HEIGHT}); true;`;
+              //
+              // v3.10.184: prefer the live container size from
+              // webViewSizeRef (set by onLayout) over the module-
+              // level SCREEN_WIDTH/ARENA_HEIGHT constants. Without
+              // this, if the user is already in landscape at app
+              // launch (some tablets), the arena would initialise
+              // at portrait width even though the visible WebView
+              // is wider. Falls back to the module-level values
+              // if no onLayout has fired yet.
+              const live = webViewSizeRef.current;
+              const initW = live?.w ?? SCREEN_WIDTH;
+              const initH = live?.h ?? ARENA_HEIGHT;
+              const initJs = `window.Arena && window.Arena.init(${initW}, ${initH}); true;`;
               webViewRef.current?.injectJavaScript(initJs);
               Promise.all([
                 AsyncStorage.getItem('cyberclaw-arena-bg'),
