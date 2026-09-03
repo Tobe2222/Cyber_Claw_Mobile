@@ -251,6 +251,16 @@ class SyncClient {
     this.send({ type: 'mobile_wake_agent', agentId });
   }
 
+  // v3.10.183: mobile-initiated LLM pill action. Sends a
+  // request to the desktop to warm / unload / start the local
+  // LLM server. The desktop runs the action and broadcasts
+  // back the new status via `llm_status`. We don't need a
+  // direct response here — the status broadcast is the
+  // confirmation.
+  sendLlmAction(model: string, action: 'start' | 'warm' | 'unload') {
+    this.send({ type: 'llm_action', model, action });
+  }
+
   // v3.10.91: periodic activity ping from mobile to desktop. The
   // desktop uses this to bump lastInteractionTs on the active
   // companion, preventing auto-sleep while the mobile user is
@@ -1097,6 +1107,21 @@ class SyncClient {
         // the reason + error from the desktop.
         console.warn('[SyncClient] sprite_config_sync_failed:', msg);
         this.emit('sprite_config_sync_failed', msg);
+        break;
+
+      // v3.10.183: local-LLM status pill broadcast. The
+      // desktop pushes this on chat-open and after any
+      // pill action (warm/unload/start). The mobile
+      // renders a matching pill above the chat input so
+      // the user can start Ollama from the phone after a
+      // reboot without needing to touch the desktop.
+      // Shape:
+      //   { type, agentId, model, state: 'running' | 'cold'
+      //     | 'down' | 'too-big' | 'unsupported',
+      //     baseUrl, providerName, modelId, vram, ts }
+      case 'llm_status':
+        console.log('[SyncClient] Received llm_status state=' + msg.state + ' model=' + msg.model);
+        this.emit('llm_status', msg);
         break;
 
       default:

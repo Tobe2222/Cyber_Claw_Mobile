@@ -21,6 +21,11 @@ import { extractAudioFeatures, matchAgainstTraining, matchAgainstAllCompanions, 
 import { base64ToInt16Array } from '../services/AudioUtils';
 import { version as APP_VERSION } from '../../package.json';
 import RemoteToolHandler from '../services/RemoteToolHandler';
+// v3.10.183: local-LLM status pill above the chat input. Lets
+// the user see at a glance whether the active companion's LLM
+// is loaded, cold, or the local server is down, and trigger
+// warm/start/unload actions from the phone.
+import LlmStatusPill from '../components/LlmStatusPill';
 // v3.10.113: theme support. The container, top bar, and
 // chat input bar follow the active theme. The arena (WebView)
 // and chat messages are media content and stay dark — they
@@ -779,6 +784,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     setChatDraft(s);
     setInputTextLocal(s);
   };
+  // v3.10.183: local-LLM pill state. Holds the most recent
+  // `llm_status` broadcast from the desktop. Cleared when the
+  // user switches to a different companion tab (or stays
+  // around if the new companion's model isn't local).
+  const [llmStatus, setLlmStatus] = useState<any | null>(null);
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   // v3.10.20: fullscreen attachment viewer. When the user
   // taps an image preview in the chat, we open this modal
@@ -3329,6 +3339,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     syncClient.on('agent_tool', onAgentTool);
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
+    // v3.10.183: local-LLM pill status from the desktop. We
+    // store the most recent broadcast and let the LlmStatusPill
+    // component decide whether to show it (it hides itself if
+    // the active companion's model isn't local, etc.). The
+    // broadcast carries `agentId` so we can verify it's for
+    // the currently-open chat.
+    const onLlmStatus = (msg: any) => {
+      // We always update state, then let the pill decide.
+      // If agentId is null/missing (mobile-initiated action
+      // result), we update unconditionally.
+      setLlmStatus(msg);
+    };
+    syncClient.on('llm_status', onLlmStatus);
     syncClient.on('audio_response', onAudioResponse);
     // v3.2.29: cache the desktop-synthesized audio for
     // both the wake greeting AND the exit reply. These
@@ -3677,6 +3700,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       try { syncClient?.off?.('agent_tool', onAgentTool); } catch {}
       try { syncClient?.off?.('chat_history', onChatHistory); } catch {}
       try { syncClient?.off?.('arena', onArena); } catch {}
+      // v3.10.183: local-LLM pill listener.
+      try { syncClient?.off?.('llm_status', onLlmStatus); } catch {}
       try { syncClient?.off?.('audio_response', onAudioResponse); } catch {}
       // v3.2.29: also tear down the cache listeners.
       try { syncClient?.off?.('greeting_audio', onGreetingAudio); } catch {}
@@ -5623,6 +5648,22 @@ useEffect(() => {
                 ? keyboardHeight
                 : insets.bottom,
             }]}>
+              {/* v3.10.183: local-LLM status pill. Sits above the
+                  input row so it doesn't shift the keyboard.
+                  Hidden when no status is known or the active
+                  companion doesn't use a local model. The pill
+                  itself returns null in those cases. */}
+              <LlmStatusPill
+                status={llmStatus}
+                activeAgentId={activeChatAgentId}
+                onAction={async ({ model, action }) => {
+                  try {
+                    syncClient.sendLlmAction(model, action);
+                  } catch (e: any) {
+                    addLogEntry(`LLM pill action failed: ${e?.message}`, 'error');
+                  }
+                }}
+              />
               <TouchableOpacity style={styles.micButton} onPress={handleAttach}>
                 <Text style={[styles.micButtonText, styles.micButtonPlusText]}>+</Text>
               </TouchableOpacity>
