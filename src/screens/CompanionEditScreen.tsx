@@ -24,21 +24,36 @@
  * route (CompanionSettingsScreen → Settings, or HomeScreen's
  * Settings button).
  *
- * The save flow:
- *   1. Store partial patch in state
- *   2. Tap Save → send sprite_config_sync via SyncClient
- *   3. Listen for sprite_config_sync_ok → toast + go back
- *   4. Listen for sprite_config_sync_failed → toast + stay
- *   5. The next agents_list broadcast (triggered by the
- *      desktop's mobile-sprite-config-saved handler) updates
- *      the in-memory cache so the Settings list reflects the
- *      new chattiness / scale / name.
+ * The save flow (v3.10.185):
+ *   1. Store partial patch in local state (instant UI feedback)
+ *   2. Persist patch to AsyncStorage on every change (offline-safe)
+ *   3. On unmount (back button / swipe / navigating away) →
+ *      send the latest patch to the desktop via sprite_config_sync
+ *   4. The next agents_list broadcast (triggered by the desktop's
+ *      mobile-sprite-config-saved handler) updates the in-memory
+ *      cache so the Settings list reflects the new chattiness /
+ *      scale / name.
+ *
+ * Section layout (v3.10.185):
+ *   🎨 Looks group — Sprite + Size (visual identity)
+ *   🎭 Behaviour group — Chattiness + Personality Traits (how they act)
+ *   The split makes it obvious which fields shape what the
+ *   companion *looks like* vs how they *behave* — previously
+ *   everything was under one "Behaviour" umbrella on the parent
+ *   CompanionSettingsScreen, which made Sprite feel misplaced.
+ *
+ * Back swipe (v3.10.185):
+ *   A BackHandler is registered so the Android hardware-back
+ *   gesture / iOS edge-swipe closes the editor instead of
+ *   exiting the app. Without this, tapping ← at the top of the
+ *   screen leaves the editor but the OS-level swipe still goes
+ *   to the home screen.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, Platform,
+  StyleSheet, Alert, Platform, BackHandler,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -116,10 +131,25 @@ export default function CompanionEditScreen({
   // v3.10.92: chattiness is the headline new feature. Default
   // 3 if the companion has no value yet (legacy companion).
   const [chattiness, setChattiness] = useState<number>(3);
-  const [saving, setSaving] = useState<boolean>(false);
+  // v3.10.185: no more Save button — edits apply instantly
+  // to local state, persist to AsyncStorage on every change,
+  // and ship to the desktop on unmount (back tap / swipe /
+  // navigating away). saving/savedAt state is gone.
   const [hydrated, setHydrated] = useState<boolean>(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
   const hydratedRef = useRef<boolean>(false);
+  // v3.10.185: track the latest patch values via refs so
+  // the unmount cleanup can read the freshest values
+  // without re-running the cleanup effect on every change
+  // (which would clobber a partial save with stale state).
+  const nameRef = useRef<string>('');
+  const scaleRef = useRef<number>(4);
+  const pixelCompanionIdRef = useRef<string>('boar');
+  const traitsRef = useRef<Set<string>>(new Set());
+  const chattinessRef = useRef<number>(3);
+  // Guard so we only auto-save to the desktop once per
+  // mount. Subsequent state changes inside the same mount
+  // only persist locally (no desktop spam).
+  const autoSavedRef = useRef<boolean>(false);
   // v3.10.103: soul + memory are read-only on mobile.
   // The desktop's Companion Forge is the editor. We just
   // display the desktop's read response so the user can
@@ -136,6 +166,65 @@ export default function CompanionEditScreen({
   // for paddingTop on the page container + the toast's
   // bottom inset.
   const insets = useSafeAreaInsets();
+
+  // v3.10.185: mirror state into refs so the unmount
+  // cleanup (and the local-persist effect below) can read
+  // the freshest values without re-running the cleanup
+  // on every change. Same values, two storage forms:
+  // useState drives the UI; refs drive the auto-save.
+  useEffect(() => { nameRef.current = name; }, [name]);
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  useEffect(() => { pixelCompanionIdRef.current = pixelCompanionId; }, [pixelCompanionId]);
+  useEffect(() => { traitsRef.current = traits; }, [traits]);
+  useEffect(() => { chattinessRef.current = chattiness; }, [chattiness]);
+
+  // v3.10.185: local-persist effect — writes the patch to
+  // AsyncStorage on every meaningful change. The desktop
+  // is NOT touched here; the desktop round-trip happens on
+  // unmount (next useEffect). Persisting locally on every
+  // change makes the UI feel instant: if the user crashes
+  // mid-edit, the next mount of this screen picks up the
+  // latest local values instead of reverting to whatever
+  // the last desktop broadcast had.
+  //
+  // The local cache (`cyberclaw-agents-cache`) also gets
+  // patched on every change so the CompanionSettingsScreen
+  // card updates immediately when the user backs out —
+  // before the desktop even sees the change.
+  useEffect(() => {
+    if (!hydrated) return; // wait until the hydrate useEffect finished
+    const patch = {
+      customName: (nameRef.current || '').trim() || undefined,
+      scale: Math.max(1, Math.min(8, scaleRef.current)),
+      pixelCompanionId: pixelCompanionIdRef.current,
+      traits: Array.from(traitsRef.current),
+      chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
+    };
+    // 1) Local per-companion cache (offline-safe + instant remount).
+    AsyncStorage.setItem(
+      `cyberclaw-companion-edit-${companionId}`,
+      JSON.stringify(patch),
+    ).catch((e) => console.warn('[CompanionEdit] local save failed:', e?.message));
+    // 2) Patch the global agents cache so the parent
+    //    CompanionSettingsScreen card reflects the change
+    //    without waiting for the desktop broadcast.
+    AsyncStorage.getItem('cyberclaw-agents-cache').then((raw) => {
+      if (!raw) return;
+      try {
+        const list = JSON.parse(raw);
+        if (!Array.isArray(list)) return;
+        const idx = list.findIndex((x: any) => x?.id === companionId);
+        if (idx === -1) return;
+        list[idx] = Object.assign({}, list[idx], {
+          sprite: patch.pixelCompanionId,
+          scale: patch.scale,
+          chattiness: patch.chattiness,
+          ...(patch.customName ? { name: patch.customName } : {}),
+        });
+        AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(list)).catch(() => {});
+      } catch (_) { /* best-effort cache patch */ }
+    }).catch(() => {});
+  }, [hydrated, name, scale, pixelCompanionId, traits, chattiness, companionId]);
 
   // v3.10.92: hydrate from the local AsyncStorage cache
   // AND the latest agents_list broadcast. The cache is the
@@ -231,8 +320,11 @@ export default function CompanionEditScreen({
   useEffect(() => {
     const onOk = (msg: any) => {
       if (msg.agentId !== companionId) return;
-      setSaving(false);
-      setSavedAt(Date.now());
+      // v3.10.185: removed setSaving(false) + setSavedAt() —
+      // the Save button is gone. The local cache patch below
+      // still runs because the agents_list broadcast that
+      // arrives after sprite_config_sync_ok contains the
+      // canonical values the desktop persisted.
       // v3.10.146: also persist the agents list to cache
       // on save success. Bug Tobe hit: edited chattiness
       // to 2, saved, returned to CompanionSettingsScreen,
@@ -287,14 +379,16 @@ export default function CompanionEditScreen({
           AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(list)).catch(() => {});
         }).catch(() => {});
       } catch (_) { /* cache is best-effort */ }
-      // The cache write also happens on the next agents_list
-      // broadcast (SyncServer re-broadcasts after every save).
-      // Show a brief toast-like banner.
-      setBanner({ kind: 'ok', text: 'Saved!' });
+      // v3.10.185: removed the 'Saved!' toast — the user
+      // doesn't need confirmation that something they
+      // didn't have to do succeeded. Edits are silent
+      // and instant.
     };
     const onFail = (msg: any) => {
       if (msg.agentId !== companionId) return;
-      setSaving(false);
+      // v3.10.185: keep the error banner so a failed
+      // unmount-save is visible (rare — only if the WS
+      // is gone). The 'Saved!' ok-banner was removed.
       setBanner({ kind: 'err', text: `Couldn't save: ${msg.error || msg.reason || 'unknown error'}` });
     };
     syncClient.on('sprite_config_sync_ok', onOk);
@@ -419,65 +513,85 @@ export default function CompanionEditScreen({
   }, []);
 
   const onSave = useCallback(async () => {
-    if (saving) return;
     if (!hydrated) return;
-    setSaving(true);
-    setBanner(null);
-    // v3.10.94: LLM options are desktop-only. The mobile
-    // no longer picks the primary/secondary model — the
-    // desktop's Companion Forge owns that. We still write
-    // the rest of the patch (customName, scale, sprite,
-    // traits, chattiness) and the desktop's openclaw.json
-    // is the source of truth for the per-agent model
-    // mapping.
-    const patch = {
-      customName: name.trim() || undefined,
-      scale: Math.max(1, Math.min(8, scale)),
-      // v3.10.93: pixelCompanionId is the sprite id. The
-      // desktop's saveSpriteConfig accepts this as is;
-      // sprite_config_sync's whitelist (in sync-server.js)
-      // includes pixelCompanionId. The desktop's
-      // mobile-sprite-config-saved handler regenerates the
-      // avatar if the sprite changed.
-      pixelCompanionId: pixelCompanionId,
-      traits: Array.from(traits),
-      chattiness: Math.max(1, Math.min(5, chattiness)),
-    };
-    try {
-      // Persist locally first so the next mount of this
-      // screen has the values (no round-trip to desktop
-      // required for display). The desktop is the source of
-      // truth via the WS broadcast, but local persistence
-      // makes the UI feel instant on remount.
-      await AsyncStorage.setItem(
-        `cyberclaw-companion-edit-${companionId}`,
-        JSON.stringify(patch),
-      );
-    } catch (e: any) {
-      console.warn('[CompanionEdit] local save failed:', e?.message);
-    }
-    try {
-      syncClient.setSpriteConfig(companionId, patch);
-    } catch (e: any) {
-      setSaving(false);
-      setBanner({ kind: 'err', text: `Couldn't send: ${e?.message || 'unknown'}` });
-      return;
-    }
-    // Optimistic: assume success after 5s if no ack. The
-    // desktop's sprite_config_sync_ok arrives within ~100ms
-    // for happy path; the fallback is for the (rare) case
-    // the WS is briefly disconnected.
-    setTimeout(() => {
-      setSaving((cur) => {
-        if (cur) {
-          setBanner({ kind: 'err', text: 'No response from desktop. Check connection.' });
-        }
-        return false;
-      });
-    }, 5000);
-  }, [companionId, name, scale, pixelCompanionId, traits, chattiness, saving, hydrated]);
+    // v3.10.185: no more setSaving/savedAt/setBanner for the
+    // save action — edits are auto-persisted, and the desktop
+    // round-trip happens on unmount (see the cleanup
+    // useEffect below). The Save button was removed in this
+    // release because:
+    //   (a) every change already persists to AsyncStorage, so
+    //       the phone has the truth at all times,
+    //   (b) sending the patch to the desktop on every change
+    //       would spam the WS (a slider drag = 30+ frames of
+    //       state changes), and
+    //   (c) the desktop's agents_list broadcast after each
+    //       sprite_config_sync would echo back the in-flight
+    //       state mid-edit, fighting the user's drag.
+    //
+    // The patch is now sent on unmount: one final sprite_config_sync
+    // with the latest values, then the screen goes away.
+    //
+    // Kept as onSave for backward-compat (it was exported in
+    // some earlier pre-release versions of this file). It's
+    // a no-op now — the real save happens in the unmount effect.
+  }, [hydrated]);
 
-  return (
+  // v3.10.185: unmount handler — ship the final patch to
+  // the desktop exactly once, no matter how the user leaves
+  // the screen (← Back tap, hardware back button, swipe back,
+  // navigate to a sibling route). The guard ensures we only
+  // do this once per mount — if the same patch is sent twice
+  // (e.g. cleanup runs and then the screen re-mounts within
+  // the same tick), the desktop's idempotent save handler
+  // treats it as a no-op.
+  useEffect(() => {
+    return () => {
+      if (autoSavedRef.current) return;
+      if (!hydratedRef.current) return; // never hydrated = nothing to save
+      const patch = {
+        customName: (nameRef.current || '').trim() || undefined,
+        scale: Math.max(1, Math.min(8, scaleRef.current)),
+        pixelCompanionId: pixelCompanionIdRef.current,
+        traits: Array.from(traitsRef.current),
+        chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
+      };
+      try {
+        syncClient.setSpriteConfig(companionId, patch);
+        autoSavedRef.current = true;
+      } catch (e: any) {
+        // The desktop may already be unreachable (mobile WS
+        // disconnected). The local AsyncStorage cache still
+        // has the patch, so the next time the user reconnects
+        // and the desktop does a sprite-config reconcile, the
+        // changes will flow through. Don't throw — this is a
+        // best-effort fire-and-forget on unmount.
+        console.warn('[CompanionEdit] unmount send failed:', e?.message);
+      }
+    };
+  }, [companionId]);
+
+  // v3.10.185: register a BackHandler so the Android
+  // hardware-back button (and the iOS edge-swipe, which
+  // routes through the same BackHandler on Android-tablet
+  // builds) closes the editor instead of exiting the app.
+  // Without this, tapping ← Back in the header goes to the
+  // previous screen BUT the OS-level swipe / hardware button
+  // pops the whole app — the two navigation paths drift
+  // apart. Registering here pins them together: BackHandler
+  // intercepts the hardware event and calls onBack(), which
+  // returns to CompanionSettingsScreen.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Returning true tells the OS: "I handled this, do
+      // not bubble it up to the activity (which would exit
+      // the app on the next bubble)."
+      onBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [onBack]);
+
+ return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 64 }]}>
         <View style={styles.headerRow}>
@@ -502,7 +616,7 @@ export default function CompanionEditScreen({
             onChangeText={setName}
             placeholder="Companion name"
             placeholderTextColor="#666"
-            editable={!saving}
+            editable={hydrated}
           />
         </Section>
 
@@ -516,6 +630,14 @@ export default function CompanionEditScreen({
             already selected"). Tapping a sprite card selects
             it immediately; the Save button persists to the
             desktop. */}
+        {/* v3.10.185: LOOKS group — Sprite + Size. Split out
+            from "Behaviour" so it's visually obvious that these
+            fields shape what the companion LOOKS like, while
+            Chattiness + Traits shape how they BEHAVE. The parent
+            CompanionSettingsScreen card is also going to be
+            split (v3.10.186) to mirror this layout. */}
+        <Text style={styles.groupLabel}>🎨 LOOKS</Text>
+
         <Section title="🐾 Sprite">
           <Text style={styles.sectionHint}>Pick the sprite for {companionName}. The currently selected one is highlighted.</Text>
           <View style={styles.spriteGrid}>
@@ -526,7 +648,7 @@ export default function CompanionEditScreen({
                   key={c.id}
                   style={[styles.spriteCard, active && styles.spriteCardActive]}
                   onPress={() => setPixelCompanionId(c.id)}
-                  disabled={saving}
+                  disabled={!hydrated}
                 >
                   <Text style={styles.spriteIcon}>{c.icon}</Text>
                   <Text style={[styles.spriteLabel, active && styles.spriteLabelActive]}>{c.name}</Text>
@@ -574,12 +696,18 @@ export default function CompanionEditScreen({
             step={1}
             value={scale}
             onChange={(v) => setScale(v)}
-            disabled={saving}
+            disabled={!hydrated}
             label="Scale"
             showValue={`${scale}×`}
           />
           <Text style={styles.sliderHint}>Bigger number = larger sprite in the arena.</Text>
         </Section>
+
+        {/* v3.10.185: BEHAVIOUR group — Chattiness + Personality
+            Traits. Visually separated from the Looks group
+            above so the editor reads top-to-bottom as
+            "Looks" → "Behaviour" → "Soul" → "Memory". */}
+        <Text style={styles.groupLabel}>🎭 BEHAVIOUR</Text>
 
         {/* v3.10.93: chattiness — single slider like the
             desktop. The 1–5 tappable scale row is gone (it's
@@ -593,7 +721,7 @@ export default function CompanionEditScreen({
             step={1}
             value={chattiness}
             onChange={(v) => setChattiness(v)}
-            disabled={saving}
+            disabled={!hydrated}
             label="How chatty"
             showValue={`${chattiness}/5`}
           />
@@ -607,7 +735,7 @@ export default function CompanionEditScreen({
             row layout: checkbox on the left, label + desc on
             the right. Multiple traits can be selected at
             once (the desktop forge's checkbox array). */}
-        <Section title="🎭 Behaviour Traits">
+        <Section title="🎭 Personality Traits">
           <Text style={styles.sectionHint}>Pick the traits that fit this companion. Multiple selections allowed.</Text>
           <View style={styles.traitsGrid}>
             {TRAITS.map(t => {
@@ -617,7 +745,7 @@ export default function CompanionEditScreen({
                   key={t.id}
                   style={[styles.traitToggle, active && styles.traitToggleActive]}
                   onPress={() => toggleTrait(t.id)}
-                  disabled={saving}
+                  disabled={!hydrated}
                 >
                   <Text style={[styles.traitBox, active && styles.traitBoxActive]}>{active ? '☑' : '☐'}</Text>
                   {/* v3.10.94: dropped the description line for
@@ -699,25 +827,14 @@ export default function CompanionEditScreen({
             picker. The mobile now only edits sprite, scale,
             traits, and chattiness (plus name). */}
 
-        <View style={styles.footer}>
-          <TouchableOpacity
-            style={[styles.saveBtn, (saving || !hydrated) && styles.saveBtnDisabled]}
-            onPress={onSave}
-            disabled={saving || !hydrated}
-          >
-            <Text style={styles.saveBtnText}>{saving ? 'Saving…' : '💾 Save'}</Text>
-          </TouchableOpacity>
-          {savedAt && !saving && !banner ? (
-            <Text style={styles.savedHint}>Saved {formatTime(savedAt)}</Text>
-          ) : null}
-        </View>
+        {/* v3.10.185: no Save button. Edits are auto-applied
+            to local state and AsyncStorage on every change;
+            the desktop round-trip fires on unmount. The
+            small footer below used to host the Save button
+            + 'Saved at HH:MM' hint. Removed both; the empty
+            footer margin is gone too. The user sees the
+            edits applied instantly — no save action needed. */}
       </ScrollView>
-
-      {banner ? (
-        <View style={[styles.toast, banner.kind === 'err' ? styles.toastErr : styles.toastOk]}>
-          <Text style={styles.toastText}>{banner.text}</Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -791,6 +908,20 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  // v3.10.185: section-group label (LOOKS / BEHAVIOUR).
+  // Dimmer than sectionTitle so the section cards inside
+  // the group stay the visual anchor. Tight vertical
+  // margin so the group label sits close to its first
+  // section card and the eye reads them as one block.
+  groupLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#888',
+    letterSpacing: 1.5,
+    marginTop: 4,
+    marginBottom: 6,
+    paddingHorizontal: 4,
   },
   sectionHint: {
     fontSize: 11,
@@ -924,32 +1055,10 @@ const styles = StyleSheet.create({
   traitLabelActive: {
     color: '#f7931a',
   },
-  footer: {
-    marginTop: 20,
-    alignItems: 'center',
-    gap: 8,
-  },
-  saveBtn: {
-    backgroundColor: '#f7931a',
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 8,
-    minWidth: 200,
-    alignItems: 'center',
-  },
-  saveBtnDisabled: {
-    backgroundColor: '#3a3a55',
-  },
-  saveBtnText: {
-    color: '#0a0a1a',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  savedHint: {
-    color: '#10b981',
-    fontSize: 12,
-    fontStyle: 'italic',
-  },
+  // v3.10.185: removed the footer/saveBtn/saveBtnText/
+  // saveBtnDisabled/savedHint styles. The Save button is
+  // gone — edits apply automatically and the desktop
+  // round-trip happens on unmount.
   toast: {
     position: 'absolute',
     bottom: 32,
