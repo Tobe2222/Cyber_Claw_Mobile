@@ -1969,6 +1969,37 @@ body.wake-mode #bg-menu { display: none !important; }
     }
   }
 
+  // v3.10.187: live scale update for the Looks editor's
+  // preview. The mobile's Looks editor shows a centered
+  // preview at the top; when the user drags the scale
+  // slider, the React Native side calls
+  //   window.Arena.setCenteredScale(value)
+  // and the preview resizes in place. No WebView reload,
+  // no JS bridge chatter — the canvas just re-paints the
+  // next frame with the new scale.
+  //
+  // Same approach as setCentered: snap to the valid range
+  // (1–20), re-compute the companion's centered x/y so the
+  // sprite stays camera-locked in the middle, and force
+  // vx=vy=0 so it doesn't drift. The draw loop picks up
+  // the new scale on the next frame automatically.
+  function setCenteredScale(value) {
+    const v = parseFloat(value);
+    if (!Number.isFinite(v) || v <= 0) return;
+    CENTERED_SCALE = Math.max(1, Math.min(20, v));
+    if (!CENTERED_MODE) return; // not in centered mode — no positioning to redo
+    for (const c of companions) {
+      const [fw, fh] = c.data.frameSize;
+      const dw = fw * CENTERED_SCALE;
+      const dh = fh * CENTERED_SCALE;
+      c.scale = CENTERED_SCALE;
+      c.x = (canvas.width - dw) / 2;
+      c.y = (canvas.height - dh) / 2;
+      c.vx = 0;
+      c.vy = 0;
+    }
+  }
+
   function notifyRN(payload) {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
       try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (_) {}
@@ -2223,6 +2254,7 @@ body.wake-mode #bg-menu { display: none !important; }
     setActive,
     setBackground,
     setCentered,
+    setCenteredScale,  // v3.10.187: live scale update for the mobile Looks editor
     init,
     dropTreat,  // v3.10.72: place a food/treat at canvas center
     getActiveId: () => activeId,
@@ -2295,7 +2327,13 @@ body.wake-mode #bg-menu { display: none !important; }
   // like 70% of the view screen". Default 10 (fills
   // the canvas for a 32x32 frame at 320px). The mobile
   // settings view uses 5 (~70% of a 240x200 box).
-  const CENTERED_SCALE = (() => {
+  // v3.10.187: changed from `const` IIFE to `let` so the
+  // Looks editor's live scale slider can update the
+  // preview via setCenteredScale(n) without reloading
+  // the WebView. The setter clamps to 1–20 to match the
+  // URL-param validation range; values outside are
+  // silently snapped to the nearest valid value.
+  let CENTERED_SCALE = (() => {
     const v = parseFloat(URL_PARAMS.get('centeredScale') || '10');
     return (v > 0 && v <= 20) ? v : 10;
   })();

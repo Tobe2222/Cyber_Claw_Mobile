@@ -58,6 +58,19 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
+// v3.10.187: live WebView preview at the top of the Looks
+// editor. Mirrors the parent CompanionSettingsScreen's
+// centered-preview WebView but is bound to the local scale
+// state — dragging the scale slider injects
+// `window.Arena.setCenteredScale(n)` so the canvas re-paints
+// at the new size on the next frame.
+import { WebView } from 'react-native-webview';
+// v3.10.187: native Picker for the sprite dropdown. The
+// previous grid-of-emoji-cards picker felt too small for the
+// desktop-forge-style editor Tobe wanted — the dropdown is
+// the obvious "pick one of N options" control and matches
+// the desktop's preset dropdown exactly.
+import { Picker } from '@react-native-picker/picker';
 // v3.10.93: shared Slider matches the desktop's native
 // <input type="range">. PanResponder-driven drag + tap.
 import Slider from '../components/Slider';
@@ -99,6 +112,15 @@ const CHATTINESS_DESCRIPTIONS = {
   4: 'Chatty — comments every 30–60 minutes.',
   5: 'Very chatty — comments every 15–30 minutes.',
 };
+
+// v3.10.187: arena.html asset cache-buster for the Looks
+// editor's live preview WebView. Bumped whenever the
+// inline JS in arena.html changes (e.g. setCenteredScale
+// added in this release) so the APK ships a fresh copy
+// and the WebView doesn't serve a stale cached version
+// from the previous APK. Increment this for any
+// arena.html change.
+const LOOKS_ARENA_HTML_VERSION = '3.10.187';
 
 // v3.10.94: model list removed from the mobile (Tobe:
 // "We can remove LLM options on the mobile end, that
@@ -166,6 +188,16 @@ export default function CompanionEditScreen({
   // mount. Subsequent state changes inside the same mount
   // only persist locally (no desktop spam).
   const autoSavedRef = useRef<boolean>(false);
+  // v3.10.187: WebView ref + arena-ready flag for the
+  // live Looks preview. The ref is used to inject JS into
+  // the WebView on scale/sprite changes. The flag tracks
+  // whether arena.html has finished bootstrapping (the
+  // arena_loaded message) so we don't fire setActive /
+  // setCenteredScale before the JS is ready to receive
+  // them — arena.html ignores injected calls until its
+  // init runs.
+  const previewWebViewRef = useRef<WebView>(null);
+  const [previewReady, setPreviewReady] = useState<boolean>(false);
   // v3.10.103: soul + memory are read-only on mobile.
   // The desktop's Companion Forge is the editor. We just
   // display the desktop's read response so the user can
@@ -193,6 +225,96 @@ export default function CompanionEditScreen({
   useEffect(() => { pixelCompanionIdRef.current = pixelCompanionId; }, [pixelCompanionId]);
   useEffect(() => { traitsRef.current = traits; }, [traits]);
   useEffect(() => { chattinessRef.current = chattiness; }, [chattiness]);
+
+  // v3.10.187: live preview scale update. When the user
+  // drags the scale slider in the Looks editor, push
+  // the new value to the WebView so the canvas re-paints
+  // at the new size on the next frame. Cheap — arena.html
+  // just mutates the companion's c.scale + c.x/c.y and
+  // returns. The WebView isn't reloaded.
+  //
+  // The 1.6× multiplier maps the editor's 1–8 "looks
+  // scale" to arena.html's centered scale range (which
+  // goes up to 20). At scale=8 the preview sprite fills
+  // the whole box width (32px frame × 1.6 × 8 ≈ 410px
+  // on a 412px-wide phone). At scale=1 it's a 50px
+  // companion in the middle of the box. Same mapping as
+  // the desktop Companion Forge's centered preview.
+  useEffect(() => {
+    if (mode !== 'looks') return;
+    if (!previewReady) return;
+    if (!previewWebViewRef.current) return;
+    const arenaScale = scale * 1.6;
+    previewWebViewRef.current.injectJavaScript(
+      `try { window.Arena.setCenteredScale(${arenaScale}); } catch (_) {} true;`
+    );
+  }, [scale, previewReady, mode]);
+
+  // v3.10.187: live preview sprite swap. When the user
+  // picks a new sprite from the dropdown, push the new
+  // sprite id to the WebView. arena.html re-loads the
+  // sprite frames asynchronously, so the preview shows
+  // the new companion within ~100ms.
+  //
+  // We don't push name changes to the WebView because
+  // the canvas name is rendered via setActive's name
+  // parameter and updates on every companion switch.
+  useEffect(() => {
+    if (mode !== 'looks') return;
+    if (!previewReady) return;
+    if (!previewWebViewRef.current) return;
+    const c = (spriteCatalog as any).companions.find((x: any) => x.id === pixelCompanionId);
+    if (!c) return;
+    const slim = [{
+      id: companionId,
+      name: (name || companionName || '').trim(),
+      sprite: pixelCompanionId,
+      scale: scale, // mobile-side scale, the arena halves it
+    }];
+    previewWebViewRef.current.injectJavaScript(
+      `(async function(){` +
+        `try {` +
+          `if (!window.Arena) return;` +
+          `window.Arena.setActive(${JSON.stringify(companionId)});` +
+          `await window.Arena.setAgents(${JSON.stringify(slim)});` +
+          `window.Arena.setCentered(true);` +
+          `window.Arena.setCenteredScale(${scale * 1.6});` +
+        `} catch (_) {}` +
+      `})(); true;`
+    );
+  }, [pixelCompanionId, previewReady, mode, companionId, name, companionName]);
+
+  // v3.10.187: also push the initial companion to the
+  // preview after it boots (when previewReady flips to
+  // true). This handles the case where the WebView
+  // remounts but the user hasn't touched the sprite /
+  // scale controls — without this the preview would
+  // show the default centered companion (boar at scale
+  // 5) instead of the actual companion.
+  useEffect(() => {
+    if (mode !== 'looks') return;
+    if (!previewReady) return;
+    if (!previewWebViewRef.current) return;
+    const c = (spriteCatalog as any).companions.find((x: any) => x.id === pixelCompanionId);
+    if (!c) return;
+    const slim = [{
+      id: companionId,
+      name: (name || companionName || '').trim(),
+      sprite: pixelCompanionId,
+      scale: scale,
+    }];
+    previewWebViewRef.current.injectJavaScript(
+      `(async function(){` +
+        `try {` +
+          `if (!window.Arena) return;` +
+          `window.Arena.setActive(${JSON.stringify(companionId)});` +
+          `await window.Arena.setAgents(${JSON.stringify(slim)});` +
+          `window.Arena.setCentered(true);` +
+          `window.Arena.setCenteredScale(${scale * 1.6});` +
+        `} catch (_) {}` +
+      `})(); true;`
+    );
+  }, [previewReady]);  // intentionally only fires on the ready transition
 
   // v3.10.185: local-persist effect — writes the patch to
   // AsyncStorage on every meaningful change. The desktop
@@ -635,6 +757,40 @@ export default function CompanionEditScreen({
         {/* === LOOKS mode === */}
         {mode === 'looks' ? (
           <>
+            {/* v3.10.187: live preview at the top of the
+                editor. Same arena.html WebView as the
+                parent CompanionSettingsScreen uses, but
+                bound to the local scale + sprite state.
+                Dragging the scale slider below injects
+                `window.Arena.setCenteredScale(n)` so the
+                canvas re-paints at the new size on the
+                next frame. Picking a sprite injects
+                `setActive + setAgents + setCentered` to
+                swap the companion in the preview. */}
+            <View style={styles.looksPreviewWrap}>
+              <WebView
+                ref={previewWebViewRef}
+                source={{ uri: `file:///android_asset/arena.html?v=${LOOKS_ARENA_HTML_VERSION}&platform=mobile&mode=wake&onlyActive=true&centered=true&centeredScale=5` }}
+                style={styles.looksPreview}
+                originWhitelist={['*']}
+                onMessage={(event) => {
+                  try {
+                    const msg = JSON.parse(event.nativeEvent.data || '{}');
+                    if (msg && msg.type === 'arena_loaded') {
+                      setPreviewReady(true);
+                    }
+                  } catch (_) { /* ignore non-JSON */ }
+                }}
+                pointerEvents="none"
+                scrollEnabled={false}
+              />
+              {!previewReady ? (
+                <View style={styles.looksPreviewHint} pointerEvents="none">
+                  <Text style={styles.looksPreviewHintText}>Loading {name || companionName}…</Text>
+                </View>
+              ) : null}
+            </View>
+
             {/* Name lives in the Looks editor too — renaming
                 is a visual identity change. Behaviour mode
                 doesn't show it (the user can rename from
@@ -650,82 +806,55 @@ export default function CompanionEditScreen({
               />
             </Section>
 
-            <Text style={styles.groupLabel}>🎨 LOOKS</Text>
-
-            {/* v3.10.93: sprite picker. Mirrors the desktop's
-                Companion Forge "🔄 Change Companion" picker. The
-                catalog is bundled with the mobile app (5 sprites,
-                matches the desktop's catalog.json). The currently
-                selected sprite has a gold border + background tint
-                so the user can see what's selected at a glance
-                (Tobe's v3.10.92 feedback: "i dont see which ones
-                is already selected"). Tapping a sprite card selects
-                it immediately; the unmount cleanup persists to
-                the desktop. */}
+            {/* v3.10.187: sprite picker — now a native
+                dropdown. Tobe's 2026-09-04 18:36
+                feedback: "Make the sprite a drop down."
+                The catalog has 5 entries so a dropdown
+                is plenty. Matches the desktop's
+                Companion Forge preset dropdown. */}
             <Section title="🐾 Sprite">
-          <Text style={styles.sectionHint}>Pick the sprite for {companionName}. The currently selected one is highlighted.</Text>
-          <View style={styles.spriteGrid}>
-            {(spriteCatalog as any).companions.map((c: any) => {
-              const active = pixelCompanionId === c.id;
-              return (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[styles.spriteCard, active && styles.spriteCardActive]}
-                  onPress={() => setPixelCompanionId(c.id)}
-                  disabled={!hydrated}
+              <Text style={styles.sectionHint}>
+                Pick the sprite for {name || companionName}. The preview above updates live.
+              </Text>
+              <View style={styles.pickerWrap}>
+                <Picker
+                  selectedValue={pixelCompanionId}
+                  onValueChange={(v: string | number) => setPixelCompanionId(String(v))}
+                  enabled={hydrated}
+                  style={styles.picker}
+                  itemStyle={styles.pickerItem}
+                  dropdownIconColor="#f7931a"
                 >
-                  <Text style={styles.spriteIcon}>{c.icon}</Text>
-                  <Text style={[styles.spriteLabel, active && styles.spriteLabelActive]}>{c.name}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </Section>
+                  {(spriteCatalog as any).companions.map((c: any) => (
+                    <Picker.Item
+                      key={c.id}
+                      label={`${c.icon}  ${c.name}`}
+                      value={c.id}
+                    />
+                  ))}
+                </Picker>
+              </View>
+            </Section>
 
-        {/* Scale — v3.10.93: single horizontal slider matching the
-            desktop's <input type="range">. Tobe's v3.10.92
-            feedback: "we dont need 2 ways of up and down for the
-            scaling". The +/- buttons are gone; the slider is
-            draggable AND tappable (just like the desktop). */}
-
-        {/* v3.10.94: sprite preview frame. Mirrors the
-            desktop's #forge-companion-viewer — a 200×200
-            centered box with a dark background and a 2px
-            border. The mobile doesn't have the desktop's
-            pixel sprite renderer, so we render the catalog
-            emoji at a size proportional to the scale
-            slider (scale × 16, so 1 = 16px, 4 = 64px, 8 =
-            128px). The sprite name is shown below the
-            frame so the user can see what's currently
-            selected. Live-updates as they change either
-            control. Tobe's v3.10.93 feedback: "use the
-            frame of the sprite selected like the desktop
-            has. A preview frame." */}
-        {/* v3.10.97: preview removed. Tobe's v3.10.96
-            feedback: "the preview are just empty and
-            black now. You can remove it." The avatar
-            data URL wasn't being broadcast correctly
-            until v3.2.28 (file-path-to-data-URI
-            conversion at broadcast time). With v3.2.28
-            on the desktop, the preview would render the
-            actual pixel sprite, but Tobe asked to drop
-            the section entirely. The mobile's Companion
-            tab in the WebView arena still shows the
-            sprite at the chosen scale, so the
-            "see how it looks" affordance is preserved. */}
-        <Section title="📐 Size">
-          <Slider
-            min={1}
-            max={8}
-            step={1}
-            value={scale}
-            onChange={(v) => setScale(v)}
-            disabled={!hydrated}
-            label="Scale"
-            showValue={`${scale}×`}
-          />
-          <Text style={styles.sliderHint}>Bigger number = larger sprite in the arena.</Text>
-        </Section>
+            {/* v3.10.187: Scale slider — 1 (fills ~5% of
+                the box) to 8 (overflows the box, the
+                "fill the whole view screen" upper
+                bound Tobe asked for). */}
+            <Section title="📐 Size">
+              <Slider
+                min={1}
+                max={8}
+                step={1}
+                value={scale}
+                onChange={(v) => setScale(v)}
+                disabled={!hydrated}
+                label="Scale"
+                showValue={`${scale}×`}
+              />
+              <Text style={styles.sliderHint}>
+                Live preview above updates as you drag. Bigger = larger sprite in the arena.
+              </Text>
+            </Section>
           </>
         ) : null}
 
@@ -733,10 +862,12 @@ export default function CompanionEditScreen({
         {mode === 'behaviour' ? (
           <>
 
-        {/* v3.10.185: BEHAVIOUR group — Chattiness + Personality
-            Traits. Visually separated from the Looks group
-            above so the editor reads top-to-bottom as
-            "Looks" → "Behaviour" → "Soul" → "Memory". */}
+        {/* v3.10.187: BEHAVIOUR group — Chattiness + Personality
+            Traits. The inline group label is preserved from
+            v3.10.185 even though the page now shows only the
+            behaviour section (the inline label was originally
+            for when Looks + Behaviour shared one scroll). The
+            label still helps anchor the section visually. */}
         <Text style={styles.groupLabel}>🎭 BEHAVIOUR</Text>
 
         {/* v3.10.93: chattiness — single slider like the
@@ -977,47 +1108,53 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginTop: 8,
   },
-  // v3.10.93: sprite picker grid. Cards are 5 across
-  // (the catalog has 5 sprites) with a gold border +
-  // background tint for the selected one. Tight 6px gap
-  // keeps the row compact; the icon is 32px so even
-  // small phones can show it.
-  spriteGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  spriteCard: {
-    width: 64,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-    borderRadius: 8,
-    backgroundColor: '#0a0a1a',
-    borderColor: '#3a3a55',
+  // v3.10.187: Looks editor styles. The sprite picker is now
+  // a native dropdown (Picker) so the old grid of cards is
+  // replaced with a single wrap that fills the section
+  // width. The live preview sits in a 240×240 centered box
+  // (matches the parent CompanionSettingsScreen's preview
+  // box height so the two views feel consistent).
+  looksPreviewWrap: {
+    width: '100%',
+    height: 240,
+    borderRadius: 10,
     borderWidth: 1,
+    borderColor: '#f7931a',
+    overflow: 'hidden',
+    backgroundColor: '#0a0a1a',
+    marginBottom: 12,
+    position: 'relative',
+  },
+  looksPreview: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  looksPreviewHint: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(10, 10, 26, 0.7)',
   },
-  spriteCardActive: {
-    borderColor: '#fbbf24',
-    backgroundColor: 'rgba(251, 191, 36, 0.12)',
-    shadowColor: '#fbbf24',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  spriteIcon: {
-    fontSize: 28,
-    marginBottom: 2,
-  },
-  spriteLabel: {
-    color: '#888',
-    fontSize: 10,
+  looksPreviewHintText: {
+    color: '#f7931a',
+    fontSize: 13,
     fontWeight: '600',
-    textAlign: 'center',
   },
-  spriteLabelActive: {
-    color: '#fbbf24',
+  pickerWrap: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#3a3a55',
+    backgroundColor: '#0a0a1a',
+    overflow: 'hidden',
+  },
+  picker: {
+    color: '#fff',
+    backgroundColor: 'transparent',
+  },
+  pickerItem: {
+    color: '#fff',
+    fontSize: 15,
   },
   // v3.10.94: preview frame mirrors the desktop's
   // .forge-companion-preview (200×200, 2px border, dark
