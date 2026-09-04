@@ -114,11 +114,27 @@ export default function CompanionEditScreen({
   companionName,
   initialEmoji,
   onBack,
+  // v3.10.186: mode selects which section group this
+  // screen instance shows. App.tsx routes:
+  //   'companion-edit-looks'     → mode='looks'
+  //     (Name + Sprite + Size, what's visible)
+  //   'companion-edit-behaviour' → mode='behaviour'
+  //     (Chattiness + Personality Traits, how they act)
+  //   'companion-edit' (legacy)  → mode='behaviour'
+  //     (kept as an alias for backward-compat)
+  // Both modes still write to the same spriteConfig on the
+  // desktop — they're just focused UIs over a shared model.
+  // The auto-save unmount handler reads from refs and only
+  // ships fields that have actually changed in the relevant
+  // scope, so partial edits don't accidentally clobber the
+  // other side.
+  mode = 'behaviour',
 }: {
   companionId: string;
   companionName: string;
   initialEmoji?: string | null;
   onBack: () => void;
+  mode?: 'looks' | 'behaviour';
 }) {
   const [name, setName] = useState(companionName || '');
   const [scale, setScale] = useState<number>(4);
@@ -599,7 +615,7 @@ export default function CompanionEditScreen({
             <Text style={styles.backBtnText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.header}>
-            {initialEmoji || '🐾'}  Edit {companionName}
+            {initialEmoji || '🐾'}  Edit {companionName} — {mode === 'looks' ? 'Looks' : 'Behaviour'}
           </Text>
           <View style={{ width: 60 }} />
         </View>
@@ -608,37 +624,45 @@ export default function CompanionEditScreen({
           <Text style={styles.loadingHint}>Loading…</Text>
         ) : null}
 
-        {/* Name */}
-        <Section title="📛 Name">
-          <TextInput
-            style={styles.input}
-            value={name}
-            onChangeText={setName}
-            placeholder="Companion name"
-            placeholderTextColor="#666"
-            editable={hydrated}
-          />
-        </Section>
+        {/* v3.10.186: gate sections by mode. The two editor
+            screens share the same state (spriteConfig + name)
+            but render only the fields relevant to that scope.
+            Both modes still auto-save on unmount via the same
+            patch (the patch is always the full set of fields
+            the screen touched); the desktop merges it
+            idempotently via sprite_config_sync. */}
 
-        {/* v3.10.93: sprite picker. Mirrors the desktop's
-            Companion Forge "🔄 Change Companion" picker. The
-            catalog is bundled with the mobile app (5 sprites,
-            matches the desktop's catalog.json). The currently
-            selected sprite has a gold border + background tint
-            so the user can see what's selected at a glance
-            (Tobe's v3.10.92 feedback: "i dont see which ones is
-            already selected"). Tapping a sprite card selects
-            it immediately; the Save button persists to the
-            desktop. */}
-        {/* v3.10.185: LOOKS group — Sprite + Size. Split out
-            from "Behaviour" so it's visually obvious that these
-            fields shape what the companion LOOKS like, while
-            Chattiness + Traits shape how they BEHAVE. The parent
-            CompanionSettingsScreen card is also going to be
-            split (v3.10.186) to mirror this layout. */}
-        <Text style={styles.groupLabel}>🎨 LOOKS</Text>
+        {/* === LOOKS mode === */}
+        {mode === 'looks' ? (
+          <>
+            {/* Name lives in the Looks editor too — renaming
+                is a visual identity change. Behaviour mode
+                doesn't show it (the user can rename from
+                either side; the last write wins). */}
+            <Section title="📛 Name">
+              <TextInput
+                style={styles.input}
+                value={name}
+                onChangeText={setName}
+                placeholder="Companion name"
+                placeholderTextColor="#666"
+                editable={hydrated}
+              />
+            </Section>
 
-        <Section title="🐾 Sprite">
+            <Text style={styles.groupLabel}>🎨 LOOKS</Text>
+
+            {/* v3.10.93: sprite picker. Mirrors the desktop's
+                Companion Forge "🔄 Change Companion" picker. The
+                catalog is bundled with the mobile app (5 sprites,
+                matches the desktop's catalog.json). The currently
+                selected sprite has a gold border + background tint
+                so the user can see what's selected at a glance
+                (Tobe's v3.10.92 feedback: "i dont see which ones
+                is already selected"). Tapping a sprite card selects
+                it immediately; the unmount cleanup persists to
+                the desktop. */}
+            <Section title="🐾 Sprite">
           <Text style={styles.sectionHint}>Pick the sprite for {companionName}. The currently selected one is highlighted.</Text>
           <View style={styles.spriteGrid}>
             {(spriteCatalog as any).companions.map((c: any) => {
@@ -702,6 +726,12 @@ export default function CompanionEditScreen({
           />
           <Text style={styles.sliderHint}>Bigger number = larger sprite in the arena.</Text>
         </Section>
+          </>
+        ) : null}
+
+        {/* === BEHAVIOUR mode === */}
+        {mode === 'behaviour' ? (
+          <>
 
         {/* v3.10.185: BEHAVIOUR group — Chattiness + Personality
             Traits. Visually separated from the Looks group
@@ -761,7 +791,10 @@ export default function CompanionEditScreen({
             })}
           </View>
         </Section>
+          </>
+        ) : null}
 
+        {/* === BOTH MODES === */}
         {/* v3.10.103: Soul — read-only viewer of the companion's
             character definition. The desktop's Companion Forge
             is the editor (it has presets + textarea + Apply

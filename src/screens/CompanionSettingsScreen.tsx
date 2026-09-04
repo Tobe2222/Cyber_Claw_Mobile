@@ -139,6 +139,12 @@ export default function CompanionSettingsScreen({
   // companion. Lifted to App.tsx as a full-screen route
   // (mirrors the desktop's Companion Forge on mobile).
   onOpenCompanionEdit,
+  // v3.10.186: split editor callbacks — Looks + Behaviour
+  // open separate screens. App.tsx wires both; if either
+  // is missing (older build), the corresponding card falls
+  // back to onOpenCompanionEdit (legacy single editor).
+  onOpenCompanionLooks,
+  onOpenCompanionBehaviour,
   // v3.10.174: open the Skills screen scoped to this
   // companion. The companion settings page is the
   // ONLY place the Skills screen is reachable from
@@ -156,6 +162,16 @@ export default function CompanionSettingsScreen({
   onPushWakeManager: (ctx: { companionId: string; companionName: string }) => void;
   onPushExitTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
   onOpenCompanionEdit?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
+  // v3.10.186: split editor callbacks. The Behaviour card
+  // was getting cluttered (sprite + scale + chattiness +
+  // traits all in one), so the parent now renders two cards:
+  // one for Looks (sprite + scale + name), one for Behaviour
+  // (chattiness + traits). Each opens its own dedicated
+  // editor screen. The legacy onOpenCompanionEdit callback
+  // is kept for backward-compat and routes to Behaviour
+  // (the dominant section).
+  onOpenCompanionLooks?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
+  onOpenCompanionBehaviour?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
   onOpenSkills?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
 }) {
   // v3.4.4: drill-down phase inside the companion
@@ -1647,21 +1663,31 @@ export default function CompanionSettingsScreen({
     goblin: '👺 Goblin',
   };
 
-  function renderBehaviourCard(companion: Companion) {
-    const sc = (companion as any).spriteConfig || {};
-    const spriteName = sc.pixelCompanionId
-      ? (sc.pixelCompanionId.charAt(0).toUpperCase() + sc.pixelCompanionId.slice(1))
-      : 'Default';
-    const scale = typeof sc.scale === 'number' ? sc.scale : '?';
-    const chattiness = typeof sc.chattiness === 'number' ? sc.chattiness : 3;
-    const traitIds: string[] = Array.isArray(sc.traits) ? sc.traits : [];
+  // v3.10.186: split the Behaviour card into Looks + Behaviour.
+// Sprite + scale are visual identity (Looks); chattiness +
+// traits are personality (Behaviour). Each card has its own
+// Edit button that opens a dedicated editor screen, matching
+// the screenshot Tobe sent (2026-09-04 16:08) where each
+// property group had its own card-style entry point.
+function renderLooksCard(companion: Companion) {
+  const sc = (companion as any).spriteConfig || {};
+  const spriteName = sc.pixelCompanionId
+    ? (sc.pixelCompanionId.charAt(0).toUpperCase() + sc.pixelCompanionId.slice(1))
+    : 'Default';
+  const scale = typeof sc.scale === 'number' ? sc.scale : '?';
+  // Prefer the split-screen callback (v3.10.186); fall back
+  // to the legacy onOpenCompanionEdit so older builds that
+  // haven't wired the new callback still get a working Edit
+  // button (routes to the behaviour editor in that case).
+  const openEditor = onOpenCompanionLooks || onOpenCompanionEdit;
 
-    return (
-      <View style={styles.behaviourCard}>
-        <View style={styles.behaviourHeader}>
-          <Text style={styles.behaviourTitle}>🎨 Behaviour</Text>
+  return (
+    <View style={styles.behaviourCard}>
+      <View style={styles.behaviourHeader}>
+        <Text style={styles.behaviourTitle}>🎨 Looks</Text>
+        {openEditor ? (
           <TouchableOpacity
-            onPress={() => onOpenCompanionEdit?.({
+            onPress={() => openEditor({
               companionId: companion.id,
               companionName: companion.name,
               emoji: companion.emoji || companion.icon || null,
@@ -1670,14 +1696,44 @@ export default function CompanionSettingsScreen({
           >
             <Text style={styles.behaviourEditBtnText}>Edit ›</Text>
           </TouchableOpacity>
-        </View>
-        <View style={styles.behaviourRow}>
-          <Text style={styles.behaviourLabel}>Sprite</Text>
-          <Text style={styles.behaviourValue}>{spriteName}</Text>
-        </View>
-        <View style={styles.behaviourRow}>
-          <Text style={styles.behaviourLabel}>Scale</Text>
-          <Text style={styles.behaviourValue}>{scale}</Text>
+        ) : null}
+      </View>
+      <View style={styles.behaviourRow}>
+        <Text style={styles.behaviourLabel}>Sprite</Text>
+        <Text style={styles.behaviourValue}>{spriteName}</Text>
+      </View>
+      <View style={styles.behaviourRow}>
+        <Text style={styles.behaviourLabel}>Scale</Text>
+        <Text style={styles.behaviourValue}>{scale}</Text>
+      </View>
+    </View>
+  );
+}
+
+function renderBehaviourCard(companion: Companion) {
+    const sc = (companion as any).spriteConfig || {};
+    const chattiness = typeof sc.chattiness === 'number' ? sc.chattiness : 3;
+    const traitIds: string[] = Array.isArray(sc.traits) ? sc.traits : [];
+    // Prefer the split-screen callback (v3.10.186); fall
+    // back to the legacy callback for older App.tsx builds.
+    const openEditor = onOpenCompanionBehaviour || onOpenCompanionEdit;
+
+    return (
+      <View style={styles.behaviourCard}>
+        <View style={styles.behaviourHeader}>
+          <Text style={styles.behaviourTitle}>🎭 Behaviour</Text>
+          {openEditor ? (
+            <TouchableOpacity
+              onPress={() => openEditor({
+                companionId: companion.id,
+                companionName: companion.name,
+                emoji: companion.emoji || companion.icon || null,
+              })}
+              style={styles.behaviourEditBtn}
+            >
+              <Text style={styles.behaviourEditBtnText}>Edit ›</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
         <View style={styles.behaviourRow}>
           <Text style={styles.behaviourLabel}>Chattiness</Text>
@@ -1805,8 +1861,18 @@ export default function CompanionSettingsScreen({
               moved up from below Exit card) */}
           {renderSkillsSection()}
 
-          {/* 3. v3.10.142: behaviour card (current values
-              + Edit button) */}
+          {/* 3. v3.10.186: split into Looks + Behaviour cards.
+              v3.10.142's single behaviour card held Sprite +
+              Scale + Chattiness + Traits under one heading,
+              which made Sprite feel misplaced (it's visual
+              identity, not personality). Each card now has its
+              own Edit button that opens a dedicated editor
+              screen. The companion's avatar block above the
+              Experience widget serves as the visual preview;
+              the Looks card surfaces the picker-driven sprite
+              name + scale number so the user can confirm what
+              they picked without opening the editor. */}
+          {renderLooksCard(companion)}
           {renderBehaviourCard(companion)}
 
           {/* v3.10.174: Skills library entry point.

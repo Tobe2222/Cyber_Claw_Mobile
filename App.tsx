@@ -106,7 +106,7 @@ export default function App(): React.JSX.Element {
   const [screen, setScreen] = useState<
     'home' | 'settings' | 'voice-mode' | 'companion' | 'quests' |
     'wake-trainer' | 'wake-manager' | 'exit-trainer' |
-    'companion-edit' | 'skills'
+    'companion-edit' | 'companion-edit-looks' | 'companion-edit-behaviour' | 'skills'
   >('home');
   // v3.10.0: contexts for the new trainer / manager
   // routes. Set when CompanionSettingsScreen calls a
@@ -124,6 +124,11 @@ export default function App(): React.JSX.Element {
   // CompanionSettingsScreen calls onOpenCompanionEdit. The
   // Personalize screen renders this as a full-screen route,
   // mirroring the desktop's Companion Forge mobile-equivalent.
+  // v3.10.186: split into two distinct contexts (looks +
+  // behaviour) so each gets its own dedicated editor screen.
+  // The legacy 'companion-edit' route is kept as an alias for
+  // any in-flight deep links; it now renders the behaviour
+  // editor (same as companion-edit-behaviour).
   const [companionEditCtx, setCompanionEditCtx] = useState<
     { companionId: string; companionName: string; emoji?: string | null } | null
   >(null);
@@ -698,9 +703,27 @@ export default function App(): React.JSX.Element {
               // which applies the patch + re-broadcasts
               // agents_list. On back, returns to the
               // companion settings page.
+              // v3.10.186: split into Looks + Behaviour
+              // callbacks so the editor screen is scoped
+              // to one section. The legacy
+              // `onOpenCompanionEdit` callback still
+              // routes to the behaviour editor (matches
+              // the v3.10.185 screen which was behaviour-
+              // dominated).
+              onOpenCompanionLooks={(ctx) => {
+                setCompanionEditCtx(ctx);
+                setScreen('companion-edit-looks');
+              }}
+              onOpenCompanionBehaviour={(ctx) => {
+                setCompanionEditCtx(ctx);
+                setScreen('companion-edit-behaviour');
+              }}
+              // v3.10.92: legacy single-edit callback.
+              // Kept for backward-compat — routes to the
+              // behaviour editor (the dominant section).
               onOpenCompanionEdit={(ctx) => {
                 setCompanionEditCtx(ctx);
-                setScreen('companion-edit');
+                setScreen('companion-edit-behaviour');
               }}
               // v3.10.174: Skills library reachable from
               // the companion settings page. The Skills
@@ -756,11 +779,18 @@ export default function App(): React.JSX.Element {
               }}
             />
           )}
-          {screen === 'companion-edit' && companionEditCtx && (
+          {/* v3.10.186: split the editor into two dedicated
+              screens — one per scope (Looks vs Behaviour).
+              The shared context + route pattern means both
+              screens pop back to 'companion' via the same
+              callback. The mode prop tells CompanionEditScreen
+              which section group to render. */}
+          {(screen === 'companion-edit' || screen === 'companion-edit-looks' || screen === 'companion-edit-behaviour') && companionEditCtx && (
             <CompanionEditScreen
               companionId={companionEditCtx.companionId}
               companionName={companionEditCtx.companionName}
               initialEmoji={companionEditCtx.emoji}
+              mode={screen === 'companion-edit-looks' ? 'looks' : 'behaviour'}
               onBack={() => {
                 setCompanionEditCtx(null);
                 setScreen('companion');
