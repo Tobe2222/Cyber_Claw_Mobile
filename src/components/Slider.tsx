@@ -49,10 +49,22 @@ export default function Slider({
 }) {
   const widthRef = useRef<number>(0);
   const valueRef = useRef<number>(value);
-  // Mirror the current value into a ref so the PanResponder
-  // (captured once at mount) can read the latest value without
-  // re-creating the responder on every change.
+  const disabledRef = useRef<boolean | undefined>(disabled);
+  // Mirror the current value + disabled flag into refs so the
+  // PanResponder (captured once at mount) can read the latest
+  // values without re-creating the responder on every change.
+  // v3.10.188: added disabledRef. Before this, the Slider's
+  // PanResponder captured the initial `disabled` prop in its
+  // closures — so if the parent mounted the Slider with
+  // `disabled={true}` (e.g. while a hydrate was pending) and
+  // then flipped it to `false` later, the slider was forever
+  // stuck in the disabled state. The thumb rendered, the
+  // disabledStyle opacity dropped, but the PanResponder's
+  // `onStartShouldSetPanResponder: () => !disabled` closure
+  // still returned false. Tobe reported this as 'i cant
+  // change scale for some reason' on 2026-09-04 19:27.
   valueRef.current = value;
+  disabledRef.current = disabled;
   const [trackWidth, setTrackWidth] = useState<number>(0);
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
@@ -81,12 +93,18 @@ export default function Slider({
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => !disabled,
-      onMoveShouldSetPanResponder: () => !disabled,
+      // v3.10.188: read disabledRef.current instead of the
+      // captured `disabled` prop. The PanResponder is created
+      // once at mount; the prop value at that moment would
+      // otherwise be locked in forever.
+      onStartShouldSetPanResponder: () => !disabledRef.current,
+      onMoveShouldSetPanResponder: () => !disabledRef.current,
       onPanResponderGrant: (e: GestureResponderEvent) => {
+        if (disabledRef.current) return;
         onChange(valueFromX(e.nativeEvent.locationX));
       },
       onPanResponderMove: (e: GestureResponderEvent) => {
+        if (disabledRef.current) return;
         onChange(valueFromX(e.nativeEvent.locationX));
       },
     }),
