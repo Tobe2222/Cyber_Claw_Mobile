@@ -1335,64 +1335,89 @@ export default function CompanionEditScreen({
           </>
         ) : null}
 
-        {/* === BOTH MODES === */}
-        {/* v3.10.103: Soul — read-only viewer of the companion's
-            character definition. The desktop's Companion Forge
-            is the editor (it has presets + textarea + Apply
-            preset). Mobile mirrors the file so the user can
-            see what their companion is "made of". Editing
-            requires opening the desktop forge. */}
-        <Section title="📜 Soul (read-only)">
-          <Text style={styles.sectionHint}>
-            Character definition for {companionName}. Edit on the desktop Companion Forge.
-          </Text>
-          <View style={styles.soulViewer}>
-            {soulLoading ? (
-              <Text style={styles.soulLoading}>Loading from desktop…</Text>
-            ) : (
-              <Text style={styles.soulText} selectable>
-                {soulContent && soulContent.trim()
-                  ? soulContent
-                  : '(empty — desktop has not generated a soul yet. Set traits in the desktop forge to generate one.)'}
-              </Text>
-            )}
-          </View>
-        </Section>
+        {/* === BEHAVIOUR ONLY === */}
+        {/* v3.10.193: Soul + Memory are personality / character
+            content, not visual identity (Looks) or LLM config
+            (Models). They live under Behaviour. Tobe 2026-09-07:
+            "i see you have put the soul and memory md in the
+            models and looks also, this only needs to be under
+            behaviour."
 
-        {/* v3.10.103: Memory — read-only log of what the
-            companion remembers (auto-written by the desktop's
-            remember_fact tool). Clear button hits the desktop's
-            companion:clear-memory IPC. The viewer mirrors the
-            file content; the desktop regenerates the content
-            from scratch on the next chat turn. */}
-        <Section title="🧠 Memory (read-only)">
-          <Text style={styles.sectionHint}>
-            Auto-written by {companionName} on the desktop. Clear to start fresh.
-          </Text>
-          <View style={styles.soulViewer}>
-            {memoryLoading ? (
-              <Text style={styles.soulLoading}>Loading from desktop…</Text>
-            ) : (
-              <Text style={styles.soulText} selectable>
-                {memoryContent && memoryContent.trim()
-                  ? memoryContent
-                  : '(empty — companion has not remembered anything yet)'}
+            Previously these were rendered for every mode because
+            they sat outside the mode === ... gates (the comment
+            said "=== BOTH MODES ===" which was the bug — there
+            was no mode where they DIDN'T appear). Now they only
+            render when mode === 'behaviour', alongside the
+            existing chattiness + traits sections.
+
+            Side benefit: the mobile's behaviour editor now
+            matches the desktop forge's structure (where Soul +
+            Memory sit below the Behaviour Traits in the
+            Settings → Companion Forge layout). */}
+
+        {mode === 'behaviour' ? (
+          <>
+            {/* v3.10.103: Soul — read-only viewer of the
+                companion's character definition. The desktop's
+                Companion Forge is the editor (it has presets +
+                textarea + Apply preset). Mobile mirrors the
+                file so the user can see what their companion
+                is "made of". Editing requires opening the
+                desktop forge. */}
+            <Section title="📜 Soul (read-only)">
+              <Text style={styles.sectionHint}>
+                Character definition for {companionName}. Edit on the desktop Companion Forge.
               </Text>
-            )}
-          </View>
-          <TouchableOpacity
-            style={[
-              styles.clearBtn,
-              (clearingMemory || !memoryContent || !memoryContent.trim()) && styles.clearBtnDisabled,
-            ]}
-            onPress={onClearMemory}
-            disabled={clearingMemory || !memoryContent || !memoryContent.trim()}
-          >
-            <Text style={styles.clearBtnText}>
-              {clearingMemory ? '🗑 Clearing…' : '🗑 Clear memory'}
-            </Text>
-          </TouchableOpacity>
-        </Section>
+              <View style={styles.soulViewer}>
+                {soulLoading ? (
+                  <Text style={styles.soulLoading}>Loading from desktop…</Text>
+                ) : (
+                  <Text style={styles.soulText} selectable>
+                    {soulContent && soulContent.trim()
+                      ? soulContent
+                      : '(empty — desktop has not generated a soul yet. Set traits in the desktop forge to generate one.)'}
+                  </Text>
+                )}
+              </View>
+            </Section>
+
+            {/* v3.10.103: Memory — read-only log of what the
+                companion remembers (auto-written by the
+                desktop's remember_fact tool). Clear button
+                hits the desktop's companion:clear-memory IPC.
+                The viewer mirrors the file content; the
+                desktop regenerates the content from scratch
+                on the next chat turn. */}
+            <Section title="🧠 Memory (read-only)">
+              <Text style={styles.sectionHint}>
+                Auto-written by {companionName} on the desktop. Clear to start fresh.
+              </Text>
+              <View style={styles.soulViewer}>
+                {memoryLoading ? (
+                  <Text style={styles.soulLoading}>Loading from desktop…</Text>
+                ) : (
+                  <Text style={styles.soulText} selectable>
+                    {memoryContent && memoryContent.trim()
+                      ? memoryContent
+                      : '(empty — companion has not remembered anything yet)'}
+                  </Text>
+                )}
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.clearBtn,
+                  (clearingMemory || !memoryContent || !memoryContent.trim()) && styles.clearBtnDisabled,
+                ]}
+                onPress={onClearMemory}
+                disabled={clearingMemory || !memoryContent || !memoryContent.trim()}
+              >
+                <Text style={styles.clearBtnText}>
+                  {clearingMemory ? '🗑 Clearing…' : '🗑 Clear memory'}
+                </Text>
+              </TouchableOpacity>
+            </Section>
+          </>
+        ) : null}
 
         {/* v3.10.94: LLM Models section removed. Tobe's
             v3.10.93 feedback: "We can remove LLM options
