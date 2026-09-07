@@ -113,6 +113,93 @@ const CHATTINESS_DESCRIPTIONS = {
   5: 'Very chatty — comments every 15–30 minutes.',
 };
 
+// v3.10.191: model catalog. Mirrors the desktop
+// forge's <select> dropdown in src/index.html
+// (forge-model-primary / forge-model-secondary),
+// grouped by provider so the picker renders as a
+// virtual optgroup structure (React Native's
+// <Picker> doesn't have a native optgroup
+// component, so we emulate the grouping with a
+// non-selectable "── Provider ──" item between
+// groups — see the picker JSX below).
+//
+// Each entry is { value, label } where:
+//   value = the raw "provider/model" string the
+//     desktop sprite_config_sync handler accepts
+//     verbatim (no transformation)
+//   label = the display-friendly name shown in
+//     the picker (e.g. "Claude Opus 4" instead
+//     of "claude-opus-4-6"). Same display names
+//     the desktop forge's formatModelName() uses
+//     in src/js/app.js so the user sees the
+//     same string on both surfaces.
+//
+// Keep this list in sync with the desktop forge's
+// <select> options. When the desktop adds a model,
+// add it here too (and bump the version).
+const MODEL_DEFAULT_NONE = '__cyberclaw_no_model__';
+const MODELS_BY_PROVIDER: Record<string, Array<{ value: string; label: string }>> = {
+  anthropic: [
+    { value: 'anthropic/claude-opus-4-6',     label: 'Claude Opus 4' },
+    { value: 'anthropic/claude-sonnet-4-6',   label: 'Claude Sonnet 4' },
+    { value: 'anthropic/claude-haiku-3.5',    label: 'Claude Haiku 3.5' },
+  ],
+  openai: [
+    { value: 'openai/gpt-4o',     label: 'GPT-4o' },
+    { value: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
+  ],
+  google: [
+    { value: 'google/gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
+    { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  ],
+  // v3.10.191: local model catalog. These are the
+  // tags the user typically pulls via Ollama /
+  // LM Studio / llama.cpp. The desktop's
+  // llm.ollama.resolveLocal IPC probes the
+  // configured baseUrl to verify the model is
+  // actually loaded — the mobile doesn't probe
+  // directly (Android won't allow localhost
+  // probing without a permission grant). The
+  // desktop's LLM status pill surfaces the
+  // reachability state.
+  ollama: [
+    { value: 'ollama/llama3',        label: 'Llama 3' },
+    { value: 'ollama/llama3.1',      label: 'Llama 3.1' },
+    { value: 'ollama/llama3.2',      label: 'Llama 3.2' },
+    { value: 'ollama/mistral',       label: 'Mistral' },
+    { value: 'ollama/mistral-nemo',  label: 'Mistral Nemo' },
+    { value: 'ollama/mixtral',       label: 'Mixtral' },
+    { value: 'ollama/codellama',     label: 'CodeLlama' },
+    { value: 'ollama/deepseek-coder', label: 'DeepSeek Coder' },
+    { value: 'ollama/qwen2.5-coder',  label: 'Qwen 2.5 Coder' },
+    { value: 'ollama/gemma2',         label: 'Gemma 2' },
+    { value: 'ollama/phi3',           label: 'Phi-3' },
+  ],
+  lmstudio: [
+    { value: 'lmstudio/local-model', label: 'Local model (any)' },
+  ],
+  llamacpp: [
+    { value: 'llamacpp/local-model', label: 'Local model (any)' },
+  ],
+  vllm: [
+    { value: 'vllm/local-model', label: 'Local model (any)' },
+  ],
+};
+// v3.10.191: helper to detect a local-model id.
+// Used by the picker JSX to determine whether the
+// currently selected primary is a local model
+// (and should be displayed in the "Local primary"
+// section rather than the cloud primary section).
+// Keep in sync with the renderModelsCard helper in
+// CompanionSettingsScreen.tsx (same provider list).
+const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm']);
+function isLocalModel(modelStr: string): boolean {
+  if (!modelStr) return false;
+  const idx = modelStr.indexOf('/');
+  if (idx < 0) return false;
+  return LOCAL_PROVIDERS.has(modelStr.slice(0, idx).toLowerCase());
+}
+
 // v3.10.187: arena.html asset cache-buster for the Looks
 // editor's live preview WebView. Bumped whenever the
 // inline JS in arena.html changes (e.g. setCenteredScale
@@ -142,6 +229,14 @@ export default function CompanionEditScreen({
   //     (Name + Sprite + Size, what's visible)
   //   'companion-edit-behaviour' → mode='behaviour'
   //     (Chattiness + Personality Traits, how they act)
+  //   'companion-edit-models'    → mode='models'
+  //     (Primary + Secondary model pickers, with
+  //     a dedicated Local models section. Tobe
+  //     2026-09-07: "Lets introduce the LLM
+  //     connection for each companion ... create a
+  //     new section for that with its own page like
+  //     looks and behaviour. ... Create a separation
+  //     for local models also.")
   //   'companion-edit' (legacy)  → mode='behaviour'
   //     (kept as an alias for backward-compat)
   // Both modes still write to the same spriteConfig on the
@@ -156,7 +251,7 @@ export default function CompanionEditScreen({
   companionName: string;
   initialEmoji?: string | null;
   onBack: () => void;
-  mode?: 'looks' | 'behaviour';
+  mode?: 'looks' | 'behaviour' | 'models';
 }) {
   const [name, setName] = useState(companionName || '');
   const [scale, setScale] = useState<number>(4);
@@ -169,6 +264,15 @@ export default function CompanionEditScreen({
   // v3.10.92: chattiness is the headline new feature. Default
   // 3 if the companion has no value yet (legacy companion).
   const [chattiness, setChattiness] = useState<number>(3);
+  // v3.10.191: model selection state. Both are stored
+  // as raw "provider/model" strings (e.g.
+  // "anthropic/claude-opus-4-6", "ollama/llama3") so
+  // they round-trip cleanly with the desktop's
+  // sprite_config_sync handler (no transformation
+  // needed on either end). Empty string = not
+  // configured (the desktop's default falls through).
+  const [primaryModel, setPrimaryModel] = useState<string>('');
+  const [secondaryModel, setSecondaryModel] = useState<string>('');
   // v3.10.185: no more Save button — edits apply instantly
   // to local state, persist to AsyncStorage on every change,
   // and ship to the desktop on unmount (back tap / swipe /
@@ -184,6 +288,12 @@ export default function CompanionEditScreen({
   const pixelCompanionIdRef = useRef<string>('boar');
   const traitsRef = useRef<Set<string>>(new Set());
   const chattinessRef = useRef<number>(3);
+  // v3.10.191: model selection refs. Mirror the
+  // useState values so the unmount cleanup can read
+  // the freshest strings without re-running on every
+  // dropdown change.
+  const primaryModelRef = useRef<string>('');
+  const secondaryModelRef = useRef<string>('');
   // Guard so we only auto-save to the desktop once per
   // mount. Subsequent state changes inside the same mount
   // only persist locally (no desktop spam).
@@ -225,6 +335,9 @@ export default function CompanionEditScreen({
   useEffect(() => { pixelCompanionIdRef.current = pixelCompanionId; }, [pixelCompanionId]);
   useEffect(() => { traitsRef.current = traits; }, [traits]);
   useEffect(() => { chattinessRef.current = chattiness; }, [chattiness]);
+  // v3.10.191: model selection refs mirror state.
+  useEffect(() => { primaryModelRef.current = primaryModel; }, [primaryModel]);
+  useEffect(() => { secondaryModelRef.current = secondaryModel; }, [secondaryModel]);
 
   // v3.10.187: live preview scale update. When the user
   // drags the scale slider in the Looks editor, push
@@ -337,6 +450,13 @@ export default function CompanionEditScreen({
       pixelCompanionId: pixelCompanionIdRef.current,
       traits: Array.from(traitsRef.current),
       chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
+      // v3.10.191: model selection in the local
+      // patch. Persisted to AsyncStorage on every
+      // change so the offline fallback path
+      // (AsyncStorage read in the hydrate effect)
+      // restores them on remount.
+      primaryModel: primaryModelRef.current,
+      secondaryModel: secondaryModelRef.current,
     };
     // 1) Local per-companion cache (offline-safe + instant remount).
     AsyncStorage.setItem(
@@ -359,10 +479,20 @@ export default function CompanionEditScreen({
           chattiness: patch.chattiness,
           ...(patch.customName ? { name: patch.customName } : {}),
         });
+        // v3.10.191: also patch the spriteConfig
+        // model fields so the Models card on the
+        // parent screen reflects the change without
+        // waiting for the desktop broadcast.
+        if (list[idx].spriteConfig) {
+          list[idx].spriteConfig = Object.assign({}, list[idx].spriteConfig, {
+            primaryModel: patch.primaryModel,
+            secondaryModel: patch.secondaryModel,
+          });
+        }
         AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(list)).catch(() => {});
       } catch (_) { /* best-effort cache patch */ }
     }).catch(() => {});
-  }, [hydrated, name, scale, pixelCompanionId, traits, chattiness, companionId]);
+  }, [hydrated, name, scale, pixelCompanionId, traits, chattiness, primaryModel, secondaryModel, companionId]);
 
   // v3.10.92: hydrate from the local AsyncStorage cache
   // AND the latest agents_list broadcast. The cache is the
@@ -424,6 +554,17 @@ export default function CompanionEditScreen({
           if (typeof spriteConfig.customName === 'string' && spriteConfig.customName) {
             setName(spriteConfig.customName);
           }
+          // v3.10.191: hydrate model selection from the
+          // agents_list broadcast. primaryModel /
+          // secondaryModel are the desktop forge's
+          // canonical field names (see desktop
+          // sprite_config_sync ALLOWED whitelist).
+          if (typeof spriteConfig.primaryModel === 'string') {
+            setPrimaryModel(spriteConfig.primaryModel);
+          }
+          if (typeof spriteConfig.secondaryModel === 'string') {
+            setSecondaryModel(spriteConfig.secondaryModel);
+          }
         } else {
           // v3.10.92: fallback for older broadcasts that
           // don't have spriteConfig. The local cache is
@@ -439,6 +580,11 @@ export default function CompanionEditScreen({
             if (typeof local.chattiness === 'number') setChattiness(local.chattiness);
             if (typeof local.customName === 'string' && local.customName) setName(local.customName);
             if (typeof local.pixelCompanionId === 'string' && local.pixelCompanionId) setPixelCompanionId(local.pixelCompanionId);
+            // v3.10.191: model selection fallback from
+            // the local cache. Same pattern as the
+            // sprite / chattiness / trait fields above.
+            if (typeof local.primaryModel === 'string') setPrimaryModel(local.primaryModel);
+            if (typeof local.secondaryModel === 'string') setSecondaryModel(local.secondaryModel);
           }
         }
         setHydrated(true);
@@ -555,6 +701,18 @@ export default function CompanionEditScreen({
         }
         if (typeof spriteConfig.customName === 'string' && spriteConfig.customName) {
           setName(spriteConfig.customName);
+        }
+        // v3.10.191: live model updates from
+        // agents_list. If the desktop changes the
+        // companion's model while the editor is
+        // open (e.g. via the desktop forge), the
+        // pickers update in place so the user sees
+        // the current state, not the stale one.
+        if (typeof spriteConfig.primaryModel === 'string') {
+          setPrimaryModel(spriteConfig.primaryModel);
+        }
+        if (typeof spriteConfig.secondaryModel === 'string') {
+          setSecondaryModel(spriteConfig.secondaryModel);
         }
       }
     };
@@ -692,6 +850,15 @@ export default function CompanionEditScreen({
         pixelCompanionId: pixelCompanionIdRef.current,
         traits: Array.from(traitsRef.current),
         chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
+        // v3.10.191: model fields. Sent to the
+        // desktop on unmount so the LLM pickers'
+        // values reach the sprite_config_sync
+        // handler. Empty string clears the field on
+        // the desktop (the field becomes undefined
+        // via the desktop's sprite_config_sync
+        // handler's behavior).
+        primaryModel: primaryModelRef.current || undefined,
+        secondaryModel: secondaryModelRef.current || undefined,
       };
       try {
         syncClient.setSpriteConfig(companionId, patch);
@@ -737,7 +904,7 @@ export default function CompanionEditScreen({
             <Text style={styles.backBtnText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.header}>
-            {initialEmoji || '🐾'}  Edit {companionName} — {mode === 'looks' ? 'Looks' : 'Behaviour'}
+            {initialEmoji || '🐾'}  Edit {companionName} — {mode === 'looks' ? 'Looks' : mode === 'models' ? 'Models' : 'Behaviour'}
           </Text>
           <View style={{ width: 60 }} />
         </View>
@@ -922,6 +1089,224 @@ export default function CompanionEditScreen({
             })}
           </View>
         </Section>
+          </>
+        ) : null}
+
+        {/* === MODELS mode === */}
+        {mode === 'models' ? (
+          <>
+            <Text style={styles.groupLabel}>🧠 MODELS</Text>
+
+            {/* v3.10.191: model picker section. Lists
+                the desktop forge's whitelisted providers
+                (Anthropic, OpenAI, Google, Local) in
+                their own sub-sections so the user can
+                scan by provider, not by individual
+                model id. Tobe: "import that setup" (the
+                desktop forge's optgroup-based <select>
+                dropdown). The mobile's <Picker>
+                renders the same optgroup structure.
+
+                The pickers are disabled until the
+                hydrate completes (same pattern as the
+                Looks editor's sprite dropdown), so the
+                user doesn't fight the local cache during
+                the brief render window before the
+                desktop broadcast lands. */}
+            <Section title="🧠 Primary model">
+              <Text style={styles.sectionHint}>
+                The main LLM this companion talks to. Defaults to the desktop default if empty.
+              </Text>
+              <View style={styles.pickerWrap}>
+                <Picker
+                  selectedValue={primaryModel || MODEL_DEFAULT_NONE}
+                  onValueChange={(v: string | number) => {
+                    const s = String(v);
+                    setPrimaryModel(s === MODEL_DEFAULT_NONE ? '' : s);
+                  }}
+                  enabled={hydrated}
+                  style={styles.picker}
+                  itemStyle={styles.pickerItem}
+                  dropdownIconColor="#f7931a"
+                >
+                  <Picker.Item label="(Default — use desktop default)" value={MODEL_DEFAULT_NONE} />
+                  {/* Anthropic optgroup — mirrors the
+                      desktop forge's <optgroup label="Anthropic">. */}
+                  <Picker.Item label="── Anthropic ──" value="__sep_anthropic__" enabled={false} />
+                  {MODELS_BY_PROVIDER.anthropic.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  {/* OpenAI */}
+                  <Picker.Item label="── OpenAI ──" value="__sep_openai__" enabled={false} />
+                  {MODELS_BY_PROVIDER.openai.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  {/* Google */}
+                  <Picker.Item label="── Google ──" value="__sep_google__" enabled={false} />
+                  {MODELS_BY_PROVIDER.google.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                </Picker>
+              </View>
+            </Section>
+
+            <Section title="🔁 Secondary model">
+              <Text style={styles.sectionHint}>
+                The fallback used when the primary is down or context-overflows. Leave on None to disable.
+              </Text>
+              <View style={styles.pickerWrap}>
+                <Picker
+                  selectedValue={secondaryModel || MODEL_DEFAULT_NONE}
+                  onValueChange={(v: string | number) => {
+                    const s = String(v);
+                    setSecondaryModel(s === MODEL_DEFAULT_NONE ? '' : s);
+                  }}
+                  enabled={hydrated}
+                  style={styles.picker}
+                  itemStyle={styles.pickerItem}
+                  dropdownIconColor="#f7931a"
+                >
+                  <Picker.Item label="(None — no fallback)" value={MODEL_DEFAULT_NONE} />
+                  <Picker.Item label="── Anthropic ──" value="__sep_anthropic__" enabled={false} />
+                  {MODELS_BY_PROVIDER.anthropic.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── OpenAI ──" value="__sep_openai__" enabled={false} />
+                  {MODELS_BY_PROVIDER.openai.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── Google ──" value="__sep_google__" enabled={false} />
+                  {MODELS_BY_PROVIDER.google.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                </Picker>
+              </View>
+            </Section>
+
+            {/* v3.10.191: LOCAL MODELS section. Tobe's
+                2026-09-07 "Create a separation for
+                local models also" — visual separation
+                so the user immediately understands
+                that local/self-hosted models are a
+                different beast from the cloud
+                providers. The header has a distinct
+                purple tint (not orange) so it reads
+                as a different category, and the
+                description explicitly calls out the
+                requirements (Ollama / LM Studio
+                running locally, etc.).
+
+                The local model list below mirrors
+                what the desktop forge ships. The
+                desktop's llm.ollama.resolveLocal IPC
+                handler probes the configured baseUrl
+                to determine whether the model is
+                reachable. The mobile doesn't probe
+                directly (it would need the same
+                localhost endpoint reachability, which
+                Android won't allow without a
+                permission grant); the desktop
+                broadcasts the status via llm_status
+                and the user can verify connectivity
+                there. We surface a small hint about
+                that. */}
+            <View style={styles.localModelsHeader}>
+              <Text style={styles.localModelsHeaderText}>
+                💻 LOCAL MODELS
+              </Text>
+              <Text style={styles.localModelsHeaderSub}>
+                Self-hosted / private. Runs on your machine — private, offline-safe, free.
+              </Text>
+            </View>
+
+            <Section title="🖥️ Local primary">
+              <Text style={styles.sectionHint}>
+                Ollama, LM Studio, llama.cpp, vLLM. Requires the runtime to be running on your desktop.
+              </Text>
+              <View style={styles.pickerWrap}>
+                <Picker
+                  selectedValue={primaryModel && isLocalModel(primaryModel) ? primaryModel : MODEL_DEFAULT_NONE}
+                  onValueChange={(v: string | number) => {
+                    const s = String(v);
+                    if (s === MODEL_DEFAULT_NONE) return; // local-primary is just a display; can't unset
+                    setPrimaryModel(s);
+                  }}
+                  enabled={hydrated}
+                  style={styles.picker}
+                  itemStyle={styles.pickerItem}
+                  dropdownIconColor="#a855f7"
+                >
+                  <Picker.Item label="(Using cloud primary above)" value={MODEL_DEFAULT_NONE} />
+                  <Picker.Item label="── Ollama ──" value="__sep_ollama__" enabled={false} />
+                  {MODELS_BY_PROVIDER.ollama.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── LM Studio ──" value="__sep_lmstudio__" enabled={false} />
+                  {MODELS_BY_PROVIDER.lmstudio.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── llama.cpp ──" value="__sep_llamacpp__" enabled={false} />
+                  {MODELS_BY_PROVIDER.llamacpp.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── vLLM ──" value="__sep_vllm__" enabled={false} />
+                  {MODELS_BY_PROVIDER.vllm.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                </Picker>
+              </View>
+            </Section>
+
+            <Section title="🖥️ Local secondary">
+              <Text style={styles.sectionHint}>
+                Same local runtimes as above. Optional second-chance fallback.
+              </Text>
+              <View style={styles.pickerWrap}>
+                <Picker
+                  selectedValue={secondaryModel && isLocalModel(secondaryModel) ? secondaryModel : MODEL_DEFAULT_NONE}
+                  onValueChange={(v: string | number) => {
+                    const s = String(v);
+                    if (s === MODEL_DEFAULT_NONE) return;
+                    setSecondaryModel(s);
+                  }}
+                  enabled={hydrated}
+                  style={styles.picker}
+                  itemStyle={styles.pickerItem}
+                  dropdownIconColor="#a855f7"
+                >
+                  <Picker.Item label="(None)" value={MODEL_DEFAULT_NONE} />
+                  <Picker.Item label="── Ollama ──" value="__sep_ollama__" enabled={false} />
+                  {MODELS_BY_PROVIDER.ollama.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── LM Studio ──" value="__sep_lmstudio__" enabled={false} />
+                  {MODELS_BY_PROVIDER.lmstudio.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── llama.cpp ──" value="__sep_llamacpp__" enabled={false} />
+                  {MODELS_BY_PROVIDER.llamacpp.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                  <Picker.Item label="── vLLM ──" value="__sep_vllm__" enabled={false} />
+                  {MODELS_BY_PROVIDER.vllm.map((m) => (
+                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  ))}
+                </Picker>
+              </View>
+            </Section>
+
+            {/* v3.10.191: status / setup hint for local
+                models. Tells the user where to go on
+                the desktop to configure the local
+                runtime's baseUrl + verify
+                reachability, since the mobile can't
+                probe localhost directly on Android
+                without a permission grant. */}
+            <View style={styles.localHint}>
+              <Text style={styles.localHintText}>
+                💡 Setup the local runtime on the desktop's Settings → LLM Endpoints. The 🧠 LLM pill in the header shows whether each model is reachable.
+              </Text>
+            </View>
           </>
         ) : null}
 
@@ -1155,6 +1540,60 @@ const styles = StyleSheet.create({
   pickerItem: {
     color: '#fff',
     fontSize: 15,
+  },
+  // v3.10.191: LOCAL MODELS section divider. The
+  // big purple "💻 LOCAL MODELS" header sits
+  // between the cloud providers and the local
+  // runtime pickers so the user immediately
+  // understands "this is a different category."
+  // Purple (not orange) because:
+  //   - The cloud pickers use the page's default
+  //     accent (orange).
+  //   - The active-quest visual language on the
+  //     Quests page already uses purple
+  //     (#a855f7) to signal "different category."
+  //   - The desktop forge's "Local" optgroup is
+  //     also visually distinguished (its label is
+  //     "Local" not "Local Models", but the
+  //     grouping itself is the visual cue).
+  // Reusing purple keeps the "this category is
+  // special" signal consistent across the app.
+  localModelsHeader: {
+    marginTop: 24,
+    marginBottom: 8,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(168, 85, 247, 0.3)',
+  },
+  localModelsHeaderText: {
+    color: '#a855f7',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    marginBottom: 4,
+  },
+  localModelsHeaderSub: {
+    color: '#9aa0b4',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  // v3.10.191: hint box at the bottom of the
+  // Models page pointing the user at the desktop
+  // for setup + reachability checks. Soft purple
+  // tint to match the local models section.
+  localHint: {
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(168, 85, 247, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(168, 85, 247, 0.25)',
+  },
+  localHintText: {
+    color: '#cfd2e0',
+    fontSize: 12,
+    lineHeight: 17,
   },
   // v3.10.94: preview frame mirrors the desktop's
   // .forge-companion-preview (200×200, 2px border, dark

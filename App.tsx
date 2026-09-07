@@ -106,7 +106,7 @@ export default function App(): React.JSX.Element {
   const [screen, setScreen] = useState<
     'home' | 'settings' | 'voice-mode' | 'companion' | 'quests' |
     'wake-trainer' | 'wake-manager' | 'exit-trainer' |
-    'companion-edit' | 'companion-edit-looks' | 'companion-edit-behaviour' | 'skills'
+    'companion-edit' | 'companion-edit-looks' | 'companion-edit-behaviour' | 'companion-edit-models' | 'skills'
   >('home');
   // v3.10.0: contexts for the new trainer / manager
   // routes. Set when CompanionSettingsScreen calls a
@@ -718,6 +718,18 @@ export default function App(): React.JSX.Element {
                 setCompanionEditCtx(ctx);
                 setScreen('companion-edit-behaviour');
               }}
+              // v3.10.191: Models editor route. The
+              // previous v3.10.94 release dropped LLM
+              // model picking from the mobile ("desktop
+              // only"). Tobe 2026-09-07 wants it back as
+              // its own dedicated section, mirroring the
+              // desktop forge's 🧠 Models block — with a
+              // visual separation for local/self-hosted
+              // models.
+              onOpenCompanionModels={(ctx) => {
+                setCompanionEditCtx(ctx);
+                setScreen('companion-edit-models');
+              }}
               // v3.10.92: legacy single-edit callback.
               // Kept for backward-compat — routes to the
               // behaviour editor (the dominant section).
@@ -785,12 +797,12 @@ export default function App(): React.JSX.Element {
               screens pop back to 'companion' via the same
               callback. The mode prop tells CompanionEditScreen
               which section group to render. */}
-          {(screen === 'companion-edit' || screen === 'companion-edit-looks' || screen === 'companion-edit-behaviour') && companionEditCtx && (
+          {(screen === 'companion-edit' || screen === 'companion-edit-looks' || screen === 'companion-edit-behaviour' || screen === 'companion-edit-models') && companionEditCtx && (
             <CompanionEditScreen
               companionId={companionEditCtx.companionId}
               companionName={companionEditCtx.companionName}
               initialEmoji={companionEditCtx.emoji}
-              mode={screen === 'companion-edit-looks' ? 'looks' : 'behaviour'}
+              mode={screen === 'companion-edit-looks' ? 'looks' : screen === 'companion-edit-models' ? 'models' : 'behaviour'}
               onBack={() => {
                 setCompanionEditCtx(null);
                 setScreen('companion');

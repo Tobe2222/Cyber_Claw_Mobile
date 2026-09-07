@@ -145,6 +145,16 @@ export default function CompanionSettingsScreen({
   // back to onOpenCompanionEdit (legacy single editor).
   onOpenCompanionLooks,
   onOpenCompanionBehaviour,
+  // v3.10.191: Models editor callback (third split-screen
+  // editor). Mirrors the Looks + Behaviour callbacks —
+  // opens a dedicated page for LLM model selection.
+  // Tobe 2026-09-07: "Lets introduce the LLM connection
+  // for each companion within the companion editor,
+  // create a new section for that with its own page like
+  // looks and behaviour." The mobile previously removed
+  // this in v3.10.94; bringing it back as its own
+  // dedicated screen with a separate Local models group.
+  onOpenCompanionModels,
   // v3.10.174: open the Skills screen scoped to this
   // companion. The companion settings page is the
   // ONLY place the Skills screen is reachable from
@@ -172,6 +182,12 @@ export default function CompanionSettingsScreen({
   // (the dominant section).
   onOpenCompanionLooks?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
   onOpenCompanionBehaviour?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
+  // v3.10.191: Models editor callback prop. App.tsx wires
+  // this to push the companion-edit-models route. If
+  // missing (older build), the Models card falls back to
+  // the behaviour editor — not ideal but it keeps the
+  // page from breaking.
+  onOpenCompanionModels?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
   onOpenSkills?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
 }) {
   // v3.4.4: drill-down phase inside the companion
@@ -1782,6 +1798,173 @@ function renderBehaviourCard(companion: Companion) {
     );
   }
 
+  // v3.10.191: Models card — summary of the
+  // companion's LLM configuration. Mirrors the
+  // shape of renderLooksCard / renderBehaviourCard
+  // (title row with an Edit button, then a list of
+  // name/value rows). The rows are:
+  //   Primary — the active model (e.g.
+  //     "Anthropic / Claude Opus 4"). Falls back
+  //     to "Default" when the companion has no
+  //     explicit primary (the desktop default
+  //     anthropic/claude-opus-4-6 is used).
+  //   Secondary — the fallback model, or "None"
+  //     if there's no secondary configured.
+  // Tobe 2026-09-07: "Lets introduce the LLM
+  // connection for each companion within the
+  // companion editor, create a new section for
+  // that with its own page like looks and
+  // behaviour. We do have this on the desktop
+  // already so import that setup." This card is
+  // the entry point to the dedicated Models
+  // editor screen.
+  function renderModelsCard(companion: Companion) {
+    const sc = (companion as any).spriteConfig || {};
+    // v3.10.191: model fields on the spriteConfig
+    // object. Desktop forge stores them as
+    // primaryModel / secondaryModel (the wire-
+    // protocol field names; see desktop
+    // sprite_config_sync ALLOWED whitelist in
+    // src/sync-server.js). Both are "provider/model"
+    // strings (e.g. "anthropic/claude-opus-4-6"
+    // or "ollama/llama3").
+    const primary = typeof sc.primaryModel === 'string' && sc.primaryModel
+      ? sc.primaryModel
+      : '';
+    const secondary = typeof sc.secondaryModel === 'string' && sc.secondaryModel
+      ? sc.secondaryModel
+      : '';
+    // v3.10.191: split a "provider/model" string
+    // into display-friendly parts. Falls back to
+    // the raw string when the slash separator
+    // isn't present (shouldn't happen for desktop-
+    // configured models, but defensive against
+    // legacy data).
+    const splitModel = (m: string): { provider: string; name: string; isLocal: boolean } => {
+      if (!m) return { provider: '', name: '', isLocal: false };
+      const idx = m.indexOf('/');
+      const provider = idx >= 0 ? m.slice(0, idx) : '';
+      const name = idx >= 0 ? m.slice(idx + 1) : m;
+      // v3.10.191: local providers include
+      // ollama (most common — the desktop forge
+      // ships with an "ollama/llama3" default),
+      // plus lmstudio / llamacpp / vllm which the
+      // desktop's IPC layer also accepts. Keep
+      // this list in sync with the Models editor's
+      // LOCAL_PROVIDERS constant.
+      const localProviders = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm']);
+      return { provider, name, isLocal: localProviders.has(provider.toLowerCase()) };
+    };
+    const primaryParts = splitModel(primary);
+    const secondaryParts = splitModel(secondary);
+    // v3.10.191: pretty-print the model id. Maps
+    // "claude-opus-4-6" → "Claude Opus 4",
+    // "gpt-4o" → "GPT-4o", "gemini-2.5-pro" →
+    // "Gemini 2.5 Pro", and leaves Ollama tags
+    // alone ("llama3", "mistral", "codellama").
+    // Mirrors the desktop forge's
+    // formatModelName() in src/js/app.js so the
+    // mobile and desktop show the same display
+    // names for the same model id.
+    const prettyProvider = (p: string): string => {
+      if (!p) return '';
+      const lower = p.toLowerCase();
+      if (lower === 'anthropic') return 'Anthropic';
+      if (lower === 'openai') return 'OpenAI';
+      if (lower === 'google') return 'Google';
+      if (lower === 'ollama') return 'Ollama';
+      if (lower === 'lmstudio') return 'LM Studio';
+      if (lower === 'llamacpp') return 'llama.cpp';
+      if (lower === 'vllm') return 'vLLM';
+      return p.charAt(0).toUpperCase() + p.slice(1);
+    };
+    const prettyName = (n: string): string => {
+      if (!n) return '';
+      // Anthropic: claude-opus-4-6 → Claude Opus 4
+      const m = n.match(/^claude-([a-z]+)-(\d+)(?:-(\d+))?$/i);
+      if (m) {
+        const tier = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+        return `Claude ${tier} ${m[2]}`;
+      }
+      // OpenAI: gpt-4o / gpt-4o-mini → GPT-4o / GPT-4o Mini
+      const g = n.match(/^gpt-(.+)$/i);
+      if (g) return `GPT-${g[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`;
+      // Google: gemini-2.5-pro → Gemini 2.5 Pro
+      const gm = n.match(/^gemini-(.+)$/i);
+      if (gm) return `Gemini ${gm[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`;
+      // Fallback: title-case, replace dashes.
+      return n.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    };
+    const openEditor = onOpenCompanionModels || onOpenCompanionEdit;
+
+    return (
+      <View style={styles.behaviourCard}>
+        <View style={styles.behaviourHeader}>
+          <Text style={styles.behaviourTitle}>🧠 Models</Text>
+          {openEditor ? (
+            <TouchableOpacity
+              onPress={() => openEditor({
+                companionId: companion.id,
+                companionName: companion.name,
+                emoji: companion.emoji || companion.icon || null,
+              })}
+              style={styles.behaviourEditBtn}
+            >
+              <Text style={styles.behaviourEditBtnText}>Edit ›</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        <View style={styles.behaviourRow}>
+          <Text style={styles.behaviourLabel}>Primary</Text>
+          {/* v3.10.191: primary model display. Shows
+              "Provider / Model" when both are
+              known, or the raw id when no provider
+              is parseable. A small green dot is
+              drawn next to local-model primaries so
+              the user can see "this companion is
+              running against a local LLM" without
+              opening the editor. */}
+          <Text style={styles.behaviourValue}>
+            {primary ? (
+              <>
+                {primaryParts.isLocal && (
+                  <Text style={styles.modelLocalDot}>  ● </Text>
+                )}
+                {prettyProvider(primaryParts.provider)}{primaryParts.provider ? ' / ' : ''}{prettyName(primaryParts.name) || primary}
+              </>
+            ) : (
+              <Text style={styles.modelDefault}>Default</Text>
+            )}
+          </Text>
+        </View>
+        <View style={styles.behaviourRow}>
+          <Text style={styles.behaviourLabel}>Secondary</Text>
+          <Text style={styles.behaviourValue}>
+            {secondary ? (
+              <>
+                {secondaryParts.isLocal && (
+                  <Text style={styles.modelLocalDot}>  ● </Text>
+                )}
+                {prettyProvider(secondaryParts.provider)}{secondaryParts.provider ? ' / ' : ''}{prettyName(secondaryParts.name) || secondary}
+              </>
+            ) : (
+              <Text style={styles.modelDefault}>None</Text>
+            )}
+          </Text>
+        </View>
+        {/* v3.10.191: small footer hint inside the
+            card explaining what "Secondary" means
+            (the fallback model the chat pipeline
+            switches to when the primary is down or
+            context-overflows). One short line, sits
+            below the rows. Helps new users. */}
+        <Text style={styles.modelFooterHint}>
+          Secondary is the fallback used when the primary is down.
+        </Text>
+      </View>
+    );
+  }
+
   // v3.10.142: compact settings card. Just shows the
   // current value inline + chevron + tap to navigate to
   // the existing sub-page (which already exists for
@@ -1874,6 +2057,17 @@ function renderBehaviourCard(companion: Companion) {
               they picked without opening the editor. */}
           {renderLooksCard(companion)}
           {renderBehaviourCard(companion)}
+          {/* v3.10.191: Models card — third in the
+              Looks / Behaviour / Models trio. Shows the
+              active primary model + the secondary (if
+              any) so the user knows which models this
+              companion is configured to use without
+              opening the editor. Tapping Edit opens
+              the dedicated Models editor (a new route
+              in App.tsx). The card's design mirrors
+              Looks + Behaviour so the trio reads as
+              one consistent pattern. */}
+          {renderModelsCard(companion)}
 
           {/* v3.10.174: Skills library entry point.
               Sits between Behaviour and the SETTINGS
@@ -3315,6 +3509,39 @@ const styles = StyleSheet.create({
   },
   behaviourChattinessTickActive: { backgroundColor: '#f7931a' },
   behaviourChattinessNum: { color: '#f7931a', fontSize: 12, fontWeight: '700', minWidth: 16, textAlign: 'right' },
+  // v3.10.191: Models card bits. Three new styles
+  // for the renderModelsCard helper:
+  //   modelLocalDot — small green dot prefixed to a
+  //     local-model row so the user can see at a
+  //     glance "this companion is running against a
+  //     local LLM." Green (not orange) because
+  //     "connected to a self-hosted runtime" is a
+  //     positive signal — the chat is local,
+  //     private, offline-safe. Same green family as
+  //     the quest-active pill.
+  //   modelDefault — muted color for the "Default"
+  //     / "None" placeholder values so they read
+  //     as "nothing was set" rather than "this IS
+  //     the value".
+  //   modelFooterHint — small italic line under
+  //     the rows in the Models card explaining what
+  //     "Secondary" means.
+  modelLocalDot: {
+    color: '#10b981',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  modelDefault: {
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  modelFooterHint: {
+    color: '#666',
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 6,
+    lineHeight: 15,
+  },
   // v3.10.144: traits as wrap chips. Tobe wanted to
   // see all traits with their emoji, not a truncated
   // comma-separated string. Chips wrap to next line
