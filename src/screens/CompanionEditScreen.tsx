@@ -135,69 +135,55 @@ const CHATTINESS_DESCRIPTIONS = {
 //     same string on both surfaces.
 //
 // Keep this list in sync with the desktop forge's
-// <select> options. When the desktop adds a model,
-// add it here too (and bump the version).
+// v3.10.192: provider-first model picker constants.
+// Tobe 2026-09-07 follow-up to v3.10.191: "the
+// catalog is not up to date. There have been several
+// releases lately. ... Could we add a generic input
+// also? Where the user can input Whatever he has?"
+//
+// The new flow: pick a provider (drives the suggested
+// key env var + provider prefix), optionally enter an
+// API key, then type any model id. No catalog
+// restriction. The local-runtimes section (Ollama /
+// LM Studio / llama.cpp / vLLM) is preserved for the
+// self-hosted case.
+//
+// Curated provider list mirrors the desktop forge's
+// FORGE_PROVIDERS table in src/js/app.js. Keep in
+// sync.
 const MODEL_DEFAULT_NONE = '__cyberclaw_no_model__';
-const MODELS_BY_PROVIDER: Record<string, Array<{ value: string; label: string }>> = {
-  anthropic: [
-    { value: 'anthropic/claude-opus-4-6',     label: 'Claude Opus 4' },
-    { value: 'anthropic/claude-sonnet-4-6',   label: 'Claude Sonnet 4' },
-    { value: 'anthropic/claude-haiku-3.5',    label: 'Claude Haiku 3.5' },
-  ],
-  openai: [
-    { value: 'openai/gpt-4o',     label: 'GPT-4o' },
-    { value: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
-  ],
-  google: [
-    { value: 'google/gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
-    { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  ],
-  // v3.10.191: local model catalog. These are the
-  // tags the user typically pulls via Ollama /
-  // LM Studio / llama.cpp. The desktop's
-  // llm.ollama.resolveLocal IPC probes the
-  // configured baseUrl to verify the model is
-  // actually loaded — the mobile doesn't probe
-  // directly (Android won't allow localhost
-  // probing without a permission grant). The
-  // desktop's LLM status pill surfaces the
-  // reachability state.
-  ollama: [
-    { value: 'ollama/llama3',        label: 'Llama 3' },
-    { value: 'ollama/llama3.1',      label: 'Llama 3.1' },
-    { value: 'ollama/llama3.2',      label: 'Llama 3.2' },
-    { value: 'ollama/mistral',       label: 'Mistral' },
-    { value: 'ollama/mistral-nemo',  label: 'Mistral Nemo' },
-    { value: 'ollama/mixtral',       label: 'Mixtral' },
-    { value: 'ollama/codellama',     label: 'CodeLlama' },
-    { value: 'ollama/deepseek-coder', label: 'DeepSeek Coder' },
-    { value: 'ollama/qwen2.5-coder',  label: 'Qwen 2.5 Coder' },
-    { value: 'ollama/gemma2',         label: 'Gemma 2' },
-    { value: 'ollama/phi3',           label: 'Phi-3' },
-  ],
-  lmstudio: [
-    { value: 'lmstudio/local-model', label: 'Local model (any)' },
-  ],
-  llamacpp: [
-    { value: 'llamacpp/local-model', label: 'Local model (any)' },
-  ],
-  vllm: [
-    { value: 'vllm/local-model', label: 'Local model (any)' },
-  ],
-};
-// v3.10.191: helper to detect a local-model id.
-// Used by the picker JSX to determine whether the
-// currently selected primary is a local model
-// (and should be displayed in the "Local primary"
-// section rather than the cloud primary section).
-// Keep in sync with the renderModelsCard helper in
-// CompanionSettingsScreen.tsx (same provider list).
-const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm']);
+const PROVIDERS_CURATED = [
+  { id: '',              label: '— Choose a provider —' },
+  { id: 'anthropic',     label: '🅰️  Anthropic',     keyEnv: 'ANTHROPIC_API_KEY',  placeholder: 'claude-opus-4-8' },
+  { id: 'openai',        label: '🅾️  OpenAI',        keyEnv: 'OPENAI_API_KEY',     placeholder: 'gpt-5.5' },
+  { id: 'google',        label: '🇬  Google',         keyEnv: 'GOOGLE_API_KEY',     placeholder: 'gemini-2.5-pro' },
+  { id: 'minimax',       label: '🐱  MiniMax',        keyEnv: 'MINIMAX_API_KEY',    placeholder: 'MiniMax-M3' },
+  { id: 'openrouter',    label: '🌐  OpenRouter',     keyEnv: 'OPENROUTER_API_KEY', placeholder: 'anthropic/claude-sonnet-4-6' },
+  { id: 'mistral',       label: '🌫️  Mistral',        keyEnv: 'MISTRAL_API_KEY',    placeholder: 'mistral-large-latest' },
+  { id: 'groq',          label: '⚡  Groq',           keyEnv: 'GROQ_API_KEY',       placeholder: 'llama-3.3-70b-versatile' },
+  { id: 'custom',        label: '🛠️  Custom',         keyEnv: '',                   placeholder: 'my-model-id' },
+];
+// v3.10.192: local provider list (self-hosted / private
+// runtimes). Kept here because the local-model UX is
+// fundamentally different from cloud providers — it
+// needs an endpoint picker, not an API key field.
+const PROVIDERS_LOCAL = [
+  { id: '',          label: '— Choose a local runtime —' },
+  { id: 'ollama',    label: '🦙 Ollama',     placeholder: 'llama3' },
+  { id: 'lmstudio',  label: '🎛️ LM Studio',   placeholder: 'local-model' },
+  { id: 'llamacpp',  label: '⚙️ llama.cpp',   placeholder: 'local-model' },
+  { id: 'vllm',      label: '🚀 vLLM',       placeholder: 'local-model' },
+];
+// v3.10.192: kept for backward-compat with the
+// Models card's local-dot rendering in
+// CompanionSettingsScreen. isLocalModel() is still
+// imported by that screen.
+const LOCAL_PROVIDER_IDS = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm']);
 function isLocalModel(modelStr: string): boolean {
   if (!modelStr) return false;
   const idx = modelStr.indexOf('/');
   if (idx < 0) return false;
-  return LOCAL_PROVIDERS.has(modelStr.slice(0, idx).toLowerCase());
+  return LOCAL_PROVIDER_IDS.has(modelStr.slice(0, idx).toLowerCase());
 }
 
 // v3.10.187: arena.html asset cache-buster for the Looks
@@ -208,6 +194,25 @@ function isLocalModel(modelStr: string): boolean {
 // from the previous APK. Increment this for any
 // arena.html change.
 const LOOKS_ARENA_HTML_VERSION = '3.10.187';
+
+// v3.10.192: wire-format helpers. The mobile stores
+// the model as separate provider + modelId state, but
+// the desktop sprite_config_sync whitelist accepts a
+// single `primaryModel` string of the form
+// `provider/model`. These helpers bridge the two.
+function splitModelRef(modelStr: string): { provider: string; modelId: string } {
+  if (!modelStr) return { provider: '', modelId: '' };
+  const idx = modelStr.indexOf('/');
+  if (idx < 0) return { provider: '', modelId: modelStr };
+  return { provider: modelStr.slice(0, idx), modelId: modelStr.slice(idx + 1) };
+}
+function composeModelRef(provider: string, modelId: string): string {
+  const p = (provider || '').trim();
+  const m = (modelId || '').trim();
+  if (!m) return '';
+  if (!p) return m; // bare id (no provider) — let the desktop fall through to its default
+  return p + '/' + m;
+}
 
 // v3.10.94: model list removed from the mobile (Tobe:
 // "We can remove LLM options on the mobile end, that
@@ -264,15 +269,36 @@ export default function CompanionEditScreen({
   // v3.10.92: chattiness is the headline new feature. Default
   // 3 if the companion has no value yet (legacy companion).
   const [chattiness, setChattiness] = useState<number>(3);
-  // v3.10.191: model selection state. Both are stored
-  // as raw "provider/model" strings (e.g.
-  // "anthropic/claude-opus-4-6", "ollama/llama3") so
-  // they round-trip cleanly with the desktop's
-  // sprite_config_sync handler (no transformation
-  // needed on either end). Empty string = not
-  // configured (the desktop's default falls through).
-  const [primaryModel, setPrimaryModel] = useState<string>('');
-  const [secondaryModel, setSecondaryModel] = useState<string>('');
+  // v3.10.192: model selection state. Tobe 2026-09-07
+  // follow-up: "remove fallbacks and update the
+  // catalog, and make it easy for the user so it just
+  // needs to select a provider and then their keys or
+  // similar ... add a generic input also?"
+  //
+  // New state model:
+  //   primaryProvider     — the chosen provider id (e.g.
+  //     'anthropic', 'openai', 'minimax', 'ollama',
+  //     'custom'). Drives the wire prefix
+  //     `provider/` and the API key field.
+  //   primaryModelId      — the model id part
+  //     (e.g. 'claude-opus-4-8', 'gpt-5.5',
+  //     'MiniMax-M3'). Free-text, no catalog
+  //     restriction. Combined with primaryProvider
+  //     on save, it forms the wire value
+  //     `primaryProvider/primaryModelId`.
+  //   primaryApiKey       — the API key the user
+  //     pasted. Sent to the desktop's
+  //     providers:save IPC on save (which writes
+  //     providers.json). Same as the desktop forge's
+  //     key flow.
+  // The secondaryModel state is dropped — Tobe
+  // wants no fallback dropdown. The wire field
+  // secondaryModel is still in the sprite_config_sync
+  // whitelist for backward-compat with existing
+  // sprites.json entries, but we never write it.
+  const [primaryProvider, setPrimaryProvider] = useState<string>('');
+  const [primaryModelId, setPrimaryModelId] = useState<string>('');
+  const [primaryApiKey, setPrimaryApiKey] = useState<string>('');
   // v3.10.185: no more Save button — edits apply instantly
   // to local state, persist to AsyncStorage on every change,
   // and ship to the desktop on unmount (back tap / swipe /
@@ -288,12 +314,13 @@ export default function CompanionEditScreen({
   const pixelCompanionIdRef = useRef<string>('boar');
   const traitsRef = useRef<Set<string>>(new Set());
   const chattinessRef = useRef<number>(3);
-  // v3.10.191: model selection refs. Mirror the
+  // v3.10.192: model selection refs. Mirror the
   // useState values so the unmount cleanup can read
   // the freshest strings without re-running on every
   // dropdown change.
-  const primaryModelRef = useRef<string>('');
-  const secondaryModelRef = useRef<string>('');
+  const primaryProviderRef = useRef<string>('');
+  const primaryModelIdRef = useRef<string>('');
+  const primaryApiKeyRef = useRef<string>('');
   // Guard so we only auto-save to the desktop once per
   // mount. Subsequent state changes inside the same mount
   // only persist locally (no desktop spam).
@@ -335,9 +362,10 @@ export default function CompanionEditScreen({
   useEffect(() => { pixelCompanionIdRef.current = pixelCompanionId; }, [pixelCompanionId]);
   useEffect(() => { traitsRef.current = traits; }, [traits]);
   useEffect(() => { chattinessRef.current = chattiness; }, [chattiness]);
-  // v3.10.191: model selection refs mirror state.
-  useEffect(() => { primaryModelRef.current = primaryModel; }, [primaryModel]);
-  useEffect(() => { secondaryModelRef.current = secondaryModel; }, [secondaryModel]);
+  // v3.10.192: model selection refs mirror state.
+  useEffect(() => { primaryProviderRef.current = primaryProvider; }, [primaryProvider]);
+  useEffect(() => { primaryModelIdRef.current = primaryModelId; }, [primaryModelId]);
+  useEffect(() => { primaryApiKeyRef.current = primaryApiKey; }, [primaryApiKey]);
 
   // v3.10.187: live preview scale update. When the user
   // drags the scale slider in the Looks editor, push
@@ -444,19 +472,25 @@ export default function CompanionEditScreen({
   // before the desktop even sees the change.
   useEffect(() => {
     if (!hydrated) return; // wait until the hydrate useEffect finished
+    // v3.10.192: build the wire primaryModel from
+    // provider + modelId. Same wire format the desktop
+    // forge uses. Empty modelId → empty primaryModel
+    // (the desktop falls through to its default).
+    const composedPrimary = composeModelRef(primaryProviderRef.current, primaryModelIdRef.current);
     const patch = {
       customName: (nameRef.current || '').trim() || undefined,
       scale: Math.max(1, Math.min(8, scaleRef.current)),
       pixelCompanionId: pixelCompanionIdRef.current,
       traits: Array.from(traitsRef.current),
       chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
-      // v3.10.191: model selection in the local
-      // patch. Persisted to AsyncStorage on every
-      // change so the offline fallback path
-      // (AsyncStorage read in the hydrate effect)
-      // restores them on remount.
-      primaryModel: primaryModelRef.current,
-      secondaryModel: secondaryModelRef.current,
+      // v3.10.192: model selection in the local patch.
+      // Persisted to AsyncStorage on every change so the
+      // offline fallback path restores them on remount.
+      // secondaryModel is intentionally omitted — Tobe
+      // removed the fallback dropdown.
+      primaryModel: composedPrimary,
+      primaryProvider: primaryProviderRef.current,
+      primaryModelId: primaryModelIdRef.current,
     };
     // 1) Local per-companion cache (offline-safe + instant remount).
     AsyncStorage.setItem(
@@ -479,20 +513,19 @@ export default function CompanionEditScreen({
           chattiness: patch.chattiness,
           ...(patch.customName ? { name: patch.customName } : {}),
         });
-        // v3.10.191: also patch the spriteConfig
-        // model fields so the Models card on the
+        // v3.10.192: also patch the spriteConfig
+        // primaryModel so the Models card on the
         // parent screen reflects the change without
         // waiting for the desktop broadcast.
         if (list[idx].spriteConfig) {
           list[idx].spriteConfig = Object.assign({}, list[idx].spriteConfig, {
             primaryModel: patch.primaryModel,
-            secondaryModel: patch.secondaryModel,
           });
         }
         AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(list)).catch(() => {});
       } catch (_) { /* best-effort cache patch */ }
     }).catch(() => {});
-  }, [hydrated, name, scale, pixelCompanionId, traits, chattiness, primaryModel, secondaryModel, companionId]);
+  }, [hydrated, name, scale, pixelCompanionId, traits, chattiness, primaryProvider, primaryModelId, companionId]);
 
   // v3.10.92: hydrate from the local AsyncStorage cache
   // AND the latest agents_list broadcast. The cache is the
@@ -554,17 +587,21 @@ export default function CompanionEditScreen({
           if (typeof spriteConfig.customName === 'string' && spriteConfig.customName) {
             setName(spriteConfig.customName);
           }
-          // v3.10.191: hydrate model selection from the
-          // agents_list broadcast. primaryModel /
-          // secondaryModel are the desktop forge's
-          // canonical field names (see desktop
-          // sprite_config_sync ALLOWED whitelist).
-          if (typeof spriteConfig.primaryModel === 'string') {
-            setPrimaryModel(spriteConfig.primaryModel);
+          // v3.10.192: hydrate model selection from the
+          // agents_list broadcast. The desktop forge's
+          // sprite_config_sync writes the wire value
+          // `provider/model` as primaryModel. Split it
+          // into provider + model id for the new panel.
+          if (typeof spriteConfig.primaryModel === 'string' && spriteConfig.primaryModel) {
+            const { provider, modelId } = splitModelRef(spriteConfig.primaryModel);
+            setPrimaryProvider(provider);
+            setPrimaryModelId(modelId);
           }
-          if (typeof spriteConfig.secondaryModel === 'string') {
-            setSecondaryModel(spriteConfig.secondaryModel);
-          }
+          // v3.10.192: ignore any stale secondaryModel —
+          // we never write it and never display it.
+          // Kept here only as a comment so the
+          // sprite_config_sync ALLOWED-whitelist behavior
+          // is documented.
         } else {
           // v3.10.92: fallback for older broadcasts that
           // don't have spriteConfig. The local cache is
@@ -580,11 +617,14 @@ export default function CompanionEditScreen({
             if (typeof local.chattiness === 'number') setChattiness(local.chattiness);
             if (typeof local.customName === 'string' && local.customName) setName(local.customName);
             if (typeof local.pixelCompanionId === 'string' && local.pixelCompanionId) setPixelCompanionId(local.pixelCompanionId);
-            // v3.10.191: model selection fallback from
-            // the local cache. Same pattern as the
-            // sprite / chattiness / trait fields above.
-            if (typeof local.primaryModel === 'string') setPrimaryModel(local.primaryModel);
-            if (typeof local.secondaryModel === 'string') setSecondaryModel(local.secondaryModel);
+            // v3.10.192: model selection fallback from
+            // the local cache. Split the wire value into
+            // provider + model id for the new panel.
+            if (typeof local.primaryModel === 'string' && local.primaryModel) {
+              const { provider, modelId } = splitModelRef(local.primaryModel);
+              setPrimaryProvider(provider);
+              setPrimaryModelId(modelId);
+            }
           }
         }
         setHydrated(true);
@@ -708,11 +748,11 @@ export default function CompanionEditScreen({
         // open (e.g. via the desktop forge), the
         // pickers update in place so the user sees
         // the current state, not the stale one.
-        if (typeof spriteConfig.primaryModel === 'string') {
-          setPrimaryModel(spriteConfig.primaryModel);
-        }
-        if (typeof spriteConfig.secondaryModel === 'string') {
-          setSecondaryModel(spriteConfig.secondaryModel);
+        // v3.10.192: split provider + model id.
+        if (typeof spriteConfig.primaryModel === 'string' && spriteConfig.primaryModel) {
+          const { provider, modelId } = splitModelRef(spriteConfig.primaryModel);
+          setPrimaryProvider(provider);
+          setPrimaryModelId(modelId);
         }
       }
     };
@@ -850,16 +890,29 @@ export default function CompanionEditScreen({
         pixelCompanionId: pixelCompanionIdRef.current,
         traits: Array.from(traitsRef.current),
         chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
-        // v3.10.191: model fields. Sent to the
-        // desktop on unmount so the LLM pickers'
-        // values reach the sprite_config_sync
-        // handler. Empty string clears the field on
-        // the desktop (the field becomes undefined
-        // via the desktop's sprite_config_sync
-        // handler's behavior).
-        primaryModel: primaryModelRef.current || undefined,
-        secondaryModel: secondaryModelRef.current || undefined,
+        // v3.10.192: model field. Composed from the
+        // new provider + modelId inputs as a single
+        // wire string (`provider/model`). The desktop
+        // writes this verbatim into sprites.json +
+        // merges into the agent's primaryModel.
+        // secondaryModel is intentionally omitted —
+        // Tobe removed the fallback dropdown.
+        primaryModel: composeModelRef(primaryProviderRef.current, primaryModelIdRef.current) || undefined,
       };
+      // v3.10.192: if the user pasted an API key
+      // (and it's not the masked placeholder),
+      // ship it to the desktop on unmount so the
+      // desktop's providers.json registry stays
+      // in sync with the mobile. The desktop
+      // already has a providers:save IPC handler.
+      const apiKey = (primaryApiKeyRef.current || '').trim();
+      if (apiKey && apiKey !== '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' && primaryProviderRef.current && primaryProviderRef.current !== 'custom') {
+        try {
+          syncClient.sendProviderKey(primaryProviderRef.current, apiKey);
+        } catch (e: any) {
+          console.warn('[CompanionEdit] provider key send failed:', e?.message);
+        }
+      }
       try {
         syncClient.setSpriteConfig(companionId, patch);
         autoSavedRef.current = true;
@@ -1095,216 +1148,188 @@ export default function CompanionEditScreen({
         {/* === MODELS mode === */}
         {mode === 'models' ? (
           <>
-            <Text style={styles.groupLabel}>🧠 MODELS</Text>
+            <Text style={styles.groupLabel}>🧠 MODEL</Text>
 
-            {/* v3.10.191: model picker section. Lists
-                the desktop forge's whitelisted providers
-                (Anthropic, OpenAI, Google, Local) in
-                their own sub-sections so the user can
-                scan by provider, not by individual
-                model id. Tobe: "import that setup" (the
-                desktop forge's optgroup-based <select>
-                dropdown). The mobile's <Picker>
-                renders the same optgroup structure.
+            {/* v3.10.192: provider-first model picker.
+                Replaces the v3.10.191 catalog-based
+                pickers (Anthropic / OpenAI / Google /
+                Local groups with hardcoded model
+                lists). Tobe 2026-09-07: "the catalog
+                is not up to date. There have been
+                several releases lately. ... Could we
+                add a generic input also? Where the
+                user can input Whatever he has?"
 
-                The pickers are disabled until the
-                hydrate completes (same pattern as the
-                Looks editor's sprite dropdown), so the
-                user doesn't fight the local cache during
-                the brief render window before the
-                desktop broadcast lands. */}
-            <Section title="🧠 Primary model">
+                New flow:
+                1. Pick a provider from the curated
+                   list (Anthropic / OpenAI / Google /
+                   MiniMax / OpenRouter / Mistral /
+                   Groq / Custom).
+                2. Paste an API key (optional —
+                   gateway uses the env-var fallback
+                   if blank).
+                3. Type any model id. No catalog
+                   restriction. Wire value is
+                   `provider/model`.
+
+                The Secondary / fallback picker is
+                gone — Tobe 2026-09-07: "remove
+                fallbacks". The local-runtimes section
+                is preserved (Ollama / LM Studio /
+                llama.cpp / vLLM) because the
+                self-hosted case has different UX
+                (endpoint picker instead of API key). */}
+
+            {/* Row 1: provider picker */}
+            <Section title="🌐 Provider">
               <Text style={styles.sectionHint}>
-                The main LLM this companion talks to. Defaults to the desktop default if empty.
+                Pick a provider. Drives the wire prefix and which API key env var applies.
               </Text>
               <View style={styles.pickerWrap}>
                 <Picker
-                  selectedValue={primaryModel || MODEL_DEFAULT_NONE}
+                  selectedValue={primaryProvider}
                   onValueChange={(v: string | number) => {
                     const s = String(v);
-                    setPrimaryModel(s === MODEL_DEFAULT_NONE ? '' : s);
+                    setPrimaryProvider(s);
+                    // When switching providers, clear
+                    // the model id (the user almost
+                    // certainly wants to pick a
+                    // different model). Keep the api
+                    // key (different providers can
+                    // share keys in theory, but it's
+                    // safer to clear it too — the
+                    // user can re-paste).
+                    if (s !== primaryProvider) {
+                      setPrimaryModelId('');
+                    }
                   }}
                   enabled={hydrated}
                   style={styles.picker}
                   itemStyle={styles.pickerItem}
                   dropdownIconColor="#f7931a"
                 >
-                  <Picker.Item label="(Default — use desktop default)" value={MODEL_DEFAULT_NONE} />
-                  {/* Anthropic optgroup — mirrors the
-                      desktop forge's <optgroup label="Anthropic">. */}
-                  <Picker.Item label="── Anthropic ──" value="__sep_anthropic__" enabled={false} />
-                  {MODELS_BY_PROVIDER.anthropic.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  {/* OpenAI */}
-                  <Picker.Item label="── OpenAI ──" value="__sep_openai__" enabled={false} />
-                  {MODELS_BY_PROVIDER.openai.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  {/* Google */}
-                  <Picker.Item label="── Google ──" value="__sep_google__" enabled={false} />
-                  {MODELS_BY_PROVIDER.google.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  {PROVIDERS_CURATED.map((p) => (
+                    <Picker.Item key={p.id || '__sep__'} label={p.label} value={p.id} />
                   ))}
                 </Picker>
               </View>
+              {/* Hint about which env var applies. */}
+              {primaryProvider && primaryProvider !== 'custom' ? (
+                (() => {
+                  const meta = PROVIDERS_CURATED.find((p) => p.id === primaryProvider);
+                  return meta?.keyEnv ? (
+                    <Text style={styles.sectionHint}>
+                      💡 Or set <Text style={styles.codeInline}>{meta.keyEnv}</Text> in your desktop's environment.
+                    </Text>
+                  ) : null;
+                })()
+              ) : null}
             </Section>
 
-            <Section title="🔁 Secondary model">
+            {/* Row 2: API key field (cloud providers only).
+                For local providers this row is hidden. */}
+            {primaryProvider && !LOCAL_PROVIDER_IDS.has(primaryProvider) && primaryProvider !== '' ? (
+              <Section title="🔑 API key">
+                <Text style={styles.sectionHint}>
+                  Paste your key. Sent to the desktop on save so this provider is available to all companions.
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  value={primaryApiKey}
+                  onChangeText={setPrimaryApiKey}
+                  placeholder="paste your API key"
+                  placeholderTextColor="#666"
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  editable={hydrated}
+                />
+              </Section>
+            ) : null}
+
+            {/* Row 3: free-text model input. No catalog
+                restriction. The placeholder updates
+                based on the chosen provider so the
+                user sees a sensible hint, but they can
+                type anything. */}
+            <Section title="🧠 Model">
               <Text style={styles.sectionHint}>
-                The fallback used when the primary is down or context-overflows. Leave on None to disable.
+                Type any model id your provider supports. The wire value is <Text style={styles.codeInline}>{primaryProvider || 'provider'}/{'{model-id}'}</Text>.
               </Text>
-              <View style={styles.pickerWrap}>
-                <Picker
-                  selectedValue={secondaryModel || MODEL_DEFAULT_NONE}
-                  onValueChange={(v: string | number) => {
-                    const s = String(v);
-                    setSecondaryModel(s === MODEL_DEFAULT_NONE ? '' : s);
-                  }}
-                  enabled={hydrated}
-                  style={styles.picker}
-                  itemStyle={styles.pickerItem}
-                  dropdownIconColor="#f7931a"
-                >
-                  <Picker.Item label="(None — no fallback)" value={MODEL_DEFAULT_NONE} />
-                  <Picker.Item label="── Anthropic ──" value="__sep_anthropic__" enabled={false} />
-                  {MODELS_BY_PROVIDER.anthropic.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── OpenAI ──" value="__sep_openai__" enabled={false} />
-                  {MODELS_BY_PROVIDER.openai.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── Google ──" value="__sep_google__" enabled={false} />
-                  {MODELS_BY_PROVIDER.google.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                </Picker>
-              </View>
+              <TextInput
+                style={styles.input}
+                value={primaryModelId}
+                onChangeText={setPrimaryModelId}
+                placeholder={(() => {
+                  if (primaryProvider === 'custom') return 'my-model-id';
+                  const meta = PROVIDERS_CURATED.find((p) => p.id === primaryProvider);
+                  return meta?.placeholder || 'model-id';
+                })()}
+                placeholderTextColor="#666"
+                autoCapitalize="none"
+                autoCorrect={false}
+                spellCheck={false}
+                editable={hydrated}
+              />
+              {/* Inline summary of the composed wire value */}
+              {primaryProvider && primaryModelId ? (
+                <Text style={styles.sectionHint}>
+                  → Saves as: <Text style={styles.codeInline}>{composeModelRef(primaryProvider, primaryModelId)}</Text>
+                </Text>
+              ) : null}
             </Section>
 
-            {/* v3.10.191: LOCAL MODELS section. Tobe's
-                2026-09-07 "Create a separation for
-                local models also" — visual separation
-                so the user immediately understands
-                that local/self-hosted models are a
-                different beast from the cloud
-                providers. The header has a distinct
-                purple tint (not orange) so it reads
-                as a different category, and the
-                description explicitly calls out the
-                requirements (Ollama / LM Studio
-                running locally, etc.).
-
-                The local model list below mirrors
-                what the desktop forge ships. The
-                desktop's llm.ollama.resolveLocal IPC
-                handler probes the configured baseUrl
-                to determine whether the model is
-                reachable. The mobile doesn't probe
-                directly (it would need the same
-                localhost endpoint reachability, which
-                Android won't allow without a
-                permission grant); the desktop
-                broadcasts the status via llm_status
-                and the user can verify connectivity
-                there. We surface a small hint about
-                that. */}
+            {/* v3.10.192: LOCAL MODELS section. Preserved
+                from v3.10.191 because local runtimes
+                have a fundamentally different UX (need
+                an endpoint, not an API key). Visual
+                separation: purple divider + a local
+                provider sub-picker that swaps the
+                primaryProvider to a local runtime.
+                Tobe's "Create a separation for local
+                models also" — still honored, just
+                with the new provider-first shape. */}
             <View style={styles.localModelsHeader}>
               <Text style={styles.localModelsHeaderText}>
                 💻 LOCAL MODELS
               </Text>
               <Text style={styles.localModelsHeaderSub}>
-                Self-hosted / private. Runs on your machine — private, offline-safe, free.
+                Self-hosted / private. Runs on your machine — private, offline-safe, free. Configure endpoints on the desktop (Settings → LLM Endpoints).
               </Text>
             </View>
 
-            <Section title="🖥️ Local primary">
+            <Section title="🖥️ Local runtime">
               <Text style={styles.sectionHint}>
-                Ollama, LM Studio, llama.cpp, vLLM. Requires the runtime to be running on your desktop.
+                Pick a local runtime. Switches the provider above to a local one and types the model id for you.
               </Text>
               <View style={styles.pickerWrap}>
                 <Picker
-                  selectedValue={primaryModel && isLocalModel(primaryModel) ? primaryModel : MODEL_DEFAULT_NONE}
+                  selectedValue={LOCAL_PROVIDER_IDS.has(primaryProvider) ? primaryProvider : ''}
                   onValueChange={(v: string | number) => {
                     const s = String(v);
-                    if (s === MODEL_DEFAULT_NONE) return; // local-primary is just a display; can't unset
-                    setPrimaryModel(s);
+                    if (!s) return;
+                    setPrimaryProvider(s);
+                    const meta = PROVIDERS_LOCAL.find((p) => p.id === s);
+                    if (meta?.placeholder && !primaryModelId) {
+                      setPrimaryModelId(meta.placeholder);
+                    }
                   }}
                   enabled={hydrated}
                   style={styles.picker}
                   itemStyle={styles.pickerItem}
                   dropdownIconColor="#a855f7"
                 >
-                  <Picker.Item label="(Using cloud primary above)" value={MODEL_DEFAULT_NONE} />
-                  <Picker.Item label="── Ollama ──" value="__sep_ollama__" enabled={false} />
-                  {MODELS_BY_PROVIDER.ollama.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── LM Studio ──" value="__sep_lmstudio__" enabled={false} />
-                  {MODELS_BY_PROVIDER.lmstudio.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── llama.cpp ──" value="__sep_llamacpp__" enabled={false} />
-                  {MODELS_BY_PROVIDER.llamacpp.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── vLLM ──" value="__sep_vllm__" enabled={false} />
-                  {MODELS_BY_PROVIDER.vllm.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
+                  {PROVIDERS_LOCAL.map((p) => (
+                    <Picker.Item key={p.id || '__sep__'} label={p.label} value={p.id} />
                   ))}
                 </Picker>
               </View>
             </Section>
 
-            <Section title="🖥️ Local secondary">
-              <Text style={styles.sectionHint}>
-                Same local runtimes as above. Optional second-chance fallback.
-              </Text>
-              <View style={styles.pickerWrap}>
-                <Picker
-                  selectedValue={secondaryModel && isLocalModel(secondaryModel) ? secondaryModel : MODEL_DEFAULT_NONE}
-                  onValueChange={(v: string | number) => {
-                    const s = String(v);
-                    if (s === MODEL_DEFAULT_NONE) return;
-                    setSecondaryModel(s);
-                  }}
-                  enabled={hydrated}
-                  style={styles.picker}
-                  itemStyle={styles.pickerItem}
-                  dropdownIconColor="#a855f7"
-                >
-                  <Picker.Item label="(None)" value={MODEL_DEFAULT_NONE} />
-                  <Picker.Item label="── Ollama ──" value="__sep_ollama__" enabled={false} />
-                  {MODELS_BY_PROVIDER.ollama.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── LM Studio ──" value="__sep_lmstudio__" enabled={false} />
-                  {MODELS_BY_PROVIDER.lmstudio.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── llama.cpp ──" value="__sep_llamacpp__" enabled={false} />
-                  {MODELS_BY_PROVIDER.llamacpp.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                  <Picker.Item label="── vLLM ──" value="__sep_vllm__" enabled={false} />
-                  {MODELS_BY_PROVIDER.vllm.map((m) => (
-                    <Picker.Item key={m.value} label={m.label} value={m.value} />
-                  ))}
-                </Picker>
-              </View>
-            </Section>
-
-            {/* v3.10.191: status / setup hint for local
-                models. Tells the user where to go on
-                the desktop to configure the local
-                runtime's baseUrl + verify
-                reachability, since the mobile can't
-                probe localhost directly on Android
-                without a permission grant. */}
             <View style={styles.localHint}>
               <Text style={styles.localHintText}>
-                💡 Setup the local runtime on the desktop's Settings → LLM Endpoints. The 🧠 LLM pill in the header shows whether each model is reachable.
+                💡 Setup the local runtime on the desktop's Settings → LLM Endpoints. The 🧠 LLM pill in the desktop header shows whether each model is reachable.
               </Text>
             </View>
           </>
@@ -1476,6 +1501,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#888',
     marginBottom: 8,
+  },
+  // v3.10.192: inline code chip for showing
+  // composed wire values (e.g. `anthropic/
+  // claude-opus-4-8`) in section hints. Same
+  // monospace + tinted look as the Quests page's
+  // path display, so the visual cue is consistent.
+  codeInline: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 11,
+    color: '#f7931a',
+    backgroundColor: 'rgba(247, 147, 26, 0.08)',
+    paddingHorizontal: 4,
+    borderRadius: 3,
   },
   input: {
     backgroundColor: '#0a0a1a',

@@ -653,6 +653,32 @@ class SyncClient {
     this.send({ type: 'sprite_config_sync', agentId, config: patch });
   }
 
+  // v3.10.192: send an API key for a provider to the
+  // desktop. The desktop's sync-server forwards to its
+  // existing providers:save IPC, which writes to
+  // ~/.openclaw/cyberclaw/providers.json. The mobile
+  // uses this to keep the desktop's provider registry
+  // in sync when the user pastes a key in the
+  // CompanionEditScreen Models panel.
+  //
+  // Wire shape mirrors the desktop IPC:
+  //   { type: 'provider_save', provider: { id, name,
+  //     baseUrl, apiKey, defaultModel?, api? } }
+  // The desktop IPC sanitizes + auto-generates id from
+  // name if missing.
+  sendProviderKey(providerId: string, apiKey: string, extras?: { baseUrl?: string; defaultModel?: string }) {
+    if (!providerId || !apiKey) return;
+    const provider = {
+      id: providerId,
+      name: providerId.charAt(0).toUpperCase() + providerId.slice(1),
+      apiKey,
+      baseUrl: extras?.baseUrl || '',
+      defaultModel: extras?.defaultModel || '',
+      api: 'openai-completions',
+    };
+    this.send({ type: 'provider_save', provider });
+  }
+
   // v3.2.5: kick off a custom openWakeWord training job on the
   // desktop. The desktop spawns the Python training script, streams
   // progress back via 'wake_training_progress' messages, and finally
