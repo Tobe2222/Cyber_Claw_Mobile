@@ -881,45 +881,37 @@ export default function QuestsScreen({
           </View>
         </View>
 
-        {/* v3.10.189: pill in the header row showing the
-            current active state at a glance.
-            - Green pill "✓ {active quest name}" when a quest
-              is active (so the user always knows which
-              quest is feeding context to the companion,
-              even before scrolling).
-            - Red pill "● No active quest" when nothing is
-              active. Tobe (2026-09-07): "add a no active
-              quest red pill in the top". The red pill
-              visually flags the "no quest" default state
-              without taking up vertical space below the
-              cards — the page already has the dashed
-              "No active quest" card under the list, but
-              that card can scroll off-screen on long
-              lists. The pill is sticky-ish (sits in the
-              header) and always visible.
-            Tapping the pill scrolls the user to the
-            relevant card (the active card or the
-            "No active quest" toggle). */}
+        {/* v3.10.190: status row under the header. Acts as
+            the page's "deactivate current quest" affordance.
+            - When a quest is active: a GREEN BUTTON labeled
+              "✓ {quest name}  ✕" that, when tapped, sends
+              set_quest_active(null) to the desktop. Replaces
+              the v3.10.189 green pill (which was just an info
+              chip — you had to scroll to find the dashed card
+              to deactivate). Now you can deactivate from the
+              top of the page in one tap. Tobe 2026-09-07:
+              "I dont need a pill for the active quest. I need
+              a button to deactivate current in the top, the
+              'pill'." The ✕ icon at the right edge of the
+              button makes the action obvious; tapping anywhere
+              on the button deactivates.
+            - When no quest is active: the red "● No active
+              quest" pill from v3.10.189 (kept — Tobe asked
+              for this and it's the right way to show the
+              default state). Static, non-tappable. */}
         <View style={styles.headerStatusRow}>
           {activeQuest ? (
             <TouchableOpacity
-              onPress={() => setDetail(activeQuest)}
+              onPress={() => handleSetActive(null)}
               style={[styles.headerStatusPill, styles.headerStatusPillActive]}
+              accessibilityLabel={`Deactivate quest ${activeQuest.name}`}
             >
               <Text style={styles.headerStatusPillActiveText} numberOfLines={1}>
                 ✓  {activeQuest.name}
               </Text>
+              <Text style={styles.headerStatusPillDeactivateIcon}>✕</Text>
             </TouchableOpacity>
           ) : (
-            // v3.10.189: red "No active quest" pill. Red
-            // (not orange) so it visually distinguishes
-            // from the gold/purple/orange active quest
-            // visual language — red is the "warning,
-            // no project context" signal. Same red
-            // family as the delete button and the error
-            // toast. Static View (not Touchable) — the
-            // pill is a status indicator, the dashed
-            // card below is the actual toggle.
             <View style={[styles.headerStatusPill, styles.headerStatusPillNoActive]}>
               <Text style={styles.headerStatusPillNoActiveText}>
                 ●  No active quest
@@ -959,73 +951,23 @@ export default function QuestsScreen({
                   ⏳ Syncing with desktop… (edit buttons will unlock when sync completes)
                 </Text>
               )}
-            {/* v3.10.82: "No active quest" card. Tobe's request
-                (2026-07-23): "Also add a default/no quest for
-                conversations not related to any of them."
-                Previously the only way to clear the active quest
-                was via the desktop UI; on the mobile, an active
-                quest stayed active forever once set, which meant
-                the agent kept getting quest context injected on
-                every chat reply even when the user wanted to
-                chat about something unrelated.
+            {/* v3.10.190: removed the dashed "No active quest"
+                card from the middle of the list. Tobe
+                (2026-09-07, follow-up to the red pill request):
+                "remove the superflous no active quest in the
+                middle of everything there." The deactivate
+                action lives in the green button at the top of
+                the page now (tap → set_quest_active(null)),
+                so the dashed card was redundant — two ways to
+                do the same thing in different parts of the
+                screen.
 
-                This card is the "default state" toggle. Tapping
-                it calls handleSetActive(null), which sends
-                `set_quest_active` with `id: null` to the desktop.
-                The desktop's onSetQuestActive handler already
-                supports empty/null ids (sets active: false on all
-                quests). The chat pipeline then stops injecting
-                quest context until another quest is set active.
-
-                v3.10.172: moved the card from the top of the
-                list to the middle — between the active quest
-                (top) and the remaining inactive quests (bottom).
-                Tobe's 2026-08-21 screenshot showed the active
-                quest sitting in the middle of the list, below
-                the "No active quest" header. He wanted the active
-                quest pinned at the very top. Now the visual order
-                is: [active quest] → [No active quest] → [other
-                quests]. The "No active quest" toggle is still
-                always visible (just one tap below the active
-                quest) so the user can still quickly switch back
-                to the default state without scrolling.
-
-                Visual: dashed border, lighter background, and a
-                ☆ icon that turns to ★ when "no quest" is the
-                current active state (matches the active-quest
-                visual language on the other cards). */}
+                List order now: [active quest pinned at top]
+                → [all other quests]. No middle card. Cleaner
+                visual hierarchy. The red "● No active quest"
+                pill in the header (when nothing is active)
+                still tells the user the default state. */}
             {activeQuest && renderQuestCard(activeQuest)}
-            <TouchableOpacity
-              style={[
-                styles.questCard,
-                styles.noQuestCard,
-                quests.every(q => !q.active) && styles.noQuestCardActive,
-              ]}
-              onPress={(e) => {
-                e?.stopPropagation?.();
-                if (!firstBroadcastReceived) return;
-                handleSetActive(null);
-              }}
-              disabled={!firstBroadcastReceived}
-            >
-              <View style={styles.questTopRow}>
-                <Text style={styles.questName}>💬  No active quest</Text>
-                <Text style={[styles.questPct, { fontSize: 16 }]}>
-                  {quests.every(q => !q.active) ? '★' : '☆'}
-                </Text>
-              </View>
-              <Text style={styles.noQuestCardDesc}>
-                Default state — chat without any quest context.
-                Use this for conversations that aren't about any
-                specific project. Tap to clear the active quest.
-              </Text>
-              {quests.some(q => q.active) && (
-                <Text style={styles.noQuestCardHint}>
-                  ⏵ Tap to deactivate “{quests.find(q => q.active)?.name}”
-                </Text>
-              )}
-            </TouchableOpacity>
-
             {remainingQuests.map((q) => renderQuestCard(q))}
             </React.Fragment>
           )}
@@ -2211,19 +2153,27 @@ const styles = StyleSheet.create({
   // chip with a thin border, soft tint, and tight
   // padding so it doesn't shout. Sized to fit its
   // content (no flex on the pill itself) but the
-  // row above centers it.
+  // row above centers it. v3.10.190: now uses
+  // flexDirection: 'row' + alignItems: 'center' + gap
+  // so the quest name and the ✕ deactivate icon sit
+  // side-by-side when the pill is acting as a button.
   headerStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 14,
     borderWidth: 1,
-    maxWidth: '90%',
+    maxWidth: '92%',
+    gap: 8,
   },
   // v3.10.189: green active-state pill. Mirrors the
   // green used by the "Active" button on the quest
   // cards and the ✓ Active text on the in-card
   // set-active button — so all three "this quest is
   // active" signals stay consistent across the page.
+  // v3.10.190: now a TouchableOpacity (button) that
+  // deactivates the current quest on tap.
   headerStatusPillActive: {
     backgroundColor: 'rgba(16, 185, 129, 0.14)',
     borderColor: 'rgba(16, 185, 129, 0.55)',
@@ -2233,6 +2183,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     letterSpacing: 0.3,
+    flexShrink: 1,
+  },
+  // v3.10.190: ✕ icon at the right edge of the green
+  // button. Slightly faded green so it reads as
+  // "close/remove" without dominating the quest name.
+  headerStatusPillDeactivateIcon: {
+    color: 'rgba(16, 185, 129, 0.75)',
+    fontSize: 14,
+    fontWeight: '700',
+    marginLeft: 2,
   },
   // v3.10.189: red "no active quest" pill. Tobe's
   // 2026-09-07 request. Red is intentionally
@@ -2269,41 +2229,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginVertical: 5,
   },
-  // v3.10.82: "No active quest" card. Dashed border to
-  // visually distinguish it from real quests (which have
-  // solid colored borders). Lighter background so it
-  // doesn't compete with the real quests below. When this
-  // is the active state, swap to a soft gold border +
-  // bright star icon, matching the active-quest visual
-  // language on regular cards.
-  noQuestCard: {
-    backgroundColor: '#0a0e1a',
-    borderColor: '#3a3f55',
-    borderStyle: 'dashed',
-    borderWidth: 1.5,
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginVertical: 6,
-  },
-  noQuestCardActive: {
-    borderColor: '#f7931a',
-    borderStyle: 'solid',
-    borderWidth: 2,
-    backgroundColor: '#1a1408',
-  },
-  noQuestCardDesc: {
-    color: '#7a809a',
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 4,
-  },
-  noQuestCardHint: {
-    color: '#f7931a',
-    fontSize: 11,
-    marginTop: 6,
-    fontStyle: 'italic',
-  },
+  // v3.10.190: removed `noQuestCard`, `noQuestCardActive`,
+  // `noQuestCardDesc`, `noQuestCardHint` — the dashed
+  // "No active quest" card in the middle of the list was
+  // removed (the green button at the top now serves as
+  // the deactivate action, and the red pill in the header
+  // shows the no-active state). Dead styles.
   questTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
