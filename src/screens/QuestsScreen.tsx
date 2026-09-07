@@ -881,16 +881,61 @@ export default function QuestsScreen({
           </View>
         </View>
 
+        {/* v3.10.189: pill in the header row showing the
+            current active state at a glance.
+            - Green pill "✓ {active quest name}" when a quest
+              is active (so the user always knows which
+              quest is feeding context to the companion,
+              even before scrolling).
+            - Red pill "● No active quest" when nothing is
+              active. Tobe (2026-09-07): "add a no active
+              quest red pill in the top". The red pill
+              visually flags the "no quest" default state
+              without taking up vertical space below the
+              cards — the page already has the dashed
+              "No active quest" card under the list, but
+              that card can scroll off-screen on long
+              lists. The pill is sticky-ish (sits in the
+              header) and always visible.
+            Tapping the pill scrolls the user to the
+            relevant card (the active card or the
+            "No active quest" toggle). */}
+        <View style={styles.headerStatusRow}>
+          {activeQuest ? (
+            <TouchableOpacity
+              onPress={() => setDetail(activeQuest)}
+              style={[styles.headerStatusPill, styles.headerStatusPillActive]}
+            >
+              <Text style={styles.headerStatusPillActiveText} numberOfLines={1}>
+                ✓  {activeQuest.name}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            // v3.10.189: red "No active quest" pill. Red
+            // (not orange) so it visually distinguishes
+            // from the gold/purple/orange active quest
+            // visual language — red is the "warning,
+            // no project context" signal. Same red
+            // family as the delete button and the error
+            // toast. Static View (not Touchable) — the
+            // pill is a status indicator, the dashed
+            // card below is the actual toggle.
+            <View style={[styles.headerStatusPill, styles.headerStatusPillNoActive]}>
+              <Text style={styles.headerStatusPillNoActiveText}>
+                ●  No active quest
+              </Text>
+            </View>
+          )}
+        </View>
+
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Quests</Text>
+          {/* v3.10.189: removed the redundant "Quests"
+              section title — the page header already
+              says 📜 Quests. Cuts a chunk of vertical
+              space before the first card. */}
           <Text style={styles.sectionDesc}>
-            Synced from the desktop's Quests panel. The active quest
-            (the one the companion is working on) is marked with a
-            ⚡ ACTIVE badge and a gold border. Tap the actions below a
-            card to set it active, edit it, or delete it. The phone
-            edits round-trip to the desktop in real-time.
+            Synced live from the desktop. Tap a card for details, long-press to copy its project path.
           </Text>
-          <Text style={styles.hint}>Tap a card for the full details. Long-press to copy the project path.</Text>
 
           {!hydrated ? (
             <View style={styles.emptyHintBox}>
@@ -2151,17 +2196,78 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'center',
   },
+  // v3.10.189: pill row directly below the header.
+  // Holds either the green "active quest name" pill or
+  // the red "No active quest" pill. Centered, with a
+  // bit of bottom margin so the cards sit cleanly below.
+  headerStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  // v3.10.189: shared pill base. Small, pill-shaped
+  // chip with a thin border, soft tint, and tight
+  // padding so it doesn't shout. Sized to fit its
+  // content (no flex on the pill itself) but the
+  // row above centers it.
+  headerStatusPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    maxWidth: '90%',
+  },
+  // v3.10.189: green active-state pill. Mirrors the
+  // green used by the "Active" button on the quest
+  // cards and the ✓ Active text on the in-card
+  // set-active button — so all three "this quest is
+  // active" signals stay consistent across the page.
+  headerStatusPillActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.14)',
+    borderColor: 'rgba(16, 185, 129, 0.55)',
+  },
+  headerStatusPillActiveText: {
+    color: '#10b981',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  // v3.10.189: red "no active quest" pill. Tobe's
+  // 2026-09-07 request. Red is intentionally
+  // distinct from the rest of the page's accent
+  // colors (orange / gold / purple / green) so it
+  // reads as a different signal — "no project
+  // context, conversations are off-quest." Same
+  // red family as the delete-confirm button and
+  // the error toast so the user has consistent
+  // "destructive / needs attention" visual cues.
+  headerStatusPillNoActive: {
+    backgroundColor: 'rgba(170, 68, 85, 0.16)',
+    borderColor: 'rgba(170, 68, 85, 0.7)',
+  },
+  headerStatusPillNoActiveText: {
+    color: '#f87171',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
   section: { marginBottom: 24 },
   sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
-  sectionDesc: { color: '#888', fontSize: 13, marginBottom: 16, lineHeight: 18 },
+  // v3.10.189: tighter description. Drops from 16 to 8
+  // marginBottom so the cards are higher up on first
+  // paint, and the line-height is shorter so the
+  // one-liner doesn't waste a vertical row.
+  sectionDesc: { color: '#888', fontSize: 12, marginBottom: 8, lineHeight: 16 },
   hint: { color: '#aaa', fontSize: 12, fontStyle: 'italic', marginBottom: 12 },
   questCard: {
     backgroundColor: '#0f1626',
     borderRadius: 12,
     borderWidth: 2,
-    paddingVertical: 12,
+    paddingVertical: 10,
     paddingHorizontal: 14,
-    marginVertical: 6,
+    marginVertical: 5,
   },
   // v3.10.82: "No active quest" card. Dashed border to
   // visually distinguish it from real quests (which have
