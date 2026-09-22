@@ -568,6 +568,32 @@ export function setArenaHiddenPersistent(v: boolean) { arenaHiddenPersistent = v
 
 type TabId = 'chat' | 'events' | 'log';
 
+// v3.11.0: per-quest chat bucketing. TypeScript's Record
+// keys must be `string | number | symbol` — `null` isn't
+// allowed as an indexer. We use a stable string sentinel
+// (`DEFAULT_QUEST_KEY`) for the "no quest / default chat"
+// bucket, and translate between `null` (the public API for
+// "no active quest") and the sentinel at every boundary:
+// the append helper, the view-sync effect, the hydrate /
+// persist effects, and the onScroll handler.
+//
+// Why a sentinel and not a Map: Map would work but rippling
+// the type change through every reader (migrations,
+// AsyncStorage, JSX inline lambdas) is more work than just
+// translating at the boundaries. The sentinel is invisible
+// outside of this file.
+const DEFAULT_QUEST_KEY = '__default__';
+// v3.11.0: stringify/parse helpers for the per-(agent,
+// quest) AsyncStorage keys. Kept module-scope so all
+// readers/writers agree on the encoding (and so a future
+// change to the sentinel is one-line).
+function questKeyForStorage(qid: string | null | undefined): string {
+  return qid == null ? DEFAULT_QUEST_KEY : qid;
+}
+function questKeyFromStorage(qid: string): string | null {
+  return qid === DEFAULT_QUEST_KEY ? null : qid;
+}
+
 // v3.1.17: per-companion chat helper. We use this in two ways:
 //   1. Append a freshly arrived message to a specific companion's
 //      history (server tells us which agent it belongs to).
@@ -588,17 +614,29 @@ function companionIconForActive(
 //   2. Update the `messages` view-state when the user switches
 //      companion tabs, so the FlatList re-renders.
 //
-// Both updates are batched into a single setMessagesByAgent call so
-// the agent's array never gets out of sync with the view.
+// Both updates are batched into a single setMessagesByAgentAndQuest
+// call so the (agent, quest) bucket never gets out of sync with
+// the view.
+//
+// v3.11.0: the per-agent chat is now a per-(agent, quest) map.
+// The `questId` parameter is the quest that was active when
+// the message was created — it's stamped onto the message via
+// the existing `msg.activeQuestId` field AND used to choose
+// which bucket to write into. `questId === null` means the
+// default no-quest / default-chat bucket.
 function appendAgentMessage(
   msg: ChatMessage,
   agentId: string,
-  setMessagesByAgent: React.Dispatch<React.SetStateAction<Record<string, ChatMessage[]>>>,
+  questId: string | null,
+  setMessagesByAgentAndQuest: React.Dispatch<React.SetStateAction<Record<string, Record<string, ChatMessage[]>>>>,
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
   activeAgentId: string | null,
+  activeQuestId: string | null | undefined,
 ) {
-  setMessagesByAgent(prev => {
-    const list = prev[agentId] || [];
+  setMessagesByAgentAndQuest(prev => {
+    const agentBuckets = prev[agentId] || {};
+    const bucketKey = questKeyForStorage(questId);
+    const list = agentBuckets[bucketKey] || [];
     // v3.10.17: expanded dedupe. Was (ts within 2s AND
     // same text). Tobe's v3.10.16 report: voice messages
     // appeared twice in chat — once as a local add and
@@ -726,9 +764,22 @@ function appendAgentMessage(
     )) {
       return prev;
     }
-    const next = { ...prev, [agentId]: [...list, msg] };
-    if (agentId === activeAgentId) {
-      setMessages(next[agentId]);
+    const next = {
+      ...prev,
+      [agentId]: {
+        ...agentBuckets,
+        [bucketKey]: [...list, msg],
+      },
+    };
+    // v3.11.0: only push to the visible chat if BOTH the
+    // agent AND the quest match the active ones. A message
+    // appended to a different quest's bucket (because the
+    // user just switched quests and an old quest's reply
+    // arrived late) must NOT clobber the visible chat —
+    // it'll appear next time the user switches back.
+    if (agentId === activeAgentId && activeQuestId !== undefined &&
+        (activeQuestId === null ? questId === null : activeQuestId === questId)) {
+      setMessages(next[agentId][bucketKey]);
     }
     return next;
   });
@@ -754,12 +805,33 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
   // its own chat history on the desktop that we mirror locally.
-  // `messages` above is a view of `messagesByAgent[activeChatAgentId]`.
+  // `messages` above is a view of
+  //   messagesByAgentAndQuest[activeChatAgentId][activeQuestIdOrNull]
+  // i.e. the active chat agent's bucket for the active quest (or the
+  // default/null-quest bucket when no quest is active).
+  //
+  // v3.11.0: per-quest buckets. Each (agent, quest) pair has its
+  // own message list. `null` quest = the "no quest / default chat"
+  // bucket — messages accumulate there when no quest is active.
+  // Old shape (v3.10.x) was Record<agentId, ChatMessage[]>. New
+  // shape is Record<agentId, Record<questId|null, ChatMessage[]>>.
+  // Migration is read-from-old-key / write-to-new-key on first
+  // launch with the new build — see the hydrate useEffect below.
   const [isThinking, setIsThinking] = useState(false);
-  const [messagesByAgent, setMessagesByAgent] = useState<Record<string, ChatMessage[]>>({});
+  const [messagesByAgentAndQuest, setMessagesByAgentAndQuest] = useState<Record<string, Record<string, ChatMessage[]>>>({});
   // v3.1.17: which companion's chat is currently shown. The
   // companion tab bar updates this when the user taps a tab.
   const [activeChatAgentId, setActiveChatAgentId] = useState<string | null>(null);
+
+  // v3.11.0: which quest's chat bucket is currently shown. Mirrors
+  // `activeQuestRef` into state so the per-quest effects below can
+  // subscribe to quest changes via React's dependency array (refs
+  // don't trigger re-renders). `undefined` = quests haven't loaded
+  // yet from the desktop (treat as default/null bucket for
+  // rendering; the append helper stamps the actual quest id on
+  // each message). `null` = no active quest — messages go to the
+  // default chat bucket. `string` = the active quest id.
+  const [activeChatQuestId, setActiveChatQuestId] = useState<string | null | undefined>(undefined);
 
   // v3.1.52: report the active chat companion back to App.tsx so
   // WakeModeScreen knows which companion to display. Fires on
@@ -964,14 +1036,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // change). If they were scrolled up, we restore the exact
   // offset so they land where they left off.
   const [chatScrollOffsetByAgent, setChatScrollOffsetByAgent] = useState<Record<string, number>>({});
+  // v3.11.0: same map, but the keys are now
+  //   `agentId::questId` (or `agentId::null` for the default
+  //   no-quest bucket). Per-agent-only offsets are preserved
+  //   as-is on first launch by the migrateOldScrollKey path in
+  //   the hydrate useEffect, then upgraded on first persist.
+  // The state type stays Record<string, number> so we don't
+  // ripple a new type through every reader.
   // v3.10.126: ref mirror so the debounced write can read the
   // latest offset without a stale-closure. Updated by the
   // scroll handler at every onScroll event.
   const chatScrollOffsetRef = useRef<Record<string, number>>({});
+  // v3.11.0: helper to build the per-(agent, quest) storage
+  // key for scroll offsets. Stable across re-renders so the
+  // onScroll handler (which is inline in JSX) can call it
+  // without a closure-stale issue.
+  //
+  // Module-scope (not a hook) so it's also reachable from
+  // the v3.11.0 quest-switch restore effect below without
+  // re-creating the helper on every render.
+  const chatScrollKey = (aid: string, qid: string | null) =>
+    `${aid}::${qid === null || qid === undefined ? 'null' : qid}`;
   // v3.10.126: which agent's offset to restore on first layout.
   // Captured at mount so a mid-flight agent switch doesn't
   // restore the wrong offset.
   const chatRestoreAgentRef = useRef<string | null>(null);
+  // v3.11.0: which quest id's offset was captured for the
+  // restore. Used together with chatRestoreAgentRef to detect
+  // when a quest switch has happened and a fresh restore is
+  // needed. null = no quest / default bucket. undefined is
+  // not used here (only the captured value lives here; the
+  // "quests not loaded yet" state lives in activeChatQuestId).
+  const chatRestoreQuestIdRef = useRef<string | null>(null);
   const chatRestoreOffsetRef = useRef<number | null>(null);
   // v3.10.178: gate the onLayout scroll-restore until the
   // AsyncStorage hydrate of `cyberclaw-chat-scroll-byagent`
@@ -1012,7 +1108,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // sync-event handlers (defined inside the main useEffect) can
   // read the latest values without a stale-closure bug.
   const activeChatAgentIdRef = useRef<string | null>(null);
-  const messagesByAgentRef = useRef<Record<string, ChatMessage[]>>({});
+  // v3.11.0: ref mirror of the per-(agent,quest) chat cache.
+  // Same shape as the state. Used by sync-event handlers and the
+  // append helper so they read the latest bucket without a stale
+  // closure over messagesByAgentAndQuest.
+  const messagesByAgentRef = useRef<Record<string, Record<string, ChatMessage[]>>>({});
   // v3.10.103: forward-declared ref to sendMessage so the
   // recent-pills long-press handler (defined inline in the
   // JSX) can call the latest sendMessage without re-rendering
@@ -1058,7 +1158,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // so the sync-event handlers in the main useEffect don't capture
   // stale values.
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
-  useEffect(() => { messagesByAgentRef.current = messagesByAgent; }, [messagesByAgent]);
+  useEffect(() => { messagesByAgentRef.current = messagesByAgentAndQuest; }, [messagesByAgentAndQuest]);
 
   // v3.10.85: snapshot of the active quest at any given moment.
   // Updated by a quests_list listener below (same broadcast
@@ -1120,6 +1220,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // which re-runs this effect, which calls setMessages
   // again with the same content. We use the ref to
   // read the latest bucket without subscribing.
+  //
+  // v3.11.0: also re-sync on quest change so switching
+  // quests swaps the FlatList's data to the new
+  // quest's bucket. Old code only re-synced on agent
+  // switch; quest switching left the previous quest's
+  // chat visible.
   useEffect(() => {
     if (activeChatAgentId == null) {
       // No active agent — leave `messages` as-is, in
@@ -1129,9 +1235,36 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // agents list loads).
       return;
     }
-    const bucket = messagesByAgentRef.current[activeChatAgentId] || [];
+    const aid = activeChatAgentId;
+    const qid = activeQuestRef.current === undefined ? null : (activeQuestRef.current?.id ?? null);
+    const agentBuckets = messagesByAgentRef.current[aid] || {};
+    const bucketKey = questKeyForStorage(qid);
+    const bucket = agentBuckets[bucketKey] || [];
     setMessages(bucket);
-  }, [activeChatAgentId]);
+    // v3.11.0: when we switch quest, mark the
+    // chatAtBottom state so the FlatList settles to the
+    // bottom of the new bucket (the user is now in a
+    // different chat, not scrolling within the same
+    // one). This also restores the per-(agent,quest)
+    // scroll offset on first layout of the new bucket —
+    // see the v3.10.126 restore path which keys on
+    // activeChatAgentId; the quest-dimension is layered
+    // on top below in a separate effect.
+    //
+    // We DON'T immediately scroll here — the FlatList
+    // might not have measured the new content yet. The
+    // restore effect (which watches messages length +
+    // activeChatAgentId + active quest) makes the
+    // actual scrollToOffset call after the new bucket
+    // has rendered.
+    setChatAtBottom(true);
+    // v3.11.0: depend on activeChatQuestId too so quest
+    // switches trigger the same view-sync. The ref is
+    // already current (the onQuestsList listener sets it
+    // synchronously before setActiveChatQuestId), so
+    // reading from the ref here picks up the new value
+    // without an extra render.
+  }, [activeChatAgentId, activeChatQuestId]);
 
   // v3.10.126: hydrate the persisted per-agent scroll
   // offsets from AsyncStorage on mount. The map is keyed
@@ -1158,39 +1291,77 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // The new capture lives in a separate effect below that
   // watches `activeChatAgentId` and runs the capture AFTER
   // hydrate has completed (gated on `chatHydrateDoneRef`).
+  //
+  // v3.11.0: extended for per-quest buckets. The on-disk
+  // shape changed from
+  //   Record<agentId, number>
+  // to
+  //   Record<string, number>      // keys are `agentId::questId` or `agentId::null`
+  //
+  // On first launch with the new build we read the OLD
+  // key (`cyberclaw-chat-scroll-byagent`), upgrade each
+  // entry to the new shape (using `null` as the quest
+  // part, since pre-v3.11.0 messages had no quest
+  // attribution), write the upgraded map under the new
+  // key (`cyberclaw-chat-scroll-byagent-byquest`), and
+  // remove the old key so we never re-migrate. This is
+  // idempotent — re-running on a v3.11.0+ install just
+  // reads the new key directly.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem('cyberclaw-chat-scroll-byagent');
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
-        if (cancelled) return;
-        // Sanitize: only keep finite numeric offsets.
-        const cleaned: Record<string, number> = {};
-        for (const [k, v] of Object.entries(parsed)) {
-          const n = Number(v);
-          if (Number.isFinite(n) && n >= 0) cleaned[k] = n;
+        // v3.11.0: prefer the new per-quest key if it exists.
+        const rawNew = await AsyncStorage.getItem('cyberclaw-chat-scroll-byagent-byquest');
+        if (rawNew) {
+          const parsed = JSON.parse(rawNew);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const cleaned: Record<string, number> = {};
+            for (const [k, v] of Object.entries(parsed)) {
+              const n = Number(v);
+              if (Number.isFinite(n) && n >= 0) cleaned[k] = n;
+            }
+            chatScrollOffsetRef.current = cleaned;
+            setChatScrollOffsetByAgent(cleaned);
+            if (!cancelled) chatHydrateDoneRef.current = true;
+            return;
+          }
         }
-        chatScrollOffsetRef.current = cleaned;
-        setChatScrollOffsetByAgent(cleaned);
+        // v3.11.0: migrate from the old per-agent-only key.
+        const rawOld = await AsyncStorage.getItem('cyberclaw-chat-scroll-byagent');
+        if (rawOld) {
+          const parsed = JSON.parse(rawOld);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const cleaned: Record<string, number> = {};
+            for (const [k, v] of Object.entries(parsed)) {
+              const n = Number(v);
+              if (Number.isFinite(n) && n >= 0) {
+                // Upgrade: old key was just `agentId`. New
+                // key is `agentId::null` (the default-quest
+                // bucket — pre-v3.11.0 messages had no quest
+                // attribution so they all belong there).
+                cleaned[`${k}::null`] = n;
+              }
+            }
+            chatScrollOffsetRef.current = cleaned;
+            setChatScrollOffsetByAgent(cleaned);
+            // Persist the upgraded map under the new key and
+            // remove the old key so the next launch skips
+            // migration. Best-effort — failures here are
+            // recoverable (next launch will just re-migrate).
+            await AsyncStorage.setItem(
+              'cyberclaw-chat-scroll-byagent-byquest',
+              JSON.stringify(cleaned),
+            ).catch(() => {});
+            await AsyncStorage.removeItem('cyberclaw-chat-scroll-byagent').catch(() => {});
+            if (!cancelled) chatHydrateDoneRef.current = true;
+            return;
+          }
+        }
+        // Neither key present — fresh install or wiped
+        // storage. Just flip the gate so the restore path
+        // can make its decision.
       } catch (_) { /* ignore corrupt storage */ }
-      // v3.10.178: flip the hydrate gate regardless of
-      // whether data was found. The restore handler
-      // uses this to know when it's safe to make the
-      // restore decision. Setting it AFTER the await
-      // (instead of synchronously) ensures the FlatList's
-      // synchronous `onLayout` (which can fire before
-      // this useEffect's async work resolves) sees the
-      // gate as `false` and waits. After this fires,
-      // any subsequent polling ticks read the populated
-      // `chatRestoreOffsetRef.current`.
-      //
-      // The AsyncStorage hydrate takes ~5-50ms on a warm
-      // device; the polling backoff (in the new restore
-      // effect below) waits up to ~600ms before falling
-      // through, so we have a comfortable margin.
       finally {
         if (!cancelled) chatHydrateDoneRef.current = true;
       }
@@ -1214,19 +1385,49 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // effect ran). The fix: defer the capture until the agents
   // list has loaded. The actual restore decision lives in the
   // next useEffect (which fires when messages are present).
+  //
+  // v3.11.0: also re-run when the active quest changes.
+  // Switching to a different quest should swap the visible
+  // chat to that quest's bucket and restore that bucket's
+  // scroll offset (per the v3.10.126 design). We treat the
+  // quest switch as a "fresh mount" of the chat panel: we
+  // capture the new (agent, quest) pair's offset into the
+  // restore refs and reset the latch so the restore
+  // useEffect fires its scrollToOffset again.
   useEffect(() => {
     if (!chatHydrateDoneRef.current) return; // hydrate not done yet; the polling restore will handle it
     if (!activeChatAgentId) return;
-    if (chatRestoreOffsetRef.current !== null) return; // already captured
-    const offset = chatScrollOffsetRef.current[activeChatAgentId];
-    if (typeof offset === 'number') {
-      chatRestoreAgentRef.current = activeChatAgentId;
-      chatRestoreOffsetRef.current = offset;
+    const qid: string | null =
+      activeChatQuestId === undefined
+        ? null
+        : activeChatQuestId;
+    const key = `${activeChatAgentId}::${questKeyForStorage(qid)}`;
+    // If we've already captured this exact (agent, quest)
+    // pair, don't clobber. The v3.10.181 one-shot rule for
+    // agent switches still applies — a mid-scroll companion
+    // tab switch must NOT re-restore.
+    if (
+      chatRestoreOffsetRef.current !== null &&
+      chatRestoreAgentRef.current === activeChatAgentId &&
+      chatRestoreQuestIdRef.current === qid
+    ) {
+      return;
     }
+    const offset = chatScrollOffsetRef.current[key];
+    chatRestoreAgentRef.current = activeChatAgentId;
+    chatRestoreQuestIdRef.current = qid;
+    chatRestoreOffsetRef.current = typeof offset === 'number' ? offset : null;
+    // v3.11.0: reset the initial-decision latch so the
+    // restore useEffect below re-fires for the new quest.
+    // Without this reset, switching quests keeps the
+    // previous quest's "decision" (latched) and the FlatList
+    // stays at the old quest's restored position instead of
+    // jumping to the new quest's saved position.
+    chatInitialDecisionRef.current = false;
     // No setState — purely a ref update, no re-render needed.
     // The restore useEffect below reads the ref directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChatAgentId]);
+  }, [activeChatAgentId, activeChatQuestId]);
 
   // v3.10.181: SINGLE SOURCE OF TRUTH for the initial scroll
   // position decision on a HomeScreen mount. Fires when:
@@ -1473,8 +1674,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           // lands. If the JS context is being torn down (app
           // backgrounded), the write may not land; we accept
           // that — AppState-change flushes are out of scope.
+          // v3.11.0: write to the new per-quest key.
           AsyncStorage.setItem(
-            'cyberclaw-chat-scroll-byagent',
+            'cyberclaw-chat-scroll-byagent-byquest',
             JSON.stringify(chatScrollOffsetRef.current),
           ).catch(() => {});
         } catch (_) { /* swallow — best-effort */ }
@@ -2107,11 +2309,21 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // Group by agentId. Pre-per-agent data typically has
         // `agentId = 'clawsuu'` (or undefined). Route anything
         // without an agentId to 'clawsuu' for backwards compat.
-        const grouped: Record<string, ChatMessage[]> = {};
+        //
+        // v3.11.0: per-quest buckets. The legacy
+        // `cyberclaw-chat-history` key holds messages from
+        // before quest attribution was added — every
+        // message goes into the `null` (default / no-quest)
+        // bucket. Per-quest bucketing didn't exist back
+        // then, so there's no way to retroactively split
+        // them. The migration just preserves the existing
+        // data into the new shape; new messages from this
+        // point on get bucketed properly.
+        const grouped: Record<string, Record<string, ChatMessage[]>> = {};
         for (const m of ordered) {
           const aid: string = m.agentId || 'clawsuu';
-          if (!grouped[aid]) grouped[aid] = [];
-          grouped[aid].push({
+          if (!grouped[aid]) grouped[aid] = { [DEFAULT_QUEST_KEY]: [] };
+          grouped[aid][DEFAULT_QUEST_KEY].push({
             id: m.id || `hist-${m.ts}-${Math.random()}`,
             text: m.text,
             isUser: m.isUser,
@@ -2124,16 +2336,27 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // first non-empty slot so the chat isn't blank on
         // startup. (The tab bar's onPress will switch this if
         // the user clicks a different tab.)
-        setMessagesByAgent(prev => {
+        setMessagesByAgentAndQuest(prev => {
           // Merge: prefer the new grouped data for slots that
           // are currently empty, but don't overwrite slots
           // that already have messages (in case the user has
           // a fresh agent that arrived via agents_list while
           // we were loading the legacy cache).
-          const next = { ...prev };
-          for (const [aid, msgs] of Object.entries(grouped)) {
-            if (!next[aid] || next[aid].length === 0) {
-              next[aid] = msgs;
+          const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
+          for (const [aid, questBuckets] of Object.entries(grouped)) {
+            const existing = next[aid];
+            const defaultBucket = questBuckets[DEFAULT_QUEST_KEY] || [];
+            const existingDefault = existing?.[DEFAULT_QUEST_KEY] || [];
+            if (!existing || existingDefault.length === 0) {
+              next[aid] = questBuckets;
+            } else {
+              // Existing bucket has data — just merge the
+              // default bucket in case the legacy cache has
+              // older messages we don't have.
+              next[aid] = {
+                ...existing,
+                [DEFAULT_QUEST_KEY]: [...existingDefault, ...defaultBucket],
+              };
             }
           }
           return next;
@@ -2143,10 +2366,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessages(prev => {
           if (prev.length > 0) return prev; // already populated
           const aid = activeChatAgentIdRef.current;
-          if (aid && grouped[aid]?.length) return grouped[aid];
+          if (aid && grouped[aid]?.[DEFAULT_QUEST_KEY]?.length) return grouped[aid][DEFAULT_QUEST_KEY];
           // otherwise the first non-empty slot
-          const firstAid = Object.keys(grouped)[0];
-          return firstAid ? grouped[firstAid] : prev;
+          for (const [, questBuckets] of Object.entries(grouped)) {
+            const def = questBuckets[DEFAULT_QUEST_KEY];
+            if (def?.length) return def;
+          }
+          return prev;
         });
       } catch (e) {
         console.log('Error loading messages:', e);
@@ -2156,42 +2382,126 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // v3.1.27: also load the per-agent key (the new source of
     // truth). The legacy key still works as a fallback for users
     // upgrading from v3.1.26.
+    //
+    // v3.11.0: extended for per-quest buckets. Reads the
+    // NEW key (`cyberclaw-chat-byagent-byquest`) first; falls
+    // back to the OLD per-agent-only key and migrates its
+    // contents into the new shape (each agent's flat array
+    // becomes that agent's `null`-quest bucket). On
+    // successful migration the old key is deleted so the
+    // next launch skips the migration path. Idempotent.
     const seedFromPerAgent = async () => {
       try {
-        const raw = await AsyncStorage.getItem('cyberclaw-chat-byagent');
-        if (!raw) return false;
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object') return false;
-        if (cancelled) return true;
-        setMessagesByAgent(prev => {
-          const next = { ...prev };
+        // v3.11.0: prefer the new per-quest key.
+        const rawNew = await AsyncStorage.getItem('cyberclaw-chat-byagent-byquest');
+        if (rawNew) {
+          const parsed = JSON.parse(rawNew);
+          if (!parsed || typeof parsed !== 'object') return false;
+          if (cancelled) return true;
+          setMessagesByAgentAndQuest(prev => {
+            const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
+            for (const [aid, questBuckets] of Object.entries(parsed)) {
+              if (!questBuckets || typeof questBuckets !== 'object') continue;
+              const migrated: Record<string, ChatMessage[]> = {};
+              for (const [qidKey, msgs] of Object.entries(questBuckets)) {
+                if (!Array.isArray(msgs) || msgs.length === 0) continue;
+                const qk: string = qidKey === 'null' ? DEFAULT_QUEST_KEY : qidKey;
+                const questId: string | null = questKeyFromStorage(qk);
+                migrated[qk] = msgs.map((m: any) => ({
+                  id: m.id || `hist-${m.ts}-${Math.random()}`,
+                  text: m.text,
+                  isUser: !!m.isUser,
+                  agentId: m.agentId || aid,
+                  agentName: m.agentName,
+                  ts: m.ts,
+                  activeQuestId: m.activeQuestId ?? questId,
+                  activeQuestName: m.activeQuestName ?? null,
+                }));
+              }
+              if (Object.keys(migrated).length > 0) {
+                // Replace slot with the persisted one
+                // (it's the newer / more recent data).
+                next[aid] = { ...(next[aid] || {}), ...migrated };
+              }
+            }
+            return next;
+          });
+          setMessages(prev => {
+            if (prev.length > 0) return prev;
+            const aid = activeChatAgentIdRef.current;
+            if (aid && parsed[aid]) {
+              for (const [, msgs] of Object.entries(parsed[aid])) {
+                if (Array.isArray(msgs) && msgs.length > 0) return msgs;
+              }
+            }
+            for (const [, questBuckets] of Object.entries(parsed)) {
+              if (!questBuckets || typeof questBuckets !== 'object') continue;
+              for (const [, msgs] of Object.entries(questBuckets)) {
+                if (Array.isArray(msgs) && msgs.length > 0) return msgs;
+              }
+            }
+            return prev;
+          });
+          return true;
+        }
+        // v3.11.0: migrate from the old per-agent-only key.
+        const rawOld = await AsyncStorage.getItem('cyberclaw-chat-byagent');
+        if (rawOld) {
+          const parsed = JSON.parse(rawOld);
+          if (!parsed || typeof parsed !== 'object') return false;
+          if (cancelled) return true;
+          const migrated: Record<string, Record<string, ChatMessage[]>> = {};
           for (const [aid, msgs] of Object.entries(parsed)) {
-            if (Array.isArray(msgs) && msgs.length > 0) {
-              // Replace slot with the persisted one (it's the
-              // newer / more recent data).
-              next[aid] = msgs.map((m: any) => ({
+            if (!Array.isArray(msgs) || msgs.length === 0) continue;
+            migrated[aid] = {
+              [DEFAULT_QUEST_KEY]: msgs.map((m: any) => ({
                 id: m.id || `hist-${m.ts}-${Math.random()}`,
                 text: m.text,
                 isUser: !!m.isUser,
                 agentId: m.agentId || aid,
                 agentName: m.agentName,
                 ts: m.ts,
-              }));
+                // Old data has no quest attribution; stamp
+                // it as `null` (default bucket).
+                activeQuestId: null,
+                activeQuestName: null,
+              })),
+            };
+          }
+          if (Object.keys(migrated).length > 0) {
+            setMessagesByAgentAndQuest(prev => {
+              const next = { ...prev };
+              for (const [aid, questBuckets] of Object.entries(migrated)) {
+                const existingDefault = next[aid]?.[DEFAULT_QUEST_KEY] || [];
+                if (!next[aid] || existingDefault.length === 0) {
+                  next[aid] = questBuckets;
+                }
+              }
+              return next;
+            });
+            // Persist the migrated data under the new key
+            // and remove the old key. Best-effort — the
+            // next launch will just re-migrate if the
+            // writes fail.
+            await AsyncStorage.setItem(
+              'cyberclaw-chat-byagent-byquest',
+              JSON.stringify(migrated),
+            ).catch(() => {});
+            await AsyncStorage.removeItem('cyberclaw-chat-byagent').catch(() => {});
+          }
+          setMessages(prev => {
+            if (prev.length > 0) return prev;
+            const aid = activeChatAgentIdRef.current;
+            if (aid && migrated[aid]?.[DEFAULT_QUEST_KEY]?.length) return migrated[aid][DEFAULT_QUEST_KEY];
+            for (const [, questBuckets] of Object.entries(migrated)) {
+              const def = questBuckets[DEFAULT_QUEST_KEY];
+              if (def?.length) return def;
             }
-          }
-          return next;
-        });
-        setMessages(prev => {
-          if (prev.length > 0) return prev;
-          const aid = activeChatAgentIdRef.current;
-          if (aid && parsed[aid]?.length) return parsed[aid];
-          // first non-empty slot
-          for (const [aid, msgs] of Object.entries(parsed)) {
-            if (Array.isArray(msgs) && msgs.length > 0) return msgs;
-          }
-          return prev;
-        });
-        return true;
+            return prev;
+          });
+          return true;
+        }
+        return false;
       } catch {
         return false;
       }
@@ -2239,6 +2549,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // this is the new source of truth for the tab-switch UX.
   // We debounce writes (every 1.5s after a messagesByAgent
   // change) so rapid incoming messages don't hammer storage.
+  //
+  // v3.11.0: extended for per-quest buckets. Snapshot is
+  // now Record<agentId, Record<questId|null, ChatMessage[]>>.
+  // We trim each bucket to the last 200 messages and write
+  // the whole thing under `cyberclaw-chat-byagent-byquest`
+  // (the new key). The old `cyberclaw-chat-byagent` key is
+  // removed on first persist so storage doesn't bloat with
+  // both copies.
   useEffect(() => {
     const handle = setTimeout(() => {
       // Snapshot via the ref so we always read the latest, even
@@ -2247,19 +2565,40 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // Don't write empty caches (avoids wiping storage on a
       // transient empty state).
       const nonEmpty = Object.entries(snapshot).filter(
-        ([, v]) => Array.isArray(v) && v.length > 0,
+        ([, questBuckets]) =>
+          questBuckets &&
+          typeof questBuckets === 'object' &&
+          Object.values(questBuckets).some(
+            (v) => Array.isArray(v) && v.length > 0,
+          ),
       );
       if (nonEmpty.length === 0) return;
-      const out: Record<string, ChatMessage[]> = {};
-      for (const [aid, msgs] of nonEmpty) {
-        // Keep the last 200 per agent.
-        out[aid] = msgs.slice(-200);
+      const out: Record<string, Record<string, ChatMessage[]>> = {};
+      for (const [aid, questBuckets] of nonEmpty) {
+        const trimmedBuckets: Record<string, ChatMessage[]> = {};
+        for (const [qidKey, msgs] of Object.entries(questBuckets)) {
+          if (!Array.isArray(msgs) || msgs.length === 0) continue;
+          // Keep the last 200 per (agent, quest) bucket.
+          // The bucket key is already the storage form
+          // (string sentinel for the default bucket); we
+          // pass it through unchanged.
+          trimmedBuckets[qidKey] = msgs.slice(-200);
+        }
+        if (Object.keys(trimmedBuckets).length > 0) out[aid] = trimmedBuckets;
       }
-      AsyncStorage.setItem('cyberclaw-chat-byagent', JSON.stringify(out))
-        .catch(() => {});
+      if (Object.keys(out).length === 0) return;
+      AsyncStorage.setItem(
+        'cyberclaw-chat-byagent-byquest',
+        JSON.stringify(out),
+      ).catch(() => {});
+      // v3.11.0: remove the old key once we've written
+      // the new one. Best-effort — if the write above
+      // failed, the old key still has the data and the
+      // next launch will re-migrate from it.
+      AsyncStorage.removeItem('cyberclaw-chat-byagent').catch(() => {});
     }, 1500);
     return () => clearTimeout(handle);
-  }, [messagesByAgent]);
+  }, [messagesByAgentAndQuest]);
 
   // Orientation listener
   useEffect(() => {
@@ -2718,7 +3057,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
         activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
-      appendAgentMessage(incoming, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      appendAgentMessage(
+        incoming,
+        aid,
+        aq === undefined ? null : (aq?.id ?? null),
+        setMessagesByAgentAndQuest,
+        setMessages,
+        activeChatAgentIdRef.current,
+        activeChatQuestId,
+      );
       // v3.10.177: classify error bubbles so the chat
       // can render a structured card with category,
       // duration, and partial-step list. The desktop
@@ -2771,13 +3118,27 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           };
           // Mutate the bubble we just appended via the
           // messagesByAgent state for this agent.
-          setMessagesByAgent(prev => {
-            const list = prev[aid] || [];
-            const idx = list.findIndex(m => m.id === incoming.id);
+          //
+          // v3.11.0: per-quest buckets. The incoming
+          // message's quest is stamped on it (activeQuestId);
+          // we look up the same bucket here.
+          setMessagesByAgentAndQuest(prev => {
+            const agentBuckets = prev[aid] || {};
+            const qid: string | null =
+              incoming.activeQuestId === undefined ? null : incoming.activeQuestId;
+            const bucketKey = questKeyForStorage(qid);
+            const list = agentBuckets[bucketKey] || [];
+            const idx = list.findIndex((m: ChatMessage) => m.id === incoming.id);
             if (idx < 0) return prev;
             const updated = [...list];
             updated[idx] = { ...updated[idx], taskSummary: summary };
-            return { ...prev, [aid]: updated };
+            return {
+              ...prev,
+              [aid]: {
+                ...agentBuckets,
+                [bucketKey]: updated,
+              },
+            };
           });
           // Also mirror into the flat `messages` array
           // (used for the active-tab view) if it's the
@@ -2965,7 +3326,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // and (if active) `messages` at the top of onChat. The legacy
       // duplicate-detection log entry still helps when debugging the
       // sync layer.
-      addLogEntry(`📨 Chat updated, total: ${(messagesByAgentRef.current[aid] || []).length + 1}`, 'received');
+      // v3.11.0: log the active quest bucket's length (the
+      // user's currently-visible chat), not the total
+      // across all buckets. The total is misleading now
+      // that one agent can have many quest buckets.
+      const aqForLog: string | null =
+        activeChatQuestId === undefined ? null : activeChatQuestId;
+      const bucketCount = (messagesByAgentRef.current[aid]?.[questKeyForStorage(aqForLog)] || []).length + 1;
+      addLogEntry(`📨 Chat updated, total: ${bucketCount}`, 'received');
       // audio_response from desktop handles spoken replies
     };
 
@@ -3153,9 +3521,43 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // the active companion. The desktop sends this on first
         // connect; the per-agent request fires afterwards for each
         // tab in the companion bar.
+        //
+        // v3.11.0: per-quest buckets. The legacy
+        // chat_history response has no quest attribution
+        // (the desktop's chatHistoryByAgent predates quest
+        // bucketing), so EVERYTHING lands in the default
+        // bucket — regardless of which quest is currently
+        // active. Putting pre-attribution messages into a
+        // specific quest's bucket would silently corrupt
+        // that quest's history. The default bucket is
+        // where unattributed history belongs.
         const aid = activeChatAgentIdRef.current || 'companion';
-        setMessagesByAgent(prev => ({ ...prev, [aid]: loaded }));
-        setMessages(loaded);
+        const bucketKey = DEFAULT_QUEST_KEY;
+        setMessagesByAgentAndQuest(prev => {
+          const agentBuckets = prev[aid] || {};
+          // Don't overwrite an existing bucket that has
+          // data — only seed if the active quest bucket
+          // is empty (or doesn't exist).
+          const existing = agentBuckets[bucketKey] || [];
+          if (existing.length > 0) return prev;
+          return {
+            ...prev,
+            [aid]: { ...agentBuckets, [bucketKey]: loaded },
+          };
+        });
+        // v3.11.0: only push to the visible chat if the
+        // active quest is the default bucket. Otherwise
+        // (a specific quest is active), leave the visible
+        // chat alone — the view-sync effect will refresh
+        // it from the active quest's bucket on the next
+        // render. Otherwise we'd briefly show the default
+        // bucket's content in the active-quest view.
+        if (
+          activeChatQuestId === undefined ||
+          activeChatQuestId === null
+        ) {
+          setMessages(loaded);
+        }
       }
     };
 
@@ -3441,7 +3843,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
         activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
-      appendAgentMessage(localUserMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      appendAgentMessage(
+        localUserMsg,
+        aid,
+        aq === undefined ? null : (aq?.id ?? null),
+        setMessagesByAgentAndQuest,
+        setMessages,
+        activeChatAgentIdRef.current,
+        activeChatQuestId,
+      );
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
       const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
       const name = a?.name || 'Companion';
@@ -3497,7 +3907,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         ts: m.ts,
       }));
       addLogEntry(`← Loaded ${loaded.length} messages for ${aid}`, 'info');
-      const localSlot = (messagesByAgentRef.current || {})[aid] || [];
+      const agentBuckets = (messagesByAgentRef.current || {})[aid] || {};
+      // v3.11.0: agent_history responses are pre-per-quest
+      // (the desktop's chatHistoryByAgent has no quest
+      // attribution), so they land in the default bucket.
+      // The active quest bucket is independent — any
+      // messages already there are preserved.
+      const localSlot = agentBuckets[DEFAULT_QUEST_KEY] || [];
       // Decide what to put in the slot. If the desktop
       // returned messages, use them (they may include the
       // latest items we don't have yet). If the desktop
@@ -3506,17 +3922,47 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // otherwise keep the local copy so the chat isn't
       // wiped just because the desktop restarted.
       if (loaded.length > 0) {
-        setMessagesByAgent(prev => ({ ...prev, [aid]: loaded }));
-        // If this is the active companion, swap the visible
-        // messages to the freshly loaded history.
-        if (activeChatAgentIdRef.current === aid) {
+        setMessagesByAgentAndQuest(prev => {
+          const existingBuckets = prev[aid] || {};
+          // Preserve any other quest buckets we already
+          // have; only the default bucket is replaced.
+          return {
+            ...prev,
+            [aid]: {
+              ...existingBuckets,
+              [DEFAULT_QUEST_KEY]: loaded,
+            },
+          };
+        });
+        // If this is the active companion AND the active
+        // quest is `null` (default bucket), swap the
+        // visible messages to the freshly loaded history.
+        // For non-null active quests, don't clobber the
+        // visible chat (which shows the active quest's
+        // bucket) with the default bucket's content.
+        if (
+          activeChatAgentIdRef.current === aid &&
+          activeChatQuestId !== undefined &&
+          activeChatQuestId === null
+        ) {
           setMessages(loaded);
         }
       } else if (localSlot.length === 0) {
         // Empty desktop response + empty local slot =
         // genuinely empty chat. Adopt the empty state.
-        setMessagesByAgent(prev => ({ ...prev, [aid]: [] }));
-        if (activeChatAgentIdRef.current === aid) {
+        setMessagesByAgentAndQuest(prev => {
+          const existingBuckets = prev[aid] || {};
+          if ((existingBuckets[DEFAULT_QUEST_KEY] || []).length > 0) return prev;
+          return {
+            ...prev,
+            [aid]: { ...existingBuckets, [DEFAULT_QUEST_KEY]: [] },
+          };
+        });
+        if (
+          activeChatAgentIdRef.current === aid &&
+          activeChatQuestId !== undefined &&
+          activeChatQuestId === null
+        ) {
           setMessages([]);
         }
       } else {
@@ -3553,10 +3999,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // each companion's history from the desktop. The desktop
         // stores chatHistoryByAgent[id] and we mirror it locally so
         // switching tabs is instant on subsequent visits.
-        setMessagesByAgent(prev => {
-          const next = { ...prev };
+        //
+        // v3.11.0: per-quest buckets. Each agent slot starts
+        // as an empty per-quest map; the `null` (default)
+        // bucket gets populated when agent_history responses
+        // arrive. No quest buckets are pre-created here —
+        // they're created lazily by appendAgentMessage when
+        // the first message lands.
+        setMessagesByAgentAndQuest(prev => {
+          const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
           for (const a of msg.agents) {
-            if (!next[a.id]) next[a.id] = [];
+            if (!next[a.id]) next[a.id] = {};
           }
           return next;
         });
@@ -3632,9 +4085,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       try {
         const quests = Array.isArray(msg?.quests) ? msg.quests : [];
         const active = quests.find((q: any) => q && q.active);
-        activeQuestRef.current = active && active.id
+        const next = active && active.id
           ? { id: active.id, name: active.name || '(unnamed quest)' }
           : null;
+        activeQuestRef.current = next;
+        // v3.11.0: mirror into state so per-quest useEffects
+        // (scroll-restore, view-sync) can re-fire on quest
+        // change. The ref stays the source of truth inside
+        // sync-event listeners (no stale closures); the
+        // state mirror is only for React subscriptions.
+        const nextQid: string | null | undefined = next ? next.id : null;
+        setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
       } catch {}
     };
     syncClient.on('quests_list', onQuestsList);
@@ -3658,6 +4119,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       const finished = activeTaskSession ? closeTaskSession('failed', e?.message || 'send error') : null;
       if (finished && finished.steps.length > 0) {
         const aid = activeChatAgentIdRef.current || 'companion';
+        // v3.11.0: stamp the error bubble with the active
+        // quest so it lands in the right bucket. The
+        // append helper reads activeQuestId via the
+        // activeQuestRef snapshot below.
+        const aq = activeQuestRef.current;
         const durationMs = (finished.endTs || Date.now()) - finished.startTs;
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}-${Math.random()}`,
@@ -3674,7 +4140,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             errorText: e?.message || 'send error',
           },
         };
-        appendAgentMessage(errorMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+        appendAgentMessage(
+          errorMsg,
+          aid,
+          aq === undefined ? null : (aq?.id ?? null),
+          setMessagesByAgentAndQuest,
+          setMessages,
+          activeChatAgentIdRef.current,
+          activeChatQuestId,
+        );
       }
     };
     syncClient.on('send_error', onSendError);
@@ -3847,7 +4321,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // tapping the tab itself.
   const switchToAgent = useCallback((aid: string) => {
     setActiveChatAgentId(aid);
-    setMessages(messagesByAgent[aid] || []);
+    // v3.11.0: per-quest buckets. The view-sync effect
+    // below handles the actual `messages` swap when
+    // activeChatAgentId changes (it reads the active
+    // quest from activeChatQuestId). We don't set
+    // messages here directly to avoid a double-render
+    // with stale data.
     setChatUnreadByAgent(prev => ({ ...prev, [aid]: 0 }));
     try { syncClient.requestAgentHistory(aid); } catch (_) {}
     try {
@@ -3856,7 +4335,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       );
     } catch (_) {}
     AsyncStorage.setItem('cyberclaw-arena-comp', aid).catch(() => {});
-  }, [messagesByAgent]);
+  }, [messagesByAgentAndQuest]);
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
@@ -4009,7 +4488,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
         activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
       };
-      appendAgentMessage(userMsg, aid, setMessagesByAgent, setMessages, activeChatAgentIdRef.current);
+      appendAgentMessage(
+        userMsg,
+        aid,
+        aq === undefined ? null : (aq?.id ?? null),
+        setMessagesByAgentAndQuest,
+        setMessages,
+        activeChatAgentIdRef.current,
+        activeChatQuestId,
+      );
       if (text) {
         syncClient.sendChat(text, aid);
         addLogEntry(`→ [${aid}] ${text.substring(0, 80)}`, 'sent');
@@ -5273,9 +5760,27 @@ useEffect(() => {
                 // don't thrash storage on rapid scroll gestures.
                 const aid = activeChatAgentIdRef.current;
                 if (aid) {
+                  // v3.11.0: per-(agent, quest) key. The
+                  // storage shape is now
+                  // `${aid}::${questKeyForStorage(qid)}` —
+                  // the default quest is encoded as a
+                  // stable string sentinel (DEFAULT_QUEST_KEY),
+                  // not the literal `null`, because
+                  // `null` is not a valid indexer for
+                  // Record types. The key is built from
+                  // the LIVE active quest (state), not a
+                  // captured closure value, so a quest
+                  // switch that happens mid-gesture
+                  // routes the next write to the new
+                  // quest's bucket.
+                  const scrollQid: string | null =
+                    activeChatQuestId === undefined
+                      ? null
+                      : activeChatQuestId;
+                  const scrollKey = `${aid}::${questKeyForStorage(scrollQid)}`;
                   chatScrollOffsetRef.current = {
                     ...chatScrollOffsetRef.current,
-                    [aid]: e.nativeEvent.contentOffset.y,
+                    [scrollKey]: e.nativeEvent.contentOffset.y,
                   };
                   // v3.10.126: schedule debounced write. Only
                   // write if no write is pending — the pending
@@ -5283,11 +5788,16 @@ useEffect(() => {
                   // fast flurry of scrolls coalesces into one
                   // write. 250ms feels instant to the user but
                   // skips writes during a swipe gesture.
+                  //
+                  // v3.11.0: write to the new per-quest
+                  // key. The old `cyberclaw-chat-scroll-byagent`
+                  // key is removed by the hydrate effect on
+                  // first launch with the new build.
                   if (!chatScrollSaveTimerRef.current) {
                     chatScrollSaveTimerRef.current = setTimeout(() => {
                       chatScrollSaveTimerRef.current = null;
                       AsyncStorage.setItem(
-                        'cyberclaw-chat-scroll-byagent',
+                        'cyberclaw-chat-scroll-byagent-byquest',
                         JSON.stringify(chatScrollOffsetRef.current),
                       ).catch(() => { /* swallow — best-effort */ });
                     }, 250);
@@ -5635,7 +6145,18 @@ useEffect(() => {
             {activeTab === 'chat' && agents
               .filter(a => a.id !== activeChatAgentId && (chatUnreadByAgent[a.id] || 0) > 0)
               .map((a) => {
-                const lastMsg = (messagesByAgent[a.id] || []).slice(-1)[0];
+                // v3.11.0: per-quest buckets. The unread
+                // preview for an inactive companion shows
+                // the last message from the SAME quest
+                // bucket the user is currently viewing
+                // (activeChatQuestId) — not the default
+                // bucket, so the preview matches what the
+                // user would see if they switched tabs.
+                const aidBuckets = messagesByAgentAndQuest[a.id] || {};
+                const previewQid: string | null =
+                  activeChatQuestId === undefined ? null : activeChatQuestId;
+                const previewKey = questKeyForStorage(previewQid);
+                const lastMsg = (aidBuckets[previewKey] || []).slice(-1)[0];
                 const preview = lastMsg?.text
                   ? (lastMsg.text.length > 48 ? lastMsg.text.substring(0, 45) + '…' : lastMsg.text)
                   : '(no preview)';
