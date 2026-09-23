@@ -7,7 +7,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, ScrollView, StyleSheet, Image,
   Platform, Keyboard, Dimensions, KeyboardAvoidingView, Alert, Modal,
-  NativeModules, StatusBar, NativeEventEmitter, BackHandler, AppState,
+  NativeModules, StatusBar, NativeEventEmitter, BackHandler, AppState, Animated,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -771,15 +771,66 @@ function appendAgentMessage(
         [bucketKey]: [...list, msg],
       },
     };
-    // v3.11.0: only push to the visible chat if BOTH the
-    // agent AND the quest match the active ones. A message
-    // appended to a different quest's bucket (because the
-    // user just switched quests and an old quest's reply
-    // arrived late) must NOT clobber the visible chat —
-    // it'll appear next time the user switches back.
-    if (agentId === activeAgentId && activeQuestId !== undefined &&
-        (activeQuestId === null ? questId === null : activeQuestId === questId)) {
-      setMessages(next[agentId][bucketKey]);
+    // v3.11.1: always sync the visible chat to the active
+    // (agent, quest) bucket — NOT just when the new message's
+    // bucket matches.
+    //
+    // Tobe's 2026-09-23 report:
+    //   "i noticed a weird behaviour in the chat of cyberclaw.
+    //    i dont recieve clawsuus replies before i send something
+    //    myself, then right as i send the reply appears above
+    //    my text. Also, i saw chat change behaviour this last
+    //    time, indicating that a new reply had landed i think,
+    //    but it did not appear."
+    //
+    // Root cause: the previous `if (agentId === activeAgentId
+    // && activeQuestId !== undefined && (...))` guard was
+    // over-strict. The flat `messages` list is a *projection* of
+    //   next[activeAgentId][activeBucketKey]
+    // i.e. the bucket the user is currently looking at. The
+    // correct sync is: project the active bucket from `next`,
+    // regardless of which bucket the incoming message landed in.
+    //
+    // The old guard also dropped the projection in two real cases:
+    //   (a) `activeChatQuestId` was still `undefined` (initial
+    //       state, before the first quests_list broadcast) — but
+    //       the user was already chatting in the default bucket
+    //       and a reply came in. The projection was skipped even
+    //       though the reply WAS for the active (default) bucket.
+    //   (b) `activeChatQuestId` was a quest id string, but the
+    //       incoming reply happened to be stamped with `null`
+    //       (race between the local ref and the state mirror —
+    //       `activeQuestRef.current` was still `null` when the
+    //       onChat listener captured it). The reply landed in
+    //       the default bucket, but the projection skipped
+    //       because the active quest's bucket is the *quest*
+    //       bucket, not the default one.
+    //
+    // In both cases the bucket got the new message but the
+    // visible flat list stayed stale — until the user sent
+    // their next message, at which point the projection
+    // refreshed and "the reply appeared above my text".
+    //
+    // The fix: project from the ACTIVE bucket, not the message's
+    // bucket. If the user is on the active quest and a stale
+    // reply from a previous (different) quest arrives, the
+    // active bucket is unchanged so we re-set it to its
+    // (unchanged) contents — a no-op re-render at worst. The
+    // stale reply sits in its own bucket and shows up when the
+    // user switches back to it.
+    //
+    // Skip the sync only when there's no active agent (the
+    // pre-agents_list state where `messages` is genuinely empty
+    // and re-projecting to [] would wipe whatever the renderer
+    // is currently showing). When activeAgentId is null we
+    // leave `messages` alone.
+    if (activeAgentId != null) {
+      const activeBucketKey = questKeyForStorage(
+        activeQuestId === undefined ? null : activeQuestId
+      );
+      const activeBucket =
+        (next[activeAgentId] || {})[activeBucketKey] || [];
+      setMessages(activeBucket);
     }
     return next;
   });
@@ -896,6 +947,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // apply the manual padding on Android.
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
+  // v3.11.1: Claude-style action log. When the agent runs a
+  // tool (via the desktop's `agent_tool` event), we push the
+  // friendly text here and the thinking-bar shows the last
+  // few actions below the spinner. Currently the desktop
+  // only emits `agent_tool` for Discord-routed sessions
+  // (suppressed per v3.2.25), so this list stays empty for
+  // mobile-initiated chats until that gap is closed on the
+  // desktop side. The infra is wired up here so when the
+  // desktop starts emitting tool events, the UI is ready.
+  const [chatActions, setChatActions] = useState<string[]>([]);
+  // Animated value driving the pulsing-dot "is thinking..."
+  // spinner. 0 → 1 → 0 → 1... in a 1.2s loop. The render
+  // reads this for the indicator bar; a separate opacity
+  // animation fades the bar in/out when chatVoiceStatus
+  // flips so the indicator doesn't pop.
+  const thinkPulse = useRef(new Animated.Value(0)).current;
+  const indicatorOpacity = useRef(new Animated.Value(0)).current;
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   // v3.10.122: arena can be hidden to give the chat list
@@ -996,6 +1064,46 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // before our scrollToEnd had a chance to land.
   const chatAtBottomRef = useRef(true);
   useEffect(() => { chatAtBottomRef.current = chatAtBottom; }, [chatAtBottom]);
+  // v3.11.1: continuous pulse loop for the thinking-dot
+  // spinner. 0 → 1 over 600ms, then 1 → 0 over 600ms, repeat.
+  // Uses `Animated.loop` so the OS keeps the animation alive
+  // without us re-firing the effect. The render reads
+  // thinkPulse (interpolated 0..1) to scale the dot.
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(thinkPulse, { toValue: 1, duration: 600, useNativeDriver: true }),
+        Animated.timing(thinkPulse, { toValue: 0, duration: 600, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [thinkPulse]);
+  // v3.11.1: fade the indicator bar in/out when chatVoiceStatus
+  // flips. A hard show/hide makes the bar pop in instantly and
+  // disappear without warning. A 180ms cross-fade gives the
+  // user a clear "thinking started" / "thinking stopped"
+  // transition. We use a derived `chatVoiceStatus` watcher
+  // (separate useEffect) so the timing controls stay simple.
+  //
+  // We ALSO clear chatActions on the off→on transition (the
+  // start of a NEW turn) so the action log from the previous
+  // turn doesn't linger. We don't clear on on→off because the
+  // last action of the current turn is still the most useful
+  // thing to show for a beat as the indicator fades out — and
+  // a new turn's typing=true will clear it then.
+  const lastVoiceStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const wasOn = lastVoiceStatusRef.current != null;
+    const isOn = chatVoiceStatus != null;
+    lastVoiceStatusRef.current = chatVoiceStatus;
+    if (isOn && !wasOn) {
+      setChatActions([]);
+      Animated.timing(indicatorOpacity, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    } else if (!isOn && wasOn) {
+      Animated.timing(indicatorOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start();
+    }
+  }, [chatVoiceStatus, indicatorOpacity]);
   // v3.10.111: tracks whether the chat FlatList has ever been
   // laid out, so onLayout's "force scroll to bottom" only runs
   // on the FIRST layout (initial mount when the chat tab opens
@@ -3174,15 +3282,46 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // for the started-at ref (so the next typing:true
       // restarts the clock from zero).
       if (!incoming.isUser) {
-        thinkingStickyRef.current = false;
-        thinkingStartedAtRef.current = null;
-        if (thinkingEscalateTimerRef.current) {
-          clearTimeout(thinkingEscalateTimerRef.current);
-          thinkingEscalateTimerRef.current = null;
+        // v3.11.1: gate the indicator clear on whether the
+        // reply is for the ACTIVE (agent, quest) bucket.
+        // Before this, an agent reply routed to a
+        // different quest's bucket would wipe the
+        // "Clawsuu is thinking..." indicator even though
+        // the user is still waiting for THEIR active
+        // quest's reply — because the desktop emits
+        // typing=true/false per-agent, not per-quest, so a
+        // late Quest A reply landing while the user is on
+        // Quest B would clear Quest B's waiting indicator.
+        // Tobe's 2026-09-23 report: "the clawsuu is
+        // thinking... disappears sometimes shortly after i
+        // sent something when i know hes thinking or
+        // working." Leaving the indicator up when the
+        // reply is for a non-active bucket keeps the user
+        // informed that their turn is still in flight.
+        const replyBucketKey = questKeyForStorage(
+          incoming.activeQuestId === undefined ? null : incoming.activeQuestId
+        );
+        const activeBucketKey = questKeyForStorage(
+          activeChatQuestId === undefined ? null : activeChatQuestId
+        );
+        const replyIsForActiveBucket =
+          aid === activeChatAgentIdRef.current &&
+          replyBucketKey === activeBucketKey;
+        if (replyIsForActiveBucket) {
+          thinkingStickyRef.current = false;
+          thinkingStartedAtRef.current = null;
+          if (thinkingEscalateTimerRef.current) {
+            clearTimeout(thinkingEscalateTimerRef.current);
+            thinkingEscalateTimerRef.current = null;
+          }
+          setIsThinking(false);
+          setArenaThinking(false);
+          setChatVoiceStatus(null);
         }
-        setIsThinking(false);
-        setArenaThinking(false);
-        setChatVoiceStatus(null);
+        // If replyIsForActiveBucket is false, leave the
+        // sticky flag and timer alone — the indicator
+        // stays up for the still-in-flight active
+        // request.
       }
       if (aid !== activeChatAgentIdRef.current) {
         setChatUnreadByAgent(prev => ({ ...prev, [aid]: (prev[aid] || 0) + 1 }));
@@ -3478,6 +3617,25 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onAgentTool = (msg: any) => {
       if (!msg || typeof msg.friendly !== 'string') return;
       setChatVoiceStatus(msg.friendly);
+      // v3.11.1: Claude-style action log. Push each
+      // tool call's friendly text onto a short rolling
+      // list (last 3) and render them below the
+      // spinner. The user sees "Reading file X" →
+      // "Running command Y" → "Writing file Z" as the
+      // agent works, instead of just a generic
+      // "thinking..." string for the entire run. Empty
+      // when the desktop doesn't emit agent_tool (which
+      // is the current state for mobile-routed chats;
+      // see v3.2.25 in main.js).
+      const friendly = msg.friendly;
+      setChatActions(prev => {
+        const next = [...prev, friendly];
+        // Keep the last 3 (oldest drops first). Cap at
+        // 3 because the bar is short; longer lists
+        // would either wrap or push the input off
+        // screen on small phones.
+        return next.length > 3 ? next.slice(next.length - 3) : next;
+      });
       // v3.10.177: also capture this as a task step so
       // the structured error/timeout bubble can show
       // which tools the agent ran before failing. The
@@ -3486,7 +3644,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // suppressed per v3.2.25), but if/when that
       // changes for in-app pipelines, this listener is
       // already wired up.
-      appendTaskStep({ label: `tool: ${msg.friendly.substring(0, 40)}` });
+      appendTaskStep({ label: `tool: ${friendly.substring(0, 40)}` });
     };
 
     const onChatHistory = (msg: any) => {
@@ -6041,9 +6199,65 @@ useEffect(() => {
                 more vertical room for messages. */}
             <View style={styles.footerOverlay}>
             {chatVoiceStatus && (
-              <View style={styles.chatStatusBar}>
-                <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
-              </View>
+              // v3.11.1: Claude-style thinking bar.
+              //   Row 1: pulsing dot + status text.
+              //     The dot is `Animated.View` with opacity
+              //     driven by thinkPulse (0..1, 1.2s loop).
+              //   Row 2 (optional): recent tool actions.
+              //     Only renders if the desktop has emitted
+              //     at least one `agent_tool` event during
+              //     this turn (currently empty for
+              //     mobile-routed chats because the desktop
+              //     suppresses tool events on the
+              //     non-Discord path, but the infra is in
+              //     place for when that lands).
+              //   Wrapped in `Animated.View` so the
+              //     bar fades in/out on transitions
+              //     instead of popping.
+              <Animated.View style={[styles.chatStatusBar, { opacity: indicatorOpacity }]}>
+                <View style={styles.chatStatusRow}>
+                  <Animated.View
+                    style={[
+                      styles.chatStatusDot,
+                      {
+                        opacity: thinkPulse.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.35, 1],
+                        }),
+                        transform: [
+                          {
+                            scale: thinkPulse.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0.7, 1.15],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                  <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
+                </View>
+                {chatActions.length > 0 && (
+                  <View style={styles.chatActionsRow}>
+                    {chatActions.map((act, idx) => (
+                      <Text
+                        key={`${idx}-${act}`}
+                        style={[
+                          styles.chatActionText,
+                          // Dim older actions; the most recent
+                          // one stays at full opacity. Gives
+                          // the user a sense of progress
+                          // without the bar feeling busy.
+                          idx < chatActions.length - 1 && styles.chatActionTextFaded,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        • {act}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+              </Animated.View>
             )}
             {/* v3.10.30: attachment preview row. When
                 the user has attached a file/image, we
@@ -7116,12 +7330,42 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   voicePreviewText: { color: '#f7931a', fontSize: 14, fontWeight: '600' },
   voicePreviewDiscard: { color: '#888', fontSize: 18, paddingLeft: 12 },
   chatStatusBar: {
-    paddingHorizontal: 16, paddingVertical: 6,
-    backgroundColor: 'rgba(247,147,26,0.08)',
-    borderTopWidth: 1, borderTopColor: 'rgba(247,147,26,0.15)',
+    paddingHorizontal: 16, paddingVertical: 8,
+    backgroundColor: 'rgba(247,147,26,0.10)',
+    borderTopWidth: 1, borderTopColor: 'rgba(247,147,26,0.18)',
+  },
+  chatStatusRow: {
+    flexDirection: 'row', alignItems: 'center',
+  },
+  // v3.11.1: pulsing dot. 8dp circle with the same
+  // warm-orange palette as the rest of the bar. The
+  // animation lives in the render path; the styles
+  // here are static so the layout settles once per
+  // remount and only the transform/opacity re-run on
+  // each animation frame.
+  chatStatusDot: {
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: '#f7931a',
+    marginRight: 8,
   },
   chatStatusText: {
-    color: 'rgba(247,147,26,0.85)', fontSize: 12, fontStyle: 'italic',
+    color: 'rgba(247,147,26,0.95)', fontSize: 13, fontStyle: 'italic', fontWeight: '500',
+  },
+  // v3.11.1: action log row. Shows the last few
+  // agent tool calls in chronological order, one per
+  // line. Kept short (12px) and indented 16dp to
+  // signal "subordinate to the main status text
+  // above". Older actions fade to 0.5 opacity so the
+  // most recent action pops first.
+  chatActionsRow: {
+    marginTop: 4, marginLeft: 16,
+  },
+  chatActionText: {
+    color: 'rgba(247,147,26,0.95)', fontSize: 11, fontStyle: 'italic',
+    lineHeight: 14,
+  },
+  chatActionTextFaded: {
+    color: 'rgba(247,147,26,0.55)',
   },
   // v3.4.8: wrapper View for the chat FlatList. flex:1 so it
   // fills all space above the input row, with `position: relative`
