@@ -635,11 +635,73 @@ const DEFAULT_QUEST_KEY = '__default__';
 // broadcast value). The mobile's visible chat is the
 // mobile user's choice.
 let mobileActiveQuestAnchor: string | null | undefined = null;
+// v3.11.6: persisted copy of the anchor across cold
+// starts. AsyncStorage is async so we keep the
+// module-scope variable as the synchronous source and
+// mirror to storage on every change. On module init
+// (process restart) we read the persisted value
+// asynchronously and apply it before any render fires.
+const ANCHOR_STORAGE_KEY = 'cyberclaw-mobile-active-quest-anchor';
+// Subscribers re-render when the bootstrap completes.
+// Each subscriber's callback receives the new value
+// and bumps the React state to trigger a re-projection.
+type AnchorSubscriber = (qid: string | null | undefined) => void;
+const _anchorSubscribers = new Set<AnchorSubscriber>();
+function notifyAnchorSubscribers(qid: string | null | undefined) {
+  for (const fn of _anchorSubscribers) {
+    try { fn(qid); } catch (_) { /* defensive */ }
+  }
+}
+export function subscribeMobileActiveQuestAnchor(fn: AnchorSubscriber) {
+  _anchorSubscribers.add(fn);
+  return () => { _anchorSubscribers.delete(fn); };
+}
+// Bootstrap: kick off an async load at module init
+// so by the time HomeScreen mounts the anchor is
+// hydrated. We don't await — the read finishes
+// during the first render cycle and the subscribers
+// re-trigger the projection effect.
+(async () => {
+  try {
+    const v = await AsyncStorage.getItem(ANCHOR_STORAGE_KEY);
+    let next: string | null | undefined;
+    if (v === null) {
+      // First run / never persisted. Leave the anchor
+      // at its module-init value of null; the first
+      // broadcast will seed it.
+      next = undefined;
+    } else if (v === '__null__') {
+      // Explicit "user has no active quest" — restore
+      // null (different from "haven't picked yet").
+      next = null;
+    } else {
+      next = v;
+    }
+    if (next !== undefined) {
+      mobileActiveQuestAnchor = next;
+      notifyAnchorSubscribers(next);
+    }
+  } catch (_) { /* storage failed — fall back to module init */ }
+})();
 export function getMobileActiveQuestAnchor() {
   return mobileActiveQuestAnchor;
 }
 export function setMobileActiveQuestAnchor(qid: string | null | undefined) {
   mobileActiveQuestAnchor = qid;
+  // Persist asynchronously; the module-scope variable
+  // is the synchronous source so the projection effect
+  // doesn't need to wait. The bootstrap read on next
+  // cold start will restore the value.
+  try {
+    if (qid == null) {
+      // Distinguish "user explicitly deactivated" from
+      // "haven't picked yet" via a sentinel string. The
+      // cold-start bootstrap checks for this.
+      AsyncStorage.setItem(ANCHOR_STORAGE_KEY, '__null__').catch(() => {});
+    } else {
+      AsyncStorage.setItem(ANCHOR_STORAGE_KEY, qid).catch(() => {});
+    }
+  } catch (_) { /* defensive */ }
 }
 // v3.11.0: stringify/parse helpers for the per-(agent,
 // quest) AsyncStorage keys. Kept module-scope so all
@@ -1325,6 +1387,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // stale values.
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
   useEffect(() => { messagesByAgentRef.current = messagesByAgentAndQuest; }, [messagesByAgentAndQuest]);
+  // v3.11.6: subscribe to the mobileActiveQuestAnchor
+  // module-scope bootstrap read. When the cold-start
+  // AsyncStorage read completes (typically a few ms
+  // after HomeScreen mounts), the subscriber bumps a
+  // counter state so the projection effect's deps
+  // change and the chat re-projects to the persisted
+  // anchor's bucket. The anchor itself is the source
+  // of truth for the qid — we just need a re-render
+  // trigger. The counter is unused otherwise; it
+  // exists solely to make React notice the dep change.
+  const [anchorHydrateTick, setAnchorHydrateTick] = useState(0);
+  useEffect(() => {
+    const unsubscribe = subscribeMobileActiveQuestAnchor((qid) => {
+      setAnchorHydrateTick(t => t + 1);
+    });
+    return unsubscribe;
+  }, []);
   // v3.11.5: per-device quest name lookup. Populated from
   // every `quests_list` broadcast so the chat-bubble
   // header can render the active quest's name on each
@@ -1487,7 +1566,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // synchronously before setActiveChatQuestId), so
     // reading from the ref here picks up the new value
     // without an extra render.
-  }, [activeChatAgentId, activeChatQuestId]);
+  }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
 
   // v3.10.126: hydrate the persisted per-agent scroll
   // offsets from AsyncStorage on mount. The map is keyed
@@ -1650,7 +1729,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // No setState — purely a ref update, no re-render needed.
     // The restore useEffect below reads the ref directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChatAgentId, activeChatQuestId]);
+  }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
 
   // v3.10.181: SINGLE SOURCE OF TRUTH for the initial scroll
   // position decision on a HomeScreen mount. Fires when:
