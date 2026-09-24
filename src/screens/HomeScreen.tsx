@@ -1325,6 +1325,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // stale values.
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
   useEffect(() => { messagesByAgentRef.current = messagesByAgentAndQuest; }, [messagesByAgentAndQuest]);
+  // v3.11.5: per-device quest name lookup. Populated from
+  // every `quests_list` broadcast so the chat-bubble
+  // header can render the active quest's name on each
+  // bubble. Keyed by quest id; falls back to '(unnamed
+  // quest)' if the id isn't in the map (rare; happens
+  // for messages stamped with a quest that was deleted).
+  const [questNameById, setQuestNameById] = useState<Record<string, string>>({});
+  const questNameByIdRef = useRef<Record<string, string>>({});
+  useEffect(() => { questNameByIdRef.current = questNameById; }, [questNameById]);
 
   // v3.10.85: snapshot of the active quest at any given moment.
   // Updated by a quests_list listener below (same broadcast
@@ -1411,41 +1420,43 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       return;
     }
     const aid = activeChatAgentId;
-    // v3.11.4: prefer `activeQuestRef.current` for the
-    // bucket key, but fall back to the module-scoped
-    // `mobileActiveQuestAnchor` when the ref is
-    // undefined (i.e. immediately after a HomeScreen
-    // remount). On app foreground the ref is
-    // useRef-initialized to undefined, so without this
-    // fallback the projection reads `qid = null` and
-    // shows the DEFAULT bucket — which on Tobe's
-    // 2026-09-24 16:37 retest was the pre-v3.3.11
-    // legacy Hive Control messages, NOT the user's
-    // actual active quest (CYBERHIVE_WEBSITE V3).
+    // v3.11.5: prefer `mobileActiveQuestAnchor` over
+    // `activeQuestRef.current` for the projection
+    // bucket key. The anchor is the single source of
+    // truth for "what quest should the chat show right
+    // now?" — it's updated synchronously by both
+    // QuestsScreen.handleSetActive (user-initiated) and
+    // the onQuestsList broadcast listener (broadcast-
+    // initiated), and it survives component remounts.
     //
-    // The anchor survives remounts (module scope, not
-    // component scope) and reflects the user's last
-    // chosen quest. Using it as the fallback means the
-    // chat shows the right bucket the moment the
-    // projection effect fires — no flash, no fallback
-    // to legacy content, no waiting for the next
-    // broadcast.
+    // The previous design (v3.11.4) preferred the ref
+    // and fell back to the anchor. That worked for
+    // remount cases but failed for the deactivate case
+    // — Tobe's 2026-09-24 21:33 retest showed the chat
+    // staying on website's content even after he
+    // tapped "Deactivate." The ref got cleared (null)
+    // but the bucket lookup still resolved to website
+    // somehow — likely because the projection effect's
+    // useState-driven re-render raced against the
+    // QuestsScreen's optimistic anchor update. With
+    // the anchor as the primary source, the projection
+    // effect reads the user's intent directly.
     //
-    // Tobe's 2026-09-24 retest confirmed the v3.11.3
-    // fix was incomplete: it fixed the
-    // broadcast-churn path but not the
-    // remount-default-bucket path. The user could
-    // minimize the app, re-open, and see the DEFAULT
-    // bucket (legacy Hive Control messages) until the
-    // first fresh broadcast fired and switched to the
-    // right bucket. This fix closes that window.
+    // `activeQuestRef` is still used inside
+    // `appendAgentMessage` to stamp incoming replies
+    // (the ref is the fast synchronous source for
+    // event handlers that can't read state). The
+    // anchor is for the view-projection.
     let qid: string | null;
-    if (activeQuestRef.current !== undefined) {
-      qid = activeQuestRef.current?.id ?? null;
-    } else if (mobileActiveQuestAnchor !== null && mobileActiveQuestAnchor !== undefined) {
-      // Anchor was set on a prior session and survives
-      // the remount. Use it.
+    if (mobileActiveQuestAnchor !== null && mobileActiveQuestAnchor !== undefined) {
+      // Anchor is the user's choice (or was seeded by
+      // a fresh broadcast). Use it directly.
       qid = mobileActiveQuestAnchor;
+    } else if (activeQuestRef.current !== undefined) {
+      // Anchor hasn't been set yet (process restart
+      // before any broadcast), but the ref may have
+      // been hydrated by a synchronous path.
+      qid = activeQuestRef.current?.id ?? null;
     } else {
       qid = null;
     }
@@ -4378,6 +4389,25 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onQuestsList = (msg: any) => {
       try {
         const quests = Array.isArray(msg?.quests) ? msg.quests : [];
+        // v3.11.5: always populate the quest name lookup
+        // map from every broadcast (including cache
+        // replays). The map is data-only and used by the
+        // bubble header to render per-bubble quest labels.
+        // Updates here are idempotent (same key, same
+        // value) so cache replays don't churn React.
+        if (quests.length > 0) {
+          setQuestNameById(prev => {
+            let changed = false;
+            const next = { ...prev };
+            for (const q of quests) {
+              if (q && q.id && q.name && next[q.id] !== q.name) {
+                next[q.id] = q.name;
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+        }
         const active = quests.find((q: any) => q && q.active);
         const next = active && active.id
           ? { id: active.id, name: active.name || '(unnamed quest)' }
@@ -5247,6 +5277,20 @@ useEffect(() => {
       return <View />;
     }
 
+    // v3.11.5: derive the quest name for this bubble's
+    // header. Three sources, in order:
+    //   1. item.activeQuestName — stamped at append time
+    //      by the chat pipeline (desktop v3.3.18 sends
+    //      activeQuestId; older code stamped the name too).
+    //   2. The questNameById map populated by the
+    //      onQuestsList listener from the latest
+    //      quests_list broadcast.
+    //   3. Fallback: '(unnamed quest)' so the user sees
+    //      the chip rather than nothing.
+    const qidForLabel = item.activeQuestId;
+    const questNameFromId = (id: string) =>
+      questNameByIdRef.current[id] || null;
+
     // v3.1.16: data is stored in chronological order (oldest→newest).
     // Show a date separator when the bucket changes from the previous
     // message (which is the one right above in the array).
@@ -5339,9 +5383,47 @@ useEffect(() => {
           </View>
         )}
         <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
-          <Text style={[styles.agentLabel, item.isUser ? styles.userLabel : styles.aiLabel]}>
-            {agentLabel}
-          </Text>
+          <View style={styles.bubbleHeaderRow}>
+            <Text style={[styles.agentLabel, item.isUser ? styles.userLabel : styles.aiLabel]}>
+              {agentLabel}
+            </Text>
+            {/* v3.11.5: show the quest name (or 'No quest')
+                on every chat bubble so the user can tell
+                which quest a message belongs to at a glance.
+                Without this, messages from different quests
+                in the same bucket can look indistinguishable,
+                and the user has to rely on the chat header /
+                Quests panel to know which quest they're
+                seeing. Tobe 2026-09-24 21:33: 'Let us put in
+                the current quest name at the upper right of
+                each text bubble so one can see what chat it
+                actually is.'
+
+                The label comes from item.activeQuestName
+                (stamped at append time by the desktop) or
+                falls back to a name lookup via
+                activeQuestIdRef if activeQuestName is
+                missing. For messages with no quest
+                attribution (legacy / DEFAULT bucket), shows
+                'No quest' so the user can distinguish
+                pre-v3.3.11 legacy chat from per-quest chat.
+
+                The label is rendered as a small chip on the
+                right side of the agent-label row. Both
+                styles share the row, so layout is unaffected
+                for short agent names. */}
+            <Text
+              style={[
+                styles.bubbleQuestLabel,
+                item.isUser ? styles.bubbleQuestLabelUser : styles.bubbleQuestLabelAi,
+              ]}
+              numberOfLines={1}
+            >
+              {item.activeQuestId == null
+                ? '— No quest'
+                : `🎯 ${item.activeQuestName || questNameFromId(item.activeQuestId) || '(unnamed quest)'}`}
+            </Text>
+          </View>
           {/* v3.10.127: selectable={true} lets the user tap-and-
               hold to bring up the system text-selection
               handles and then copy. Without it React Native
@@ -5553,7 +5635,7 @@ useEffect(() => {
     // fresh `agents_list` broadcast from the desktop. Without this,
     // messages rendered with the old (stale, no-icon) agents state
     // never updated when new agent data arrived.
-  }, [messages, agents]);
+  }, [messages, agents, questNameById]);
 
   const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
     // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)
@@ -7292,6 +7374,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   agentLabel: { fontSize: 10, fontWeight: '700', marginBottom: 4, color: t.text.muted },
   userLabel: { color: t.brand.cyanDim, fontWeight: 'bold' },
   aiLabel: { color: t.brand.accent, fontWeight: 'bold' },
+  // v3.11.5: bubble header row hosts the agent label on
+  // the left and the quest chip on the right. Using
+  // spaceBetween so the chip floats to the upper right
+  // of the bubble (matches Tobe's request: 'the current
+  // quest name at the upper right of each text bubble').
+  bubbleHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  // The quest chip: small, muted color, rounded. Two
+  // variants for user vs AI bubbles so it reads well
+  // against the bubble background. The '— No quest'
+  // text shows when item.activeQuestId is null (legacy
+  // or user explicitly deactivated).
+  bubbleQuestLabel: { fontSize: 9, fontWeight: '600', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden', marginLeft: 6, maxWidth: '60%' },
+  bubbleQuestLabelAi: { backgroundColor: t.brand.accentDim + '22', color: t.brand.accent },
+  bubbleQuestLabelUser: { backgroundColor: t.brand.cyanDim + '22', color: t.brand.cyanDim },
   // v3.10.114: text follows the bubble border color so user
   // messages read as 'from you' (sky blue text) and AI as
   // 'from companion' (forest green text). Both on a white bg,
