@@ -1411,7 +1411,44 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       return;
     }
     const aid = activeChatAgentId;
-    const qid = activeQuestRef.current === undefined ? null : (activeQuestRef.current?.id ?? null);
+    // v3.11.4: prefer `activeQuestRef.current` for the
+    // bucket key, but fall back to the module-scoped
+    // `mobileActiveQuestAnchor` when the ref is
+    // undefined (i.e. immediately after a HomeScreen
+    // remount). On app foreground the ref is
+    // useRef-initialized to undefined, so without this
+    // fallback the projection reads `qid = null` and
+    // shows the DEFAULT bucket — which on Tobe's
+    // 2026-09-24 16:37 retest was the pre-v3.3.11
+    // legacy Hive Control messages, NOT the user's
+    // actual active quest (CYBERHIVE_WEBSITE V3).
+    //
+    // The anchor survives remounts (module scope, not
+    // component scope) and reflects the user's last
+    // chosen quest. Using it as the fallback means the
+    // chat shows the right bucket the moment the
+    // projection effect fires — no flash, no fallback
+    // to legacy content, no waiting for the next
+    // broadcast.
+    //
+    // Tobe's 2026-09-24 retest confirmed the v3.11.3
+    // fix was incomplete: it fixed the
+    // broadcast-churn path but not the
+    // remount-default-bucket path. The user could
+    // minimize the app, re-open, and see the DEFAULT
+    // bucket (legacy Hive Control messages) until the
+    // first fresh broadcast fired and switched to the
+    // right bucket. This fix closes that window.
+    let qid: string | null;
+    if (activeQuestRef.current !== undefined) {
+      qid = activeQuestRef.current?.id ?? null;
+    } else if (mobileActiveQuestAnchor !== null && mobileActiveQuestAnchor !== undefined) {
+      // Anchor was set on a prior session and survives
+      // the remount. Use it.
+      qid = mobileActiveQuestAnchor;
+    } else {
+      qid = null;
+    }
     const agentBuckets = messagesByAgentRef.current[aid] || {};
     const bucketKey = questKeyForStorage(qid);
     const bucket = agentBuckets[bucketKey] || [];
@@ -2604,7 +2641,39 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setMessages(prev => {
             if (prev.length > 0) return prev;
             const aid = activeChatAgentIdRef.current;
+            // v3.11.4: prefer the active quest's bucket
+            // over the iteration-order first bucket. The
+            // previous logic used `Object.entries` and
+            // returned the FIRST non-empty bucket, which
+            // is insertion order in JS — the legacy
+            // DEFAULT bucket (from the v3.11.0 migration)
+            // was iterated first and won, regardless of
+            // which quest the user actually had active.
+            //
+            // The new logic prefers:
+            //   1. The active companion × active quest's
+            //      bucket.
+            //   2. The active companion's DEFAULT bucket.
+            //   3. Any agent's bucket with content (rare
+            //      fallback for the empty-state initial
+            //      load).
             if (aid && parsed[aid]) {
+              const activeQid = mobileActiveQuestAnchor ?? null;
+              const activeKey = questKeyForStorage(
+                activeQid === undefined ? null : activeQid
+              );
+              if (parsed[aid][activeKey] && parsed[aid][activeKey].length > 0) {
+                return parsed[aid][activeKey];
+              }
+              // Fall back to the active agent's default
+              // bucket.
+              const defaultKey = DEFAULT_QUEST_KEY;
+              if (parsed[aid][defaultKey] && parsed[aid][defaultKey].length > 0) {
+                return parsed[aid][defaultKey];
+              }
+              // Last resort: any bucket of any agent with
+              // content. Useful only on initial load before
+              // the agents list arrives.
               for (const [, msgs] of Object.entries(parsed[aid])) {
                 if (Array.isArray(msgs) && msgs.length > 0) return msgs;
               }
