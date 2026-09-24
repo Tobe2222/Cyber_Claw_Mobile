@@ -583,6 +583,64 @@ type TabId = 'chat' | 'events' | 'log';
 // translating at the boundaries. The sentinel is invisible
 // outside of this file.
 const DEFAULT_QUEST_KEY = '__default__';
+
+// v3.11.2: per-device active-quest anchor. Tracks the
+// active quest that THIS device has chosen (either from
+// the initial quests_list broadcast or from a user
+// tap in QuestsScreen.handleSetActive). The mobile's
+// `onQuestsList` listener uses this to decide whether a
+// incoming broadcast should update the visible chat
+// selection.
+//
+// Bug history (2026-09-24): while an LLM reply was in
+// flight on the website quest, the mobile's chat flashed
+// to the Hive Control bucket for ~1s, then reverted
+// when the user navigated away/back. Root cause: the
+// mobile's `onQuestsList` listener blindly trusted the
+// desktop's `q.active` flag in every broadcast. The
+// desktop re-broadcasts quests_list on every saveQuests
+// (which fires on every chat-pipeline log append, every
+// quest metadata edit, every mobile reconnect), and the
+// cached `_lastQuestsList` payload could carry a stale
+// or transient `q.active` (e.g. a stale replay after
+// the user previously had Hive Control active during
+// testing). Each broadcast re-runs the projection
+// effect, which swaps `messages` to the broadcast's
+// quest's bucket — so a 1-frame flash to the wrong chat
+// becomes user-visible.
+//
+// Module-scoped (not component-scoped) because both
+// HomeScreen's `onQuestsList` and QuestsScreen's
+// `handleSetActive` need to read/write it. The ref
+// survives HomeScreen unmount during navigation. Reset
+// to null on app cold start (process restart) — that's
+// the same as "no anchor yet," and the initial broadcast
+// seeds it.
+//
+// Type:
+//   null        — no anchor yet (initial state). The
+//                  first `quests_list` broadcast seeds
+//                  it; subsequent broadcasts that
+//                  agree with the anchor are no-ops and
+//                  broadcasts that DISAGREE are ignored.
+//   string|undefined — the user's chosen or adopted
+//                  active quest id. `undefined` mirrors
+//                  v3.11.0's `activeChatQuestId` state
+//                  sentinel for "no active quest on
+//                  desktop."
+//
+// Note: this anchor is ON THE MOBILE only. The desktop
+// remains the source of truth for cross-device broadcasts
+// (the agent reply stamping still uses the desktop's
+// broadcast value). The mobile's visible chat is the
+// mobile user's choice.
+let mobileActiveQuestAnchor: string | null | undefined = null;
+export function getMobileActiveQuestAnchor() {
+  return mobileActiveQuestAnchor;
+}
+export function setMobileActiveQuestAnchor(qid: string | null | undefined) {
+  mobileActiveQuestAnchor = qid;
+}
 // v3.11.0: stringify/parse helpers for the per-(agent,
 // quest) AsyncStorage keys. Kept module-scope so all
 // readers/writers agree on the encoding (and so a future
@@ -1277,6 +1335,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // quest (the v3.10.82 default state). `undefined` =
   // quests haven't loaded yet from the desktop.
   const activeQuestRef = useRef<{ id: string; name: string } | null | undefined>(undefined);
+  // v3.11.2: per-device active-quest anchor lives in
+  // module-scope (`mobileActiveQuestAnchor` near the top
+  // of this file) so both HomeScreen's `onQuestsList`
+  // and QuestsScreen's `handleSetActive` can read/write
+  // it without prop-drilling. The listener uses it to
+  // decide whether to adopt the broadcast's `q.active`
+  // or ignore it. See the comment near
+  // `mobileActiveQuestAnchor` for the full bug history
+  // and fix rationale.
   // v3.10.108: sticky thinking flag. Mirrors Discord's
   // server-authoritative typing indicator: once set true
   // by a `typing: true` from desktop, stays true (and
@@ -4246,14 +4313,85 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const next = active && active.id
           ? { id: active.id, name: active.name || '(unnamed quest)' }
           : null;
-        activeQuestRef.current = next;
-        // v3.11.0: mirror into state so per-quest useEffects
-        // (scroll-restore, view-sync) can re-fire on quest
-        // change. The ref stays the source of truth inside
-        // sync-event listeners (no stale closures); the
-        // state mirror is only for React subscriptions.
         const nextQid: string | null | undefined = next ? next.id : null;
-        setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
+        // v3.11.2: gated update of the local active-quest
+        // state. The desktop re-broadcasts quests_list on
+        // every saveQuests (which fires on every chat
+        // pipeline log append and every mobile WS
+        // reconnect). The cached `_lastQuestsList` payload
+        // can carry a stale or transient `q.active` from an
+        // earlier session. The 2026-09-24 bug: the mobile
+        // flashed from website's chat to Hive Control's
+        // chat for ~1s during an in-flight LLM turn because
+        // a stale replay carried Hive Control as active.
+        //
+        // The fix: once the mobile has anchored on an
+        // active quest (either from the initial broadcast
+        // or from a user pick in QuestsScreen), it sticks.
+        // Subsequent `quests_list` broadcasts that carry a
+        // DIFFERENT active quest are ignored. Broadcasts
+        // that AGREE with the anchor always adopt (they're
+        // confirmations). The desktop remains the source
+        // of truth for cross-device chat-context
+        // (activeQuestRef.current, used to stamp incoming
+        // agent replies in appendAgentMessage), but the
+        // visible chat selection stays glued to the user's
+        // last choice on this device.
+        //
+        // To intentionally re-sync (e.g. the user actively
+        // switched active on the desktop), the user can
+        // re-tap the active quest on the Quests panel,
+        // which routes through QuestsScreen.handleSetActive
+        // and clears the anchor.
+        //
+        // The 3 cases below cover everything:
+        if (mobileActiveQuestAnchor === null) {
+          // Case 1: no anchor yet (process restart OR we
+          // explicitly reset the anchor). Adopt the
+          // broadcast's active as the initial anchor.
+          // Both "no active quest" (nextQid === null)
+          // and "active quest X" (nextQid === 'X') are
+          // valid initial seeds — the anchor becomes
+          // whatever the broadcast said.
+          mobileActiveQuestAnchor = nextQid;
+          activeQuestRef.current = next;
+          setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
+          return;
+        }
+        if (mobileActiveQuestAnchor === nextQid) {
+          // Case 2: broadcast confirms our anchor (most
+          // common case). No state swap; keep the ref in
+          // sync (in case the quest name changed between
+          // broadcasts, e.g. user renamed it).
+          activeQuestRef.current = next;
+          setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
+          return;
+        }
+        // Case 3: broadcast carries a different active
+        // than our anchor. Ignore the broadcast's active
+        // (the user's mobile view stays); but DO update
+        // the ref so outgoing agent messages get stamped
+        // correctly. This avoids the in-flight reply
+        // bucketing bug where a reply would land in the
+        // wrong bucket because of a stale ref.
+        //
+        // We update activeQuestRef.current (no state
+        // change, so the projection effect doesn't fire)
+        // but DON'T setActiveChatQuestId. The visible
+        // chat bucket stays anchored to the user's
+        // choice; the broadcast's different active is
+        // still available to stamp incoming messages if
+        // they happen to arrive during this window.
+        //
+        // Tobe's report (2026-09-24): chat flashed to a
+        // different quest mid-task. That flash is gone.
+        // Replies that arrive now may be stamped to a
+        // different quest's bucket than the user is
+        // viewing (rare; only during a brief window
+        // when the desktop and mobile disagree). They
+        // don't appear in the visible chat; they show up
+        // when the user next visits that quest.
+        activeQuestRef.current = next;
       } catch {}
     };
     syncClient.on('quests_list', onQuestsList);

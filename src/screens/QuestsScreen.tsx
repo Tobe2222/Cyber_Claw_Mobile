@@ -62,6 +62,13 @@ import syncClient from '../services/SyncClient';
 // top of the screen (Tobe reported 2026-07-23). With the
 // inset padding, the modal starts below the status bar.
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// v3.11.2: setters/getter for the per-device
+// active-quest anchor (defined in HomeScreen.tsx).
+// The anchor is module-scoped so QuestsScreen can
+// update it on handleSetActive without prop-drilling.
+// See the comment on `mobileActiveQuestAnchor` in
+// HomeScreen.tsx for the bug history.
+import { setMobileActiveQuestAnchor } from './HomeScreen';
 
 type CompanionQuest = {
   id: string;
@@ -434,6 +441,31 @@ export default function QuestsScreen({
   // shows a toast on rejection.
   const handleSetActive = (id: string | null) => {
     setError(null);
+    // v3.11.2: optimistically anchor the local active
+    // quest before the desktop replies. The mobile's
+    // `onQuestsList` listener (in HomeScreen) consults
+    // the anchor when broadcasts arrive; without an
+    // explicit anchor update here, the listener could
+    // lock onto whatever an in-flight broadcast carries
+    // (e.g. a stale `_lastQuestsList` cache hit from an
+    // earlier session) and ignore the user's pick.
+    //
+    // Setting the anchor optimistically is safe: when
+    // the desktop's reply broadcast arrives carrying
+    // the same active, the listener's `Case 2: anchor
+    // matches broadcast` path runs (no-op state swap).
+    // If the desktop replies with a different active
+    // (shouldn't happen — the IPC we just sent sets
+    // active, and the reply broadcast reflects that),
+    // the listener will keep the user's optimistic
+    // pick (Case 3: ignore) and the user sees the
+    // quest they expected.
+    //
+    // `null` (the deactivate button) is also a valid
+    // anchor value — the listener treats `null ===
+    // null` as "match." A user who explicitly picks no
+    // quest gets to keep that decision.
+    setMobileActiveQuestAnchor(id ?? null);
     syncClient.setQuestActive?.(id);
   };
   const handleUpdateQuest = (id: string, updates: Record<string, any>) => {
@@ -478,6 +510,20 @@ export default function QuestsScreen({
     if (refreshing) return; // double-tap guard
     setError(null);
     setRefreshing(true);
+    // v3.11.2: user-initiated refresh means "I want to
+    // re-sync from the desktop." Reset the mobile's
+    // per-device active-quest anchor so the next
+    // `quests_list` broadcast is adopted instead of
+    // being compared against the (possibly stale)
+    // anchor. Without this reset, the refresh would
+    // surface the latest quest list data in the cards
+    // (the local state), but the active highlight
+    // would still be locked to whatever the user last
+    // picked or was first seeded with. For users who
+    // e.g. switched active on the desktop and want
+    // the mobile to follow, this reset is the recovery
+    // path.
+    setMobileActiveQuestAnchor(null);
     try {
       syncClient.requestQuestsList?.();
     } catch (_) {}
