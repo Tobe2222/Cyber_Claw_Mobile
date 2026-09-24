@@ -1,5 +1,16 @@
 # v3.11.2 — Active-quest chat flash fix (broadcast churn in `onQuestsList`)
 
+> **Revision (2026-09-24 ~10:20):** Tobe clarified the
+> chat didn't flash — it STAYED on the wrong quest until
+> he navigated Quests and back. That meant the listener
+> permanently adopted the wrong active, not just briefly.
+> Root cause: under the original v3.11.2 design, the
+> first broadcast to seed the anchor could be a stale
+> cached replay (`source: 'cache_replay'`). The fix:
+> the desktop now tags fresh broadcasts vs cache replays,
+> and the mobile only seeds the anchor on fresh
+> broadcasts. See "Fix (revised)" below.
+
 Tobe (2026-09-24 ~09:39, Discord #cyber-dev), reported against v3.11.1:
 
 > "im planning to use a new computer for my agents and work
@@ -76,7 +87,64 @@ flipped state to Hive Control, the projection swapped
 broadcast replayed the canonical ("website") state, the
 listener flipped back, the projection re-swapped.
 
-## Fix
+## Fix (revised, 2026-09-24 ~10:20)
+
+The desktop tags each `quests_list` broadcast with a
+`source` field:
+
+- `'broadcast'` — fresh, just-saved state. Set by
+  `broadcastQuestsList()` in sync-server.js.
+- `'cache_replay'` — served from `_lastQuestsList` on
+  mobile reconnect / `request_state` /
+  `request_quests_list`. Set by `_sendFullState` and the
+  `request_quests_list` cache-fallback path.
+
+The mobile's `onQuestsList` listener (HomeScreen.tsx,
+~line 4283) treats fresh broadcasts as authoritative for
+the per-device anchor, and treats cache replays as
+data-only (populates the quest list, but doesn't seed the
+anchor):
+
+```ts
+const isFreshBroadcast = msg?.source !== 'cache_replay';
+if (!isFreshBroadcast) {
+  // Cache replay. Populate data; do NOT seed the anchor.
+  activeQuestRef.current = next;
+  return;
+}
+// Fresh broadcast: 3-case logic as below.
+```
+
+Cache replays can still reach the listener in two ways
+during a single mobile connection:
+
+1. `_sendFullState` on WS auth (the desktop's first
+   message after the mobile connects).
+2. `request_quests_list` cache fallback (rare; main.js's
+   `onRequestQuestsList` always re-reads fresh, so this
+   only fires when the desktop's main.js is unregistered
+   or broken).
+
+In both cases, the broadcast's `source: 'cache_replay'`
+flags it as suspect.
+
+### Server-side companion fix (desktop v3.3.16)
+
+The desktop's `_sendFullState` and `request_quests_list`
+cache fallback now always call `onRequestQuestsList()`
+to re-broadcast fresh, in addition to (or instead of)
+the cache replay. So in the common path, the mobile gets:
+
+1. Cache replay (instant, tagged `source: 'cache_replay'`)
+2. Fresh broadcast (a tick later, tagged
+   `source: 'broadcast'`)
+
+The mobile listener processes both; the fresh broadcast
+seeds the anchor. The cache replay is harmlessly ignored
+for state purposes but populates the quest list data
+immediately so the user doesn't see an empty list.
+
+## Fix (original v3.11.2 design, kept for context)
 
 A per-device anchor for the active quest. Once the mobile
 has chosen an active quest (initial broadcast OR explicit
