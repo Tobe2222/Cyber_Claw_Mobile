@@ -4351,13 +4351,31 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         //     a stale replay" path.
         const isFreshBroadcast = msg?.source !== 'cache_replay';
         if (!isFreshBroadcast) {
-          // Cache replay. Populate the quest data and
-          // keep the ref in sync, but DON'T seed or
-          // update the anchor. The user has either
-          // already chosen an active quest (anchor set)
-          // or hasn't yet (we'll wait for a fresh
-          // broadcast to seed it).
-          activeQuestRef.current = next;
+          // Cache replay. Data-only — do NOT touch
+          // activeQuestRef or activeChatQuestId. The
+          // reason: a cache replay can arrive AFTER a
+          // fresh broadcast has already seeded the
+          // ref/state to the correct value, and writing
+          // the cache's (potentially stale) ref value
+          // here would corrupt the projection effect's
+          // view.
+          //
+          // Tobe's 2026-09-24 repro on v3.11.2 (revised)
+          // hit exactly this: the fresh broadcast seeded
+          // the ref to website, then a cache replay
+          // arrived carrying Hive Control and the ref
+          // flipped to Hive Control. The projection
+          // effect's bucket lookup returned the
+          // legacy/DEFAULT bucket (which Hive Control
+          // happens to map to via the null-active-quest
+          // path), and the chat flashed to the
+          // pre-v3.3.11 legacy history.
+          //
+          // The correct ref/state values come only from
+          // fresh broadcasts (Case 1/2/3 below). Cache
+          // replays are useful only for populating the
+          // QuestsScreen card list, which the renderer
+          // handles separately via its own listener.
           return;
         }
         if (mobileActiveQuestAnchor === null) {
