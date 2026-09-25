@@ -1588,21 +1588,43 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // event handlers that can't read state). The
     // anchor is for the view-projection.
     let qid: string | null;
+    let skipBucketLookup = false;
     if (mobileActiveQuestAnchor !== null && mobileActiveQuestAnchor !== undefined) {
       // Anchor is the user's choice (or was seeded by
       // a fresh broadcast). Use it directly.
       qid = mobileActiveQuestAnchor;
+    } else if (!_anchorBootstrapResolved) {
+      // v3.11.10: bootstrap pending. Don't fall through
+      // to the ref-and-default-bucket fallback — the
+      // bootstrap will resolve shortly and set the
+      // anchor (which triggers a re-run via
+      // setAnchorHydrateTick). Show empty until then.
+      //
+      // The previous behavior fell to activeQuestRef
+      // (undefined on a fresh mount) → qid = null →
+      // DEFAULT bucket lookup. If a chat_history
+      // response had populated the DEFAULT bucket in
+      // the gap, the user saw pre-v3.11.0 legacy
+      // content. Tobe hit this on 2026-09-25 ~20:14.
+      qid = null;
+      skipBucketLookup = true;
     } else if (activeQuestRef.current !== undefined) {
-      // Anchor hasn't been set yet (process restart
-      // before any broadcast), but the ref may have
-      // been hydrated by a synchronous path.
+      // Anchor is null AND the bootstrap has resolved
+      // AND returned null (user explicitly deactivated).
+      // The ref may also be set if a fresh broadcast
+      // landed; prefer that.
       qid = activeQuestRef.current?.id ?? null;
     } else {
+      // Anchor is null AND bootstrap resolved with null
+      // AND no ref is set. User explicitly deactivated
+      // and no broadcast has landed yet. Show DEFAULT
+      // bucket content (which is what "no active quest"
+      // means).
       qid = null;
     }
     const agentBuckets = messagesByAgentRef.current[aid] || {};
     const bucketKey = questKeyForStorage(qid);
-    const bucket = agentBuckets[bucketKey] || [];
+    const bucket = skipBucketLookup ? [] : (agentBuckets[bucketKey] || []);
     setMessages(bucket);
     // v3.11.0: when we switch quest, mark the
     // chatAtBottom state so the FlatList settles to the
@@ -4057,6 +4079,28 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // active and the legacy DEFAULT bucket content
         // doesn't belong in their active-quest view.
         //
+        // v3.11.10: the v3.11.9 check `anchor === null`
+        // was correct for "user has explicitly
+        // deactivated" but WRONG for "bootstrap pending".
+        // On a slow first start (AsyncStorage.getItem
+        // takes >300ms), chat_history fires before the
+        // bootstrap reads the persisted anchor. anchor
+        // is still null at that moment — but it would
+        // become 'database' (or whatever's persisted)
+        // moments later. Reading anchor === null without
+        // also checking whether the bootstrap has
+        // resolved leaked the DEFAULT bucket content in
+        // the gap.
+        //
+        // Fix: only surface DEFAULT content if both the
+        // bootstrap has resolved AND the resolved value
+        // is null (user explicitly deactivated). While
+        // the bootstrap is pending, return without
+        // touching `messages`. The projection effect
+        // will run after the bootstrap completes (the
+        // subscriber bumps anchorHydrateTick, which is
+        // in the effect's deps).
+        //
         // Edge case: the projection effect's deps don't
         // include the chat_history event, so it won't
         // re-fire after this setMessages runs. But
@@ -4069,7 +4113,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // agent_history or seedFromPerAgent, that content
         // is already in messages from those earlier
         // async paths.
-        if (mobileActiveQuestAnchor === null) {
+        if (_anchorBootstrapResolved && mobileActiveQuestAnchor === null) {
           setMessages(loaded);
         }
       }
