@@ -652,8 +652,53 @@ function notifyAnchorSubscribers(qid: string | null | undefined) {
     try { fn(qid); } catch (_) { /* defensive */ }
   }
 }
+// v3.11.7: tracks whether the module-init bootstrap IIFE
+// has completed at least once. We need this to distinguish
+// "bootstrap hasn't run yet" (don't replay — the subscriber
+// will be notified when it completes) from "bootstrap
+// resolved with a value before the subscriber registered"
+// (REPLAY the value to the new subscriber so React gets a
+// re-render trigger).
+//
+// Without this flag, the v3.11.6 bootstrap had a race:
+//   1. Module load → IIFE kicks off AsyncStorage.getItem.
+//   2. HomeScreen mounts → first render commits →
+//      projection effect fires with anchor=null → DEFAULT
+//      bucket is rendered.
+//   3. AsyncStorage.getItem resolves (fast on Hermes —
+//      sometimes under one frame).
+//   4. notifyAnchorSubscribers fires on an empty Set —
+//      no React state update, no re-projection.
+//   5. The user sees the DEFAULT bucket forever (until
+//      they navigate to Quests and back, which forces
+//      a remount and re-reads the module-scope anchor).
+//
+// Tobe hit exactly this on 2026-09-25: "I still started
+// with the no quest chat on startup, even tho i had
+// website quest active. It refreshes to the correct
+// after i go into quests and out again." Anchor IS
+// persisted (he picked it once), but the projection
+// effect never re-fires on cold start.
+let _anchorBootstrapResolved = false;
 export function subscribeMobileActiveQuestAnchor(fn: AnchorSubscriber) {
   _anchorSubscribers.add(fn);
+  // v3.11.7: replay the current anchor value to the new
+  // subscriber IF the bootstrap has already resolved.
+  // This closes the race where the bootstrap's notify
+  // fires before any subscriber registered. We pass
+  // the current `mobileActiveQuestAnchor` value:
+  //   - string qid: re-trigger the projection with the
+  //     persisted quest.
+  //   - null: re-trigger with "user explicitly deactivated"
+  //     (re-project to DEFAULT bucket, which is correct
+  //     in this case — the user wanted no active quest).
+  //   - undefined: bootstrap resolved with no persisted
+  //     value (first run) — don't replay, the next
+  //     broadcast will seed via Case 1 and the subscriber
+  //     will be notified then.
+  if (_anchorBootstrapResolved) {
+    try { fn(mobileActiveQuestAnchor); } catch (_) { /* defensive */ }
+  }
   return () => { _anchorSubscribers.delete(fn); };
 }
 // Bootstrap: kick off an async load at module init
@@ -661,6 +706,22 @@ export function subscribeMobileActiveQuestAnchor(fn: AnchorSubscriber) {
 // hydrated. We don't await — the read finishes
 // during the first render cycle and the subscribers
 // re-trigger the projection effect.
+//
+// v3.11.7: when the read completes (success or empty),
+// set `_anchorBootstrapResolved = true` so any future
+// `subscribeMobileActiveQuestAnchor` call can replay
+// the current value. The previous version only set
+// the flag on the `next !== undefined` branch, which
+// meant a first-run install (no persisted value) would
+// leave the flag false forever and a late-registered
+// subscriber would never get a replay (correct, in
+// that case — there's nothing to replay) but ALSO
+// wouldn't be protected if the bootstrap resolved
+// just after the subscriber registered (the notify
+// would land on a populated Set and the subscriber
+// would fire normally). The flag now reflects "the
+// bootstrap IIFE has completed" regardless of whether
+// a value was found.
 (async () => {
   try {
     const v = await AsyncStorage.getItem(ANCHOR_STORAGE_KEY);
@@ -679,9 +740,9 @@ export function subscribeMobileActiveQuestAnchor(fn: AnchorSubscriber) {
     }
     if (next !== undefined) {
       mobileActiveQuestAnchor = next;
-      notifyAnchorSubscribers(next);
     }
   } catch (_) { /* storage failed — fall back to module init */ }
+  _anchorBootstrapResolved = true;
 })();
 export function getMobileActiveQuestAnchor() {
   return mobileActiveQuestAnchor;
