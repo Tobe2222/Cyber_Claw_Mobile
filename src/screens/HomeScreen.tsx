@@ -4038,10 +4038,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // it from the active quest's bucket on the next
         // render. Otherwise we'd briefly show the default
         // bucket's content in the active-quest view.
-        if (
-          activeChatQuestId === undefined ||
-          activeChatQuestId === null
-        ) {
+        //
+        // v3.11.9: the v3.11.0 check used
+        // `activeChatQuestId === undefined || null`, which
+        // was wrong on cold start: activeChatQuestId is
+        // `undefined` (initial state) until the first
+        // quests_list broadcast lands, but
+        // `mobileActiveQuestAnchor` may already be set
+        // (from the v3.11.6/7 bootstrap) to a specific
+        // quest. Reading activeChatQuestId here would
+        // surface the legacy DEFAULT bucket content into
+        // a user's active-quest view — the chat-flash
+        // bug.
+        //
+        // The anchor is the source of truth (set by the
+        // bootstrap or by handleSetActive, both sync). If
+        // it's a non-null quest id, the user has a quest
+        // active and the legacy DEFAULT bucket content
+        // doesn't belong in their active-quest view.
+        //
+        // Edge case: the projection effect's deps don't
+        // include the chat_history event, so it won't
+        // re-fire after this setMessages runs. But
+        // because we no longer write the wrong bucket
+        // here, the projection effect's previous render
+        // (showing the correct empty/active-quest bucket)
+        // stands. If the active quest's bucket is empty,
+        // the user sees empty chat (consistent with
+        // v3.11.8's seed paths). If it has content from
+        // agent_history or seedFromPerAgent, that content
+        // is already in messages from those earlier
+        // async paths.
+        if (mobileActiveQuestAnchor === null) {
           setMessages(loaded);
         }
       }
