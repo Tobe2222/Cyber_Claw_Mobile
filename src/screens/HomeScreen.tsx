@@ -2726,8 +2726,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         });
         // Show the first non-empty slot (or the active tab's
         // slot, if any) as the visible chat.
+        //
+        // v3.11.8: the legacy `cyberclaw-chat-history` key
+        // pre-dates quest attribution — every message it
+        // holds is un-attributed (treated as DEFAULT /
+        // no-quest). If the user has an active quest
+        // (anchor !== null), the legacy content is NOT
+        // relevant to that quest's view. Skip the legacy
+        // bucket and bump anchorHydrateTick so the
+        // projection effect picks a clean empty render for
+        // the active quest's bucket.
         setMessages(prev => {
           if (prev.length > 0) return prev; // already populated
+          const activeQid = mobileActiveQuestAnchor ?? null;
+          if (activeQid !== null) {
+            setAnchorHydrateTick(t => t + 1);
+            return prev;
+          }
           const aid = activeChatAgentIdRef.current;
           if (aid && grouped[aid]?.[DEFAULT_QUEST_KEY]?.length) return grouped[aid][DEFAULT_QUEST_KEY];
           // otherwise the first non-empty slot
@@ -2793,21 +2808,21 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             if (prev.length > 0) return prev;
             const aid = activeChatAgentIdRef.current;
             // v3.11.4: prefer the active quest's bucket
-            // over the iteration-order first bucket. The
-            // previous logic used `Object.entries` and
-            // returned the FIRST non-empty bucket, which
-            // is insertion order in JS — the legacy
-            // DEFAULT bucket (from the v3.11.0 migration)
-            // was iterated first and won, regardless of
-            // which quest the user actually had active.
+            // over the iteration-order first bucket.
             //
-            // The new logic prefers:
-            //   1. The active companion × active quest's
-            //      bucket.
-            //   2. The active companion's DEFAULT bucket.
-            //   3. Any agent's bucket with content (rare
-            //      fallback for the empty-state initial
-            //      load).
+            // v3.11.8: when the active quest's bucket has
+            // no data, do NOT silently fall back to the
+            // DEFAULT bucket. The legacy DEFAULT bucket
+            // holds pre-v3.11.0 messages with no quest
+            // attribution — showing them when the user
+            // has a quest active is the chat-flash bug.
+            //
+            // Fall back to DEFAULT ONLY when the user
+            // actually has no active quest (anchor === null).
+            // Otherwise return prev and let the projection
+            // effect re-run with the populated bucket map
+            // (we bump anchorHydrateTick below to trigger
+            // that re-run).
             if (aid && parsed[aid]) {
               const activeQid = mobileActiveQuestAnchor ?? null;
               const activeKey = questKeyForStorage(
@@ -2816,25 +2831,34 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               if (parsed[aid][activeKey] && parsed[aid][activeKey].length > 0) {
                 return parsed[aid][activeKey];
               }
-              // Fall back to the active agent's default
-              // bucket.
-              const defaultKey = DEFAULT_QUEST_KEY;
-              if (parsed[aid][defaultKey] && parsed[aid][defaultKey].length > 0) {
-                return parsed[aid][defaultKey];
+              // Active quest bucket has no data on disk.
+              // Only fall back to DEFAULT if the user
+              // genuinely has no active quest. If anchor
+              // is set (a specific quest), leave messages
+              // untouched so the projection effect can
+              // pick a clean empty render for that quest.
+              if (activeQid === null) {
+                const defaultKey = DEFAULT_QUEST_KEY;
+                if (parsed[aid][defaultKey] && parsed[aid][defaultKey].length > 0) {
+                  return parsed[aid][defaultKey];
+                }
               }
-              // Last resort: any bucket of any agent with
-              // content. Useful only on initial load before
-              // the agents list arrives.
-              for (const [, msgs] of Object.entries(parsed[aid])) {
-                if (Array.isArray(msgs) && msgs.length > 0) return msgs;
-              }
+              // No fallback to "any bucket of any agent" —
+              // the previous version's last-resort path
+              // could leak the legacy DEFAULT bucket into
+              // a user's active-quest view. Tobe hit this
+              // on 2026-09-25 15:39 (intermittent) and on
+              // 2026-09-24 21:33 (chat flashed to legacy).
             }
-            for (const [, questBuckets] of Object.entries(parsed)) {
-              if (!questBuckets || typeof questBuckets !== 'object') continue;
-              for (const [, msgs] of Object.entries(questBuckets)) {
-                if (Array.isArray(msgs) && msgs.length > 0) return msgs;
-              }
-            }
+            // Trigger a projection-effect re-run so the
+            // freshly-populated bucket map drives the
+            // visible chat. Without this, the projection
+            // effect (which has anchorHydrateTick in its
+            // deps) wouldn't re-fire after the bucket map
+            // changed, and any messages state we'd
+            // computed here would be the only signal the
+            // user sees for the rest of the session.
+            setAnchorHydrateTick(t => t + 1);
             return prev;
           });
           return true;
@@ -2887,6 +2911,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setMessages(prev => {
             if (prev.length > 0) return prev;
             const aid = activeChatAgentIdRef.current;
+            // v3.11.8: legacy migration only adds a
+            // DEFAULT bucket (the old data has no quest
+            // attribution). If the user has an active
+            // quest (anchor !== null), don't surface the
+            // legacy DEFAULT bucket — let the projection
+            // effect drive an empty render for the active
+            // quest. If the user explicitly has no active
+            // quest, the DEFAULT bucket IS what they want.
+            const activeQid = mobileActiveQuestAnchor ?? null;
+            if (activeQid !== null) {
+              // User has an active quest; the legacy
+              // DEFAULT bucket doesn't belong in their
+              // active-quest view. Trigger a projection
+              // re-run with the populated empty bucket.
+              setAnchorHydrateTick(t => t + 1);
+              return prev;
+            }
             if (aid && migrated[aid]?.[DEFAULT_QUEST_KEY]?.length) return migrated[aid][DEFAULT_QUEST_KEY];
             for (const [, questBuckets] of Object.entries(migrated)) {
               const def = questBuckets[DEFAULT_QUEST_KEY];
