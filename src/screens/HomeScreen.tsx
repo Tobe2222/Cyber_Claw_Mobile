@@ -1358,6 +1358,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // "quests not loaded yet" state lives in activeChatQuestId).
   const chatRestoreQuestIdRef = useRef<string | null>(null);
   const chatRestoreOffsetRef = useRef<number | null>(null);
+  // v3.11.14: track which (aid, bucketKey) the projection
+  // effect last rendered. Used to detect "the projection
+  // switched to a different bucket" vs "the projection
+  // re-ran with the same bucket because new data
+  // arrived" — we only want to setChatAtBottom(true) on
+  // the former, otherwise the chat snaps to the bottom
+  // on every hydrate. Module-scope variable would be too
+  // persistent (would skip the bottom-snap on HomeScreen
+  // remount), so use a ref which re-initialises per mount.
+  const lastProjectedKeyRef = useRef<string | null>(null);
   // v3.10.178: gate the onLayout scroll-restore until the
   // AsyncStorage hydrate of `cyberclaw-chat-scroll-byagent`
   // has completed. Without this gate, there's a race:
@@ -1636,13 +1646,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // activeChatAgentId; the quest-dimension is layered
     // on top below in a separate effect.
     //
+    // v3.11.14: only setChatAtBottom(true) when the
+    // projection ACTUALLY switched to a different
+    // bucket (different aid or bucketKey). The projection
+    // effect re-runs on anchorHydrateTick bumps (every
+    // agent_history / chat_history hydrate call) which
+    // doesn't change the visible chat — it just refills
+    // the same bucket with newer data. Setting
+    // chatAtBottom(true) on every re-run was yanking the
+    // user back to the bottom mid-read when they were
+    // scrolled up. Tobe 2026-09-27 18:29: "it does not
+    // want to go to the bottom, it just skips up and its
+    // very jumpy up and down. It should just be smooth
+    // and exactly like discord chat is."
+    //
+    // Track the last-projected (aid, bucketKey) in a
+    // module-scope ref. Initialise on first projection
+    // effect run; compare on subsequent runs. The ref
+    // survives across renders without retriggering.
+    //
     // We DON'T immediately scroll here — the FlatList
     // might not have measured the new content yet. The
     // restore effect (which watches messages length +
     // activeChatAgentId + active quest) makes the
     // actual scrollToOffset call after the new bucket
     // has rendered.
-    setChatAtBottom(true);
+    const projectedKey = `${aid}::${bucketKey}`;
+    if (lastProjectedKeyRef.current !== null && lastProjectedKeyRef.current !== projectedKey) {
+      // Bucket changed — user is in a different
+      // conversation; jump to bottom of new bucket.
+      setChatAtBottom(true);
+    }
+    lastProjectedKeyRef.current = projectedKey;
     // v3.11.0: depend on activeChatQuestId too so quest
     // switches trigger the same view-sync. The ref is
     // already current (the onQuestsList listener sets it
