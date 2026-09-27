@@ -3555,14 +3555,51 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // added one), so a missed dedupe just means the
       // transcription is the only entry — no duplicate.
       const aid: string = msg.agentId || activeChatAgentIdRef.current || 'companion';
-      // v3.10.85: stamp the message with which quest was
-      // active when it landed. The desktop echo can lag
-      // the mobile's local copy by a few seconds (network
-      // + STT + IPC round-trip), so the snapshot taken at
-      // append time may differ from what's active now —
-      // that's correct, it reflects the state at the time
-      // the user/agent actually exchanged the message.
+      // v3.10.85 + v3.11.12: stamp the message with which
+      // quest was active when it landed. The desktop echo
+      // can lag the mobile's local copy by a few seconds
+      // (network + STT + IPC round-trip), so the snapshot
+      // taken at append time may differ from what's active
+      // now — that's correct, it reflects the state at the
+      // time the user/agent actually exchanged the message.
+      //
+      // v3.11.12: prefer the desktop's broadcast
+      // `msg.activeQuestId` / `msg.activeQuestName` (set by
+      // the desktop's addChatMsg using ITS activeQuestId
+      // at append time) over the mobile's local
+      // `activeQuestRef.current`. v3.10.85..v3.11.11 used
+      // only the mobile's ref, which had two failure
+      // modes that bit Tobe repeatedly:
+      //
+      //   (a) Cold start: ref is null until the first
+      //       quests_list broadcast lands. Realtime chat
+      //       messages arriving in that window were stamped
+      //       with activeQuestId: null even though the
+      //       desktop sent them under an active quest.
+      //       The chat-flash symptom.
+      //
+      //   (b) Desync: if the mobile's anchor becomes stale
+      //       (e.g. bootstrap read a different value than
+      //       what the desktop just broadcasted), realtime
+      //       messages get routed to the wrong bucket on
+      //       the mobile while the desktop's chat_history
+      //       routes correctly. The user sees messages
+      //       arrive in one bucket, then disappear when
+      //       the projection effect refreshes to the other
+      //       bucket. The same loop symptom.
+      //
+      // The desktop's broadcast is the source of truth for
+      // "what quest was this message sent under." Use it
+      // directly. Fall back to the local ref only for old
+      // desktops (< v3.3.19) that don't stamp on the wire.
       const aq = activeQuestRef.current;
+      const questFromBroadcast = (typeof msg.activeQuestId === 'string' && msg.activeQuestId)
+        ? { id: msg.activeQuestId, name: msg.activeQuestName || null }
+        : null;
+      const questForStamp = questFromBroadcast || aq || null;
+      const qidForRoute = questFromBroadcast
+        ? questFromBroadcast.id
+        : (aq === undefined ? null : (aq?.id ?? null));
       const incoming: ChatMessage = {
         id: `${msg.ts || Date.now()}-${Math.random()}`,
         text: msg.text,
@@ -3570,13 +3607,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         agentId: aid,
         agentName: msg.agentName,
         ts: msg.ts || Date.now(),
-        activeQuestId: aq === undefined ? undefined : (aq?.id ?? null),
-        activeQuestName: aq === undefined ? undefined : (aq?.name ?? null),
+        // Stamp the broadcast-derived quest id on the
+        // message bubble so the v3.11.5 pill shows the
+        // correct quest name even when the mobile's anchor
+        // is null or stale.
+        activeQuestId: questForStamp?.id ?? null,
+        activeQuestName: questForStamp?.name ?? null,
       };
       appendAgentMessage(
         incoming,
         aid,
-        aq === undefined ? null : (aq?.id ?? null),
+        qidForRoute,
         setMessagesByAgentAndQuest,
         setMessages,
         activeChatAgentIdRef.current,
