@@ -5951,9 +5951,29 @@ useEffect(() => {
               ]}
               numberOfLines={1}
             >
-              {item.activeQuestId == null
-                ? '— No quest'
-                : `🎯 ${item.activeQuestName || questNameFromId(item.activeQuestId) || '(unnamed quest)'}`}
+              {/* v3.11.17: suppress the per-bubble quest pill when
+                  the user is currently viewing an active quest.
+                  The pill is useful in the DEFAULT bucket (where
+                  bubbles from different quests mix) but redundant
+                  and visually confusing when the user is already
+                  on the active quest — every bubble would show
+                  the same quest name (or '— No quest' for legacy
+                  bubbles that predate the active quest), creating
+                  the "suddenly all bubbles show no quest" effect
+                  Tobe reported at 2026-09-27 23:02. The active-
+                  quest name is shown once in the chat header (the
+                  pill above the input row); the bubble pills are
+                  only useful when the bubble's quest differs from
+                  the current view context. */}
+              {(activeChatQuestId == null || activeChatQuestId === undefined)
+                ? (item.activeQuestId == null
+                    ? '— No quest'
+                    : `🎯 ${item.activeQuestName || questNameFromId(item.activeQuestId) || '(unnamed quest)'}`)
+                : (item.activeQuestId !== activeChatQuestId
+                    ? (item.activeQuestId == null
+                        ? '— Legacy (no quest)'
+                        : `🎯 ${item.activeQuestName || questNameFromId(item.activeQuestId) || '(unnamed quest)'}`)
+                    : null)}
             </Text>
           </View>
           {/* v3.10.127: selectable={true} lets the user tap-and-
@@ -6876,7 +6896,36 @@ useEffect(() => {
                 // these two cases: layout reflows preserve the
                 // user's scroll position; only new messages
                 // trigger the auto-follow.
+                //
+                // v3.11.17: also gate on keyboardVisible. When the
+                // keyboard opens or closes, the FlatList re-lays
+                // out (because the parent KeyboardAvoidingView's
+                // paddingBottom changes), which fires
+                // onContentSizeChange even though no new content
+                // arrived. On Android the keyboard-open animation
+                // can fire this multiple times in rapid succession
+                // with slightly different contentSize values
+                // (because the FlatList re-measures as the layout
+                // settles). Each fire with grew=true would call
+                // scrollToEnd, but during keyboard open the
+                // visible-area height is shrinking — the
+                // scrollToEnd target keeps moving. The user sees
+                // the chat position "skip up" repeatedly as the
+                // target jumps.
+                //
+                // Discord's behaviour during typing: the chat
+                // panel shrinks, the scroll position is preserved
+                // (because the user is reading what they typed,
+                // not scrolling to follow new content). We do the
+                // same: skip auto-scroll while the keyboard is
+                // visible. The user's scroll position stays put.
+                // When they send the message (which arrives as a
+                // new bubble), the grew=true check fires AFTER
+                // the keyboard closes (because the new message
+                // arrival and the auto-scroll both happen on the
+                // tap path), and the auto-scroll lands.
                 if (!chatInitialDecisionRef.current) return;
+                if (keyboardVisible) return;
                 const grew = messages.length > prevMessagesLengthRef.current;
                 prevMessagesLengthRef.current = messages.length;
                 if (grew && chatAtBottomRef.current) {
