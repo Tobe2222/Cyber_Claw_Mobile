@@ -4060,6 +4060,65 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
         // v3.1.16: data is stored in chronological order (oldest→newest).
         // The desktop sends it that way; we keep it as-is.
+        // v3.3.19 + v3.11.12: the desktop's chatHistory flat
+        // mirror now stamps `activeQuestId` and
+        // `activeQuestName` per message. With this stamping,
+        // we can route each historical message to its correct
+        // per-quest bucket on the mobile side, instead of
+        // dumping everything into DEFAULT. Pre-v3.3.19
+        // desktops sent messages with `activeQuestId`
+        // missing (the field didn't exist on the desktop's
+        // flat mirror); those land in DEFAULT as before.
+        //
+        // v3.11.12 keeps the v3.11.10 / 11 bootstrap-pending
+        // guard but refines the "all to DEFAULT" behavior:
+        //   * If the active quest's bucket has no data AND
+        //     the user has an active quest → keep the
+        //     messages state untouched (don't flash DEFAULT
+        //     content) AND bump anchorHydrateTick so the
+        //     projection effect re-runs against the freshly-
+        //     populated buckets.
+        //   * If the user has no active quest (anchor is
+        //     null) → land everything in DEFAULT (the
+        //     historical behavior).
+        //
+        // v3.11.12: per-quest attribution check. If the
+        // desktop v3.3.19+ stamped activeQuestId on every
+        // message, route per-message instead of all-to-DEFAULT.
+        // Old desktops have the field missing entirely
+        // (undefined) which fails this check; they fall
+        // through to the legacy DEFAULT-bucket path below.
+        if (msg.messages.every((m: any) => 'activeQuestId' in m)) {
+          // Per-quest attribution is present on all
+          // messages. Group by (questId, agentId) and
+          // write each group to its own bucket.
+          const aid = activeChatAgentIdRef.current || 'companion';
+          setMessagesByAgentAndQuest(prev => {
+            const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
+            for (const m of msg.messages) {
+              const mAid: string = m.agentId || aid;
+              const mQid: string | null = (typeof m.activeQuestId === 'string') ? m.activeQuestId : null;
+              const mKey = questKeyForStorage(mQid);
+              if (!next[mAid]) next[mAid] = {};
+              if (!next[mAid][mKey]) next[mAid][mKey] = [];
+              next[mAid][mKey].push({
+                id: `hist-${m.ts}-${Math.random()}`,
+                text: m.text,
+                isUser: !!m.isUser,
+                agentId: mAid,
+                agentName: m.agentName ?? null,
+                ts: m.ts,
+                activeQuestId: mQid,
+                activeQuestName: m.activeQuestName ?? null,
+              });
+            }
+            return next;
+          });
+          // Bump hydrate tick so the projection effect picks
+          // up the freshly-populated buckets.
+          setAnchorHydrateTick(t => t + 1);
+          return;
+        }
         // v3.10.107: preserve attachments through the
         // history re-deserialization. Tobe's 2026-07-29
         // feedback: image previews "sometimes get into the
@@ -4514,6 +4573,62 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // `name` as a fallback. New desktops (v3.2.9+) already
       // send the normalized shape and these fallbacks are
       // no-ops.
+      //
+      // v3.11.12: BREAKING CHANGE on desktop wire format.
+      // The desktop v3.3.19+ now sends `buckets` (a Record
+      // keyed by questKeyForStorage(qid)) instead of a flat
+      // `messages` array. The v3.3.19 desktop ALSO sends a
+      // flat `messages` field as a backwards-compat fallback
+      // (sourced from the DEFAULT bucket, or the first
+      // non-empty bucket if DEFAULT is empty) so that
+      // v3.11.11 and earlier mobile builds keep working.
+      //
+      // The new path routes per-bucket messages to their
+      // own slot in messagesByAgentAndQuest. This is what
+      // fixes the "— No quest" chat-flash after a cold
+      // start: previously, only DEFAULT-bucket content
+      // reached the mobile regardless of which quest was
+      // active, so the active-quest view stayed empty and
+      // the user saw DEFAULT content under "— No quest"
+      // pills.
+      if (msg.buckets && typeof msg.buckets === 'object' && !Array.isArray(msg.buckets)) {
+        const bucketsMsg = msg.buckets;
+        setMessagesByAgentAndQuest(prev => {
+          const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
+          const existingBuckets = next[aid] || {};
+          const mergedForAgent: Record<string, ChatMessage[]> = { ...existingBuckets };
+          for (const [bucketKey, msgs] of Object.entries(bucketsMsg)) {
+            if (!Array.isArray(msgs) || msgs.length === 0) continue;
+            // Map each message with a stable id + preserve
+            // quest attribution.
+            const loadedBucket: ChatMessage[] = msgs.map((m: any) => ({
+              id: `hist-${m.ts}-${Math.random()}`,
+              text: m.text,
+              isUser: typeof m.isUser === 'boolean' ? m.isUser : (m.type === 'user'),
+              agentId: m.agentId || m.name || aid,
+              agentName: m.agentName || m.name || null,
+              ts: m.ts,
+              activeQuestId: m.activeQuestId ?? (bucketKey === DEFAULT_QUEST_KEY ? null : bucketKey),
+              activeQuestName: m.activeQuestName ?? null,
+            }));
+            mergedForAgent[bucketKey] = loadedBucket;
+          }
+          next[aid] = mergedForAgent;
+          return next;
+        });
+        // Bump the anchor re-trigger counter so the projection
+        // effect re-runs with the freshly-populated bucket map.
+        // Without this, the visible chat wouldn't refresh
+        // unless something else also changed activeChatQuestId
+        // or activeChatAgentId. We don't clobber `messages`
+        // state here — the projection effect will pick the
+        // right bucket for the current anchor.
+        setAnchorHydrateTick(t => t + 1);
+        return;
+      }
+      // Legacy fallback path: flat `messages` array (v3.3.18
+      // and earlier, or v3.3.19 when no per-quest data
+      // exists). Routes everything to DEFAULT bucket.
       const loaded: ChatMessage[] = (Array.isArray(msg.messages) ? msg.messages : []).map((m: any) => ({
         id: `hist-${m.ts}-${Math.random()}`,
         text: m.text,
