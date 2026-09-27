@@ -2758,13 +2758,54 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // bucket and bump anchorHydrateTick so the
         // projection effect picks a clean empty render for
         // the active quest's bucket.
+        //
+        // v3.11.11: parity with v3.11.10's onChatHistory fix.
+        // This `activeQid === null` check conflates two
+        // states: "bootstrap pending (anchor will become
+        // something soon)" and "bootstrap resolved with null
+        // (user explicitly deactivated)". The previous
+        // v3.11.10 patch only fixed onChatHistory; this
+        // seedFromLegacy path was missed. On a slow first
+        // start (AsyncStorage.getItem takes >300ms), this
+        // could leak the legacy DEFAULT bucket content into
+        // a user's active-quest view IF the bootstrap
+        // hasn't run yet but the activeChatAgentId was
+        // already set (e.g. from a cached agents_list).
+        //
+        // Fix: also gate on _anchorBootstrapResolved. While
+        // bootstrap is pending, return prev (don't surface
+        // the legacy DEFAULT bucket). The projection effect
+        // will re-run after the bootstrap resolves (the
+        // subscriber bumps anchorHydrateTick). This matches
+        // v3.11.10's onChatHistory behavior exactly.
         setMessages(prev => {
           if (prev.length > 0) return prev; // already populated
           const activeQid = mobileActiveQuestAnchor ?? null;
           if (activeQid !== null) {
+            // User has an active quest (anchor set). Don't
+            // surface legacy DEFAULT content — bump tick so
+            // the projection effect drives an empty render
+            // for the active quest's bucket.
             setAnchorHydrateTick(t => t + 1);
             return prev;
           }
+          // activeQid === null. Two meanings:
+          //   (a) Bootstrap pending → show empty (don't leak
+          //       legacy DEFAULT into the chat panel).
+          //   (b) Bootstrap resolved with null → user
+          //       explicitly deactivated → show legacy
+          //       DEFAULT bucket (that's what "no quest"
+          //       means).
+          // Distinguish via _anchorBootstrapResolved.
+          if (!_anchorBootstrapResolved) {
+            // (a) Bootstrap pending. Same as onChatHistory:
+            // return prev, projection effect will re-run
+            // after bootstrap completes.
+            setAnchorHydrateTick(t => t + 1);
+            return prev;
+          }
+          // (b) Bootstrap resolved with null. Surface
+          // legacy DEFAULT bucket content.
           const aid = activeChatAgentIdRef.current;
           if (aid && grouped[aid]?.[DEFAULT_QUEST_KEY]?.length) return grouped[aid][DEFAULT_QUEST_KEY];
           // otherwise the first non-empty slot
@@ -2941,6 +2982,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             // effect drive an empty render for the active
             // quest. If the user explicitly has no active
             // quest, the DEFAULT bucket IS what they want.
+            //
+            // v3.11.11: parity with v3.11.10's onChatHistory
+            // fix — also gate on _anchorBootstrapResolved to
+            // distinguish "bootstrap pending" from "user
+            // explicitly deactivated". While bootstrap is
+            // pending, return prev and let the projection
+            // effect drive the render after bootstrap
+            // completes. Same reasoning as the seedFromLegacy
+            // path above.
             const activeQid = mobileActiveQuestAnchor ?? null;
             if (activeQid !== null) {
               // User has an active quest; the legacy
@@ -2950,6 +3000,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               setAnchorHydrateTick(t => t + 1);
               return prev;
             }
+            // activeQid === null — same (a)/(b) distinction
+            // as in seedFromLegacy.
+            if (!_anchorBootstrapResolved) {
+              setAnchorHydrateTick(t => t + 1);
+              return prev;
+            }
+            // (b) Bootstrap resolved with null — surface
+            // legacy DEFAULT bucket.
             if (aid && migrated[aid]?.[DEFAULT_QUEST_KEY]?.length) return migrated[aid][DEFAULT_QUEST_KEY];
             for (const [, questBuckets] of Object.entries(migrated)) {
               const def = questBuckets[DEFAULT_QUEST_KEY];
@@ -4733,7 +4791,35 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         if (mobileActiveQuestAnchor === null) {
           // Case 1: no anchor yet. Fresh broadcast —
           // adopt.
-          mobileActiveQuestAnchor = nextQid;
+          //
+          // v3.11.11: persist via setMobileActiveQuestAnchor
+          // instead of direct assignment. The desktop-driven
+          // anchor (set here when the user never tapped a
+          // quest on mobile) needs to survive the JS process
+          // being killed by Android (which happens after the
+          // app is backgrounded for a while). Without this,
+          // a user who relies entirely on desktop-driven
+          // anchor (the common case — most users activate
+          // quests on the desktop, not on the mobile) would
+          // see "— No quest" on every cold start because
+          // the bootstrap AsyncStorage read returns no key
+          // and falls back to module-init null. Tobe hit
+          // this on 2026-09-27 12:31 (Cyber_Database quest
+          // active on desktop, mobile showed DEFAULT bucket
+          // with "— No quest" pill on every bubble).
+          //
+          // setMobileActiveQuestAnchor:
+          //   - writes the module-scope variable
+          //   - persists to AsyncStorage (fire-and-forget)
+          //   - null → '__null__' sentinel
+          //   - string → the qid
+          //
+          // Safe to call here: this branch only fires when
+          // the anchor is null AND a fresh broadcast is
+          // confirming the desktop's current active. Once the
+          // anchor is set, subsequent broadcasts hit Case 2
+          // or Case 3 and don't write AsyncStorage again.
+          setMobileActiveQuestAnchor(nextQid);
           activeQuestRef.current = next;
           setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
           return;
