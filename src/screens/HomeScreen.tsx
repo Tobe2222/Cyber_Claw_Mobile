@@ -1894,15 +1894,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       chatInitialDecisionRef.current = true;
       const off = chatRestoreOffsetRef.current;
       if (typeof off === 'number' && off > 0) {
-        // Smoothly restore to the saved position. Two
-        // scrollToOffsets because FlatList measures lazily —
-        // the first often lands before the full content is
-        // measured, so we re-apply after a 300ms settle.
-        chatRef.current?.scrollToOffset({ offset: off, animated: false });
-        setTimeout(() => {
-          if (cancelled) return;
-          chatRef.current?.scrollToOffset({ offset: off, animated: false });
-        }, 300);
+        // v3.11.16: single scrollToOffset, animated. The
+        // previous code did two scrollToOffsets (immediate +
+        // 300ms settle) with animated:false, which produced
+        // visible double-jumps when the FlatList measured
+        // correctly on the first try. Animated scroll gives
+        // a smooth motion that the user perceives as a
+        // single restore. If the FlatList hasn't measured
+        // yet, the FlatList's own internal handling will
+        // re-apply the scroll once content is measured.
+        chatRef.current?.scrollToOffset({ offset: off, animated: true });
         // Defer chatAtBottomRef updates to the onScroll event
         // that the programmatic scrollToOffset will fire.
         // DON'T pre-compute here — we don't have an accurate
@@ -6985,17 +6986,11 @@ useEffect(() => {
                     chatInitialDecisionRef.current = true;
                     const restoreOffset = chatRestoreOffsetRef.current;
                     if (typeof restoreOffset === 'number' && restoreOffset > 0) {
-                      chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
-                      setTimeout(() => {
-                        chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: false });
-                      }, 300);
-                      // Defer chatAtBottomRef updates to the
-                      // onScroll event that the programmatic
-                      // scrollToOffset will fire on Android.
-                      // (See comment in the new useEffect for
-                      // the reasoning — pre-computing is
-                      // unreliable without an accurate
-                      // contentSize.)
+                      // v3.11.16: single animated scrollToOffset
+                      // (was double animated:false). See the
+                      // matching change in the tryRestore
+                      // path above.
+                      chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: true });
                     } else {
                       // No saved offset → user at natural top.
                       chatAtBottomRef.current = false;
