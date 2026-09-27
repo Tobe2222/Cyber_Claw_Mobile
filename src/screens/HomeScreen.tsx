@@ -1368,6 +1368,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // persistent (would skip the bottom-snap on HomeScreen
   // remount), so use a ref which re-initialises per mount.
   const lastProjectedKeyRef = useRef<string | null>(null);
+  // v3.11.15: track the previous messages.length so
+  // onContentSizeChange can distinguish "new message
+  // arrived" (length grew) from "layout reflow"
+  // (length stayed the same). Only auto-scroll on
+  // new-message growth; ignore layout reflows. This
+  // is what Discord does and what eliminates the
+  // keyboard-insets / agent-history-hydrate bounces.
+  const prevMessagesLengthRef = useRef(0);
   // v3.10.178: gate the onLayout scroll-restore until the
   // AsyncStorage hydrate of `cyberclaw-chat-scroll-byagent`
   // has completed. Without this gate, there's a race:
@@ -5695,9 +5703,15 @@ useEffect(() => {
     setChatUnreadCount(0);
     return;
   }
-  if (chatAtBottomRef.current) {
-    setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
-  }
+  // v3.11.15: removed the duplicate scrollToEnd here.
+  // The onContentSizeChange handler is now the single
+  // source of truth for "new message arrived, auto-scroll
+  // to bottom if user is at bottom." It uses animated:true
+  // for smooth scrolling matching Discord's behaviour.
+  // Previously this effect ALSO fired scrollToEnd with
+  // animated:false, producing a double-jump on every new
+  // message (smooth scroll + jump). Tobe's 2026-09-27
+  // 20:52 "jumps up and down like crazy" symptom.
   setChatUnreadCount(c => c + 1);
 }, [messages.length]);
 
@@ -5776,31 +5790,18 @@ useEffect(() => {
   };
 }, [isConnected, activeTab]);
 
-// v3.8.6: explicit first-paint scroll to bottom. Belt-and-
-// suspenders to the onLayout handler above. Fires once when
-// messages first populate (e.g. when AsyncStorage hydration
-// lands) and runs after a short delay so the FlatList has
-// time to render its rows and measure contentSize. Without
-// this, the initial scroll is at the mercy of onLayout's
-// timing on a freshly-mounted FlatList — which can race
-// with the chat history hydration (Tobe hit this: opened
-// the app, chat was scrolled to the top of the history
-// showing old messages, new "Late hour" message was below
-// the fold). Once we run scrollToEnd here, we mark
-// chatAtBottom true so the next incoming message will
-// auto-scroll instead of bumping the unread badge.
-useEffect(() => {
-  if (messages.length === 0) return;
-  // Only fire on the first non-empty render; we don't want
-  // this re-running on every new incoming message (that's
-  // the messages.length useEffect's job).
-  const timer = setTimeout(() => {
-    chatRef.current?.scrollToEnd({ animated: false });
-    setChatAtBottom(true);
-  }, 200);
-  return () => clearTimeout(timer);
-// eslint-disable-next-line react-hooks/exhaustive-deps
-}, [messages.length > 0]);
+// v3.8.6 (REMOVED in v3.11.15): the explicit first-paint
+// scroll-to-bottom effect was redundant with the v3.11.15
+// onContentSizeChange handler, which now handles initial
+// auto-scroll via the `messages.length grew` check. The
+// v3.8.6 effect was firing scrollToEnd 200ms after the
+// first non-empty render, which combined with
+// onContentSizeChange's same-frame scrollToEnd to produce
+// a visible jump-and-settle on cold start. Tobe's
+// 2026-09-27 20:52 "jumps up and down like crazy now"
+// report traced back to this duplication (combined with
+// the v3.10.181 initial-decision effect and the new-
+// message effect). Removing the duplicate.
 
   const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
@@ -6860,9 +6861,25 @@ useEffect(() => {
                 // changes until that decision has been made AND
                 // `chatAtBottomRef` reflects the user's actual
                 // position.
+                //
+                // v3.11.15: only auto-scroll when messages.length
+                // GREW (a new message arrived), not on layout
+                // reflows (keyboard show/hide, agent-history
+                // hydrate re-renders the same messages, font scale
+                // changes, etc.). The previous behavior fired
+                // scrollToEnd on every onContentSizeChange when at
+                // the bottom — including layout reflows that didn't
+                // actually add content — producing the rapid
+                // bounce Tobe hit on 2026-09-27 20:52 ("jumps up
+                // and down like crazy now"). Discord distinguishes
+                // these two cases: layout reflows preserve the
+                // user's scroll position; only new messages
+                // trigger the auto-follow.
                 if (!chatInitialDecisionRef.current) return;
-                if (chatAtBottomRef.current) {
-                  chatRef.current?.scrollToEnd({ animated: false });
+                const grew = messages.length > prevMessagesLengthRef.current;
+                prevMessagesLengthRef.current = messages.length;
+                if (grew && chatAtBottomRef.current) {
+                  chatRef.current?.scrollToEnd({ animated: true });
                 }
               }}
               onLayout={() => {
