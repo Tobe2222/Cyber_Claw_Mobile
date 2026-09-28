@@ -1376,6 +1376,35 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // is what Discord does and what eliminates the
   // keyboard-insets / agent-history-hydrate bounces.
   const prevMessagesLengthRef = useRef(0);
+  // v3.11.18: last known distance-from-bottom at the moment
+  // of the last onScroll event. Used by the onContentSizeChange
+  // handler to decide whether the user is "at the bottom" —
+  // which determines whether to auto-scroll on new content.
+  //
+  // Why a separate ref instead of chatAtBottomRef: the latter
+  // is a boolean derived from distanceFromEnd < 50, but it
+  // only updates on a real onScroll event. If the FlatList
+  // re-measures (contentSize changes) WITHOUT a corresponding
+  // onScroll (e.g., a bubble height reflows because a pill was
+  // suppressed, or a bubble's text rewrapped after a state
+  // update), the user's actual position relative to the new
+  // bottom can shift by tens of pixels — but chatAtBottomRef
+  // stays at its stale value. Using a fresh distance check
+  // based on the latest saved scrollY vs. the new contentSize
+  // catches these layout-only reflows.
+  //
+  // Updated on every onScroll event; read on every
+  // onContentSizeChange event.
+  const lastDistanceFromEndRef = useRef(0);
+  // v3.11.18: debounce timer for scrollToEnd. Set when
+  // onContentSizeChange wants to scroll to the new bottom but
+  // waits 80ms for the FlatList to settle its multi-pass
+  // layout (a single render can fire onContentSizeChange 2–3
+  // times as cells measure and remount). Without the debounce,
+  // a scrollToEnd issued against an interim contentSize lands
+  // at a wrong position and the user sees the chat "jump up"
+  // once the FlatList settles.
+  const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // v3.10.178: gate the onLayout scroll-restore until the
   // AsyncStorage hydrate of `cyberclaw-chat-scroll-byagent`
   // has completed. Without this gate, there's a race:
@@ -5114,6 +5143,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // tries to setState on an unmounted component.
       try { if (thinkingEscalateTimerRef.current) clearTimeout(thinkingEscalateTimerRef.current); } catch {}
       thinkingEscalateTimerRef.current = null;
+      // v3.11.18: cancel any pending scrollSettle timer —
+      // same reason as above. Without this, a HomeScreen
+      // unmount mid-settle (e.g., tab switch + quick
+      // backgrounding) leaves a setTimeout that fires on a
+      // stale chatRef against an unmounted FlatList.
+      try { if (scrollSettleTimerRef.current) clearTimeout(scrollSettleTimerRef.current); } catch {}
+      scrollSettleTimerRef.current = null;
       try { wakeSub?.remove?.(); } catch {}
       try { wakeOpenSub?.remove?.(); } catch {}
       try { debugSub?.remove?.(); } catch {}
@@ -5944,37 +5980,56 @@ useEffect(() => {
                 right side of the agent-label row. Both
                 styles share the row, so layout is unaffected
                 for short agent names. */}
-            <Text
-              style={[
-                styles.bubbleQuestLabel,
-                item.isUser ? styles.bubbleQuestLabelUser : styles.bubbleQuestLabelAi,
-              ]}
-              numberOfLines={1}
-            >
-              {/* v3.11.17: suppress the per-bubble quest pill when
-                  the user is currently viewing an active quest.
-                  The pill is useful in the DEFAULT bucket (where
-                  bubbles from different quests mix) but redundant
-                  and visually confusing when the user is already
-                  on the active quest — every bubble would show
-                  the same quest name (or '— No quest' for legacy
-                  bubbles that predate the active quest), creating
-                  the "suddenly all bubbles show no quest" effect
-                  Tobe reported at 2026-09-27 23:02. The active-
-                  quest name is shown once in the chat header (the
-                  pill above the input row); the bubble pills are
-                  only useful when the bubble's quest differs from
-                  the current view context. */}
-              {(activeChatQuestId == null || activeChatQuestId === undefined)
-                ? (item.activeQuestId == null
-                    ? '— No quest'
-                    : `🎯 ${item.activeQuestName || questNameFromId(item.activeQuestId) || '(unnamed quest)'}`)
-                : (item.activeQuestId !== activeChatQuestId
-                    ? (item.activeQuestId == null
-                        ? '— Legacy (no quest)'
-                        : `🎯 ${item.activeQuestName || questNameFromId(item.activeQuestId) || '(unnamed quest)'}`)
-                    : null)}
-            </Text>
+            {/* v3.11.18: always render the per-bubble quest pill
+                so the user can see which quest each message
+                belongs to at a glance. Tobe's 2026-09-28 12:37
+                feedback on v3.11.17: 'the text to show which
+                quest chat it is, is gone' — every bubble in the
+                active quest's chat lost its pill because v3.11.17
+                suppressed it when bubble.activeQuestId ===
+                activeChatQuestId. The active-quest name in the
+                chat header was not a substitute; Tobe wanted the
+                pill on every bubble.
+
+                For bubbles with no quest attribution (legacy /
+                DEFAULT bucket, or messages stamped before the
+                user activated a quest), we DO NOT render the
+                pill at all — no Text node, no flexbox slot, no
+                visual label. v3.11.17's '— No quest' /
+                '— Legacy (no quest)' string was the original
+                visual-noise complaint; rendering nothing
+                addresses that AND keeps the bubble width stable
+                (no shifting layout as a legacy bubble scrolls
+                past a stamped bubble).
+
+                For bubbles with a quest stamp we render the
+                quest name on its own (no leading 🎯 emoji — the
+                background color of the pill is already a strong
+                visual cue, and the emoji was eating ~14dp of
+                pill width on small Android screens where long
+                quest names got truncated). The pill text falls
+                back to the broadcast's activeQuestName; if that
+                is missing we look up the name from the
+                questNameById map populated by onQuestsList. If
+                we still don't have a name, we suppress the pill
+                rather than render '(unnamed quest)'. */}
+            {(() => {
+              if (item.activeQuestId == null) return null;
+              const name = item.activeQuestName
+                || questNameFromId(item.activeQuestId);
+              if (!name) return null;
+              return (
+                <Text
+                  style={[
+                    styles.bubbleQuestLabel,
+                    item.isUser ? styles.bubbleQuestLabelUser : styles.bubbleQuestLabelAi,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {name}
+                </Text>
+              );
+            })()}
           </View>
           {/* v3.10.127: selectable={true} lets the user tap-and-
               hold to bring up the system text-selection
@@ -6817,6 +6872,11 @@ useEffect(() => {
                 // denser scroll budgets and 32px felt twitchy.
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 const distanceFromEnd = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+                // v3.11.18: cache the latest distance for the
+                // onContentSizeChange handler. See comment on
+                // lastDistanceFromEndRef for why this lives
+                // outside chatAtBottomRef.
+                lastDistanceFromEndRef.current = distanceFromEnd;
                 const isAtBottom = distanceFromEnd < 50;
                 setChatAtBottom(isAtBottom);
                 // v3.10.96: clear the "↓ N new messages" badge
@@ -6928,8 +6988,75 @@ useEffect(() => {
                 if (keyboardVisible) return;
                 const grew = messages.length > prevMessagesLengthRef.current;
                 prevMessagesLengthRef.current = messages.length;
-                if (grew && chatAtBottomRef.current) {
-                  chatRef.current?.scrollToEnd({ animated: true });
+                // v3.11.18: the user is "near the bottom" if
+                // either the boolean ref says so OR the last
+                // distance measurement was small. The boolean
+                // ref is updated by onScroll, which doesn't
+                // fire when the FlatList re-measures WITHOUT a
+                // user scroll — so it can be stale after a
+                // layout reflow. The distance ref is updated on
+                // every onScroll too, but we use it here to
+                // catch the layout-only case where the user
+                // was near the bottom BEFORE the reflow but
+                // ended up above the new contentSize bottom.
+                //
+                // Threshold 100px (vs onScroll's 50px) gives
+                // margin for the contentSize drift between
+                // the last onScroll and this contentSizeChange.
+                const wasNearBottom =
+                  chatAtBottomRef.current ||
+                  lastDistanceFromEndRef.current < 100;
+                if (wasNearBottom) {
+                  // v3.11.18: debounce the scrollToEnd so the
+                  // FlatList has time to settle its multi-pass
+                  // layout. A single render that adds a bubble
+                  // AND reflows existing bubble heights (e.g., a
+                  // quest pill suppression toggles across several
+                  // bubbles in the same render) can fire
+                  // onContentSizeChange 2–3 times in rapid
+                  // succession. Issuing scrollToEnd against the
+                  // FIRST contentSize lands at a wrong target
+                  // — the chat visibly "jumps up" once the
+                  // FlatList settles to the final contentSize.
+                  // Tobe's 2026-09-28 12:37 report: "i was at
+                  // the bottom of the chat and it suddenly moved
+                  // upwards a bit, i dragged it down again, and
+                  // it happened like 20 seconds after again."
+                  //
+                  // The debounce coalesces multiple
+                  // onContentSizeChange fires into a single
+                  // scrollToEnd issued 80ms after the LAST fire.
+                  // 80ms is enough for the FlatList to finish
+                  // its lazy-measure pass on real Android
+                  // hardware but well under the
+                  // perception-threshold for chat auto-scroll
+                  // (Discord's analogous animation is ~120ms).
+                  //
+                  // Unlike v3.11.17 which gated on `grew` only,
+                  // we re-anchor on ANY contentSize change while
+                  // near the bottom. This catches the
+                  // reflow-without-grow case where the FlatList
+                  // shrinks contentSize (e.g., a bubble's text
+                  // rewrapped, removing a line of height) and
+                  // leaves the user stranded above the new
+                  // bottom. The previous logic only re-anchored
+                  // on grew=true, so reflow-only changes left
+                  // the user above the new bottom — Tobe's
+                  // "moved upwards" symptom.
+                  //
+                  // `grew` is still tracked for the
+                  // prevMessagesLengthRef update and is
+                  // available for future per-message handlers,
+                  // but no longer gates this scroll.
+                  if (scrollSettleTimerRef.current) {
+                    clearTimeout(scrollSettleTimerRef.current);
+                  }
+                  scrollSettleTimerRef.current = setTimeout(() => {
+                    scrollSettleTimerRef.current = null;
+                    if (chatAtBottomRef.current) {
+                      chatRef.current?.scrollToEnd({ animated: true });
+                    }
+                  }, 80);
                 }
               }}
               onLayout={() => {
