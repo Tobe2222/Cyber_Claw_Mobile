@@ -3686,6 +3686,37 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // is null or stale.
         activeQuestId: questForStamp?.id ?? null,
         activeQuestName: questForStamp?.name ?? null,
+        // v3.11.13: forward `attachments` from the desktop's
+        // chat_message broadcast. The desktop v3.3.20+ sends
+        // attachments for image bubbles (the [SCREENSHOT
+        // target=...] directive flow), and the renderer's
+        // user-side send path already uses attachments for
+        // image-bearing messages. The bubble renderer
+        // (renderMessage in this file, around line 6190)
+        // already accepts `attachments` and renders image
+        // previews — we just had to pass them through here.
+        //
+        // Without this, the mobile's chat_message arrived
+        // with `attachments: undefined`, so the bubble
+        // rendered text-only even when the desktop showed a
+        // screenshot thumbnail. Tobe 2026-09-29 11:38:
+        // 'clawsuu is posting pictures in the desktop app
+        // but they dont come through to the mobile end.'
+        // The desktop-side fix ships in v3.3.20; this is
+        // the mobile-side counterpart.
+        //
+        // We only forward the attachments on agent-image
+        // bubbles (or any future visual-only bubble type)
+        // to avoid inflating regular text chats with empty
+        // `attachments: []` arrays — the dedupe in
+        // appendAgentMessage normalizes text, and an empty
+        // text + non-empty attachments would dedupe OK but
+        // a stale `attachments: undefined` won't. Keeping
+        // it conservative for now: only attach when the
+        // broadcast explicitly includes them.
+        attachments: Array.isArray(msg.attachments) && msg.attachments.length > 0
+          ? msg.attachments
+          : undefined,
       };
       appendAgentMessage(
         incoming,
