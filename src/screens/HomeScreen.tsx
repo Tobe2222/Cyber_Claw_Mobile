@@ -4755,6 +4755,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               ts: m.ts,
               activeQuestId: m.activeQuestId ?? (bucketKey === DEFAULT_QUEST_KEY ? null : bucketKey),
               activeQuestName: m.activeQuestName ?? null,
+              // v3.11.20: forward attachments on history
+              // sync. The desktop v3.3.20+ persists
+              // agent-image bubbles in the per-quest bucket
+              // (including the attachments field), so the
+              // history response carries them. Without this,
+              // history sync would strip image attachments
+              // even though the realtime chat_message path
+              // preserves them — the user would see the
+              // image when the realtime broadcast lands but
+              // not on a subsequent reconnect. Tobe 2026-09-29
+              // 16:10 report.
+              attachments: Array.isArray(m.attachments) && m.attachments.length > 0
+                ? m.attachments
+                : undefined,
             }));
             mergedForAgent[bucketKey] = loadedBucket;
           }
@@ -4781,6 +4795,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         agentId: m.agentId || m.name || aid,
         agentName: m.agentName || m.name || null,
         ts: m.ts,
+        // v3.11.20: forward attachments on history sync.
+        // The desktop v3.3.20+ persists agent-image bubbles
+        // in chatHistory (the flat mirror that the legacy
+        // /chat_history path serves). Without this, history
+        // sync strips image attachments even though the
+        // realtime chat_message path preserves them. Tobe
+        // 2026-09-29 16:10 report.
+        attachments: Array.isArray(m.attachments) && m.attachments.length > 0
+          ? m.attachments
+          : undefined,
       }));
       addLogEntry(`← Loaded ${loaded.length} messages for ${aid}`, 'info');
       const agentBuckets = (messagesByAgentRef.current || {})[aid] || {};
