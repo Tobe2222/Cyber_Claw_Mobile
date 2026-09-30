@@ -4280,6 +4280,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           // Per-quest attribution is present on all
           // messages. Group by (questId, agentId) and
           // write each group to its own bucket.
+          //
+          // v3.11.23: dedupe by ID before pushing. The
+          // desktop sends chat_history on every WS
+          // reconnect; without dedupe, the bucket
+          // grows unbounded (every reconnect duplicates
+          // every historical message). The auto-scroll
+          // effect then bumps the unread badge once per
+          // duplicate because last.id changes when the
+          // array length changes. Tobe 2026-09-30 14:18
+          // report: '1 new message... 4 new but i am at
+          // the bottom of the chat already and it is no
+          // more new texts, not even on the desktop.' —
+          // the 4 was 4 reconnect replays of the same
+          // messages, each bumping the badge once. With
+          // the dedupe below, replays no-op on already-
+          // seen message IDs and the badge only
+          // increments for genuinely new arrivals.
           const aid = activeChatAgentIdRef.current || 'companion';
           setMessagesByAgentAndQuest(prev => {
             const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
@@ -4289,8 +4306,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               const mKey = questKeyForStorage(mQid);
               if (!next[mAid]) next[mAid] = {};
               if (!next[mAid][mKey]) next[mAid][mKey] = [];
+              const id = stableHistoryMessageId(m.ts, m.text);
+              // Skip if we've already stored a message
+              // with this ID in this bucket. The dedupe
+              // key is the stable ID from v3.11.21
+              // (ts + text hash); without it, every
+              // reconnect looked like a fresh batch.
+              if (next[mAid][mKey].some((existing: ChatMessage) => existing.id === id)) {
+                continue;
+              }
               next[mAid][mKey].push({
-                id: stableHistoryMessageId(m.ts, m.text),
+                id,
                 text: m.text,
                 isUser: !!m.isUser,
                 agentId: mAid,
