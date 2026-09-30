@@ -584,6 +584,49 @@ type TabId = 'chat' | 'events' | 'log';
 // outside of this file.
 const DEFAULT_QUEST_KEY = '__default__';
 
+// v3.11.21: stable message IDs for history/replay paths.
+// Pre-v3.11.21 the onAgentHistory / onChatHistory /
+// seedFromLegacy paths generated IDs as
+// `hist-${m.ts}-${Math.random()}`. The random suffix
+// changed on every re-hydrate (WS reconnect, agent-tab
+// switch, foreground, etc.), so even though the SAME
+// message was being re-pushed into the bucket, the
+// `lastMessageIdRef` in the auto-scroll-to-new-message
+// effect saw a different last.id and triggered
+// scrollToEnd. Tobe 2026-09-30 10:38: 'now the mobile
+// end chat is spamming up and down... I get a
+// notification of a new message even tho there are
+// none but the chat seems to refresh and think there
+// are and then starts spam scrolling fast up and down
+// to the same positions.' The root cause was the
+// random ID change on every reconnect, which fired
+// the auto-scroll effect on every reconnect storm.
+//
+// Fix: deterministic IDs derived from ts + text hash.
+// `ts` is the desktop-side timestamp; `text` is the
+// message body. Two messages with the same ts and
+// text get the same ID. The hash is a tiny string
+// slice + char-code sum (no external dep, fast) —
+// collisions across very different messages are
+// extraordinarily rare in practice; even if they
+// collide, the dedupe in appendAgentMessage catches
+// them by normalized-text match anyway.
+function stableHistoryMessageId(ts: number, text: string, suffix?: string): string {
+  // 16 chars of text prefix is enough for human-readable
+  // uniqueness; combined with ts it gives near-zero
+  // collision probability. The `suffix` is for backward
+  // compat with old message records that included a
+  // random component — preserved here so existing
+  // dedupe keys still match.
+  const t = (typeof ts === 'number' && isFinite(ts)) ? ts : 0;
+  const textPart = (text || '').replace(/\s+/g, ' ').trim().slice(0, 16);
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+  }
+  return `hist-${t}-${textPart}-${hash}${suffix ? '-' + suffix : ''}`;
+}
+
 // v3.11.2: per-device active-quest anchor. Tracks the
 // active quest that THIS device has chosen (either from
 // the initial quests_list broadcast or from a user
@@ -2782,7 +2825,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           const aid: string = m.agentId || 'clawsuu';
           if (!grouped[aid]) grouped[aid] = { [DEFAULT_QUEST_KEY]: [] };
           grouped[aid][DEFAULT_QUEST_KEY].push({
-            id: m.id || `hist-${m.ts}-${Math.random()}`,
+            id: m.id || stableHistoryMessageId(m.ts, m.text),
             text: m.text,
             isUser: m.isUser,
             agentId: aid,
@@ -2922,7 +2965,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 const qk: string = qidKey === 'null' ? DEFAULT_QUEST_KEY : qidKey;
                 const questId: string | null = questKeyFromStorage(qk);
                 migrated[qk] = msgs.map((m: any) => ({
-                  id: m.id || `hist-${m.ts}-${Math.random()}`,
+                  id: m.id || stableHistoryMessageId(m.ts, m.text),
                   text: m.text,
                   isUser: !!m.isUser,
                   agentId: m.agentId || aid,
@@ -3010,7 +3053,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             if (!Array.isArray(msgs) || msgs.length === 0) continue;
             migrated[aid] = {
               [DEFAULT_QUEST_KEY]: msgs.map((m: any) => ({
-                id: m.id || `hist-${m.ts}-${Math.random()}`,
+                id: m.id || stableHistoryMessageId(m.ts, m.text),
                 text: m.text,
                 isUser: !!m.isUser,
                 agentId: m.agentId || aid,
@@ -4247,7 +4290,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               if (!next[mAid]) next[mAid] = {};
               if (!next[mAid][mKey]) next[mAid][mKey] = [];
               next[mAid][mKey].push({
-                id: `hist-${m.ts}-${Math.random()}`,
+                id: stableHistoryMessageId(m.ts, m.text),
                 text: m.text,
                 isUser: !!m.isUser,
                 agentId: mAid,
@@ -4279,7 +4322,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // long-term fix (desktop-side image rendering)
         // is out of scope for this release.
         const loaded = msg.messages.map((m: any) => ({
-          id: `hist-${m.ts}-${Math.random()}`,
+          id: stableHistoryMessageId(m.ts, m.text),
           text: m.text,
           isUser: m.isUser,
           agentId: m.agentId,
@@ -4747,7 +4790,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             // Map each message with a stable id + preserve
             // quest attribution.
             const loadedBucket: ChatMessage[] = msgs.map((m: any) => ({
-              id: `hist-${m.ts}-${Math.random()}`,
+              id: stableHistoryMessageId(m.ts, m.text),
               text: m.text,
               isUser: typeof m.isUser === 'boolean' ? m.isUser : (m.type === 'user'),
               agentId: m.agentId || m.name || aid,
@@ -4789,7 +4832,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // and earlier, or v3.3.19 when no per-quest data
       // exists). Routes everything to DEFAULT bucket.
       const loaded: ChatMessage[] = (Array.isArray(msg.messages) ? msg.messages : []).map((m: any) => ({
-        id: `hist-${m.ts}-${Math.random()}`,
+        id: stableHistoryMessageId(m.ts, m.text),
         text: m.text,
         isUser: typeof m.isUser === 'boolean' ? m.isUser : (m.type === 'user'),
         agentId: m.agentId || m.name || aid,
