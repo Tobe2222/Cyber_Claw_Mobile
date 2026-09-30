@@ -6120,7 +6120,6 @@ useEffect(() => {
                 <Text
                   style={[
                     styles.bubbleQuestLabel,
-                    item.isUser ? styles.bubbleQuestLabelUser : styles.bubbleQuestLabelAi,
                   ]}
                   numberOfLines={1}
                 >
@@ -8195,15 +8194,25 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // spaceBetween so the chip floats to the upper right
   // of the bubble (matches Tobe's request: 'the current
   // quest name at the upper right of each text bubble').
-  bubbleHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  // The quest chip: small, muted color, rounded. Two
-  // variants for user vs AI bubbles so it reads well
-  // against the bubble background. The '— No quest'
-  // text shows when item.activeQuestId is null (legacy
-  // or user explicitly deactivated).
-  bubbleQuestLabel: { fontSize: 9, fontWeight: '600', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden', marginLeft: 6, maxWidth: '60%' },
-  bubbleQuestLabelAi: { backgroundColor: t.brand.accentDim + '22', color: t.brand.accent },
-  bubbleQuestLabelUser: { backgroundColor: t.brand.cyanDim + '22', color: t.brand.cyanDim },
+  //
+  // v3.11.22: switch to absolute positioning for the quest
+  // chip. Tobe 2026-09-30 12:37 report: the chip was
+  // rendering top-LEFT (next to or wrapping under the
+  // agent label) and the gray tint was too low-contrast
+  // against the bubble's secondary bg. Absolute positioning
+  // pins the chip to top-right regardless of the agent
+  // label's length or the bubble's width. The chip's
+  // background is now a solid orange (no alpha overlay) so
+  // it's legible at a glance. Tobe's request: 'That text
+  // should also be in the top right of the text bubble,
+  // not top left, and the text is hard to see in gray, it
+  // should be Orange.'
+  bubbleHeaderRow: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', marginBottom: 4, position: 'relative' },
+  // The quest chip: small, SOLID orange (no alpha overlay),
+  // rounded. Same variant for both user and AI bubbles —
+  // orange reads as 'quest context' on any bubble color.
+  // Pinned to top-right via absolute positioning above.
+  bubbleQuestLabel: { fontSize: 9, fontWeight: '700', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden', position: 'absolute', right: 0, top: 0, maxWidth: '70%', backgroundColor: t.brand.accent, color: '#000000' },
   // v3.10.114: text follows the bubble border color so user
   // messages read as 'from you' (sky blue text) and AI as
   // 'from companion' (forest green text). Both on a white bg,
