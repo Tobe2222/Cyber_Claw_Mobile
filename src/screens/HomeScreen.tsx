@@ -3712,10 +3712,29 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       const questFromBroadcast = (typeof msg.activeQuestId === 'string' && msg.activeQuestId)
         ? { id: msg.activeQuestId, name: msg.activeQuestName || null }
         : null;
-      const questForStamp = questFromBroadcast || aq || null;
-      const qidForRoute = questFromBroadcast
-        ? questFromBroadcast.id
-        : (aq === undefined ? null : (aq?.id ?? null));
+      // v3.11.24: if the broadcast has no activeQuestId
+      // (e.g. the desktop's module-scope activeQuestId was
+      // null at broadcast time, an old desktop, or a
+      // race during a desktop reload), fall back to the
+      // mobile's anchor. Without this, the message lands
+      // in the DEFAULT bucket and the user — whose mobile
+      // anchor is on a specific quest — never sees it.
+      // Tobe 2026-09-30 17:29: 'the rate limit error
+      // appears, but again that does not come through to
+      // the mobile, only on desktop for some reason.'
+      // The message is broadcast with activeQuestId=null
+      // (whatever the reason — desktop reload race,
+      // mobile-side desync, etc.) and routed to DEFAULT
+      // bucket on the mobile, which is invisible to a
+      // user with an active quest anchor. Fall back to
+      // the anchor so the error lands in the user's
+      // visible bucket.
+      const questForRoute = questFromBroadcast
+        || (mobileActiveQuestAnchor ? { id: mobileActiveQuestAnchor } : aq);
+      const questForStamp = questForRoute || aq || null;
+      const qidForRoute = questForRoute
+        ? questForRoute.id
+        : null;
       const incoming: ChatMessage = {
         id: `${msg.ts || Date.now()}-${Math.random()}`,
         text: msg.text,
@@ -3728,7 +3747,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // correct quest name even when the mobile's anchor
         // is null or stale.
         activeQuestId: questForStamp?.id ?? null,
-        activeQuestName: questForStamp?.name ?? null,
+        activeQuestName: (questForStamp as any)?.name ?? null,
         // v3.11.13: forward `attachments` from the desktop's
         // chat_message broadcast. The desktop v3.3.20+ sends
         // attachments for image bubbles (the [SCREENSHOT
