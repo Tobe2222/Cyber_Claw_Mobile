@@ -4321,7 +4321,57 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
             for (const m of msg.messages) {
               const mAid: string = m.agentId || aid;
-              const mQid: string | null = (typeof m.activeQuestId === 'string') ? m.activeQuestId : null;
+              const rawQid: string | null = (typeof m.activeQuestId === 'string') ? m.activeQuestId : null;
+              // v3.11.26: if the desktop stamped this
+              // message with activeQuestId: null (because
+              // the desktop's module-scope activeQuestId
+              // was null at addChatMsg time — e.g. mid-
+              // reload race, post-deactivation, or the
+              // user hadn't activated a quest when the
+              // message was sent), fall back to the mobile
+              // anchor. Without this, the message lands in
+              // the DEFAULT bucket and the user — whose
+              // mobile anchor is on a specific quest — never
+              // sees it on the chat_history fetch (which
+              // happens on every WS reconnect, every cold
+              // start, and every tab-switch back to chat).
+              //
+              // Tobe 2026-10-01 07:18: 'a timeout error
+              // appeared i see on the desktop end. Again,
+              // its not showing up on the mobile.' — the
+              // v3.11.24 fix handled the realtime broadcast
+              // path (onChat), but the chat_history path
+              // (this handler) was still routing messages
+              // with desktop-activeQuestId=null to DEFAULT.
+              // If the mobile was disconnected (Android doze,
+              // background, etc.) when the timeout broadcast
+              // fired and reconnected after, the desktop's
+              // chat_history replay sent the error message
+              // with activeQuestId=null, the mobile routed
+              // it to DEFAULT, and the projection effect
+              // (showing the anchor's bucket) never rendered
+              // it.
+              //
+              // The fallback is only applied when:
+              //   - the desktop's stamp is null/missing
+              //     (a wrong non-null stamp is preserved
+              //     as the desktop is source of truth for
+              //     non-null values), AND
+              //   - the mobile anchor has a non-null value
+              //     (don't fall back if the user explicitly
+              //     deactivated on the mobile side).
+              //
+              // We re-stamp the message's activeQuestId too
+              // so the per-bubble pill (rendered from
+              // activeQuestName) shows the anchor's name,
+              // matching the realtime broadcast path's
+              // behavior in v3.11.24.
+              const mQid: string | null = (rawQid == null && mobileActiveQuestAnchor)
+                ? mobileActiveQuestAnchor
+                : rawQid;
+              const mQname: string | null = (rawQid == null && mobileActiveQuestAnchor)
+                ? (questNameByIdRef.current?.[mobileActiveQuestAnchor] ?? m.activeQuestName ?? null)
+                : (m.activeQuestName ?? null);
               const mKey = questKeyForStorage(mQid);
               if (!next[mAid]) next[mAid] = {};
               if (!next[mAid][mKey]) next[mAid][mKey] = [];
@@ -4331,9 +4381,42 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               // key is the stable ID from v3.11.21
               // (ts + text hash); without it, every
               // reconnect looked like a fresh batch.
+              //
+              // v3.11.26: also check the OLD bucket
+              // (desktop's stamp bucket) for the same ID.
+              // If the desktop sends a chat_history
+              // response where the error was previously
+              // stored in DEFAULT (because we routed it
+              // there before this fix), and we now want to
+              // move it to the anchor's bucket, we need to
+              // recognize that the same message ID already
+              // exists in DEFAULT and either move it or
+              // skip the duplicate. The simplest approach:
+              // dedupe across ALL buckets for this agent,
+              // not just the target bucket. That way, if
+              // the same message is in DEFAULT from a
+              // previous chat_history response, we don't
+              // duplicate it into the anchor bucket.
               if (next[mAid][mKey].some((existing: ChatMessage) => existing.id === id)) {
                 continue;
               }
+              // Cross-bucket dedupe: if this message ID
+              // exists in any other bucket for this agent
+              // (e.g. DEFAULT from a prior chat_history
+              // response before the anchor-fallback fix),
+              // skip pushing it again. This prevents the
+              // error from appearing twice (once in
+              // DEFAULT, once in HIVE_CONTROL) after the
+              // fix is deployed and the user reconnects.
+              let foundInOtherBucket = false;
+              for (const [otherKey, otherList] of Object.entries(next[mAid])) {
+                if (otherKey === mKey) continue;
+                if (otherList.some((existing: ChatMessage) => existing.id === id)) {
+                  foundInOtherBucket = true;
+                  break;
+                }
+              }
+              if (foundInOtherBucket) continue;
               next[mAid][mKey].push({
                 id,
                 text: m.text,
@@ -4342,7 +4425,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 agentName: m.agentName ?? null,
                 ts: m.ts,
                 activeQuestId: mQid,
-                activeQuestName: m.activeQuestName ?? null,
+                activeQuestName: mQname,
               });
             }
             return next;
