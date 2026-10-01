@@ -1419,6 +1419,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // is what Discord does and what eliminates the
   // keyboard-insets / agent-history-hydrate bounces.
   const prevMessagesLengthRef = useRef(0);
+  // v3.11.27: last known contentSize.height. Used to
+  // distinguish a contentSize GROWTH (legit new content
+  // or bubble rewrap that adds visible height) from a
+  // pure FlatList measurement re-pass that fires
+  // onContentSizeChange with the SAME contentSize. The
+  // v3.11.18 logic fires scrollToEnd on ANY contentSize
+  // change while at the bottom — including pure
+  // re-measurement passes with the same height. Each
+  // scrollToEnd triggers onScroll → log a new
+  // lastDistanceFromEndRef value → another onContentSizeChange
+  // fires (because the FlatList re-measures after every
+  // scroll) → another scrollToEnd → "wild scrolling"
+  // (Tobe 2026-10-01 10:23). With this ref, we only
+  // scroll when contentSize actually grew by more than
+  // 2px (layout jitter threshold) or shrunk (catch
+  // the v3.11.18 stranded-above-new-bottom case).
+  const prevContentHeightRef = useRef(0);
   // v3.11.18: last known distance-from-bottom at the moment
   // of the last onScroll event. Used by the onContentSizeChange
   // handler to decide whether the user is "at the bottom" —
@@ -7164,7 +7181,7 @@ useEffect(() => {
                   }
                 }
               }}
-              onContentSizeChange={() => {
+              onContentSizeChange={(_w: number, h: number) => {
                 // Auto-scroll to the newest on first render and whenever
                 // the user is already at the bottom when new content
                 // arrives.
@@ -7230,6 +7247,39 @@ useEffect(() => {
                 if (keyboardVisible) return;
                 const grew = messages.length > prevMessagesLengthRef.current;
                 prevMessagesLengthRef.current = messages.length;
+                // v3.11.27: also compute contentHeight delta.
+                // The FlatList fires onContentSizeChange not
+                // only when the data changes (grew=true) but
+                // also on pure re-measurement passes with the
+                // SAME contentSize (lazy virtualization on
+                // Android). The v3.11.18 logic fires
+                // scrollToEnd on any contentSize change while
+                // at the bottom — including those pure
+                // re-measurement passes — producing the
+                // self-perpetuating "wild scrolling" loop
+                // Tobe hit in v3.11.25/26 (2026-10-01 10:23).
+                //
+                // Each scrollToEnd -> another onScroll ->
+                // another onContentSizeChange -> another
+                // scrollToEnd. With animated:false (v3.11.25)
+                // each move is instant but the FlatList
+                // re-measures after each scroll, firing
+                // onContentSizeChange which schedules another
+                // scrollToEnd. The cycle never settles.
+                //
+                // Fix: only auto-scroll when the contentSize
+                // actually CHANGED (grew by more than the
+                // layout jitter threshold — a few pixels can
+                // drift between re-measurement passes — or
+                // shrunk). Skip the pure re-measurement case
+                // (height unchanged from prevContentHeightRef).
+                // The shrunk case catches the v3.11.18
+                // "stranded above new bottom" symptom without
+                // re-anchoring on every layout jitter.
+                const newHeight = (typeof h === 'number') ? h : 0;
+                const prevHeight = prevContentHeightRef.current;
+                const heightDelta = newHeight - prevHeight;
+                prevContentHeightRef.current = newHeight;
                 // v3.11.18: the user is "near the bottom" if
                 // either the boolean ref says so OR the last
                 // distance measurement was small. The boolean
@@ -7248,7 +7298,15 @@ useEffect(() => {
                 const wasNearBottom =
                   chatAtBottomRef.current ||
                   lastDistanceFromEndRef.current < 100;
-                if (wasNearBottom) {
+                // v3.11.27: gate the scroll on a real content
+                // change. Threshold 2px filters out the
+                // sub-pixel contentSize drift between FlatList
+                // re-measurement passes that happens on every
+                // scroll (each scrollToEnd triggers a
+                // re-measure, which reports a height that's
+                // +/-1px from the previous measurement).
+                const heightChanged = heightDelta > 2 || heightDelta < -2;
+                if (wasNearBottom && heightChanged) {
                   // v3.11.18: debounce the scrollToEnd so the
                   // FlatList has time to settle its multi-pass
                   // layout. A single render that adds a bubble
