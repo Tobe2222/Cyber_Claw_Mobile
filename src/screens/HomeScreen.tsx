@@ -6146,16 +6146,32 @@ useEffect(() => {
                 past a stamped bubble).
 
                 For bubbles with a quest stamp we render the
-                quest name on its own (no leading 🎯 emoji — the
-                background color of the pill is already a strong
-                visual cue, and the emoji was eating ~14dp of
-                pill width on small Android screens where long
-                quest names got truncated). The pill text falls
-                back to the broadcast's activeQuestName; if that
-                is missing we look up the name from the
-                questNameById map populated by onQuestsList. If
-                we still don't have a name, we suppress the pill
-                rather than render '(unnamed quest)'. */}
+                quest name as an inline tinted pill (🎯 prefix
+                preserved from the v3.11.5–v3.11.17 era). The
+                pill text falls back to the broadcast's
+                activeQuestName; if that is missing we look up
+                the name from the questNameById map populated
+                by onQuestsList. If we still don't have a name,
+                we suppress the pill rather than render
+                '(unnamed quest)'.
+
+                v3.11.25: Tobe 2026-10-01 07:18 — 'change back
+                to the previous quest text style in the chat
+                bubbles'. The v3.11.22 absolute-positioned solid
+                orange chip was too prominent (overrode the
+                bubble border-color identity, ate vertical
+                header space on small bubbles, and looked
+                stuck-on). Reverting to the v3.11.5–v3.11.17
+                inline pill: tinted background (alpha-overlay
+                of the bubble's accent color, not solid), small
+                font, flex row with `space-between` so it sits
+                to the right of the agent label. Per-side
+                variants (orange tint for AI bubbles, sky tint
+                for user bubbles) so the pill reads as
+                'quest context' without clobbering the bubble
+                border-color identity. The 🎯 emoji prefix is
+                restored (v3.11.18 had removed it for width;
+                the inline pill has room). */}
             {(() => {
               if (item.activeQuestId == null) return null;
               const name = item.activeQuestName
@@ -6165,10 +6181,11 @@ useEffect(() => {
                 <Text
                   style={[
                     styles.bubbleQuestLabel,
+                    item.isUser ? styles.bubbleQuestLabelUser : styles.bubbleQuestLabelAi,
                   ]}
                   numberOfLines={1}
                 >
-                  {name}
+                  🎯 {name}
                 </Text>
               );
             })()}
@@ -7190,13 +7207,57 @@ useEffect(() => {
                   // prevMessagesLengthRef update and is
                   // available for future per-message handlers,
                   // but no longer gates this scroll.
+                  //
+                  // v3.11.25: scrollToEnd now uses
+                  // `animated: false` (was `animated: true`).
+                  // Tobe 2026-10-01 07:18: when he manually
+                  // scrolls to the bottom of the chat, the
+                  // chat visibly "skips back up a bit". Root
+                  // cause: when the user is already at (or
+                  // within a few pixels of) the bottom, an
+                  // `animated: true` scrollToEnd runs
+                  // Animated.Scroll over ~250ms. During the
+                  // animation, the FlatList fires onScroll
+                  // events whose `contentOffset.y` value
+                  // briefly diverges from the settled
+                  // position (Animated.Scroll interpolates
+                  // frame-by-frame from the start to the
+                  // target). The onScroll handler then
+                  // updates `lastDistanceFromEndRef` /
+                  // `chatAtBottomRef` based on the in-flight
+                  // value, and a subsequent onContentSizeChange
+                  // (fired because the Animated.Scroll itself
+                  // caused a contentSize re-measure, or simply
+                  // because the FlatList settled again) sees
+                  // `wasNearBottom === true` and queues
+                  // another scrollToEnd. This produces a
+                  // visible "skip up + scroll down" loop
+                  // whenever a periodic broadcast lands while
+                  // the user is at the bottom.
+                  //
+                  // The fix: after 80ms of debounce the
+                  // FlatList has fully settled, so an INSTANT
+                  // scrollToEnd lands at the precise target
+                  // without firing any in-flight onScroll
+                  // events. Visually a no-op when already at
+                  // the bottom (which is the case for most
+                  // scrollToEnd calls). For the rare
+                  // "near-but-not-at-bottom" case (user
+                  // within 100px of bottom, new message
+                  // arrives), the instant scroll lands
+                  // precisely at the new bottom — the user
+                  // sees the new message appear at the
+                  // bottom of the chat, no animation but
+                  // also no skip-up jitter. Tradeoff:
+                  // loses the ~250ms smooth-scroll aesthetic
+                  // in favor of jitter-free precision.
                   if (scrollSettleTimerRef.current) {
                     clearTimeout(scrollSettleTimerRef.current);
                   }
                   scrollSettleTimerRef.current = setTimeout(() => {
                     scrollSettleTimerRef.current = null;
                     if (chatAtBottomRef.current) {
-                      chatRef.current?.scrollToEnd({ animated: true });
+                      chatRef.current?.scrollToEnd({ animated: false });
                     }
                   }, 80);
                 }
@@ -8252,12 +8313,25 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   // should also be in the top right of the text bubble,
   // not top left, and the text is hard to see in gray, it
   // should be Orange.'
-  bubbleHeaderRow: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', marginBottom: 4, position: 'relative' },
-  // The quest chip: small, SOLID orange (no alpha overlay),
-  // rounded. Same variant for both user and AI bubbles —
-  // orange reads as 'quest context' on any bubble color.
-  // Pinned to top-right via absolute positioning above.
-  bubbleQuestLabel: { fontSize: 9, fontWeight: '700', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden', position: 'absolute', right: 0, top: 0, maxWidth: '70%', backgroundColor: t.brand.accent, color: '#000000' },
+  bubbleHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  // The quest chip: small, tinted (NOT solid), rounded.
+  // Sits inline to the right of the agent label via
+  // space-between on the row above. Two variants so it
+  // reads as 'quest context' without clobbering the bubble
+  // border-color identity (orange-tint for AI bubbles,
+  // sky-tint for user bubbles).
+  //
+  // v3.11.25: reverted from the v3.11.22 absolute-
+  // positioned solid-orange chip back to the v3.11.5–
+  // v3.11.17 inline tinted pill. Tobe 2026-10-01 07:18:
+  // 'change back to the previous quest text style in the
+  // chat bubbles'. The solid-orange absolute chip was too
+  // prominent and visually 'stuck-on' against the bubble
+  // background; the inline tinted pill reads as
+  // supplementary context.
+  bubbleQuestLabel: { fontSize: 9, fontWeight: '600', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden', marginLeft: 6, maxWidth: '60%' },
+  bubbleQuestLabelAi: { backgroundColor: t.brand.accentDim + '22', color: t.brand.accent },
+  bubbleQuestLabelUser: { backgroundColor: t.brand.cyanDim + '22', color: t.brand.cyanDim },
   // v3.10.114: text follows the bubble border color so user
   // messages read as 'from you' (sky blue text) and AI as
   // 'from companion' (forest green text). Both on a white bg,
