@@ -3746,8 +3746,26 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // user with an active quest anchor. Fall back to
       // the anchor so the error lands in the user's
       // visible bucket.
-      const questForRoute = questFromBroadcast
-        || (mobileActiveQuestAnchor ? { id: mobileActiveQuestAnchor } : aq);
+      //
+      // v3.11.28: skip the anchor fallback when the
+      // desktop explicitly stamped `forceNoQuest: true`
+      // on the broadcast (v3.3.31 desktop). That flag
+      // means "this bubble belongs in the no-quest chat
+      // regardless of any active quest" — used for
+      // companion-reaction bubbles (toy dropped, snack
+      // eaten, ball fetched, etc.). Tobe 2026-10-01
+      // 12:20: "I just want that speech the companion
+      // does into the no quest chat, not any quest so
+      // it does not clutter those conversations."
+      // Without this guard, the v3.11.26 anchor fallback
+      // would re-route toy-reaction bubbles from DEFAULT
+      // back to the user's anchor bucket, defeating the
+      // v3.3.31 desktop intent.
+      const forceNoQuest = msg.forceNoQuest === true;
+      const questForRoute = forceNoQuest
+        ? null
+        : (questFromBroadcast
+          || (mobileActiveQuestAnchor ? { id: mobileActiveQuestAnchor } : aq));
       const questForStamp = questForRoute || aq || null;
       const qidForRoute = questForRoute
         ? questForRoute.id
@@ -4383,10 +4401,29 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               // activeQuestName) shows the anchor's name,
               // matching the realtime broadcast path's
               // behavior in v3.11.24.
-              const mQid: string | null = (rawQid == null && mobileActiveQuestAnchor)
-                ? mobileActiveQuestAnchor
+              //
+              // v3.11.28: respect the desktop's `forceNoQuest`
+              // flag (v3.3.31). When the desktop stamps
+              // forceNoQuest: true on a message, it means
+              // "this bubble belongs in the no-quest chat
+              // regardless of any active quest" — used for
+              // companion-reaction bubbles (toy dropped,
+              // snack eaten, ball fetched, etc.). Don't
+              // fall back to the anchor in that case.
+              // Tobe 2026-10-01 12:20: "I just want that
+              // speech the companion does into the no quest
+              // chat, not any quest so it does not clutter
+              // those conversations." Without this guard,
+              // the v3.11.26 anchor fallback would re-route
+              // toy-reaction bubbles from DEFAULT back to
+              // the user's anchor bucket, defeating the
+              // v3.3.31 desktop intent.
+              const mForceNoQuest = m.forceNoQuest === true;
+              const useAnchorFallback = !mForceNoQuest && rawQid == null && !!mobileActiveQuestAnchor;
+              const mQid: string | null = useAnchorFallback
+                ? (mobileActiveQuestAnchor as string)
                 : rawQid;
-              const mQname: string | null = (rawQid == null && mobileActiveQuestAnchor)
+              const mQname: string | null = useAnchorFallback && mobileActiveQuestAnchor
                 ? (questNameByIdRef.current?.[mobileActiveQuestAnchor] ?? m.activeQuestName ?? null)
                 : (m.activeQuestName ?? null);
               const mKey = questKeyForStorage(mQid);
