@@ -960,7 +960,7 @@ export default function QuestsScreen({
           ) : (
             <View style={[styles.headerStatusPill, styles.headerStatusPillNoActive]}>
               <Text style={styles.headerStatusPillNoActiveText}>
-                ●  No active quest
+                ●  Casual chat
               </Text>
             </View>
           )}

@@ -6185,7 +6185,7 @@ useEffect(() => {
       })();
       if (changed) {
         showQuestSeparator = true;
-        questSeparatorLabel = currQ == null ? 'No active quest' : `🎯 ${item.activeQuestName || '(unnamed quest)'}`;
+        questSeparatorLabel = currQ == null ? '— Casual chat' : `🎯 ${item.activeQuestName || '(unnamed quest)'}`;
       }
     }
 
