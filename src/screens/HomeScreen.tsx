@@ -2848,6 +2848,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             agentId: aid,
             agentName: m.agentName,
             ts: m.ts,
+            // v3.11.30 FIX (Tobe 2026-10-05 08:32):
+            //   forward attachments from the legacy
+            //   chat cache. Older versions never wrote
+            //   `attachments` to the cache; newer
+            //   v3.11.30+ does. Preserve either way.
+            attachments: Array.isArray(m.attachments) && m.attachments.length > 0
+              ? m.attachments
+              : undefined,
           });
         }
         // v3.1.27: also seed the visible `messages` from the
@@ -2990,6 +2998,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                   ts: m.ts,
                   activeQuestId: m.activeQuestId ?? questId,
                   activeQuestName: m.activeQuestName ?? null,
+                  // v3.11.30 FIX (Tobe 2026-10-05 08:32):
+                  //   forward attachments from the
+                  //   persisted local cache. The new
+                  //   v3.11.30 local-append path writes
+                  //   attachments onto user messages; the
+                  //   older legacy cache (pre-v3.11.30)
+                  //   has no `attachments` field — that's
+                  //   fine, fall through to undefined.
+                  attachments: Array.isArray(m.attachments) && m.attachments.length > 0
+                    ? m.attachments
+                    : undefined,
                 }));
               }
               if (Object.keys(migrated).length > 0) {
@@ -4480,6 +4499,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 ts: m.ts,
                 activeQuestId: mQid,
                 activeQuestName: mQname,
+                // v3.11.30 FIX (Tobe 2026-10-05 08:32):
+                //   forward attachments from chat_history
+                //   messages. The desktop v3.3.36+ now
+                //   includes user-bubble attachments in
+                //   the chatHistoryByAgent mirror and the
+                //   chat_history / agent_history responses.
+                //   Preserve them here so a cold-start /
+                //   reconnect hydrate shows image
+                //   previews. Without this, the bucket
+                //   rebuild from chat_history would wipe
+                //   attachments even though the desktop
+                //   sent them. The dedupe by id (above)
+                //   catches the case where the local
+                //   bubble already has the same id.
+                attachments: Array.isArray(m.attachments) && m.attachments.length > 0
+                  ? m.attachments
+                  : undefined,
               });
             }
             return next;
@@ -5794,7 +5830,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
     setInputText('');
     setAttachments([]);
-  }, [inputText, isConnected, pendingAudioPath]);
+    // v3.11.30 FIX (Tobe 2026-10-05 08:32): add
+    //   `attachments` to the deps. Without it, the
+    //   closure captured `attachments = []` from the
+    //   initial render. The button's `disabled` prop
+    //   reads `attachments.length` inline (always
+    //   fresh), so the button enabled correctly, but
+    //   the onPress pointed at the stale sendMessage
+    //   — which built userMsg WITHOUT attachments and
+    //   then looped over an empty array (no
+    //   sendAttachment calls). Symptom: 'pictures
+    //   disappeared right after i sent it.'
+  }, [inputText, isConnected, pendingAudioPath, attachments]);
 
   const toggleVoiceInput = useCallback(async () => {
     if (!isConnected) {
