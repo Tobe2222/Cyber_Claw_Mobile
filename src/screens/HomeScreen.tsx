@@ -3789,8 +3789,29 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       const qidForRoute = questForRoute
         ? questForRoute.id
         : null;
-      const incoming: ChatMessage = {
-        id: `${msg.ts || Date.now()}-${Math.random()}`,
+      // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
+        //   stableHistoryMessageId instead of
+        //   `${ts}-${random}`. The random suffix
+        //   guaranteed uniqueness within the app
+        //   session but made the realtime bubble's
+        //   id DIFFERENT from the chat_history
+        //   replay's id (chat_history uses
+        //   stableHistoryMessageId(ts, text)).
+        //   Without id-match, chat_history replays
+        //   on every reconnect pushed duplicates
+        //   even for messages the local already
+        //   had from the realtime broadcast.
+        //   Symptom: '2 new messages' badge appears
+        //   on every chat refresh, messages.length
+        //   keeps growing in the bucket, the chat
+        //   flickers as duplicates scroll in/out.
+        //
+        //   Now the realtime id matches the
+        //   chat_history id (both = hist-{ts}-
+        //   {first16text}-{hash}), so the chat_history
+        //   dedupe skips already-known entries.
+        const incoming: ChatMessage = {
+        id: stableHistoryMessageId(msg.ts || Date.now(), msg.text || ''),
         text: msg.text,
         isUser: !!msg.isUser,
         agentId: aid,
@@ -4449,6 +4470,49 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               if (!next[mAid]) next[mAid] = {};
               if (!next[mAid][mKey]) next[mAid][mKey] = [];
               const id = stableHistoryMessageId(m.ts, m.text);
+              // v3.11.31 FIX (Tobe 2026-10-05 18:43):
+              //   Stage 1 fallback dedupe. The realtime
+              //   onChat handler and the local user
+              //   sendMessage path now use
+              //   stableHistoryMessageId too (see
+              //   ~line 3793 and ~line 5775), so the
+              //   id-based dedupe below should usually
+              //   skip replays of messages already in
+              //   the bucket. BUT the local append's
+              //   `ts` is the mobile's Date.now() at
+              //   send time, while the desktop's
+              //   chatHistory mirror records the message
+              //   with the desktop's Date.now() at
+              //   addChatMsg time (typically a few
+              //   ms later for user bubbles, ~200ms
+              //   later for agent replies that go
+              //   through the LLM pipeline). The ts
+              //   values differ, so the
+              //   stableHistoryMessageId hashes differ,
+              //   and the id-dedupe misses.
+              //
+              //   Stage 1 fallback: match by text +
+              //   isUser + ts-window (the same
+              //   criteria appendAgentMessage uses for
+              //   the realtime echo dedupe). 60s window
+              //   to be generous (the chat_history
+              //   response could arrive seconds after
+              //   the realtime one). Tobe's chat was
+              //   getting duplicate 'user [From:..]'
+              //   bubbles from chat_history replays
+              //   on every WS reconnect, bumping
+              //   messages.length and triggering the
+              //   '↓ N new messages' badge on every
+              //   refresh — chat flashed and looked
+              //   like it kept gaining content.
+              const mIsUser = typeof m.isUser === 'boolean' ? m.isUser : (m.type === 'user');
+              const incomingTs = (typeof m.ts === 'number' && isFinite(m.ts)) ? m.ts : 0;
+              const stage1Dup = next[mAid][mKey].some((existing: any) =>
+                existing.text === m.text &&
+                !!existing.isUser === mIsUser &&
+                Math.abs((existing.ts || 0) - incomingTs) < 60000
+              );
+              if (stage1Dup) continue;
               // Skip if we've already stored a message
               // with this ID in this bucket. The dedupe
               // key is the stable ID from v3.11.21
@@ -4915,8 +4979,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // path for the rationale (snapshot-at-append, not at
       // render — the chat history is self-documenting).
       const aq = activeQuestRef.current;
+      // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
+      //   stableHistoryMessageId so the voice-mode
+      //   local bubble has the same id as the
+      //   chat_history replay entry. Same fix as
+      //   the typed-send path (~line 5871). The
+      //   random `user-local-{...}-{rand}` suffix
+      //   made the local id different from the
+      //   chat_history id, causing duplicates on
+      //   every reconnect.
       const localUserMsg: ChatMessage = {
-        id: `user-local-${localTs}-${Math.random().toString(36).slice(2, 6)}`,
+        id: stableHistoryMessageId(localTs, `[From: ${deviceName}] ${msg.transcript}`),
         text: `[From: ${deviceName}] ${msg.transcript}`,
         isUser: true,
         agentId: aid,
@@ -5771,8 +5844,40 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // typed-send time. Same snapshot-at-append pattern
       // as the desktop-echo and voice paths.
       const aq = activeQuestRef.current;
+      // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
+      //   stableHistoryMessageId so the local user
+      //   bubble has the SAME id as the chat_history
+      //   replay entry. Previously used
+      //   `user-${Date.now()}` which is unique per
+      //   local append — when the desktop sent
+      //   chat_history on the next WS reconnect, the
+      //   chat_history handler's id-dedupe didn't
+      //   match the local user bubble and pushed a
+      //   duplicate. The bucket grew by one entry per
+      //   user message per reconnect, messages.length
+      //   bumped, and the "↓ N new messages" badge
+      //   fired. Symptom: chat flickers and thinks
+      //   there are new messages on every refresh.
+      //
+      //   The `ts` we stamp locally is the mobile's
+      //   Date.now() at send time. The desktop
+      //   records the message at addChatMsg time with
+      //   its OWN Date.now() (slightly later). The
+      //   ts values may differ by a few ms. The
+      //   stableHistoryMessageId takes both as input,
+      //   so the local and chat_history entries get
+      //   different ids even with this fix — UNLESS
+      //   we stamp the same ts the desktop will see.
+      //
+      //   Cleaner approach: also dedupe by Stage 1
+      //   criteria (text + isUser + ts-window) in the
+      //   chat_history handler, the way
+      //   appendAgentMessage's Stage 1 already does.
+      //   See line ~4474 v3.11.31 below. The
+      //   stableHistoryMessageId change here is
+      //   belt-and-suspenders.
       const userMsg: ChatMessage = {
-        id: `user-${Date.now()}`,
+        id: stableHistoryMessageId(Date.now(), text ? `[From: ${deviceName}] ${text}` : text),
         text: text ? `[From: ${deviceName}] ${text}` : text,
         isUser: true,
         agentId: aid,
@@ -5937,12 +6042,52 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 // effect on the same render. The ref is updated in the
 // useEffect above and is always current.
 const lastMessageIdRef = useRef<string | null>(null);
+// v3.11.31 FIX (Tobe 2026-10-05 18:43): track the
+//   last message's text + ts so the unread counter
+//   can handle the chat_history-replay case where
+//   the same bubble lands with a fresh id (mobile
+//   vs desktop ts differ by a few ms, so
+//   stableHistoryMessageId yields a different id
+//   even though the content is identical). Without
+//   this, every WS reconnect appended the
+//   chat_history-replay of the last agent message
+//   to the bucket with a new id, the messages.length
+//   effect fired, and the '↓ N new messages' badge
+//   incremented on every refresh. Symptom: chat
+//   flickers and thinks there are new messages.
+const lastMessageTextRef = useRef<string | null>(null);
+const lastMessageTsRef = useRef<number | null>(null);
 useEffect(() => {
   if (messages.length === 0) return;
   const last = messages[messages.length - 1];
   if (last.id === lastMessageIdRef.current) return;
+  // Stage 1 fallback (matches the realtime appendAgentMessage
+  // dedupe): if text + ts match the previous last (within
+  // 60s), it's a chat_history replay of an already-known
+  // bubble — don't bump unread. Use only when both refs
+  // are non-null (i.e. we've seen at least one prior
+  // bubble).
+  const prevText = lastMessageTextRef.current;
+  const prevTs = lastMessageTsRef.current;
+  if (prevText !== null && prevTs !== null) {
+    const textMatches = last.text === prevText;
+    const tsWithinWindow = Math.abs((last.ts || 0) - prevTs) < 60000;
+    if (textMatches && tsWithinWindow) {
+      // It's a replay. Adopt the new id so we don't
+      // re-evaluate, but keep the prior ts (closer to
+      // the original local-append time) for future
+      // Stage 1 checks.
+      lastMessageIdRef.current = last.id;
+      // Keep prevTs unchanged so a future genuine
+      // duplicate (e.g. another reconnect) still
+      // matches.
+      return;
+    }
+  }
   const isInitial = lastMessageIdRef.current === null;
   lastMessageIdRef.current = last.id;
+  lastMessageTextRef.current = last.text;
+  lastMessageTsRef.current = last.ts || 0;
   if (isInitial) return; // first mount: just record, no auto-scroll/bump
   // Skip user-sent messages: the user just typed them, they know.
   if (last.isUser) {
