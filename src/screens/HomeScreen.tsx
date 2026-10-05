@@ -3991,8 +3991,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const replyBucketKey = questKeyForStorage(
           incoming.activeQuestId === undefined ? null : incoming.activeQuestId
         );
+        // v3.11.32 FIX (Tobe 2026-10-05 22:53): use
+        //   the same source for `activeBucketKey` as
+        //   the projection effect at line 1723 uses
+        //   for its `qid`. Previously read
+        //   `activeChatQuestId` state. Problem: the
+        //   onQuestsList handler's Case 3 path
+        //   (~line 5460) updates
+        //   `activeQuestRef.current` to the desktop's
+        //   new active quest but does NOT update
+        //   `activeChatQuestId` state (the comment
+        //   explains why: we don't swap state
+        //   without user intent). The state is
+        //   therefore stuck on whatever quest was
+        //   active when the user last interacted
+        //   with the mobile (e.g. HIVE_CONTROL
+        //   earlier in the day). The ref tracks the
+        //   current desktop active (Cyber_Computer
+        //   now). Projection effect reads the ref
+        //   and correctly shows Cyber_Computer
+        //   content. Thinking clear reads the
+        //   state, sees HIVE_CONTROL, doesn't match
+        //   the reply's Cyber_Computer bucket, and
+        //   leaves the indicator up. Symptom:
+        //   'clawsuu is still working even when he
+        //   is done.'
+        //
+        //   Fix: read the ref, not the state. Same
+        //   source as the projection effect so the
+        //   clear matches what's on screen.
+        const activeQidFromRef = activeQuestRef.current?.id ?? null;
         const activeBucketKey = questKeyForStorage(
-          activeChatQuestId === undefined ? null : activeChatQuestId
+          activeQidFromRef
         );
         const replyIsForActiveBucket =
           aid === activeChatAgentIdRef.current &&
