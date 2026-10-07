@@ -1328,167 +1328,37 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       Animated.timing(indicatorOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start();
     }
   }, [chatVoiceStatus, indicatorOpacity]);
-  // v3.10.111: tracks whether the chat FlatList has ever been
-  // laid out, so onLayout's "force scroll to bottom" only runs
-  // on the FIRST layout (initial mount when the chat tab opens
-  // for the first time, or after a hard remount). Subsequent
-  // layouts (font scale change, keyboard show/hide, rotation,
-  // companion re-render) leave the user's scroll position alone
-  // instead of yanking them back to the latest message.
-  // Resets only when the component unmounts (the ref's lifecycle
-  // is tied to the FlatList's tree position via the ref hook).
-  const chatLayoutSeenRef = useRef(false);
-  // v3.10.181: per-mount latch for the initial scroll decision.
-  // Set to `true` once we've decided where the FlatList should
-  // start (restored to a saved offset, or left at natural top
-  // because nothing was saved). Until then, the
-  // `onContentSizeChange` handler is gated off — otherwise the
-  // first content-size event would unconditionally
-  // `scrollToEnd()` (because `chatAtBottomRef.current` defaults
-  // to `true` on a fresh mount), producing the "starts at top
-  // then snaps to bottom" flash that Tobe reported on
-  // 2026-08-31. Distinct from `chatLayoutSeenRef` (which gates
-  // the now-deprecated onLayout restore) so the two latches
-  // can be retired independently.
-  const chatInitialDecisionRef = useRef(false);
-  // v3.10.126: persisted scroll position per agent. The chat
-  // is a FlatList with `inverted={false}` (newest at the
-  // bottom). When the user navigates away from Home and
-  // back, the FlatList re-mounts and would lose its scroll
-  // position. Tobe's 2026-08-02 17:28 report: "each time
-  // home screen comes the chat Auto scrolls to the bottom,
-  // but why does it even start at the top. Cant it just
-  // stay where it got left?"
+  // v3.11.33: SCROLL BEHAVIOR REWRITE.
+  //   The previous logic (v3.1.14 through v3.11.27) accumulated
+  //   12 layers of band-aids around the question "should the
+  //   chat auto-scroll on new content?". Tobe's 2026-10-07
+  //   request: NO auto-scroll. The chat only moves when the
+  //   user does (or when they tap the ↓ jump-to-bottom button).
+  //   On opening / switching to a chat, always start at the
+  //   bottom (Discord cold-start behavior).
   //
-  // We persist the scroll offset to AsyncStorage keyed by
-  // agentId (so each companion's chat remembers its own
-  // scroll position), and restore on first layout of the
-  // FlatList. If the user was at the bottom when they left,
-  // the auto-scroll-to-end behavior handles the restore (no
-  // change). If they were scrolled up, we restore the exact
-  // offset so they land where they left off.
-  const [chatScrollOffsetByAgent, setChatScrollOffsetByAgent] = useState<Record<string, number>>({});
-  // v3.11.0: same map, but the keys are now
-  //   `agentId::questId` (or `agentId::null` for the default
-  //   no-quest bucket). Per-agent-only offsets are preserved
-  //   as-is on first launch by the migrateOldScrollKey path in
-  //   the hydrate useEffect, then upgraded on first persist.
-  // The state type stays Record<string, number> so we don't
-  // ripple a new type through every reader.
-  // v3.10.126: ref mirror so the debounced write can read the
-  // latest offset without a stale-closure. Updated by the
-  // scroll handler at every onScroll event.
-  const chatScrollOffsetRef = useRef<Record<string, number>>({});
-  // v3.11.0: helper to build the per-(agent, quest) storage
-  // key for scroll offsets. Stable across re-renders so the
-  // onScroll handler (which is inline in JSX) can call it
-  // without a closure-stale issue.
+  //   Removed (all in service of the now-deleted auto-scroll /
+  //   scroll-restore path):
+  //     - chatLayoutSeenRef
+  //     - chatInitialDecisionRef
+  //     - chatScrollOffsetByAgent / chatScrollOffsetRef
+  //     - chatScrollKey
+  //     - chatRestoreAgentRef / chatRestoreQuestIdRef /
+  //       chatRestoreOffsetRef
+  //     - lastProjectedKeyRef
+  //     - prevMessagesLengthRef / prevContentHeightRef
+  //     - lastDistanceFromEndRef
+  //     - scrollSettleTimerRef
+  //     - chatHydrateDoneRef
+  //     - chatScrollSaveTimerRef
   //
-  // Module-scope (not a hook) so it's also reachable from
-  // the v3.11.0 quest-switch restore effect below without
-  // re-creating the helper on every render.
-  const chatScrollKey = (aid: string, qid: string | null) =>
-    `${aid}::${qid === null || qid === undefined ? 'null' : qid}`;
-  // v3.10.126: which agent's offset to restore on first layout.
-  // Captured at mount so a mid-flight agent switch doesn't
-  // restore the wrong offset.
-  const chatRestoreAgentRef = useRef<string | null>(null);
-  // v3.11.0: which quest id's offset was captured for the
-  // restore. Used together with chatRestoreAgentRef to detect
-  // when a quest switch has happened and a fresh restore is
-  // needed. null = no quest / default bucket. undefined is
-  // not used here (only the captured value lives here; the
-  // "quests not loaded yet" state lives in activeChatQuestId).
-  const chatRestoreQuestIdRef = useRef<string | null>(null);
-  const chatRestoreOffsetRef = useRef<number | null>(null);
-  // v3.11.14: track which (aid, bucketKey) the projection
-  // effect last rendered. Used to detect "the projection
-  // switched to a different bucket" vs "the projection
-  // re-ran with the same bucket because new data
-  // arrived" — we only want to setChatAtBottom(true) on
-  // the former, otherwise the chat snaps to the bottom
-  // on every hydrate. Module-scope variable would be too
-  // persistent (would skip the bottom-snap on HomeScreen
-  // remount), so use a ref which re-initialises per mount.
-  const lastProjectedKeyRef = useRef<string | null>(null);
-  // v3.11.15: track the previous messages.length so
-  // onContentSizeChange can distinguish "new message
-  // arrived" (length grew) from "layout reflow"
-  // (length stayed the same). Only auto-scroll on
-  // new-message growth; ignore layout reflows. This
-  // is what Discord does and what eliminates the
-  // keyboard-insets / agent-history-hydrate bounces.
-  const prevMessagesLengthRef = useRef(0);
-  // v3.11.27: last known contentSize.height. Used to
-  // distinguish a contentSize GROWTH (legit new content
-  // or bubble rewrap that adds visible height) from a
-  // pure FlatList measurement re-pass that fires
-  // onContentSizeChange with the SAME contentSize. The
-  // v3.11.18 logic fires scrollToEnd on ANY contentSize
-  // change while at the bottom — including pure
-  // re-measurement passes with the same height. Each
-  // scrollToEnd triggers onScroll → log a new
-  // lastDistanceFromEndRef value → another onContentSizeChange
-  // fires (because the FlatList re-measures after every
-  // scroll) → another scrollToEnd → "wild scrolling"
-  // (Tobe 2026-10-01 10:23). With this ref, we only
-  // scroll when contentSize actually grew by more than
-  // 2px (layout jitter threshold) or shrunk (catch
-  // the v3.11.18 stranded-above-new-bottom case).
-  const prevContentHeightRef = useRef(0);
-  // v3.11.18: last known distance-from-bottom at the moment
-  // of the last onScroll event. Used by the onContentSizeChange
-  // handler to decide whether the user is "at the bottom" —
-  // which determines whether to auto-scroll on new content.
-  //
-  // Why a separate ref instead of chatAtBottomRef: the latter
-  // is a boolean derived from distanceFromEnd < 50, but it
-  // only updates on a real onScroll event. If the FlatList
-  // re-measures (contentSize changes) WITHOUT a corresponding
-  // onScroll (e.g., a bubble height reflows because a pill was
-  // suppressed, or a bubble's text rewrapped after a state
-  // update), the user's actual position relative to the new
-  // bottom can shift by tens of pixels — but chatAtBottomRef
-  // stays at its stale value. Using a fresh distance check
-  // based on the latest saved scrollY vs. the new contentSize
-  // catches these layout-only reflows.
-  //
-  // Updated on every onScroll event; read on every
-  // onContentSizeChange event.
-  const lastDistanceFromEndRef = useRef(0);
-  // v3.11.18: debounce timer for scrollToEnd. Set when
-  // onContentSizeChange wants to scroll to the new bottom but
-  // waits 80ms for the FlatList to settle its multi-pass
-  // layout (a single render can fire onContentSizeChange 2–3
-  // times as cells measure and remount). Without the debounce,
-  // a scrollToEnd issued against an interim contentSize lands
-  // at a wrong position and the user sees the chat "jump up"
-  // once the FlatList settles.
-  const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // v3.10.178: gate the onLayout scroll-restore until the
-  // AsyncStorage hydrate of `cyberclaw-chat-scroll-byagent`
-  // has completed. Without this gate, there's a race:
-  //   1. FlatList mounts and `onLayout` fires.
-  //   2. The async hydrate effect is still in flight;
-  //      `chatRestoreOffsetRef.current` is still null.
-  //   3. The onLayout handler falls into the
-  //      `else { scrollToEnd() }` branch because no
-  //      restoreOffset is available — yanking the user
-  //      to the bottom even when they had a saved
-  //      scroll-up position.
-  //
-  // Hydrate is fire-and-forget so we can't await it; we
-  // poll the ref a few times with a short backoff before
-  // giving up and falling through. Polling only happens
-  // on the very first onLayout (gated by chatLayoutSeenRef)
-  // so the cost is bounded to a single mount.
-  const chatHydrateDoneRef = useRef(false);
-  // v3.10.126: debounce timer for the scroll-offset write.
-  // Null = no write pending. Set when a scroll fires; the
-  // timer fires once and writes the latest offset to
-  // AsyncStorage. This keeps fast swipe gestures from
-  // writing to storage on every frame.
-  const chatScrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  //   Kept:
+  //     - chatAtBottom state + chatAtBottomRef — needed to
+  //       decide when to show the ↓ jump-to-bottom button.
+  //     - chatUnreadCount — used by the existing "↓ N new
+  //       messages" badge. Without auto-scroll, the badge
+  //       becomes the user's only signal that new content
+  //       has arrived below the fold. Still useful.
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
   // v3.10.70: mirror of activeTab so the chat-event
@@ -1733,313 +1603,83 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const bucketKey = questKeyForStorage(qid);
     const bucket = skipBucketLookup ? [] : (agentBuckets[bucketKey] || []);
     setMessages(bucket);
-    // v3.11.0: when we switch quest, mark the
-    // chatAtBottom state so the FlatList settles to the
-    // bottom of the new bucket (the user is now in a
-    // different chat, not scrolling within the same
-    // one). This also restores the per-(agent,quest)
-    // scroll offset on first layout of the new bucket —
-    // see the v3.10.126 restore path which keys on
-    // activeChatAgentId; the quest-dimension is layered
-    // on top below in a separate effect.
-    //
-    // v3.11.14: only setChatAtBottom(true) when the
-    // projection ACTUALLY switched to a different
-    // bucket (different aid or bucketKey). The projection
-    // effect re-runs on anchorHydrateTick bumps (every
-    // agent_history / chat_history hydrate call) which
-    // doesn't change the visible chat — it just refills
-    // the same bucket with newer data. Setting
-    // chatAtBottom(true) on every re-run was yanking the
-    // user back to the bottom mid-read when they were
-    // scrolled up. Tobe 2026-09-27 18:29: "it does not
-    // want to go to the bottom, it just skips up and its
-    // very jumpy up and down. It should just be smooth
-    // and exactly like discord chat is."
-    //
-    // Track the last-projected (aid, bucketKey) in a
-    // module-scope ref. Initialise on first projection
-    // effect run; compare on subsequent runs. The ref
-    // survives across renders without retriggering.
-    //
-    // We DON'T immediately scroll here — the FlatList
-    // might not have measured the new content yet. The
-    // restore effect (which watches messages length +
-    // activeChatAgentId + active quest) makes the
-    // actual scrollToOffset call after the new bucket
-    // has rendered.
-    const projectedKey = `${aid}::${bucketKey}`;
-    if (lastProjectedKeyRef.current !== null && lastProjectedKeyRef.current !== projectedKey) {
-      // Bucket changed — user is in a different
-      // conversation; jump to bottom of new bucket.
+    // v3.11.33: bucket switching now scrolls to the
+    // bottom via the dedicated useEffect above (which
+    // watches activeChatAgentId + activeChatQuestId +
+    // anchorHydrateTick). The previous
+    // "setChatAtBottom(true) on bucket change" hack is
+    // no longer needed — the scrollToEnd call IS the
+    // way the chat positions itself.
+  }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
+
+  // v3.11.33: SCROLL-TO-BOTTOM ON PRESENT. Replaces the v3.10.181
+  // tryRestore/restore-offset path (now deleted). The new rule:
+  //   - On mount: chat opens at the bottom.
+  //   - On active agent change: chat opens at the bottom for
+  //     the new agent.
+  //   - On active quest change: chat opens at the bottom for
+  //     the new quest's bucket.
+  //
+  // No more "stay where you left it" / scroll-restore. No
+  // persisted scroll offsets. The ↓ jump-to-bottom button
+  // (rendered when !chatAtBottom) is the user's affordance for
+  // reaching the bottom after manually scrolling up.
+  //
+  // Why one useEffect for all three: each is conceptually the
+  // same event — "the user is now looking at a different chat
+  // panel". We do not debounce because the FlatList's
+  // measurement pass is the only timing constraint, and it lands
+  // on the next frame (which `requestAnimationFrame` already
+  // waits for).
+  //
+  // On a cold remount the FlatList mounts with no content
+  // (messages still hydrating); the rAF will likely fire before
+  // messages land. To handle that we schedule a second pass
+  // 250ms later via setTimeout — covers the
+  // AsyncStorage-hydrate + chat-history-replay path which can
+  // take longer than one frame on real Android hardware.
+  useEffect(() => {
+    let cancelled = false;
+    const scrollToBottom = () => {
+      if (cancelled) return;
+      if (!activeChatAgentId) return;
+      // animated:true gives the user a smooth "settle to the
+      // bottom" motion on mount/quest-switch — matches
+      // Discord's cold-channel-open feel. If the FlatList
+      // hasn't measured yet, scrollToEnd no-ops; the second
+      // pass 250ms later will land once content is rendered.
+      chatRef.current?.scrollToEnd({ animated: true });
+      // Reflect the new at-bottom state so the ↓ button
+      // disappears immediately and a follow-up user scroll
+      // (before the FlatList reports its settled position)
+      // doesn't re-show the button prematurely.
+      chatAtBottomRef.current = true;
       setChatAtBottom(true);
-    }
-    lastProjectedKeyRef.current = projectedKey;
-    // v3.11.0: depend on activeChatQuestId too so quest
-    // switches trigger the same view-sync. The ref is
-    // already current (the onQuestsList listener sets it
-    // synchronously before setActiveChatQuestId), so
-    // reading from the ref here picks up the new value
-    // without an extra render.
-  }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
-
-  // v3.10.126: hydrate the persisted per-agent scroll
-  // offsets from AsyncStorage on mount. The map is keyed
-  // by agentId so Clawsuu's chat remembers its position
-  // independent of Lamasuu's. We mirror the loaded map
-  // into chatScrollOffsetRef so the onScroll handler can
-  // read it without re-renders.
-  //
-  // v3.10.181: NO LONGER captures chatRestoreOffsetRef.current
-  // synchronously here. On a HomeScreen remount (Quests → Back)
-  // the AsyncStorage hydrate runs at component mount, but
-  // `activeChatAgentId` is still `null` at that point — it only
-  // becomes non-null a frame or two later when the desktop's
-  // `agents_list` broadcast arrives. The old synchronous capture
-  // (`if (activeChatAgentId && cleaned[activeChatAgentId] ...`)
-  // always evaluated with the initial null value, so
-  // `chatRestoreOffsetRef.current` was never populated and the
-  // onLayout restore fell through to "no offset, leave at top",
-  // and then the `chatAtBottomRef.current === true` default
-  // clobbered the result with a `scrollToEnd()` on the first
-  // contentSize change — that's the flash Tobe reported on
-  // 2026-08-31.
-  //
-  // The new capture lives in a separate effect below that
-  // watches `activeChatAgentId` and runs the capture AFTER
-  // hydrate has completed (gated on `chatHydrateDoneRef`).
-  //
-  // v3.11.0: extended for per-quest buckets. The on-disk
-  // shape changed from
-  //   Record<agentId, number>
-  // to
-  //   Record<string, number>      // keys are `agentId::questId` or `agentId::null`
-  //
-  // On first launch with the new build we read the OLD
-  // key (`cyberclaw-chat-scroll-byagent`), upgrade each
-  // entry to the new shape (using `null` as the quest
-  // part, since pre-v3.11.0 messages had no quest
-  // attribution), write the upgraded map under the new
-  // key (`cyberclaw-chat-scroll-byagent-byquest`), and
-  // remove the old key so we never re-migrate. This is
-  // idempotent — re-running on a v3.11.0+ install just
-  // reads the new key directly.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        // v3.11.0: prefer the new per-quest key if it exists.
-        const rawNew = await AsyncStorage.getItem('cyberclaw-chat-scroll-byagent-byquest');
-        if (rawNew) {
-          const parsed = JSON.parse(rawNew);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            const cleaned: Record<string, number> = {};
-            for (const [k, v] of Object.entries(parsed)) {
-              const n = Number(v);
-              if (Number.isFinite(n) && n >= 0) cleaned[k] = n;
-            }
-            chatScrollOffsetRef.current = cleaned;
-            setChatScrollOffsetByAgent(cleaned);
-            if (!cancelled) chatHydrateDoneRef.current = true;
-            return;
-          }
-        }
-        // v3.11.0: migrate from the old per-agent-only key.
-        const rawOld = await AsyncStorage.getItem('cyberclaw-chat-scroll-byagent');
-        if (rawOld) {
-          const parsed = JSON.parse(rawOld);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            const cleaned: Record<string, number> = {};
-            for (const [k, v] of Object.entries(parsed)) {
-              const n = Number(v);
-              if (Number.isFinite(n) && n >= 0) {
-                // Upgrade: old key was just `agentId`. New
-                // key is `agentId::null` (the default-quest
-                // bucket — pre-v3.11.0 messages had no quest
-                // attribution so they all belong there).
-                cleaned[`${k}::null`] = n;
-              }
-            }
-            chatScrollOffsetRef.current = cleaned;
-            setChatScrollOffsetByAgent(cleaned);
-            // Persist the upgraded map under the new key and
-            // remove the old key so the next launch skips
-            // migration. Best-effort — failures here are
-            // recoverable (next launch will just re-migrate).
-            await AsyncStorage.setItem(
-              'cyberclaw-chat-scroll-byagent-byquest',
-              JSON.stringify(cleaned),
-            ).catch(() => {});
-            await AsyncStorage.removeItem('cyberclaw-chat-scroll-byagent').catch(() => {});
-            if (!cancelled) chatHydrateDoneRef.current = true;
-            return;
-          }
-        }
-        // Neither key present — fresh install or wiped
-        // storage. Just flip the gate so the restore path
-        // can make its decision.
-      } catch (_) { /* ignore corrupt storage */ }
-      finally {
-        if (!cancelled) chatHydrateDoneRef.current = true;
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount-once load; activeChatAgentId read inside is the initial value
-
-  // v3.10.181: reactive capture of the restore offset for the
-  // CURRENT active agent. Runs whenever `activeChatAgentId`
-  // changes AND the scroll-offset hydrate has already
-  // completed. The capture is one-shot — we latch on the first
-  // non-null activeChatAgentId after hydrate, then ignore
-  // subsequent changes so a mid-flight companion tab switch
-  // doesn't accidentally restore the wrong agent's offset
-  // while the user is mid-scroll.
-  //
-  // Without this, the onLayout/v3.10.178 restore path always
-  // saw `chatRestoreOffsetRef.current === null` on a remount
-  // (because activeChatAgentId was null when the hydrate
-  // effect ran). The fix: defer the capture until the agents
-  // list has loaded. The actual restore decision lives in the
-  // next useEffect (which fires when messages are present).
-  //
-  // v3.11.0: also re-run when the active quest changes.
-  // Switching to a different quest should swap the visible
-  // chat to that quest's bucket and restore that bucket's
-  // scroll offset (per the v3.10.126 design). We treat the
-  // quest switch as a "fresh mount" of the chat panel: we
-  // capture the new (agent, quest) pair's offset into the
-  // restore refs and reset the latch so the restore
-  // useEffect fires its scrollToOffset again.
-  useEffect(() => {
-    if (!chatHydrateDoneRef.current) return; // hydrate not done yet; the polling restore will handle it
-    if (!activeChatAgentId) return;
-    const qid: string | null =
-      activeChatQuestId === undefined
-        ? null
-        : activeChatQuestId;
-    const key = `${activeChatAgentId}::${questKeyForStorage(qid)}`;
-    // If we've already captured this exact (agent, quest)
-    // pair, don't clobber. The v3.10.181 one-shot rule for
-    // agent switches still applies — a mid-scroll companion
-    // tab switch must NOT re-restore.
-    if (
-      chatRestoreOffsetRef.current !== null &&
-      chatRestoreAgentRef.current === activeChatAgentId &&
-      chatRestoreQuestIdRef.current === qid
-    ) {
-      return;
-    }
-    const offset = chatScrollOffsetRef.current[key];
-    chatRestoreAgentRef.current = activeChatAgentId;
-    chatRestoreQuestIdRef.current = qid;
-    chatRestoreOffsetRef.current = typeof offset === 'number' ? offset : null;
-    // v3.11.0: reset the initial-decision latch so the
-    // restore useEffect below re-fires for the new quest.
-    // Without this reset, switching quests keeps the
-    // previous quest's "decision" (latched) and the FlatList
-    // stays at the old quest's restored position instead of
-    // jumping to the new quest's saved position.
-    chatInitialDecisionRef.current = false;
-    // No setState — purely a ref update, no re-render needed.
-    // The restore useEffect below reads the ref directly.
+      // Clear any leftover unread count — opening the chat
+      // means the user is "caught up" on whatever was
+      // pending (the badge is only useful while they're
+      // looking at a different chat or scrolled up).
+      setChatUnreadCount(0);
+    };
+    // First pass: next frame, so the FlatList has time to
+    // commit its mount before we ask it to scroll.
+    const raf = requestAnimationFrame(scrollToBottom);
+    // Second pass: 250ms later, catches the
+    // hydrate-then-replay path where messages arrive
+    // AFTER the FlatList first paint. Without the second
+    // pass the user sees a brief "empty chat" → "chat
+    // appears at the bottom" jump.
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      scrollToBottom();
+    }, 250);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
-
-  // v3.10.181: SINGLE SOURCE OF TRUTH for the initial scroll
-  // position decision on a HomeScreen mount. Fires when:
-  //   1. messages are populated (FlatList will render real
-  //      content), AND
-  //   2. an activeChatAgentId is known (the per-agent offset
-  //      map needs a key), AND
-  //   3. we haven't already decided for this mount
-  //      (chatInitialDecisionRef latch — fires once per mount).
-  //
-  // Polls `chatHydrateDoneRef` with a short backoff so the
-  // AsyncStorage hydrate has a chance to land before we make
-  // the decision. Total budget: ~600ms (8 × 75ms).
-  //
-  // Decision matrix:
-  //   - chatRestoreOffsetRef.current === a real positive number
-  //     → scrollToOffset(savedOffset) (twice: once now, once
-  //       after a 300ms settle because FlatList measures
-  //       lazily). Set chatAtBottomRef based on whether the
-  //       offset was near the bottom, so the next
-  //       contentSize change doesn't clobber the restore.
-  //   - chatRestoreOffsetRef.current === null
-  //     → leave the FlatList at its natural top. No
-  //       auto-scroll. The user can tap the "↓ new messages"
-  //       badge to jump to the bottom if they want.
-  //     (Discord-equivalent default for cold starts with no
-  //     saved position.)
-  useEffect(() => {
-    if (chatInitialDecisionRef.current) return;
-    if (messages.length === 0) return;
-    if (!activeChatAgentId) return;
-    let cancelled = false;
-    const tryRestore = () => {
-      if (cancelled) return;
-      // The decision fires ONCE per mount.
-      chatInitialDecisionRef.current = true;
-      const off = chatRestoreOffsetRef.current;
-      if (typeof off === 'number' && off > 0) {
-        // v3.11.16: single scrollToOffset, animated. The
-        // previous code did two scrollToOffsets (immediate +
-        // 300ms settle) with animated:false, which produced
-        // visible double-jumps when the FlatList measured
-        // correctly on the first try. Animated scroll gives
-        // a smooth motion that the user perceives as a
-        // single restore. If the FlatList hasn't measured
-        // yet, the FlatList's own internal handling will
-        // re-apply the scroll once content is measured.
-        chatRef.current?.scrollToOffset({ offset: off, animated: true });
-        // Defer chatAtBottomRef updates to the onScroll event
-        // that the programmatic scrollToOffset will fire.
-        // DON'T pre-compute here — we don't have an accurate
-        // contentSize yet, and a wrong guess would either
-        // (a) wrongly auto-scroll on the next content size
-        // change (if we guess "near bottom" when actually
-        // mid-history) or (b) wrongly suppress auto-scroll
-        // for a future "user is at bottom" message (if we
-        // guess "not at bottom" when actually near it).
-        // The onScroll handler is the source of truth; it
-        // uses e.nativeEvent.contentSize which IS accurate.
-      } else {
-        // No saved offset. Leave the FlatList at its
-        // natural initial position (top of history). Mark
-        // NOT at bottom so the next contentSize change
-        // doesn't snap to the bottom — the user is at the
-        // top, leave them there. (This is the bug Tobe hit:
-        // chatAtBottomRef defaults to true on remount, then
-        // onContentSizeChange's scrollToEnd yanks them to
-        // the bottom right after the natural top paint,
-        // producing the "starts up high then jumps down"
-        // flash.)
-        chatAtBottomRef.current = false;
-        setChatAtBottom(false);
-      }
-      // Clear the restore slot so a mid-mount agent switch
-        // doesn't accidentally re-restore from a stale value.
-      chatRestoreOffsetRef.current = null;
-    };
-    if (chatHydrateDoneRef.current) {
-      tryRestore();
-      return () => { cancelled = true; };
-    }
-    // Hydrate still in flight. Poll the gate up to ~600ms.
-    let attempts = 0;
-    const poll = () => {
-      if (cancelled) return;
-      if (chatHydrateDoneRef.current || attempts++ >= 8) {
-        tryRestore();
-        return;
-      }
-      setTimeout(poll, 75);
-    };
-    setTimeout(poll, 0);
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChatAgentId, messages.length > 0]);
 
   // v3.1.63: inject setCentered(true) when voice mode
   // (fullscreen) is entered, setCentered(false) when exited.
@@ -2151,54 +1791,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
   }, []);
 
-  // NOTE: Scroll handled by hasInitialScrolled effect below
-
-  // Stop speech and cleanup when component unmounts
-  //
-  // v3.10.181: also flushes the debounced scroll-offset save.
-  // The onScroll handler debounces AsyncStorage writes 250ms,
-  // which is fast enough for normal scroll-and-stop usage but
-  // too slow for "scroll within 250ms of tapping Quests" — the
-  // HomeScreen unmounts before the timer fires and the latest
-  // offset never makes it to storage. Without this flush, the
-  // very next HomeScreen remount would restore the position
-  // from BEFORE the most recent scroll. Sync write on unmount
-  // is fine: AsyncStorage is fast on warm devices, the user is
-  // about to navigate, and we already accepted a sync write on
-  // the agents-cache hydrate path.
+  // v3.11.33: stop speech + flush scroll state on unmount.
+  // (scroll-flush is now a no-op since we don't persist
+  // scroll positions any more — but the speech cancel
+  // remains for the WebView TTS fallback.)
   useEffect(() => {
     return () => {
       try {
         if (webViewRef?.current) {
           webViewRef.current.injectJavaScript('if (window.speechSynthesis) { window.speechSynthesis.pause?.(); window.speechSynthesis.cancel?.(); } true;');
         }
-      } catch (e) {
-        // Silently fail - component is unmounting
-      }
-      try {
-        isWakeWordStoppedRef.current = true;
-      } catch {}
-      // Flush any pending debounced scroll-offset write so the
-      // position the user was just at makes it to AsyncStorage
-      // before the component (and the in-memory ref) is gone.
-      if (chatScrollSaveTimerRef.current) {
-        clearTimeout(chatScrollSaveTimerRef.current);
-        chatScrollSaveTimerRef.current = null;
-        try {
-          // Note: AsyncStorage.setItem returns a Promise; on
-          // unmount we fire-and-forget. If the unmount happens
-          // because the user is navigating away, the JS thread
-          // is still alive for a tick or two and the write
-          // lands. If the JS context is being torn down (app
-          // backgrounded), the write may not land; we accept
-          // that — AppState-change flushes are out of scope.
-          // v3.11.0: write to the new per-quest key.
-          AsyncStorage.setItem(
-            'cyberclaw-chat-scroll-byagent-byquest',
-            JSON.stringify(chatScrollOffsetRef.current),
-          ).catch(() => {});
-        } catch (_) { /* swallow — best-effort */ }
-      }
+      } catch (_) { /* swallow on unmount */ }
     };
   }, []);
 
@@ -5562,13 +5165,6 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // tries to setState on an unmounted component.
       try { if (thinkingEscalateTimerRef.current) clearTimeout(thinkingEscalateTimerRef.current); } catch {}
       thinkingEscalateTimerRef.current = null;
-      // v3.11.18: cancel any pending scrollSettle timer —
-      // same reason as above. Without this, a HomeScreen
-      // unmount mid-settle (e.g., tab switch + quick
-      // backgrounding) leaves a setTimeout that fires on a
-      // stale chatRef against an unmounted FlatList.
-      try { if (scrollSettleTimerRef.current) clearTimeout(scrollSettleTimerRef.current); } catch {}
-      scrollSettleTimerRef.current = null;
       try { wakeSub?.remove?.(); } catch {}
       try { wakeOpenSub?.remove?.(); } catch {}
       try { debugSub?.remove?.(); } catch {}
@@ -6266,14 +5862,9 @@ useEffect(() => {
 // Settings and back, they stay where they were.
 //
 // The FlatList is conditionally rendered in this screen
-// (see `{activeTab === 'chat' && <FlatList ... />}` at
-// line 4714). On the previous screen the FlatList
-// unmounted when the user leaves the tab and a fresh
-// FlatList mounts when they come back. The save-path
-// (onScroll -> debounced AsyncStorage write at
-// cyberclaw-chat-scroll-byagent) runs while the user
-// scrolls; the restore-path (onLayout / v3.10.178
-// hydrate gate) lands the user where they left off.
+// v3.11.33: clear unread count when the chat tab becomes
+// visible. (Previously this hook also referenced the
+// deleted scroll-save/restore path; that path is gone.)
 useEffect(() => {
   if (activeTab === 'chat') {
     setChatUnreadCount(0);
@@ -7332,105 +6923,27 @@ useEffect(() => {
               // scrollToEnd to jump there.
               inverted={false}
               onScroll={(e) => {
-                // v3.10.126: capture the current scroll offset for
-                // persistence. We update the ref mirror on every
-                // scroll event (cheap — just an object write) and
-                // schedule a debounced AsyncStorage write so we
-                // don't thrash storage on rapid scroll gestures.
-                const aid = activeChatAgentIdRef.current;
-                if (aid) {
-                  // v3.11.0: per-(agent, quest) key. The
-                  // storage shape is now
-                  // `${aid}::${questKeyForStorage(qid)}` —
-                  // the default quest is encoded as a
-                  // stable string sentinel (DEFAULT_QUEST_KEY),
-                  // not the literal `null`, because
-                  // `null` is not a valid indexer for
-                  // Record types. The key is built from
-                  // the LIVE active quest (state), not a
-                  // captured closure value, so a quest
-                  // switch that happens mid-gesture
-                  // routes the next write to the new
-                  // quest's bucket.
-                  const scrollQid: string | null =
-                    activeChatQuestId === undefined
-                      ? null
-                      : activeChatQuestId;
-                  const scrollKey = `${aid}::${questKeyForStorage(scrollQid)}`;
-                  chatScrollOffsetRef.current = {
-                    ...chatScrollOffsetRef.current,
-                    [scrollKey]: e.nativeEvent.contentOffset.y,
-                  };
-                  // v3.10.126: schedule debounced write. Only
-                  // write if no write is pending — the pending
-                  // timer is keyed in a module-level ref so a
-                  // fast flurry of scrolls coalesces into one
-                  // write. 250ms feels instant to the user but
-                  // skips writes during a swipe gesture.
-                  //
-                  // v3.11.0: write to the new per-quest
-                  // key. The old `cyberclaw-chat-scroll-byagent`
-                  // key is removed by the hydrate effect on
-                  // first launch with the new build.
-                  if (!chatScrollSaveTimerRef.current) {
-                    chatScrollSaveTimerRef.current = setTimeout(() => {
-                      chatScrollSaveTimerRef.current = null;
-                      AsyncStorage.setItem(
-                        'cyberclaw-chat-scroll-byagent-byquest',
-                        JSON.stringify(chatScrollOffsetRef.current),
-                      ).catch(() => { /* swallow — best-effort */ });
-                    }, 250);
-                  }
-                }
-                // Without inversion, "at the bottom" means near the
-                // end of contentSize.height (within a small threshold
-                // of layoutHeight).
-                // v3.10.111: 32px → 50px to better match Discord's
-                // "near bottom" feel — small phone screens have
-                // denser scroll budgets and 32px felt twitchy.
+                // v3.11.33: SCROLL HANDLER SIMPLIFIED.
+                //   The previous handler also wrote the scroll
+                //   offset to AsyncStorage on every event (for
+                //   restore-on-revisit). Without restore-on-
+                //   revisit we only need to track the at-bottom
+                //   state for the ↓ button's visibility.
+                //
+                //   Threshold 50px from v3.10.111 (was 32px).
+                //   Within 50px of the bottom → "at bottom";
+                //   the ↓ jump-to-bottom button hides. Beyond
+                //   → button shows.
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 const distanceFromEnd = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-                // v3.11.18: cache the latest distance for the
-                // onContentSizeChange handler. See comment on
-                // lastDistanceFromEndRef for why this lives
-                // outside chatAtBottomRef.
-                lastDistanceFromEndRef.current = distanceFromEnd;
                 const isAtBottom = distanceFromEnd < 50;
                 setChatAtBottom(isAtBottom);
-                // v3.10.96: clear the "↓ N new messages" badge
-                // when the user scrolls to the bottom of the
-                // chat. Tobe's v3.10.90/v3.10.95 feedback: the
-                // badge persisted even after the user manually
-                // scrolled to the bottom, requiring a tap on
-                // the badge to clear it. v3.10.90 introduced
-                // the "always show" rule so missed-broadcast
-                // replays were visible — but it lost the
-                // implicit "scrolled to bottom = caught up"
-                // semantic. The fix: the badge is "you have
-                // not yet seen these new messages". The moment
-                // the user is at the bottom of the chat, they
-                // have seen them. The onContentSizeChange
-                // handler's auto-scroll already moves them
-                // there for new incoming messages, so this
-                // clear is consistent with the auto-scroll
-                // behavior.
+                // v3.10.96 kept: clear the unread badge + the
+                // per-companion tab badge when the user
+                // scrolls to the bottom. Same semantic — "if
+                // you're at the bottom you've seen everything".
                 if (isAtBottom) {
                   setChatUnreadCount(0);
-                  // v3.10.96 (Tobe's v3.10.95 feedback
-                  // second part): also clear the
-                  // per-companion tab badge for the
-                  // active agent. The tab badge (the
-                  // "9" red circle on the Clawsuu tab)
-                  // is `chatUnreadByAgent[activeAgent]`
-                  // and was persisting even after the
-                  // user scrolled to the bottom of the
-                  // chat. The agent_history callback
-                  // clears it on tab switch, but if the
-                  // history response is slow or fails
-                  // the badge lingers. Treating
-                  // "scrolled to bottom" as
-                  // "caught up" clears both badges
-                  // with the same gesture.
                   const aid = activeChatAgentIdRef.current;
                   if (aid) {
                     setChatUnreadByAgent(prev => {
@@ -7440,350 +6953,18 @@ useEffect(() => {
                   }
                 }
               }}
-              onContentSizeChange={(_w: number, h: number) => {
-                // Auto-scroll to the newest on first render and whenever
-                // the user is already at the bottom when new content
-                // arrives.
-                //
-                // v3.10.181: GATED on `chatInitialDecisionRef.current`.
-                // On a HomeScreen remount, the FlatList mounts with
-                // empty data, then chat history hydrates and the
-                // content size changes. WITHOUT this gate,
-                // `chatAtBottomRef.current` defaults to `true` on a
-                // fresh mount, so the first onContentSizeChange
-                // would unconditionally `scrollToEnd()` — producing
-                // the "starts at top, then snaps to bottom" flash
-                // that Tobe reported on 2026-08-31. The initial
-                // decision (restore-to-saved-offset OR leave-at-top)
-                // is made by the dedicated useEffect above; we
-                // don't start auto-scrolling on content size
-                // changes until that decision has been made AND
-                // `chatAtBottomRef` reflects the user's actual
-                // position.
-                //
-                // v3.11.15: only auto-scroll when messages.length
-                // GREW (a new message arrived), not on layout
-                // reflows (keyboard show/hide, agent-history
-                // hydrate re-renders the same messages, font scale
-                // changes, etc.). The previous behavior fired
-                // scrollToEnd on every onContentSizeChange when at
-                // the bottom — including layout reflows that didn't
-                // actually add content — producing the rapid
-                // bounce Tobe hit on 2026-09-27 20:52 ("jumps up
-                // and down like crazy now"). Discord distinguishes
-                // these two cases: layout reflows preserve the
-                // user's scroll position; only new messages
-                // trigger the auto-follow.
-                //
-                // v3.11.17: also gate on keyboardVisible. When the
-                // keyboard opens or closes, the FlatList re-lays
-                // out (because the parent KeyboardAvoidingView's
-                // paddingBottom changes), which fires
-                // onContentSizeChange even though no new content
-                // arrived. On Android the keyboard-open animation
-                // can fire this multiple times in rapid succession
-                // with slightly different contentSize values
-                // (because the FlatList re-measures as the layout
-                // settles). Each fire with grew=true would call
-                // scrollToEnd, but during keyboard open the
-                // visible-area height is shrinking — the
-                // scrollToEnd target keeps moving. The user sees
-                // the chat position "skip up" repeatedly as the
-                // target jumps.
-                //
-                // Discord's behaviour during typing: the chat
-                // panel shrinks, the scroll position is preserved
-                // (because the user is reading what they typed,
-                // not scrolling to follow new content). We do the
-                // same: skip auto-scroll while the keyboard is
-                // visible. The user's scroll position stays put.
-                // When they send the message (which arrives as a
-                // new bubble), the grew=true check fires AFTER
-                // the keyboard closes (because the new message
-                // arrival and the auto-scroll both happen on the
-                // tap path), and the auto-scroll lands.
-                if (!chatInitialDecisionRef.current) return;
-                if (keyboardVisible) return;
-                const grew = messages.length > prevMessagesLengthRef.current;
-                prevMessagesLengthRef.current = messages.length;
-                // v3.11.27: also compute contentHeight delta.
-                // The FlatList fires onContentSizeChange not
-                // only when the data changes (grew=true) but
-                // also on pure re-measurement passes with the
-                // SAME contentSize (lazy virtualization on
-                // Android). The v3.11.18 logic fires
-                // scrollToEnd on any contentSize change while
-                // at the bottom — including those pure
-                // re-measurement passes — producing the
-                // self-perpetuating "wild scrolling" loop
-                // Tobe hit in v3.11.25/26 (2026-10-01 10:23).
-                //
-                // Each scrollToEnd -> another onScroll ->
-                // another onContentSizeChange -> another
-                // scrollToEnd. With animated:false (v3.11.25)
-                // each move is instant but the FlatList
-                // re-measures after each scroll, firing
-                // onContentSizeChange which schedules another
-                // scrollToEnd. The cycle never settles.
-                //
-                // Fix: only auto-scroll when the contentSize
-                // actually CHANGED (grew by more than the
-                // layout jitter threshold — a few pixels can
-                // drift between re-measurement passes — or
-                // shrunk). Skip the pure re-measurement case
-                // (height unchanged from prevContentHeightRef).
-                // The shrunk case catches the v3.11.18
-                // "stranded above new bottom" symptom without
-                // re-anchoring on every layout jitter.
-                const newHeight = (typeof h === 'number') ? h : 0;
-                const prevHeight = prevContentHeightRef.current;
-                const heightDelta = newHeight - prevHeight;
-                prevContentHeightRef.current = newHeight;
-                // v3.11.18: the user is "near the bottom" if
-                // either the boolean ref says so OR the last
-                // distance measurement was small. The boolean
-                // ref is updated by onScroll, which doesn't
-                // fire when the FlatList re-measures WITHOUT a
-                // user scroll — so it can be stale after a
-                // layout reflow. The distance ref is updated on
-                // every onScroll too, but we use it here to
-                // catch the layout-only case where the user
-                // was near the bottom BEFORE the reflow but
-                // ended up above the new contentSize bottom.
-                //
-                // Threshold 100px (vs onScroll's 50px) gives
-                // margin for the contentSize drift between
-                // the last onScroll and this contentSizeChange.
-                const wasNearBottom =
-                  chatAtBottomRef.current ||
-                  lastDistanceFromEndRef.current < 100;
-                // v3.11.27: gate the scroll on a real content
-                // change. Threshold 2px filters out the
-                // sub-pixel contentSize drift between FlatList
-                // re-measurement passes that happens on every
-                // scroll (each scrollToEnd triggers a
-                // re-measure, which reports a height that's
-                // +/-1px from the previous measurement).
-                const heightChanged = heightDelta > 2 || heightDelta < -2;
-                if (wasNearBottom && heightChanged) {
-                  // v3.11.18: debounce the scrollToEnd so the
-                  // FlatList has time to settle its multi-pass
-                  // layout. A single render that adds a bubble
-                  // AND reflows existing bubble heights (e.g., a
-                  // quest pill suppression toggles across several
-                  // bubbles in the same render) can fire
-                  // onContentSizeChange 2–3 times in rapid
-                  // succession. Issuing scrollToEnd against the
-                  // FIRST contentSize lands at a wrong target
-                  // — the chat visibly "jumps up" once the
-                  // FlatList settles to the final contentSize.
-                  // Tobe's 2026-09-28 12:37 report: "i was at
-                  // the bottom of the chat and it suddenly moved
-                  // upwards a bit, i dragged it down again, and
-                  // it happened like 20 seconds after again."
-                  //
-                  // The debounce coalesces multiple
-                  // onContentSizeChange fires into a single
-                  // scrollToEnd issued 80ms after the LAST fire.
-                  // 80ms is enough for the FlatList to finish
-                  // its lazy-measure pass on real Android
-                  // hardware but well under the
-                  // perception-threshold for chat auto-scroll
-                  // (Discord's analogous animation is ~120ms).
-                  //
-                  // Unlike v3.11.17 which gated on `grew` only,
-                  // we re-anchor on ANY contentSize change while
-                  // near the bottom. This catches the
-                  // reflow-without-grow case where the FlatList
-                  // shrinks contentSize (e.g., a bubble's text
-                  // rewrapped, removing a line of height) and
-                  // leaves the user stranded above the new
-                  // bottom. The previous logic only re-anchored
-                  // on grew=true, so reflow-only changes left
-                  // the user above the new bottom — Tobe's
-                  // "moved upwards" symptom.
-                  //
-                  // `grew` is still tracked for the
-                  // prevMessagesLengthRef update and is
-                  // available for future per-message handlers,
-                  // but no longer gates this scroll.
-                  //
-                  // v3.11.25: scrollToEnd now uses
-                  // `animated: false` (was `animated: true`).
-                  // Tobe 2026-10-01 07:18: when he manually
-                  // scrolls to the bottom of the chat, the
-                  // chat visibly "skips back up a bit". Root
-                  // cause: when the user is already at (or
-                  // within a few pixels of) the bottom, an
-                  // `animated: true` scrollToEnd runs
-                  // Animated.Scroll over ~250ms. During the
-                  // animation, the FlatList fires onScroll
-                  // events whose `contentOffset.y` value
-                  // briefly diverges from the settled
-                  // position (Animated.Scroll interpolates
-                  // frame-by-frame from the start to the
-                  // target). The onScroll handler then
-                  // updates `lastDistanceFromEndRef` /
-                  // `chatAtBottomRef` based on the in-flight
-                  // value, and a subsequent onContentSizeChange
-                  // (fired because the Animated.Scroll itself
-                  // caused a contentSize re-measure, or simply
-                  // because the FlatList settled again) sees
-                  // `wasNearBottom === true` and queues
-                  // another scrollToEnd. This produces a
-                  // visible "skip up + scroll down" loop
-                  // whenever a periodic broadcast lands while
-                  // the user is at the bottom.
-                  //
-                  // The fix: after 80ms of debounce the
-                  // FlatList has fully settled, so an INSTANT
-                  // scrollToEnd lands at the precise target
-                  // without firing any in-flight onScroll
-                  // events. Visually a no-op when already at
-                  // the bottom (which is the case for most
-                  // scrollToEnd calls). For the rare
-                  // "near-but-not-at-bottom" case (user
-                  // within 100px of bottom, new message
-                  // arrives), the instant scroll lands
-                  // precisely at the new bottom — the user
-                  // sees the new message appear at the
-                  // bottom of the chat, no animation but
-                  // also no skip-up jitter. Tradeoff:
-                  // loses the ~250ms smooth-scroll aesthetic
-                  // in favor of jitter-free precision.
-                  if (scrollSettleTimerRef.current) {
-                    clearTimeout(scrollSettleTimerRef.current);
-                  }
-                  scrollSettleTimerRef.current = setTimeout(() => {
-                    scrollSettleTimerRef.current = null;
-                    if (chatAtBottomRef.current) {
-                      chatRef.current?.scrollToEnd({ animated: false });
-                    }
-                  }, 80);
-                }
-              }}
-              onLayout={() => {
-                // v3.8.6: robust initial-scroll. The previous
-                // version did a single setTimeout(150) and relied
-                // on chatAtBottom already being true. The race
-                // was: onScroll fires with distanceFromEnd huge
-                // → chatAtBottom flips to false BEFORE the 150ms
-                // timer runs → scrollToEnd's effect doesn't
-                // stick. Tobe hit this on app open: a fresh chat
-                // with new messages at the bottom, but the
-                // FlatList landed at the top showing old
-                // messages with no "↓ new messages" badge (the
-                // useEffect skipped because lastMessageIdRef
-                // already matched the hydrated messages).
-                //
-                // v3.10.111: only force-scroll-to-bottom on the
-                // FIRST layout (initial mount / first time the
-                // FlatList becomes visible). Tobe reported
-                // (2026-07-30) that the chat "almost forcefully
-                // scrolls down to the bottom" — this onLayout
-                // handler was the culprit: it ran every time
-                // the FlatList re-laid out (font scale change,
-                // rotation, companion re-render, etc.), yanking
-                // the user back to the bottom mid-read. Now
-                // `chatLayoutSeenRef` guards the scroll so only
-                // the FIRST onLayout does it. Subsequent layouts
-                // leave the scroll position alone — Discord-
-                // style "stay where you left it".
-                //
-                // v3.10.178: Three changes on top of v3.10.111
-                // to fully match Discord's "stay where you
-                // left off" behaviour:
-                //
-                //   1. RACE FIX. Wait for the AsyncStorage
-                //      hydrate of `cyberclaw-chat-scroll-byagent`
-                //      to complete before deciding whether to
-                //      scroll. Previously the hydrate ran async
-                //      and onLayout fired synchronously — so
-                //      every cold start fell into the
-                //      `else { scrollToEnd }` branch, yanking
-                //      the user to the bottom even when they
-                //      had a saved scroll-up position. We poll
-                //      `chatHydrateDoneRef.current` with a
-                //      short backoff (max ~600ms) before giving
-                //      up. The cost is bounded to the first
-                //      onLayout because `chatLayoutSeenRef`
-                //      latches.
-                //
-                //   2. NO AUTO-SCROLL WHEN NO SAVED OFFSET.
-                //      First-ever open (or no persisted offset
-                //      because the user never scrolled) used to
-                //      fall into a `scrollToEnd()` branch. Now
-                //      we just leave the FlatList at its
-                //      natural initial position (top). Discord
-                //      does the same — it doesn't force-scroll
-                //      to bottom on cold start when there's
-                //      nothing to restore. The "↓ new messages"
-                //      badge (line 4689) is the user's
-                //      affordance to jump to the bottom if
-                //      they want.
-                //
-                //   3. STOP ON TAB SWITCH. Removed the
-                //      `useEffect on [activeTab === 'chat']`
-                //      scroll-to-bottom that v3.10.111 kept
-                //      "for open at the bottom". That effect
-                //      fired on every tab-touch (Settings →
-                //      Chat, etc.) and always scrolled to the
-                //      end, contradicting the "stay where you
-                //      left off" rule. Discord doesn't do this
-                //      either — tab-switching leaves the
-                //      channel's scroll position alone.
-                if (messages.length > 0 && !chatLayoutSeenRef.current) {
-                  chatLayoutSeenRef.current = true;
-                  // v3.10.181: the v3.10.178 tryRestore path is now
-                  // delegated to a dedicated useEffect (the "initial
-                  // scroll decision" effect above) that fires when
-                  // both messages and activeChatAgentId are known
-                  // AND hydrate has finished. That effect is the
-                  // single source of truth for the restore
-                  // decision, gated by `chatInitialDecisionRef`.
-                  //
-                  // Why we keep this onLayout branch at all: to
-                  // (a) maintain the `chatLayoutSeenRef` latch
-                  // (prevents subsequent layouts from
-                  // yanking the user), and (b) handle the rare
-                  // case where the new useEffect hasn't run yet
-                  // — typically only when messages populate
-                  // BEFORE activeChatAgentId (e.g. cached chat
-                  // history loads faster than the WebSocket
-                  // agents_list). In that race, onLayout is the
-                  // FIRST chance to make the decision, and the
-                  // useEffect will see `chatInitialDecisionRef
-                  // === true` and skip itself. Single-decision
-                  // guarantee either way.
-                  if (chatInitialDecisionRef.current) return; // new useEffect already handled it
-                  if (chatHydrateDoneRef.current) {
-                    // Hydrate done but the new useEffect
-                    // hasn't fired yet (messages populated
-                    // without activeChatAgentId yet). Nudge
-                    // things by directly making the decision
-                    // here with the same logic.
-                    chatInitialDecisionRef.current = true;
-                    const restoreOffset = chatRestoreOffsetRef.current;
-                    if (typeof restoreOffset === 'number' && restoreOffset > 0) {
-                      // v3.11.16: single animated scrollToOffset
-                      // (was double animated:false). See the
-                      // matching change in the tryRestore
-                      // path above.
-                      chatRef.current?.scrollToOffset({ offset: restoreOffset, animated: true });
-                    } else {
-                      // No saved offset → user at natural top.
-                      chatAtBottomRef.current = false;
-                      setChatAtBottom(false);
-                    }
-                    chatRestoreOffsetRef.current = null;
-                  }
-                  // Else: hydrate still in flight. The new
-                  // useEffect's polling backoff will make the
-                  // decision within ~600ms. Don't double-fire
-                  // from here.
-                }
-              }}
-              ListFooterComponent={null} // Disabled: old messages mix with current session
+              // v3.11.33: NO AUTO-SCROLL on content size
+              // changes. The previous 12 layers of
+              // scroll-on-new-content / scroll-on-layout /
+              // scroll-on-hydrate are all deleted. The chat
+              // only scrolls when (a) the user scrolls, (b) the
+              // ↓ button is tapped, or (c) the chat panel is
+              // (re-)presented for a new active agent/quest
+              // (dedicated useEffect above). New messages
+              // arriving while the user is reading do NOT yank
+              // them to the bottom.
+              onContentSizeChange={() => { /* v3.11.33: no-op (no auto-scroll) */ }}
+              onLayout={() => { /* v3.11.33: no-op (no auto-scroll) */ }}
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
