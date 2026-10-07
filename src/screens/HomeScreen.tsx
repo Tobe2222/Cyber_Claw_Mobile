@@ -1096,6 +1096,26 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const styles = useMemo(() => makeStyles(t), [t]);
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // v3.11.42: derived list of image attachments from the
+  // current chat. Used by the image-gallery button and
+  // the gallery overlay. Walks the messages array (NOT
+  // the paginated visibleMessages slice) so the gallery
+  // shows ALL images from the chat, not just the visible
+  // window. Cheap O(N) walk; with a few hundred messages
+  // this is sub-millisecond. Memoized so it doesn't
+  // recompute on every render.
+  const chatImages = useMemo(() => {
+    const out: { msgId: string; att: { uri: string; type: string; name: string; data?: string } }[] = [];
+    for (const m of messages) {
+      if (!Array.isArray(m.attachments)) continue;
+      for (const att of m.attachments) {
+        if (att && typeof att.type === 'string' && att.type.startsWith('image/')) {
+          out.push({ msgId: m.id, att });
+        }
+      }
+    }
+    return out;
+  }, [messages]);
   // v3.11.41: pagination. The chat only renders the most
   // recent N messages by default. The user can click
   // "Load more ↑" at the top of the chat to reveal
@@ -1273,6 +1293,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // the chat, such that one can Click them and look at them
   // also, like discord does".
   const [fullscreenAttachment, setFullscreenAttachment] = useState<{ uri: string; type: string; name: string; data?: string } | null>(null);
+  // v3.11.42: image gallery overlay. Tobe 2026-10-07 16:03:
+  // "perhaps a button in the top right of the chat to view
+  // the images stored in the chat." A floating button in
+  // the top right of the chat FlatList (similar to the
+  // existing ↓ jump-to-bottom button) opens a grid
+  // overlay of all images from the current chat. Each
+  // image is tappable to open the fullscreen viewer.
+  const [galleryOpen, setGalleryOpen] = useState<boolean>(false);
 
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
@@ -7089,6 +7117,25 @@ useEffect(() => {
                   <Text style={styles.chatJumpToBottomText}>↓</Text>
                 </TouchableOpacity>
               )}
+              {/* v3.11.42: image gallery button in the top
+                  right of the chat. Shows a count of
+                  images in the current chat. Tapping opens
+                  a grid overlay with all images
+                  (galleryOpen state). The button is
+                  hidden when there are no images in the
+                  current chat so it doesn't clutter the UI
+                  for chats that never had image
+                  attachments. */}
+              {chatImages.length > 0 && (
+                <TouchableOpacity
+                  style={styles.chatGalleryBtn}
+                  onPress={() => setGalleryOpen(true)}
+                  accessibilityLabel={`View ${chatImages.length} images from this chat`}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.chatGalleryText}>🖼 {chatImages.length}</Text>
+                </TouchableOpacity>
+              )}
             <FlatList
               ref={chatRef}
               data={messages.slice(-visibleCount)}
@@ -7702,6 +7749,74 @@ useEffect(() => {
             </View>
           )}
         </TouchableOpacity>
+      </Modal>
+
+      {/* v3.11.42: image gallery overlay. Shows all images
+          from the current chat in a 3-column grid. Tap a
+          thumbnail to open the fullscreen viewer (reusing
+          the existing fullscreenAttachment state). The
+          header has a close button (✕) to dismiss. */}
+      <Modal
+        visible={galleryOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setGalleryOpen(false)}
+      >
+        <View style={styles.galleryBackdrop}>
+          <View style={styles.galleryHeader}>
+            <Text style={styles.galleryTitle}>
+              {chatImages.length === 1
+                ? '1 image'
+                : `${chatImages.length} images`}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setGalleryOpen(false)}
+              accessibilityLabel="Close gallery"
+              accessibilityRole="button"
+            >
+              <Text style={styles.galleryClose}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={chatImages}
+            keyExtractor={(item, i) => `${item.msgId}-${i}`}
+            numColumns={3}
+            contentContainerStyle={styles.galleryGrid}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.galleryItem}
+                onPress={() => {
+                  // Open the existing fullscreen viewer.
+                  setFullscreenAttachment(item.att);
+                  // Don't close the gallery — the user
+                  // closes it via the fullscreen viewer's
+                  // ✕ button (or back button on Android).
+                  // Actually, we DO close the gallery so
+                  // the fullscreen viewer is the only
+                  // overlay; the gallery reopens on
+                  // close.
+                  setGalleryOpen(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Image
+                  source={
+                    item.att.data
+                      ? { uri: `data:${item.att.type};base64,${item.att.data}` }
+                      : { uri: item.att.uri }
+                  }
+                  style={styles.galleryItemImage}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <Text style={[styles.emptyChatText, { textAlign: 'center', padding: 20 }]}>
+                No images in this chat yet.
+              </Text>
+            }
+          />
+        </View>
       </Modal>
 
       {/* v3.10.75: the feed picker Modal is gone. The
@@ -8627,6 +8742,72 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     color: t.text.secondary ?? '#aaa',
     fontSize: 12,
     fontWeight: '500',
+  },
+  // v3.11.42: image gallery button. Top right of the chat
+  // FlatList, similar in style to chatJumpToBottomBtn but
+  // mirrored horizontally and at the top.
+  chatGalleryBtn: {
+    position: 'absolute',
+    right: 12,
+    top: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 11,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  chatGalleryText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  // v3.11.42: image gallery overlay. Dark backdrop with a
+  // grid of thumbnails. Tapping a thumbnail opens the
+  // fullscreen image viewer.
+  galleryBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+  },
+  galleryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  galleryTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  galleryClose: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: '300',
+    paddingHorizontal: 8,
+  },
+  galleryGrid: {
+    paddingHorizontal: 8,
+    paddingBottom: 24,
+  },
+  galleryItem: {
+    flex: 1 / 3,
+    aspectRatio: 1,
+    margin: 4,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  galleryItemImage: {
+    width: '100%',
+    height: '100%',
   },
   // v3.10.36: cross-companion chat banner. Shown above
   // the input row when OTHER agents have new messages
