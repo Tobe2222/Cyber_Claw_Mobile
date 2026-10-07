@@ -1148,14 +1148,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // every subsequent chat-history batch.
   const lastProjectedKeyRef = useRef<string | null>(null);
   const lastProjectedMessagesLenRef = useRef<number>(0);
-  // Pending rAF / setTimeout handles from the projection
-  // effect's scroll-to-bottom schedule. Held so the next
-  // projection effect run (caused by chat_history batch
-  // arrival or a chat-switch) can cancel the previous
-  // one if it's stale (e.g., scheduled for a bucket
-  // that's now switching again).
-  const pendingScrollRafRef = useRef<number | null>(null);
-  const pendingScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // v3.11.40: scroll-to-bottom latch. The projection effect
+  // sets this when the chat needs to be scrolled to the
+  // bottom (bucket changed or grew); the FlatList's
+  // onContentSizeChange handler consumes it on the first
+  // fire where the FlatList has measured non-zero content.
+  // This is the v3.11.40 fix for "the chat still starts at
+  // the top" — the previous rAF-based scheduling fired too
+  // early (before FlatList measurement), scrollToEnd was a
+  // no-op, and the rAF consumed the latch, cancelling the
+  // 100ms setTimeout fallback. Driving the scroll off
+  // onContentSizeChange (which fires AFTER measurement)
+  // makes it land reliably.
+  const pendingScrollKeyRef = useRef<string | null>(null);
+  const pendingScrollLenRef = useRef<number>(0);
   const draftQidRef = useRef<string | null>(
     activeChatQuestId === undefined ? null : activeChatQuestId);
 
@@ -1733,96 +1739,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const bucketKey = questKeyForStorage(qid);
     const bucket = skipBucketLookup ? [] : (agentBuckets[bucketKey] || []);
     setMessages(bucket);
-    // v3.11.37: scroll-to-bottom is now owned by the
-    // projection effect itself, not a dedicated
-    // useEffect. The previous dedicated useEffect
-    // (v3.11.33) watched anchorHydrateTick — which
-    // increments on every chat_history batch the
-    // desktop sends during cold-start hydration.
-    // Three batches in two seconds meant three
-    // animated scrollToEnd calls back-to-back, which
-    // Tobe 2026-10-07 reported as "the chat is still
-    // going berzerk up and down to the same positions
-    // when i reopen the app". Each scrollToEnd
-    // visibly animated to the bottom, so the user
-    // saw the chat jump multiple times during
-    // cold-start.
+    // v3.11.40: scroll-to-bottom latch moves to onContentSizeChange.
+    //   The previous design (v3.11.37 / v3.11.38 / v3.11.39)
+    //   scheduled the scroll via rAF (+ 100ms setTimeout
+    //   fallback in v3.11.39). The rAF fired before the
+    //   FlatList had measured its content, scrollToEnd read
+    //   contentSize=0, was a no-op, and the rAF consumed the
+    //   latch — cancelling the setTimeout fallback. Result:
+    //   chat stayed at the natural mount position (scrollY=0).
+    //   Tobe 2026-10-07 17:29 retest: "It still started at
+    //   top."
     //
-    // v3.11.38: added the bucketGrew condition. The
-    // v3.11.37 latch (chatChanged OR messagesFromEmpty)
-    // didn't cover hot-foreground reconnects where the
-    // bucket ALREADY had messages but grew during
-    // agent_history / chat_history re-hydration.
-    // Tobe 2026-10-07 14:04: "opened it non fresh
-    // again and this time it does not want to stay
-    // at the bottom, it just jumps up a bit."
-    //
-    // v3.11.39: REVERTED animated:false → animated:true,
-    // AND added a 100ms setTimeout as a fallback. Tobe
-    // 2026-10-07 16:03: "chat seems to always start at
-    // the top and i have to Click the button after a
-    // small scroll to reach the bottom." The v3.11.38
-    // instant-scroll was firing too early — the
-    // FlatList hadn't measured its content yet, so
-    // scrollToEnd read contentSize=0 and was a no-op.
-    // The rAF-only schedule has no retry, so the
-    // scroll was lost and the chat stayed at the
-    // natural mount position (scrollY=0). Reverted
-    // to animated:true so the animation's target can
-    // adapt to content growth, AND added a 100ms
-    // setTimeout as a second pass that catches the
-    // case where the rAF fires before the FlatList
-    // is ready. Two triggers, only one scroll lands
-    // (the second one is gated on the first having
-    // already moved the scroll).
+    //   The fix: instead of scheduling the scroll from the
+    //   projection effect, set a LATCH (pendingScrollKeyRef)
+    //   that the FlatList's onContentSizeChange handler
+    //   consumes. onContentSizeChange fires AFTER the
+    //   FlatList has measured its content — exactly the
+    //   moment when scrollToEnd actually works. The latch
+    //   ensures the scroll fires exactly once per
+    //   chat-switch / re-hydration, regardless of how many
+    //   times onContentSizeChange re-fires during
+    //   measurement (the v3.11.27 multi-pass concern).
     const chatChanged =
       lastProjectedKeyRef.current !== null &&
       lastProjectedKeyRef.current !== `${aid}::${bucketKey}`;
     const bucketGrew =
       bucket.length > lastProjectedMessagesLenRef.current;
-    // Cancel any in-flight scroll from the previous
-    // effect run (it was scheduled for a stale
-    // chat-key or stale messages count).
-    if (pendingScrollRafRef.current !== null) {
-      cancelAnimationFrame(pendingScrollRafRef.current);
-      pendingScrollRafRef.current = null;
-    }
-    if (pendingScrollTimerRef.current !== null) {
-      clearTimeout(pendingScrollTimerRef.current);
-      pendingScrollTimerRef.current = null;
-    }
     if (chatChanged || bucketGrew) {
-      let didScroll = false;
-      const scrollToBottom = (animated: boolean) => {
-        if (didScroll) return;
-        // Refuse to scroll if the FlatList isn't ready
-        // (no content yet). The setTimeout fallback below
-        // will catch this.
-        if (bucket.length === 0) return;
-        chatRef.current?.scrollToEnd({ animated });
-        chatAtBottomRef.current = true;
-        setChatAtBottom(true);
-        setChatUnreadCount(0);
-        didScroll = true;
-        if (pendingScrollRafRef.current !== null) {
-          cancelAnimationFrame(pendingScrollRafRef.current);
-          pendingScrollRafRef.current = null;
-        }
-        if (pendingScrollTimerRef.current !== null) {
-          clearTimeout(pendingScrollTimerRef.current);
-          pendingScrollTimerRef.current = null;
-        }
-      };
-      // rAF: catches the case where the FlatList is
-      // already measured. animated:true so the target
-      // can adapt to content growth.
-      pendingScrollRafRef.current = requestAnimationFrame(() => scrollToBottom(true));
-      // 100ms setTimeout fallback: catches the case
-      // where the rAF fires before the FlatList has
-      // measured its content (contentSize=0, scroll is
-      // a no-op). By 100ms the FlatList has rendered
-      // and scrollToEnd can land.
-      pendingScrollTimerRef.current = setTimeout(() => scrollToBottom(true), 100);
+      // Set the latch. The onContentSizeChange handler
+      // will consume it on the first fire where the
+      // FlatList has measured non-zero content.
+      pendingScrollKeyRef.current = `${aid}::${bucketKey}`;
+      pendingScrollLenRef.current = bucket.length;
     }
     lastProjectedKeyRef.current = `${aid}::${bucketKey}`;
     lastProjectedMessagesLenRef.current = bucket.length;
@@ -7172,11 +7120,34 @@ useEffect(() => {
               // only scrolls when (a) the user scrolls, (b) the
               // ↓ button is tapped, or (c) the chat panel is
               // (re-)presented for a new active agent/quest
-              // (dedicated useEffect above). New messages
-              // arriving while the user is reading do NOT yank
-              // them to the bottom.
-              onContentSizeChange={() => { /* v3.11.33: no-op (no auto-scroll) */ }}
-              onLayout={() => { /* v3.11.33: no-op (no auto-scroll) */ }}
+              // (handled by the pendingScrollKeyRef latch
+              // consumed below).
+              //
+              // v3.11.40: the onContentSizeChange handler is
+              // the SINGLE source of truth for "the FlatList
+              // has just been (re-)populated with content".
+              // It fires AFTER the FlatList has measured its
+              // contentSize, so a scrollToEnd called from
+              // here is guaranteed to find a non-zero target.
+              // The projection effect sets the
+              // pendingScrollKeyRef latch; this handler
+              // consumes it on the first qualifying fire and
+              // runs the scroll. Subsequent fires (the
+              // multi-pass measurement concern from
+              // v3.11.18 / v3.11.27) see a null latch and
+              // are no-ops.
+              onContentSizeChange={(_w, h) => {
+                if (pendingScrollKeyRef.current !== null && h > 0) {
+                  // Consume the latch. Single scroll per
+                  // (chatChanged || bucketGrew) trigger.
+                  pendingScrollKeyRef.current = null;
+                  chatRef.current?.scrollToEnd({ animated: true });
+                  chatAtBottomRef.current = true;
+                  setChatAtBottom(true);
+                  setChatUnreadCount(0);
+                }
+              }}
+              onLayout={() => { /* no-op — v3.11.40 scroll lives in onContentSizeChange */ }}
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <Text style={styles.emptyChatText}>
