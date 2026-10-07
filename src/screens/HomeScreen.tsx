@@ -1096,6 +1096,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const styles = useMemo(() => makeStyles(t), [t]);
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // v3.11.41: pagination. The chat only renders the most
+  // recent N messages by default. The user can click
+  // "Load more ↑" at the top of the chat to reveal
+  // additional older messages in batches. This matches
+  // Discord's "scroll up to load history" model, but
+  // explicit-click rather than infinite-scroll.
+  //
+  // The visible count resets when the user switches to a
+  // different chat (so they get the most-recent N of the
+  // new chat, not the N they happened to have open in the
+  // previous chat). The reset is handled in the projection
+  // effect via a `lastProjectedKeyRef !== new key` check.
+  const VISIBLE_BATCH = 50;
+  const [visibleCount, setVisibleCount] = useState<number>(VISIBLE_BATCH);
   // v3.1.17: per-companion chat history. The mobile companion tab
   // bar lets the user switch between companions; each companion has
   // its own chat history on the desktop that we mirror locally.
@@ -1162,6 +1176,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // makes it land reliably.
   const pendingScrollKeyRef = useRef<string | null>(null);
   const pendingScrollLenRef = useRef<number>(0);
+  // v3.11.41: track the latest onScroll values so the
+  // onContentSizeChange handler can compute distance-from-
+  // end when content grows (e.g., "Load more" prepending
+  // older messages). Without these refs, contentSize
+  // growth would leave the at-bottom state stale.
+  const lastScrollYRef = useRef<number>(0);
+  const lastViewportHeightRef = useRef<number>(0);
   const draftQidRef = useRef<string | null>(
     activeChatQuestId === undefined ? null : activeChatQuestId);
 
@@ -1765,6 +1786,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       lastProjectedKeyRef.current !== `${aid}::${bucketKey}`;
     const bucketGrew =
       bucket.length > lastProjectedMessagesLenRef.current;
+    // v3.11.41: reset pagination when the user switches
+    // to a different (agent, quest) chat. Otherwise the
+    // new chat opens with the visibleCount from the
+    // previous chat, which would be wrong (e.g., the
+    // previous chat might have shown 200 messages; the
+    // new chat has only 5, and showing 200 of those
+    // would just show all 5 plus trigger a no-op
+    // load-more button).
+    if (chatChanged) {
+      setVisibleCount(VISIBLE_BATCH);
+    }
     if (chatChanged || bucketGrew) {
       // Set the latch. The onContentSizeChange handler
       // will consume it on the first fire where the
@@ -5427,6 +5459,27 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
+  // v3.11.41: load more history. Increments visibleCount by
+  // VISIBLE_BATCH, causing the FlatList to re-render with
+  // more (older) messages. Crucially, we clear the scroll
+  // latch so the onContentSizeChange handler doesn't fire
+  // a scrollToEnd that would yank the user to the bottom
+  // — they want to STAY at their current scroll position
+  // (now scrolled "deeper" into the content with older
+  // messages above them).
+  const handleLoadMore = useCallback(() => {
+    setVisibleCount(prev => prev + VISIBLE_BATCH);
+    pendingScrollKeyRef.current = null;
+    // Force the projection effect to update its
+    // lastProjectedMessagesLenRef on the next run, so a
+    // subsequent bucket growth (e.g., a new realtime chat
+    // message) still fires the scroll-to-bottom latch
+    // correctly. Without this, the projection effect
+    // would see the visibleCount-induced re-render as
+    // a "bucket grew" event and might yank.
+    lastProjectedMessagesLenRef.current = -1;
+  }, []);
+
   // v3.10.131: removed the auto-paste-on-focus handler and
   // the explicit 📋 clipboard paste button. Tobe 2026-08-03
   // 06:33: 'i cant use the clipboard button, i need to select
@@ -7038,9 +7091,34 @@ useEffect(() => {
               )}
             <FlatList
               ref={chatRef}
-              data={messages}
+              data={messages.slice(-visibleCount)}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
+              // v3.11.41: "Load more" button at the top of the
+              // chat, only shown when there are more older
+              // messages to reveal. Clicking it calls
+              // handleLoadMore (defined near removeAttachment
+              // above) which increments visibleCount by
+              // VISIBLE_BATCH and clears the scroll latch so
+              // the FlatList re-renders without yanking the
+              // user to the bottom. The user's scrollY is
+              // preserved by the FlatList (the new items
+              // prepend above the current viewport, pushing
+              // the user's view deeper into the content).
+              ListHeaderComponent={
+                messages.length > visibleCount ? (
+                  <TouchableOpacity
+                    style={styles.chatLoadMoreBtn}
+                    onPress={handleLoadMore}
+                    accessibilityLabel={`Load ${Math.min(VISIBLE_BATCH, messages.length - visibleCount)} more messages`}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.chatLoadMoreText}>
+                      ↑ Load {Math.min(VISIBLE_BATCH, messages.length - visibleCount)} more
+                    </Text>
+                  </TouchableOpacity>
+                ) : null
+              }
               // v3.10.123: footer-height estimate 56 → 44
               // to match the slimmer input row (paddingVertical
               // 8→4 + paddingBottom-closed 8+insets→insets =
@@ -7094,7 +7172,14 @@ useEffect(() => {
                 //   Within 50px of the bottom → "at bottom";
                 //   the ↓ jump-to-bottom button hides. Beyond
                 //   → button shows.
+                //
+                // v3.11.41: also cache the latest scrollY and
+                // viewport height so onContentSizeChange can
+                // re-derive the at-bottom state when content
+                // grows without a user scroll.
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+                lastScrollYRef.current = contentOffset.y;
+                lastViewportHeightRef.current = layoutMeasurement.height;
                 const distanceFromEnd = contentSize.height - (contentOffset.y + layoutMeasurement.height);
                 const isAtBottom = distanceFromEnd < 50;
                 setChatAtBottom(isAtBottom);
@@ -7145,6 +7230,30 @@ useEffect(() => {
                   chatAtBottomRef.current = true;
                   setChatAtBottom(true);
                   setChatUnreadCount(0);
+                  return;
+                }
+                // v3.11.41: no scroll latch. If contentSize
+                // grew (e.g., from "Load more" prepending
+                // older messages, or from a realtime chat
+                // arrival), update the at-bottom state so
+                // the ↓ button appears when the user is no
+                // longer at the bottom of the new content.
+                // The onScroll handler doesn't fire when
+                // contentSize grows without a user scroll,
+                // so we have to do this check here.
+                if (h > 0 && lastScrollYRef.current > 0) {
+                  const viewport = lastViewportHeightRef.current;
+                  if (viewport > 0) {
+                    const distanceFromEnd = h - viewport - lastScrollYRef.current;
+                    const isAtBottom = distanceFromEnd < 50;
+                    if (!isAtBottom && chatAtBottomRef.current) {
+                      chatAtBottomRef.current = false;
+                      setChatAtBottom(false);
+                    } else if (isAtBottom && !chatAtBottomRef.current) {
+                      chatAtBottomRef.current = true;
+                      setChatAtBottom(true);
+                    }
+                  }
                 }
               }}
               onLayout={() => { /* no-op — v3.11.40 scroll lives in onContentSizeChange */ }}
@@ -8498,6 +8607,26 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     lineHeight: 22,  // vertical-center the ↓ glyph in the 40px circle
+  },
+  // v3.11.41: "Load more" button at the top of the chat.
+  // Centered text in a subtle pill. The button only renders
+  // when there are more older messages to reveal
+  // (messages.length > visibleCount).
+  chatLoadMoreBtn: {
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  chatLoadMoreText: {
+    color: t.text.secondary ?? '#aaa',
+    fontSize: 12,
+    fontWeight: '500',
   },
   // v3.10.36: cross-companion chat banner. Shown above
   // the input row when OTHER agents have new messages
