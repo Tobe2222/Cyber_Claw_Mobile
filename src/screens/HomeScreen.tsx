@@ -1450,6 +1450,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   //   per empty→populated transition, never on subsequent
   //   chat_history batches.
   //
+  // v3.11.38: hot-foreground reconnect had the chat settling
+  //   "above the new bottom" by N bubble-heights because
+  //   the bucket already had messages (so messagesArrived
+  //   was false) but grew due to agent_history / chat_history
+  //   re-hydration. Tobe 2026-10-07 14:04: "opened it non
+  //   fresh again and this time it does not want to stay
+  //   at the bottom, it just jumps up a bit." Added the
+  //   `bucketGrew` condition so any bucket growth triggers
+  //   a single scrollToEnd. Also switched from animated:true
+  //   to animated:false so the scroll lands in one frame
+  //   (animation drift during contentSize growth was
+  //   contributing to the wrong-target settle).
+  //
   //   Removed (all in service of the now-deleted auto-scroll /
   //   scroll-restore path):
   //     - chatLayoutSeenRef
@@ -1734,21 +1747,38 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // saw the chat jump multiple times during
     // cold-start.
     //
-    // The fix: gate the scroll on TWO conditions,
-    // either of which triggers a single scrollToEnd:
-    //   (a) the projection switched to a different
-    //       (aid, bucket) than last time
-    //       (lastProjectedKeyRef), OR
-    //   (b) the bucket went from empty to non-empty
-    //       (lastProjectedMessagesLenRef).
-    // Both refs are updated to the new state, so
-    // subsequent chat_history batches (length 5 → 8
-    // → 12) do not retrigger the scroll.
+    // v3.11.38: added the bucketGrew condition. The
+    // v3.11.37 latch (chatChanged OR messagesFromEmpty)
+    // didn't cover hot-foreground reconnects where the
+    // bucket ALREADY had messages but grew during
+    // agent_history / chat_history re-hydration.
+    // Tobe 2026-10-07 14:04: "opened it non fresh
+    // again and this time it does not want to stay
+    // at the bottom, it just jumps up a bit."
+    //
+    // The mechanism: chat history arrives in a
+    // re-hydration batch, anchorHydrateTick++ fires
+    // the projection effect, the bucket has MORE
+    // messages than the previous render. The FlatList
+    // re-renders with the larger data, but the user's
+    // scroll position (where it was anchored at the
+    // bottom of the OLD contentSize) is now above
+    // the NEW bottom by N bubble-heights. Visually:
+    // the chat "jumps up a bit".
+    //
+    // The fix: trigger a scrollToEnd whenever the
+    // bucket grew. anchorHydrateTick is only bumped
+    // by chat_history / agent_history handlers (NOT
+    // by realtime appendAgentMessage calls), so this
+    // trigger fires ONLY when the desktop re-validates
+    // the bucket — never during normal conversation.
+    // Real-time chat (the user's "new messages stay
+    // at OLD bottom" requirement) is unaffected.
     const chatChanged =
       lastProjectedKeyRef.current !== null &&
       lastProjectedKeyRef.current !== `${aid}::${bucketKey}`;
-    const messagesArrived =
-      bucket.length > 0 && lastProjectedMessagesLenRef.current === 0;
+    const bucketGrew =
+      bucket.length > lastProjectedMessagesLenRef.current;
     // Cancel any in-flight scroll from the previous
     // effect run (it was scheduled for a stale
     // chat-key or stale messages count).
@@ -1756,18 +1786,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       cancelAnimationFrame(pendingScrollRafRef.current);
       pendingScrollRafRef.current = null;
     }
-    if (chatChanged || messagesArrived) {
-      // rAF only. The rAF gives the FlatList a frame
-      // to commit its render before we ask it to
-      // scroll. We don't need a 250ms safety net
-      // here — the projection effect itself re-runs
-      // when chat_history arrives (via
-      // anchorHydrateTick), and the messagesArrived
-      // branch fires then. The rAF in this branch
-      // is for the bucket-switch case where messages
-      // are already present.
+    if (chatChanged || bucketGrew) {
+      // rAF + animated:false. The previous design
+      // (v3.11.37) used animated:true (smooth scroll),
+      // but Tobe's hot-reopen symptom was the chat
+      // settling at the wrong position — the
+      // animation's target became invalid mid-flight
+      // when contentSize grew during the animation.
+      // Using animated:false lands the scroll in one
+      // frame, no in-flight drift. Tradeoff: loses
+      // the smooth-scroll aesthetic in favour of
+      // jitter-free precision on re-hydration.
       const scrollToBottom = () => {
-        chatRef.current?.scrollToEnd({ animated: true });
+        chatRef.current?.scrollToEnd({ animated: false });
         chatAtBottomRef.current = true;
         setChatAtBottom(true);
         setChatUnreadCount(0);
