@@ -549,13 +549,32 @@ export function formatTaskDuration(ms: number): string {
 // Tobe's report (2026-08-01): "when i type, then go check
 // settings, my text disappears, it should be remembered."
 //
+// v3.11.34: per-(agent, quest) drafts. Discord-style — every
+// conversation remembers its own draft independently, so
+// switching to a different chat (companion tab or quest)
+// swaps the visible input to that chat's draft instead of
+// clobbering it with the previous chat's draft.
+//
 // Module-scoped because HomeScreen unmounts on navigation
 // (App.tsx switches screen='home' -> 'settings'), so any
 // useState inside the component resets to '' on remount.
-// Module scope survives unmounts. Cleared on send.
-let chatDraft = '';
-export function getChatDraft() { return chatDraft; }
-export function setChatDraft(s: string) { chatDraft = s; }
+// Module scope survives unmounts. Empty drafts are deleted
+// from the map (rather than stored as '') so the map stays
+// sparse across many chats.
+const chatDraftByKey: Record<string, string> = {};
+const chatDraftKey = (aid: string | null, qid: string | null): string =>
+  `${aid ?? 'null'}::${qid ?? 'null'}`;
+export function getChatDraft(aid: string | null, qid: string | null): string {
+  return chatDraftByKey[chatDraftKey(aid, qid)] || '';
+}
+export function setChatDraft(aid: string | null, qid: string | null, text: string): void {
+  const k = chatDraftKey(aid, qid);
+  if (text === '') {
+    delete chatDraftByKey[k];
+  } else {
+    chatDraftByKey[k] = text;
+  }
+}
 
 // v3.10.122: arenaHidden persistence. Same module-scope
 // pattern as chatDraft (v3.10.120) — survives HomeScreen
@@ -1108,6 +1127,64 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // default chat bucket. `string` = the active quest id.
   const [activeChatQuestId, setActiveChatQuestId] = useState<string | null | undefined>(undefined);
 
+  // v3.11.34: per-chat draft refs. Mirrored from the
+  // (activeChatAgentId, activeChatQuestId) state by the
+  // chatDraftSyncEffect below so the setInputText
+  // wrapper (which is called from many places, including
+  // useRef-style event listeners) always reads the LATEST
+  // conversation context without a stale-closure bug.
+  //
+  // lastDraftKeyRef tracks the previous (aid, qid) so we
+  // can detect an actual conversation switch vs a no-op
+  // re-render and avoid clobbering what the user is
+  // typing on every state bump.
+  const lastDraftKeyRef = useRef<string | null>(null);
+  const draftAidRef = useRef<string | null>(activeChatAgentId);
+  const draftQidRef = useRef<string | null>(
+    activeChatQuestId === undefined ? null : activeChatQuestId);
+
+  // v3.11.34: per-chat draft sync effect. Mirrors the
+  // current (agent, quest) into the draftAidRef /
+  // draftQidRef that the setInputText wrapper reads, and
+  // re-syncs the visible inputText when the conversation
+  // switches. When the user clicks a different companion
+  // tab or quest, the input swaps to that chat's draft
+  // (Discord-style — each conversation remembers its own
+  // in-progress text independently).
+  //
+  // Why not initialize refs in the same render as the
+  // state? Because on the FIRST render the refs are
+  // initialized with the state values, but if the state
+  // changes before the effect runs (very unlikely but
+  // possible during concurrent rendering), the refs
+  // would be stale. Effect-level mirroring is the safe
+  // pattern.
+  //
+  // Edge: on quest resolution the activeChatQuestId flips
+  // to null. setInputTextLocal reads getDraft(null) which
+  // returns '' for the no-quest bucket — the user loses
+  // their draft when a quest ends. That's intentional
+  // (the chat is now a different conversation with no
+  // quest attribution), and matches what the chat scroll
+  // already does on quest resolution.
+  useEffect(() => {
+    const aid: string | null = activeChatAgentId;
+    const qid: string | null = activeChatQuestId === undefined ? null : activeChatQuestId;
+    draftAidRef.current = aid;
+    draftQidRef.current = qid;
+    // Only swap the visible text if the conversation
+    // actually changed. We compare against the previous
+    // (aid, qid) tuple via a ref so a no-op re-run (e.g.,
+    // a messages-state bump that re-renders the parent)
+    // doesn't clobber what the user is typing.
+    const prev = lastDraftKeyRef.current;
+    const next = `${aid ?? 'null'}::${qid ?? 'null'}`;
+    lastDraftKeyRef.current = next;
+    if (prev !== null && prev !== next) {
+      setInputTextLocal(getChatDraft(aid, qid));
+    }
+  }, [activeChatAgentId, activeChatQuestId]);
+
   // v3.1.52: report the active chat companion back to App.tsx so
   // WakeModeScreen knows which companion to display. Fires on
   // mount (with the initial value) and every time the user taps
@@ -1126,9 +1203,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // it should be remembered." Initializing from chatDraft
   // restores on remount; the local setInputText wrapper keeps
   // the module-scope copy in sync so the next remount sees it.
-  const [inputText, setInputTextLocal] = useState(() => getChatDraft());
+  //
+  // v3.11.34: per-(agent, quest) drafts. The wrapper reads
+  // the CURRENT (agent, quest) from refs (kept in sync via
+  // effects below) so the typed text always lands in the
+  // right conversation's slot — not the previous chat's.
+  // Effect `chatDraftSyncEffect` below mirrors
+  // (activeChatAgentId, activeChatQuestId) into those refs
+  // and resyncs inputText when the user switches chats.
+  const [inputText, setInputTextLocal] = useState(() =>
+    getChatDraft(activeChatAgentId, activeChatQuestId ?? null));
   const setInputText = (s: string) => {
-    setChatDraft(s);
+    setChatDraft(draftAidRef.current, draftQidRef.current, s);
     setInputTextLocal(s);
   };
   // v3.10.183: local-LLM pill state. Holds the most recent
