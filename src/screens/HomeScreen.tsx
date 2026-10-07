@@ -1140,6 +1140,21 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // typing on every state bump.
   const lastDraftKeyRef = useRef<string | null>(null);
   const draftAidRef = useRef<string | null>(activeChatAgentId);
+  // v3.11.37: projection effect refs. Track the last
+  // (aid, bucket) we rendered AND the last bucket length
+  // we saw, so the projection effect can decide whether
+  // to scroll to the bottom (bucket switched OR messages
+  // just arrived in an empty bucket) without firing on
+  // every subsequent chat-history batch.
+  const lastProjectedKeyRef = useRef<string | null>(null);
+  const lastProjectedMessagesLenRef = useRef<number>(0);
+  // Pending rAF handle from the projection effect's
+  // scroll-to-bottom schedule. Held so the next
+  // projection effect run (caused by chat_history batch
+  // arrival or a chat-switch) can cancel the previous
+  // one if it's stale (e.g., scheduled for a bucket
+  // that's now switching again).
+  const pendingScrollRafRef = useRef<number | null>(null);
   const draftQidRef = useRef<string | null>(
     activeChatQuestId === undefined ? null : activeChatQuestId);
 
@@ -1423,6 +1438,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   //   On opening / switching to a chat, always start at the
   //   bottom (Discord cold-start behavior).
   //
+  // v3.11.37: the dedicated scroll-to-bottom useEffect that
+  //   v3.11.33 added was firing on every chat_history batch
+  //   because it watched anchorHydrateTick. Three batches in
+  //   two seconds meant three animated scrollToEnd calls
+  //   back-to-back (Tobe 2026-10-07: "going berzerk up and
+  //   down to the same positions"). Moved the scroll-to-
+  //   bottom scheduling into the projection effect itself
+  //   with a latch on (lastProjectedKey, lastProjectedMessages
+  //   LenRef) so it triggers exactly once per chat switch or
+  //   per empty→populated transition, never on subsequent
+  //   chat_history batches.
+  //
   //   Removed (all in service of the now-deleted auto-scroll /
   //   scroll-restore path):
   //     - chatLayoutSeenRef
@@ -1431,12 +1458,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   //     - chatScrollKey
   //     - chatRestoreAgentRef / chatRestoreQuestIdRef /
   //       chatRestoreOffsetRef
-  //     - lastProjectedKeyRef
   //     - prevMessagesLengthRef / prevContentHeightRef
   //     - lastDistanceFromEndRef
   //     - scrollSettleTimerRef
   //     - chatHydrateDoneRef
   //     - chatScrollSaveTimerRef
+  //
+  //   Re-added (projection effect's scroll latch):
+  //     - lastProjectedKeyRef (with lastProjectedMessagesLenRef)
+  //       — see the projection effect comment below.
   //
   //   Kept:
   //     - chatAtBottom state + chatAtBottomRef — needed to
@@ -1689,82 +1719,64 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const bucketKey = questKeyForStorage(qid);
     const bucket = skipBucketLookup ? [] : (agentBuckets[bucketKey] || []);
     setMessages(bucket);
-    // v3.11.33: bucket switching now scrolls to the
-    // bottom via the dedicated useEffect above (which
-    // watches activeChatAgentId + activeChatQuestId +
-    // anchorHydrateTick). The previous
-    // "setChatAtBottom(true) on bucket change" hack is
-    // no longer needed — the scrollToEnd call IS the
-    // way the chat positions itself.
-  }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
-
-  // v3.11.33: SCROLL-TO-BOTTOM ON PRESENT. Replaces the v3.10.181
-  // tryRestore/restore-offset path (now deleted). The new rule:
-  //   - On mount: chat opens at the bottom.
-  //   - On active agent change: chat opens at the bottom for
-  //     the new agent.
-  //   - On active quest change: chat opens at the bottom for
-  //     the new quest's bucket.
-  //
-  // No more "stay where you left it" / scroll-restore. No
-  // persisted scroll offsets. The ↓ jump-to-bottom button
-  // (rendered when !chatAtBottom) is the user's affordance for
-  // reaching the bottom after manually scrolling up.
-  //
-  // Why one useEffect for all three: each is conceptually the
-  // same event — "the user is now looking at a different chat
-  // panel". We do not debounce because the FlatList's
-  // measurement pass is the only timing constraint, and it lands
-  // on the next frame (which `requestAnimationFrame` already
-  // waits for).
-  //
-  // On a cold remount the FlatList mounts with no content
-  // (messages still hydrating); the rAF will likely fire before
-  // messages land. To handle that we schedule a second pass
-  // 250ms later via setTimeout — covers the
-  // AsyncStorage-hydrate + chat-history-replay path which can
-  // take longer than one frame on real Android hardware.
-  useEffect(() => {
-    let cancelled = false;
-    const scrollToBottom = () => {
-      if (cancelled) return;
-      if (!activeChatAgentId) return;
-      // animated:true gives the user a smooth "settle to the
-      // bottom" motion on mount/quest-switch — matches
-      // Discord's cold-channel-open feel. If the FlatList
-      // hasn't measured yet, scrollToEnd no-ops; the second
-      // pass 250ms later will land once content is rendered.
-      chatRef.current?.scrollToEnd({ animated: true });
-      // Reflect the new at-bottom state so the ↓ button
-      // disappears immediately and a follow-up user scroll
-      // (before the FlatList reports its settled position)
-      // doesn't re-show the button prematurely.
-      chatAtBottomRef.current = true;
-      setChatAtBottom(true);
-      // Clear any leftover unread count — opening the chat
-      // means the user is "caught up" on whatever was
-      // pending (the badge is only useful while they're
-      // looking at a different chat or scrolled up).
-      setChatUnreadCount(0);
-    };
-    // First pass: next frame, so the FlatList has time to
-    // commit its mount before we ask it to scroll.
-    const raf = requestAnimationFrame(scrollToBottom);
-    // Second pass: 250ms later, catches the
-    // hydrate-then-replay path where messages arrive
-    // AFTER the FlatList first paint. Without the second
-    // pass the user sees a brief "empty chat" → "chat
-    // appears at the bottom" jump.
-    const t = setTimeout(() => {
-      if (cancelled) return;
-      scrollToBottom();
-    }, 250);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-      clearTimeout(t);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // v3.11.37: scroll-to-bottom is now owned by the
+    // projection effect itself, not a dedicated
+    // useEffect. The previous dedicated useEffect
+    // (v3.11.33) watched anchorHydrateTick — which
+    // increments on every chat_history batch the
+    // desktop sends during cold-start hydration.
+    // Three batches in two seconds meant three
+    // animated scrollToEnd calls back-to-back, which
+    // Tobe 2026-10-07 reported as "the chat is still
+    // going berzerk up and down to the same positions
+    // when i reopen the app". Each scrollToEnd
+    // visibly animated to the bottom, so the user
+    // saw the chat jump multiple times during
+    // cold-start.
+    //
+    // The fix: gate the scroll on TWO conditions,
+    // either of which triggers a single scrollToEnd:
+    //   (a) the projection switched to a different
+    //       (aid, bucket) than last time
+    //       (lastProjectedKeyRef), OR
+    //   (b) the bucket went from empty to non-empty
+    //       (lastProjectedMessagesLenRef).
+    // Both refs are updated to the new state, so
+    // subsequent chat_history batches (length 5 → 8
+    // → 12) do not retrigger the scroll.
+    const chatChanged =
+      lastProjectedKeyRef.current !== null &&
+      lastProjectedKeyRef.current !== `${aid}::${bucketKey}`;
+    const messagesArrived =
+      bucket.length > 0 && lastProjectedMessagesLenRef.current === 0;
+    // Cancel any in-flight scroll from the previous
+    // effect run (it was scheduled for a stale
+    // chat-key or stale messages count).
+    if (pendingScrollRafRef.current !== null) {
+      cancelAnimationFrame(pendingScrollRafRef.current);
+      pendingScrollRafRef.current = null;
+    }
+    if (chatChanged || messagesArrived) {
+      // rAF only. The rAF gives the FlatList a frame
+      // to commit its render before we ask it to
+      // scroll. We don't need a 250ms safety net
+      // here — the projection effect itself re-runs
+      // when chat_history arrives (via
+      // anchorHydrateTick), and the messagesArrived
+      // branch fires then. The rAF in this branch
+      // is for the bucket-switch case where messages
+      // are already present.
+      const scrollToBottom = () => {
+        chatRef.current?.scrollToEnd({ animated: true });
+        chatAtBottomRef.current = true;
+        setChatAtBottom(true);
+        setChatUnreadCount(0);
+        pendingScrollRafRef.current = null;
+      };
+      pendingScrollRafRef.current = requestAnimationFrame(scrollToBottom);
+    }
+    lastProjectedKeyRef.current = `${aid}::${bucketKey}`;
+    lastProjectedMessagesLenRef.current = bucket.length;
   }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
 
   // v3.1.63: inject setCentered(true) when voice mode
