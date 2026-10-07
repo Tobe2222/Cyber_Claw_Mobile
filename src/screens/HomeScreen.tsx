@@ -1148,13 +1148,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // every subsequent chat-history batch.
   const lastProjectedKeyRef = useRef<string | null>(null);
   const lastProjectedMessagesLenRef = useRef<number>(0);
-  // Pending rAF handle from the projection effect's
-  // scroll-to-bottom schedule. Held so the next
+  // Pending rAF / setTimeout handles from the projection
+  // effect's scroll-to-bottom schedule. Held so the next
   // projection effect run (caused by chat_history batch
   // arrival or a chat-switch) can cancel the previous
   // one if it's stale (e.g., scheduled for a bucket
   // that's now switching again).
   const pendingScrollRafRef = useRef<number | null>(null);
+  const pendingScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftQidRef = useRef<string | null>(
     activeChatQuestId === undefined ? null : activeChatQuestId);
 
@@ -1756,24 +1757,24 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // again and this time it does not want to stay
     // at the bottom, it just jumps up a bit."
     //
-    // The mechanism: chat history arrives in a
-    // re-hydration batch, anchorHydrateTick++ fires
-    // the projection effect, the bucket has MORE
-    // messages than the previous render. The FlatList
-    // re-renders with the larger data, but the user's
-    // scroll position (where it was anchored at the
-    // bottom of the OLD contentSize) is now above
-    // the NEW bottom by N bubble-heights. Visually:
-    // the chat "jumps up a bit".
-    //
-    // The fix: trigger a scrollToEnd whenever the
-    // bucket grew. anchorHydrateTick is only bumped
-    // by chat_history / agent_history handlers (NOT
-    // by realtime appendAgentMessage calls), so this
-    // trigger fires ONLY when the desktop re-validates
-    // the bucket — never during normal conversation.
-    // Real-time chat (the user's "new messages stay
-    // at OLD bottom" requirement) is unaffected.
+    // v3.11.39: REVERTED animated:false → animated:true,
+    // AND added a 100ms setTimeout as a fallback. Tobe
+    // 2026-10-07 16:03: "chat seems to always start at
+    // the top and i have to Click the button after a
+    // small scroll to reach the bottom." The v3.11.38
+    // instant-scroll was firing too early — the
+    // FlatList hadn't measured its content yet, so
+    // scrollToEnd read contentSize=0 and was a no-op.
+    // The rAF-only schedule has no retry, so the
+    // scroll was lost and the chat stayed at the
+    // natural mount position (scrollY=0). Reverted
+    // to animated:true so the animation's target can
+    // adapt to content growth, AND added a 100ms
+    // setTimeout as a second pass that catches the
+    // case where the rAF fires before the FlatList
+    // is ready. Two triggers, only one scroll lands
+    // (the second one is gated on the first having
+    // already moved the scroll).
     const chatChanged =
       lastProjectedKeyRef.current !== null &&
       lastProjectedKeyRef.current !== `${aid}::${bucketKey}`;
@@ -1786,25 +1787,42 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       cancelAnimationFrame(pendingScrollRafRef.current);
       pendingScrollRafRef.current = null;
     }
+    if (pendingScrollTimerRef.current !== null) {
+      clearTimeout(pendingScrollTimerRef.current);
+      pendingScrollTimerRef.current = null;
+    }
     if (chatChanged || bucketGrew) {
-      // rAF + animated:false. The previous design
-      // (v3.11.37) used animated:true (smooth scroll),
-      // but Tobe's hot-reopen symptom was the chat
-      // settling at the wrong position — the
-      // animation's target became invalid mid-flight
-      // when contentSize grew during the animation.
-      // Using animated:false lands the scroll in one
-      // frame, no in-flight drift. Tradeoff: loses
-      // the smooth-scroll aesthetic in favour of
-      // jitter-free precision on re-hydration.
-      const scrollToBottom = () => {
-        chatRef.current?.scrollToEnd({ animated: false });
+      let didScroll = false;
+      const scrollToBottom = (animated: boolean) => {
+        if (didScroll) return;
+        // Refuse to scroll if the FlatList isn't ready
+        // (no content yet). The setTimeout fallback below
+        // will catch this.
+        if (bucket.length === 0) return;
+        chatRef.current?.scrollToEnd({ animated });
         chatAtBottomRef.current = true;
         setChatAtBottom(true);
         setChatUnreadCount(0);
-        pendingScrollRafRef.current = null;
+        didScroll = true;
+        if (pendingScrollRafRef.current !== null) {
+          cancelAnimationFrame(pendingScrollRafRef.current);
+          pendingScrollRafRef.current = null;
+        }
+        if (pendingScrollTimerRef.current !== null) {
+          clearTimeout(pendingScrollTimerRef.current);
+          pendingScrollTimerRef.current = null;
+        }
       };
-      pendingScrollRafRef.current = requestAnimationFrame(scrollToBottom);
+      // rAF: catches the case where the FlatList is
+      // already measured. animated:true so the target
+      // can adapt to content growth.
+      pendingScrollRafRef.current = requestAnimationFrame(() => scrollToBottom(true));
+      // 100ms setTimeout fallback: catches the case
+      // where the rAF fires before the FlatList has
+      // measured its content (contentSize=0, scroll is
+      // a no-op). By 100ms the FlatList has rendered
+      // and scrollToEnd can land.
+      pendingScrollTimerRef.current = setTimeout(() => scrollToBottom(true), 100);
     }
     lastProjectedKeyRef.current = `${aid}::${bucketKey}`;
     lastProjectedMessagesLenRef.current = bucket.length;
@@ -6971,7 +6989,22 @@ useEffect(() => {
       // avoidance path is reliable and doesn't have the
       // Android 15+ adjustResize problem.
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding' enabled={Platform.OS === 'ios'}>
-        {activeTab === 'chat' && (
+        {/* v3.11.39: keep all tab contents mounted (only
+            toggle visibility via display:none) so the
+            chat tab's FlatList scroll position, input
+            text, and other transient state survive
+            tab-switch round-trips. Tobe 2026-10-07 16:03:
+            "iy resets some what after i go into settings
+            for example. It should stay where it was left."
+            Previously the conditional `activeTab === 'chat'
+            && (...)` UNMOUNTED the chat tab when the user
+            went to Settings, then re-mounted it at scrollY=0
+            on return. Wrapping in display:none preserves
+            the FlatList's internal scroll state. Each tab
+            content is its own sibling inside the
+            KeyboardAvoidingView; only the active one
+            occupies layout space. */}
+        <View style={{ flex: 1, display: activeTab === 'chat' ? 'flex' : 'none' }}>
           <>
             {/* v3.4.8: wrapped FlatList in a flex:1 View so
                 the "↓ N new messages" floating badge can sit
@@ -7476,9 +7509,9 @@ useEffect(() => {
             </View>
             </View>
           </>
-        )}
+        </View>
 
-        {activeTab === 'events' && (
+        <View style={{ flex: 1, display: activeTab === 'events' ? 'flex' : 'none' }}>
           <FlatList
             ref={eventsRef}
             data={events}
@@ -7488,9 +7521,9 @@ useEffect(() => {
             onContentSizeChange={() => eventsRef.current?.scrollToEnd({ animated: false })}
             ListEmptyComponent={<Text style={[styles.emptyChatText, { padding: 20 }]}>No events yet</Text>}
           />
-        )}
+        </View>
 
-        {activeTab === 'log' && (
+        <View style={{ flex: 1, display: activeTab === 'log' ? 'flex' : 'none' }}>
           <>
             <View style={styles.wakeDebugBar}>
               {/* v3.10.39: renamed 'Mic:' prefix to 'Wake:'.
@@ -7536,7 +7569,7 @@ useEffect(() => {
               ListEmptyComponent={<Text style={[styles.emptyChatText, { padding: 20 }]}>No log entries</Text>}
             />
           </>
-        )}
+        </View>
       </KeyboardAvoidingView>
       )}
 
