@@ -2099,7 +2099,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           }, 1000);
         });
 
-        await recorder.start(recPath, 5000); // 5s silence timeout
+        await recorder.start(recPath, 1800); // v3.11.36: 1.8s silence timeout (default from VoiceSettings.DEFAULT_SILENCE_MS)
         setIsVoiceListening(true);
 
         // FIXED #1: Add audio detection timer
@@ -4571,7 +4571,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               }
             }, 30000);
 
-            await recorder.start(recPath, 5000);
+            await recorder.start(recPath, 1800);
             addLogEntry('Loop: listening restarted', 'info');
           } catch (e: any) {
             addLogEntry(`Voice: restart error: ${e?.message}`, 'error');
@@ -5777,7 +5777,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           }
         });
 
-        await recorder.start(recPath, 5000);
+        await recorder.start(recPath, 1800);
         setIsVoiceListening(true);
         setVoiceStatus('recording');
         setChatVoiceStatus('Recording...');

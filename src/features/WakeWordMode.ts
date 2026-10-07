@@ -62,7 +62,7 @@ export class WakeWordController {
     // Start recording
     this.recorder = new SimpleAudioRecorder();
     const path = `/tmp/wake-sentence-${this.session.id}.wav`;
-    await this.recorder.start(path, 5000);  // 5s silence timeout
+    await this.recorder.start(path, 1800);  // v3.11.36: 1.8s silence timeout (matches VoiceSettings.DEFAULT_SILENCE_MS)
   }
   
   /**
@@ -90,7 +90,7 @@ export class WakeWordController {
     // Start new recording session
     this.recorder = new SimpleAudioRecorder();
     const path = `/tmp/wake-append-${this.session.id}-${Date.now()}.wav`;
-    await this.recorder.start(path, 5000);
+    await this.recorder.start(path, 1800);  // v3.11.36: 1.8s silence timeout
   }
   
   /**

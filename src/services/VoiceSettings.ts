@@ -78,18 +78,32 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // sub-page, that companion gets its own per-companion value.
 export const SILENCE_MS_KEY = 'cyberclaw-voice-silence-ms';
 
-// v3.9.7 — bumped defaults. Tobe (v3.9.5 testing): "We
-// should have longer silence detection. Or a way to
-// detect drawn out words due to thinking." Natural
-// conversational pauses for "thinking out loud" routinely
-// hit 6-8 seconds; the v3.9.5 default of 5s cut users
-// off mid-thought. New defaults give 6s silence + 5s
-// countdown = 11s total before send. MIN bumped to 3s so
-// even the most aggressive setting is conversation-
-// friendly (was 2s, too tight).
-export const DEFAULT_SILENCE_MS = 6000;
-export const MIN_SILENCE_MS = 3000;
-export const MAX_SILENCE_MS = 15000;
+// v3.11.36 — tightened defaults. The native-side
+// silence detector now does proper hysteresis
+// (speech-band RMS 0.010, silence-band RMS 0.005,
+// v3.9.5/v3.10.12) which absorbs natural inter-word
+// drops without bleeding into ambient noise. Combined
+// with the smart-silence toggle (relative threshold,
+// v3.10.28), a 1.8s trailing-silence window reliably
+// detects sentence-end for normal conversational speech
+// without cutting off mid-thought hesitations. Old
+// default was 6s (paired with 5s countdown = 11s total)
+// — way too laggy for back-and-forth voice chat. New
+// total sleep = ~3s (1.8s silence + ~1s visual
+// countdown).
+//
+// MIN 800ms lets the aggressive end of the slider work
+// for users with clear, snappy speech patterns. MAX 6s
+// keeps the slow-but-sure end of the slider reachable
+// for users who draw out words while thinking.
+// Tobe's 2026-10-07 ask: "we need a better way of
+// recognizing end of user sentence." This is the
+// incremental improvement without bringing in a full
+// trained VAD (Silero / LiveKit turn-detector, planned
+// for v3.11.37+ as a separate native-module integration).
+export const DEFAULT_SILENCE_MS = 1800;
+export const MIN_SILENCE_MS = 800;
+export const MAX_SILENCE_MS = 6000;
 
 /** v3.7.2: per-companion silence key builder. */
 export const getSilenceMsKey = (companionId: string) =>

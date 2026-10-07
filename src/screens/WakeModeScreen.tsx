@@ -2010,7 +2010,11 @@ export default function WakeModeScreen({
           }
         } catch (_) {}
         setVoiceStatus('silence_countdown');
-        let count = 5;
+        // v3.11.36: countdown 5s → 3s. Pairs with the new
+        // 1.8s silenceMs default for a snappier "user goes
+        // silent → audio sent" cycle (was 11s, now ~5s
+        // including the silence window).
+        let count = 3;
         const tick = setInterval(async () => {
           count--;
           if (count <= 0) {
