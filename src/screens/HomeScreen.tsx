@@ -574,6 +574,38 @@ export function setChatDraft(aid: string | null, qid: string | null, text: strin
   } else {
     chatDraftByKey[k] = text;
   }
+  schedulePersistChatUi();
+}
+
+// v3.11.45: Discord-style persistence. Drafts and the scroll position
+// of every (companion, quest) chat survive app restarts. Scroll
+// position = distance from the newest message (inverted list offset).
+const CHAT_UI_STORAGE_KEY = 'cyberclaw-chat-ui-v1';
+const chatScrollPosByKey: Record<string, number> = {};
+export function getChatScrollPos(k: string): number { return chatScrollPosByKey[k] || 0; }
+export function setChatScrollPos(k: string, y: number): void {
+  if (y < 40) delete chatScrollPosByKey[k]; else chatScrollPosByKey[k] = Math.round(y);
+  schedulePersistChatUi();
+}
+let chatUiPersistTimer: any = null;
+function schedulePersistChatUi() {
+  if (chatUiPersistTimer) clearTimeout(chatUiPersistTimer);
+  chatUiPersistTimer = setTimeout(() => {
+    chatUiPersistTimer = null;
+    AsyncStorage.setItem(CHAT_UI_STORAGE_KEY, JSON.stringify({ drafts: chatDraftByKey, scroll: chatScrollPosByKey })).catch(() => {});
+  }, 600);
+}
+let chatUiLoaded: Promise<void> | null = null;
+export function loadChatUiState(): Promise<void> {
+  if (!chatUiLoaded) {
+    chatUiLoaded = AsyncStorage.getItem(CHAT_UI_STORAGE_KEY).then(raw => {
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d && d.drafts) for (const k of Object.keys(d.drafts)) if (!(k in chatDraftByKey)) chatDraftByKey[k] = d.drafts[k];
+      if (d && d.scroll) Object.assign(chatScrollPosByKey, d.scroll);
+    }).catch(() => {});
+  }
+  return chatUiLoaded;
 }
 
 // v3.10.122: arenaHidden persistence. Same module-scope
@@ -1173,6 +1205,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // re-render and avoid clobbering what the user is
   // typing on every state bump.
   const lastDraftKeyRef = useRef<string | null>(null);
+  // v3.11.44/45: casual chat view (declared early — drafts depend on it)
+  const [chatCasual, setChatCasual] = useState(false);
   const draftAidRef = useRef<string | null>(activeChatAgentId);
   // v3.11.37: projection effect refs. Track the last
   // (aid, bucket) we rendered AND the last bucket length
@@ -1232,7 +1266,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // already does on quest resolution.
   useEffect(() => {
     const aid: string | null = activeChatAgentId;
-    const qid: string | null = activeChatQuestId === undefined ? null : activeChatQuestId;
+    const qid: string | null = (chatCasual || activeChatQuestId === undefined) ? null : activeChatQuestId;
     draftAidRef.current = aid;
     draftQidRef.current = qid;
     // Only swap the visible text if the conversation
@@ -1246,7 +1280,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     if (prev !== null && prev !== next) {
       setInputTextLocal(getChatDraft(aid, qid));
     }
-  }, [activeChatAgentId, activeChatQuestId]);
+  }, [activeChatAgentId, activeChatQuestId, chatCasual]);
 
   // v3.1.52: report the active chat companion back to App.tsx so
   // WakeModeScreen knows which companion to display. Fires on
@@ -1276,6 +1310,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // and resyncs inputText when the user switches chats.
   const [inputText, setInputTextLocal] = useState(() =>
     getChatDraft(activeChatAgentId, activeChatQuestId ?? null));
+  // v3.11.45: restore drafts saved before the app was closed.
+  useEffect(() => {
+    loadChatUiState().then(() => {
+      const cur = getChatDraft(draftAidRef.current, draftQidRef.current);
+      if (cur) setInputTextLocal(prev => prev || cur);
+    });
+  }, []);
   const setInputText = (s: string) => {
     setChatDraft(draftAidRef.current, draftQidRef.current, s);
     setInputTextLocal(s);
@@ -1407,6 +1448,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   });
   const [webViewKey, setWebViewKey] = useState(0);
   const chatRef = useRef<FlatList>(null);
+  // v3.11.45: Discord-style chat = inverted FlatList, newest first.
+  const chatData = useMemo(() => messages.slice(-visibleCount).reverse(), [messages, visibleCount]);
+  const chatDataRef = useRef<ChatMessage[]>([]);
+  chatDataRef.current = chatData;
+  const chatScrollKeyRef = useRef<string>('');
+  const pendingRestoreRef = useRef<string | null>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
   // v3.1.57: only auto-scroll the log to the bottom if the
@@ -1649,7 +1696,6 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // v3.11.44: casual/quest chat toggle (mirrors the desktop). The quest
   // stays ACTIVE; this only switches which chat is shown and where new
   // messages go. Shared with the desktop via chat_context.
-  const [chatCasual, setChatCasual] = useState(false);
   const chatCasualRef = useRef(false);
   const [activeQuestInfo, setActiveQuestInfo] = useState<{ id: string; name: string } | null>(null);
   useEffect(() => { chatCasualRef.current = chatCasual; }, [chatCasual]);
@@ -1839,6 +1885,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     if (chatChanged) {
       setVisibleCount(VISIBLE_BATCH);
     }
+    chatScrollKeyRef.current = aid + '::' + bucketKey;
+    if (chatChanged || lastProjectedKeyRef.current === null) pendingRestoreRef.current = aid + '::' + bucketKey;
     if (chatChanged || bucketGrew) {
       // Set the latch. The onContentSizeChange handler
       // will consume it on the first fire where the
@@ -5959,7 +6007,7 @@ useEffect(() => {
   if (last.isUser) {
     // ...but still scroll to the new (their) message at the bottom.
     if (chatAtBottomRef.current) {
-      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 50);
+      setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
     }
     // v3.10.180: the user just sent a new message — any
     // failed taskSummary cards from PRIOR turns are now
@@ -6049,24 +6097,16 @@ useEffect(() => {
     const failedIndex = messages.length - 1;
     const scrollToFailed = () => {
       try {
-        chatRef.current?.scrollToIndex({
-          index: failedIndex,
-          animated: true,
-          viewPosition: 0.2, // a bit below the top so the card is fully visible
-        });
+        chatRef.current?.scrollToOffset({ offset: 0, animated: true });
       } catch (_) {
         // scrollToIndex throws if the item isn't
         // measured yet — retry once after a short
         // delay, then fall back to scrollToEnd.
         setTimeout(() => {
           try {
-            chatRef.current?.scrollToIndex({
-              index: failedIndex,
-              animated: true,
-              viewPosition: 0.2,
-            });
+            chatRef.current?.scrollToOffset({ offset: 0, animated: true });
           } catch (__) {
-            chatRef.current?.scrollToEnd({ animated: true });
+            chatRef.current?.scrollToOffset({ offset: 0, animated: true });
           }
         }, 120);
       }
@@ -6196,10 +6236,11 @@ useEffect(() => {
     // Show a date separator when the bucket changes from the previous
     // message (which is the one right above in the array).
     let showDateSeparator = false;
-    if (index === 0 || !messages[index - 1]) {
+    const olderMsg = chatDataRef.current[index + 1]; // v3.11.45: inverted list
+    if (!olderMsg) {
       showDateSeparator = true;
     } else {
-      const prevBucket = getDateBucket(messages[index - 1].ts);
+      const prevBucket = getDateBucket(olderMsg.ts);
       const currBucket = getDateBucket(item.ts);
       showDateSeparator = prevBucket !== currBucket;
     }
@@ -6225,8 +6266,8 @@ useEffect(() => {
     //     followed by a stamped message)
     let showQuestSeparator = false;
     let questSeparatorLabel: string | null = null;
-    if (index > 0 && messages[index - 1]) {
-      const prevQ = messages[index - 1].activeQuestId;
+    if (olderMsg) {
+      const prevQ = olderMsg.activeQuestId;
       const currQ = item.activeQuestId;
       const changed = (() => {
         // Both undefined: no data, no separator
@@ -7095,7 +7136,7 @@ useEffect(() => {
                 <TouchableOpacity
                   style={styles.chatScrollToBottomBtn}
                   onPress={() => {
-                    chatRef.current?.scrollToEnd({ animated: true });
+                    chatRef.current?.scrollToOffset({ offset: 0, animated: true });
                     setChatUnreadCount(0);
                   }}
                 >
@@ -7125,7 +7166,7 @@ useEffect(() => {
                 <TouchableOpacity
                   style={styles.chatJumpToBottomBtn}
                   onPress={() => {
-                    chatRef.current?.scrollToEnd({ animated: true });
+                    chatRef.current?.scrollToOffset({ offset: 0, animated: true });
                     setChatUnreadCount(0);
                   }}
                   accessibilityLabel="Jump to latest message"
@@ -7155,7 +7196,8 @@ useEffect(() => {
               )}
             <FlatList
               ref={chatRef}
-              data={messages.slice(-visibleCount)}
+              data={chatData}
+              extraData={visibleCount}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
               // v3.11.41: "Load more" button at the top of the
@@ -7169,7 +7211,7 @@ useEffect(() => {
               // preserved by the FlatList (the new items
               // prepend above the current viewport, pushing
               // the user's view deeper into the content).
-              ListHeaderComponent={
+              ListFooterComponent={
                 messages.length > visibleCount ? (
                   <TouchableOpacity
                     style={styles.chatLoadMoreBtn}
@@ -7178,7 +7220,7 @@ useEffect(() => {
                     accessibilityRole="button"
                   >
                     <Text style={styles.chatLoadMoreText}>
-                      ↑ Load {Math.min(VISIBLE_BATCH, messages.length - visibleCount)} more
+                      ↑ Load older messages
                     </Text>
                   </TouchableOpacity>
                 ) : null
@@ -7215,15 +7257,21 @@ useEffect(() => {
               // area now stops at the input's top edge, no
               // matter where the input is on screen.
               contentContainerStyle={[styles.chatList, {
-                paddingBottom: 4 + 44 + insets.bottom,
+                // inverted: paddingTop sits visually at the bottom
+                paddingTop: 4 + 44 + insets.bottom,
+                paddingBottom: 8,
               }]}
+              onEndReached={() => { if (messages.length > visibleCount) handleLoadMore(); }}
+              onEndReachedThreshold={0.5}
+              maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
+              keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
               // v3.1.16: simple chronological FlatList (not inverted).
               // Newest message lives at the end of the array and the
               // end of the screen, where the user reads it. We use
               // scrollToEnd to jump there.
-              inverted={false}
+              inverted
               onScroll={(e) => {
                 // v3.11.33: SCROLL HANDLER SIMPLIFIED.
                 //   The previous handler also wrote the scroll
@@ -7244,8 +7292,9 @@ useEffect(() => {
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 lastScrollYRef.current = contentOffset.y;
                 lastViewportHeightRef.current = layoutMeasurement.height;
-                const distanceFromEnd = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-                const isAtBottom = distanceFromEnd < 50;
+                // v3.11.45: inverted → offset 0 is the newest message.
+                const isAtBottom = contentOffset.y < 50;
+                if (chatScrollKeyRef.current && pendingRestoreRef.current === null) setChatScrollPos(chatScrollKeyRef.current, contentOffset.y);
                 setChatAtBottom(isAtBottom);
                 // v3.10.96 kept: clear the unread badge + the
                 // per-companion tab badge when the user
@@ -7286,38 +7335,19 @@ useEffect(() => {
               // v3.11.18 / v3.11.27) see a null latch and
               // are no-ops.
               onContentSizeChange={(_w, h) => {
-                if (pendingScrollKeyRef.current !== null && h > 0) {
-                  // Consume the latch. Single scroll per
-                  // (chatChanged || bucketGrew) trigger.
+                // v3.11.45: when a chat opens, jump to where the user left it
+                // (0 = newest). New messages stay pinned via
+                // maintainVisibleContentPosition — no scrollToEnd latches.
+                const k = pendingRestoreRef.current;
+                if (k !== null && h > 0) {
+                  pendingRestoreRef.current = null;
                   pendingScrollKeyRef.current = null;
-                  chatRef.current?.scrollToEnd({ animated: true });
-                  chatAtBottomRef.current = true;
-                  setChatAtBottom(true);
-                  setChatUnreadCount(0);
-                  return;
-                }
-                // v3.11.41: no scroll latch. If contentSize
-                // grew (e.g., from "Load more" prepending
-                // older messages, or from a realtime chat
-                // arrival), update the at-bottom state so
-                // the ↓ button appears when the user is no
-                // longer at the bottom of the new content.
-                // The onScroll handler doesn't fire when
-                // contentSize grows without a user scroll,
-                // so we have to do this check here.
-                if (h > 0 && lastScrollYRef.current > 0) {
-                  const viewport = lastViewportHeightRef.current;
-                  if (viewport > 0) {
-                    const distanceFromEnd = h - viewport - lastScrollYRef.current;
-                    const isAtBottom = distanceFromEnd < 50;
-                    if (!isAtBottom && chatAtBottomRef.current) {
-                      chatAtBottomRef.current = false;
-                      setChatAtBottom(false);
-                    } else if (isAtBottom && !chatAtBottomRef.current) {
-                      chatAtBottomRef.current = true;
-                      setChatAtBottom(true);
-                    }
-                  }
+                  const y = getChatScrollPos(k);
+                  chatRef.current?.scrollToOffset({ offset: y, animated: false });
+                  const atBottom = y < 50;
+                  chatAtBottomRef.current = atBottom;
+                  setChatAtBottom(atBottom);
+                  if (atBottom) setChatUnreadCount(0);
                 }
               }}
               onLayout={() => { /* no-op — v3.11.40 scroll lives in onContentSizeChange */ }}
