@@ -612,256 +612,77 @@ export default function QuestsScreen({
     // counter — subtle hint that the detail modal
     // has more.
     const changeCount = Array.isArray(q.latestChanges) ? q.latestChanges.length : 0;
+    // v3.11.44: sleek card. Tobe 2026-10-13: 'clean up quest page,
+    // it just looks bad, make it prettier and more sleek'. One quiet
+    // card per quest: accent stripe + ACTIVE chip instead of the big
+    // banner/purple border, one-line description, folder + progress
+    // in a muted meta line, compact actions on the right.
+    const accent = isComplete ? '#10b981' : isActive ? '#22c55e' : 'transparent';
     return (
       <TouchableOpacity
         key={q.id}
-        style={[
-          styles.questCard,
-          {
-            borderColor,
-            borderWidth: isActive ? 2 : 1.5,
-            opacity: cardOpacity,
-          },
-        ]}
+        activeOpacity={0.8}
+        style={[styles.qc, isActive && styles.qcActive, { opacity: isComplete && !isActive ? 0.6 : 1 }]}
         onPress={() => setDetail(q)}
-        onLongPress={() => {
-          if (q.directory) {
-            Clipboard.setString(q.directory);
-          }
-        }}
+        onLongPress={() => { if (q.directory) Clipboard.setString(q.directory); }}
       >
-        {isActive && (
-          // v3.7.10: ⚡ ACTIVE banner at the top of
-          // the card. INLINE (not absolute-positioned
-          // like v3.7.8 was) so it doesn't overlap
-          // the done/total count. Bumped font size
-          // from 9pt to 11pt and added a subtle
-          // background tint so the eye lands on it
-          // even at a glance.
-          <View style={styles.activeBanner}>
-            <Text style={styles.activeBannerText}>
-              ⚡  ACTIVE — companion is working on this
-            </Text>
-          </View>
-        )}
-        <View style={styles.questTopRow}>
-          <Text style={styles.questName} numberOfLines={1}>
-            {isComplete ? '✅' : '⚔️'}  {q.name}
-          </Text>
-          <Text style={styles.questPct}>{done}/{goals.length}</Text>
-        </View>
-        {!!q.description && (
-          <Text style={styles.questDesc} numberOfLines={2}>
-            {q.description}
-          </Text>
-        )}
-        {/* v3.10.79: inline step list. Previously the card
-           showed only the progress text + bar; users had
-           to tap the card to see the actual steps in the
-           detail modal. Tobe reported on 2026-07-22 that
-           the steps should be visible inline so he doesn't
-           have to tap each card to remember what's left.
-           First 3 steps show by default; the rest fall in
-           the detail modal. */}
-        {goals.length > 0 && (
-          <View style={styles.questSteps}>
-            {goals.slice(0, 3).map((g, i) => (
-              <Text
-                key={i}
-                style={[
-                  styles.questStepText,
-                  g.completed && styles.questStepCompleted,
-                ]}
-                numberOfLines={1}
-              >
-                {g.completed ? '☑' : '☐'}  {g.text}
-              </Text>
-            ))}
-            {goals.length > 3 && (
-              <Text style={styles.questStepMore}>
-                +{goals.length - 3} more (tap card for full list)
-              </Text>
+        <View style={[styles.qcStripe, { backgroundColor: accent }]} />
+        <View style={styles.qcBody}>
+          <View style={styles.qcTitleRow}>
+            <Text style={styles.qcName} numberOfLines={1}>{isComplete ? '✅ ' : ''}{q.name}</Text>
+            {isActive && (
+              <View style={styles.qcChip}><Text style={styles.qcChipText}>ACTIVE</Text></View>
             )}
           </View>
-        )}
-        {goals.length > 0 && (
-          <View style={styles.questBar}>
-            <View
-              style={[
-                styles.questFill,
-                {
-                  width: `${pct}%`,
-                  backgroundColor: pct >= 100 ? '#10b981' : '#a855f7',
-                },
-              ]}
-            />
+          {!!q.description && (
+            <Text style={styles.qcDesc} numberOfLines={1}>{q.description}</Text>
+          )}
+          <View style={styles.qcMetaRow}>
+            {!!q.directory && <Text style={styles.qcMeta} numberOfLines={1}>📁 {dirName}</Text>}
+            {goals.length > 0 && <Text style={styles.qcMeta}>  ·  {done}/{goals.length} steps</Text>}
+            {changeCount > 0 && <Text style={styles.qcMeta}>  ·  {changeCount} change{changeCount === 1 ? '' : 's'}</Text>}
           </View>
-        )}
-        {!!q.directory && (
-          <Text style={styles.questDir} numberOfLines={1}>
-            📁 {dirName}
-          </Text>
-        )}
-        {changeCount > 0 && (
-          // v3.7.8: small inline counter showing
-          // how many journal entries exist. Tapping
-          // the card opens the detail modal where
-          // the full timeline is rendered.
-          <Text style={styles.questChangesHint}>
-            📝 {changeCount} change{changeCount === 1 ? '' : 's'} logged
-          </Text>
-        )}
-
-        {/* v3.10.171: action row. Three quick actions
-            on each card: ✏️ edit (left), ⭐ set
-            active (middle), ✕ delete (right).
-            SetActive floats in the middle by
-            sandwiching it between two `flex: 1`
-            spacers so Edit and Delete anchor the
-            opposite edges of the row. This works
-            regardless of how wide the SetActive
-            label is (English "Set active" vs
-            Norwegian "Aktivér" etc.) — the pill
-            stays centered.
-
-            v3.10.170 had only one spacer (between
-            Edit and SetActive) which left-aligned
-            the whole row to the left edge. Tobe
-            caught it immediately: "you little
-            goblin. Now you put all of it on the
-            left side." Two spacers fix it.
-
-            SetActive is the prominent labeled pill
-            (gold when inactive, green ✓ Active when
-            the quest is already active). Edit and
-            Delete are small icon-only chips
-            (secondary, infrequent destructive).
-
-            Inline TouchableOpacity so the touch
-            is absorbed and doesn't bubble to
-            the card's onPress (which would open
-            the detail modal). */}
-        <View style={styles.cardActions}>
+          {goals.length > 0 && (
+            <View style={styles.qcBar}>
+              <View style={[styles.qcFill, { width: `${pct}%`, backgroundColor: pct >= 100 ? '#10b981' : '#f7931a' }]} />
+            </View>
+          )}
+        </View>
+        <View style={styles.qcActions}>
           <TouchableOpacity
-            // v3.10.73: disable the ✏️ button
-            // until the first broadcast arrives.
-            // Otherwise the editor opens with a
-            // stale id from the cache and Save
-            // fails with "quest not found" because
-            // the desktop doesn't recognize the
-            // id. Tobe hit this on 2026-07-22.
-            style={[
-              styles.cardActionBtn,
-              !firstBroadcastReceived && styles.cardActionBtnDisabled,
-            ]}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={[styles.qcPlay, isActive && styles.qcPlayActive, !firstBroadcastReceived && styles.cardActionBtnDisabled]}
             onPress={(e) => {
               e?.stopPropagation?.();
               if (!firstBroadcastReceived) return;
-              setEditorOpen({ ...q });
+              handleSetActive(isActive ? null : q.id);
             }}
+            accessibilityLabel={isActive ? 'Deactivate quest' : 'Set quest active'}
           >
-            <Text style={styles.cardActionText}>✏️</Text>
+            <Text style={[styles.qcPlayText, isActive && styles.qcPlayTextActive]}>{isActive ? '■' : '▶'}</Text>
           </TouchableOpacity>
-          {/* v3.10.83: prominent "Set as active" button.
-              v3.10.82 moved ☆ to the right but kept it
-              as a small icon-only button. Tobe's
-              follow-up (2026-07-23): "That star is it
-              perhaps but thats not intuitive. Create a
-              bigger set as active button on the right
-              side of each as i asked for."
-
-              v3.10.170: moved from the right edge to
-              the middle. Tobe (2026-08-18): "the set
-              as active can be in the middle there, so
-              we have edit to the left, delete on the
-              right and set as active in middle."
-
-              Now it's a proper labeled button with
-              the star icon + "Set as active" text,
-              gold-tinted, sits in the middle of the
-              action row. When the quest IS active,
-              replace with a non-interactive
-              "✓ Active" label so the user can confirm
-              the state at a glance (the ACTIVE banner
-              at the top of the card is fine for the
-              initial discovery, but the inline label
-              right next to the action button confirms
-              the current state when scanning cards). */}
-          <TouchableOpacity
-            style={[
-              styles.cardSetActiveBtn,
-              isActive && styles.cardSetActiveBtnActive,
-              !firstBroadcastReceived && styles.cardActionBtnDisabled,
-            ]}
-            onPress={(e) => {
-              e?.stopPropagation?.();
-              if (!firstBroadcastReceived) return;
-              if (isActive) {
-                // Tap the active button → deactivate
-                // (jump to "no active quest" default).
-                // Mirrors the no-quest card behavior
-                // — easier than going back to the top
-                // of the list.
-                handleSetActive(null);
-              } else {
-                handleSetActive(q.id);
-              }
-            }}
-          >
-            <Text style={[
-              styles.cardSetActiveBtnIcon,
-              isActive && styles.cardSetActiveBtnTextActive,
-            ]}>
-              {isActive ? '✓' : '☆'}
-            </Text>
-            <Text style={[
-              styles.cardSetActiveBtnText,
-              isActive && styles.cardSetActiveBtnTextActive,
-            ]}>
-              {isActive ? 'Active' : 'Set active'}
-            </Text>
-          </TouchableOpacity>
-          {/* v3.10.171: second flex spacer — pushes the
-              Delete button to the right edge so the
-              SetActive pill sits truly in the middle
-              between Edit (left) and Delete (right).
-              v3.10.170 removed both spacers thinking
-              "tight gap between buttons" would put
-              SetActive in the middle — but without
-              justification the row just left-aligned
-              everything crammed together. With one
-              spacer on each side of SetActive, the
-              pill floats centered between the two
-              icon-only chips regardless of label
-              width. */}
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity
-            // v3.10.73: same staleness guard as
-            // ✏️ and the set-active button. delete_quest
-            // with a stale id silently no-ops which
-            // is even worse than the others — the
-            // user clicks Delete, the confirmation
-            // dialog appears, they confirm, and
-            // nothing happens.
-            style={[
-              styles.cardActionBtn,
-              !firstBroadcastReceived && styles.cardActionBtnDisabled,
-            ]}
-            onPress={(e) => {
-              e?.stopPropagation?.();
-              if (!firstBroadcastReceived) return;
-              setConfirm({
-                title: 'Delete quest?',
-                message: `"${q.name}" will be removed from the desktop too. This can't be undone.`,
-                onConfirm: () => {
-                  setConfirm(null);
-                  handleDeleteQuest(q.id);
-                },
-              });
-            }}
-          >
-            <Text style={[styles.cardActionText, styles.cardActionTextDelete]}>✕</Text>
-          </TouchableOpacity>
+          <View style={styles.qcIconRow}>
+            <TouchableOpacity
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+              onPress={(e) => { e?.stopPropagation?.(); if (!firstBroadcastReceived) return; setEditorOpen({ ...q }); }}
+            >
+              <Text style={styles.qcIcon}>✎</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                if (!firstBroadcastReceived) return;
+                setConfirm({
+                  title: 'Delete quest?',
+                  message: `"${q.name}" will be removed from the desktop too. This can't be undone.`,
+                  onConfirm: () => { setConfirm(null); handleDeleteQuest(q.id); },
+                });
+              }}
+            >
+              <Text style={[styles.qcIcon, styles.qcIconDelete]}>✕</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </TouchableOpacity>
     );
@@ -972,7 +793,7 @@ export default function QuestsScreen({
               says 📜 Quests. Cuts a chunk of vertical
               space before the first card. */}
           <Text style={styles.sectionDesc}>
-            Synced live from the desktop. Tap a card for details, long-press to copy its project path.
+            ▶ starts a quest · tap for details · long-press copies the path
           </Text>
 
           {!hydrated ? (
@@ -2104,6 +1925,28 @@ function formatTimeAgo(date: Date): string {
 }
 
 const styles = StyleSheet.create({
+  // v3.11.44: sleek quest cards
+  qc: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#11131c', borderRadius: 12, borderWidth: 1, borderColor: '#23263a', marginBottom: 8, overflow: 'hidden' },
+  qcActive: { backgroundColor: '#0f1d16', borderColor: 'rgba(34,197,94,0.45)' },
+  qcStripe: { width: 4 },
+  qcBody: { flex: 1, paddingVertical: 11, paddingLeft: 12, paddingRight: 6 },
+  qcTitleRow: { flexDirection: 'row', alignItems: 'center' },
+  qcName: { color: '#f1f2f6', fontSize: 15, fontWeight: '600', flexShrink: 1 },
+  qcChip: { marginLeft: 8, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: 'rgba(34,197,94,0.16)' },
+  qcChipText: { color: '#4ade80', fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
+  qcDesc: { color: '#9aa0b4', fontSize: 13, marginTop: 3 },
+  qcMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 5, flexWrap: 'nowrap' },
+  qcMeta: { color: '#6b7088', fontSize: 11.5 },
+  qcBar: { height: 3, backgroundColor: '#23263a', borderRadius: 2, marginTop: 7, overflow: 'hidden' },
+  qcFill: { height: 3, borderRadius: 2 },
+  qcActions: { width: 64, alignItems: 'center', justifyContent: 'center', paddingVertical: 8, borderLeftWidth: 1, borderLeftColor: '#1c1f2e' },
+  qcPlay: { width: 34, height: 34, borderRadius: 17, borderWidth: 1.5, borderColor: '#f7931a', alignItems: 'center', justifyContent: 'center' },
+  qcPlayActive: { borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.15)' },
+  qcPlayText: { color: '#f7931a', fontSize: 13, marginLeft: 2 },
+  qcPlayTextActive: { color: '#4ade80', marginLeft: 0 },
+  qcIconRow: { flexDirection: 'row', marginTop: 8, gap: 14 },
+  qcIcon: { color: '#6b7088', fontSize: 15 },
+  qcIconDelete: { color: '#a15a5a' },
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   // v3.7.7: paddingTop: 50 matches the v3.4.5 pattern from
   // CompanionSettingsScreen / SettingsScreen. Clears both

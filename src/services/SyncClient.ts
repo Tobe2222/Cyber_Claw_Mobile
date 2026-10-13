@@ -225,6 +225,11 @@ class SyncClient {
     this.setState('disconnected');
   }
 
+  // v3.11.44: switch the shared chat context (casual vs active quest).
+  setChatContext(casual: boolean) {
+    this.send({ type: 'set_chat_context', casual: !!casual });
+  }
+
   pair(code: string, deviceName: string = 'Android') {
     this.send({ type: 'pair', code, deviceName });
   }
@@ -887,6 +892,10 @@ class SyncClient {
           // v3.11.43: old token rejected (new desktop / reinstall) → ask for a code.
           this.emit('pairing_required', { reason: 'token_rejected', error: msg.error });
         }
+        break;
+
+      case 'chat_context':
+        this.emit('chat_context', msg);
         break;
 
       case 'chat_history':

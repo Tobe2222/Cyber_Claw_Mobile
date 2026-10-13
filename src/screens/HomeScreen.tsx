@@ -1646,6 +1646,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // quest (the v3.10.82 default state). `undefined` =
   // quests haven't loaded yet from the desktop.
   const activeQuestRef = useRef<{ id: string; name: string } | null | undefined>(undefined);
+  // v3.11.44: casual/quest chat toggle (mirrors the desktop). The quest
+  // stays ACTIVE; this only switches which chat is shown and where new
+  // messages go. Shared with the desktop via chat_context.
+  const [chatCasual, setChatCasual] = useState(false);
+  const chatCasualRef = useRef(false);
+  const [activeQuestInfo, setActiveQuestInfo] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => { chatCasualRef.current = chatCasual; }, [chatCasual]);
+  useEffect(() => {
+    const onCtx = (m: any) => setChatCasual(!!m?.casual);
+    syncClient.on('chat_context', onCtx);
+    return () => syncClient.off('chat_context', onCtx);
+  }, []);
+  useEffect(() => { if (!activeQuestInfo) setChatCasual(false); }, [activeQuestInfo]);
   // v3.11.2: per-device active-quest anchor lives in
   // module-scope (`mobileActiveQuestAnchor` near the top
   // of this file) so both HomeScreen's `onQuestsList`
@@ -1784,6 +1797,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // means).
       qid = null;
     }
+    if (chatCasual) { qid = null; skipBucketLookup = false; } // v3.11.44
     const agentBuckets = messagesByAgentRef.current[aid] || {};
     const bucketKey = questKeyForStorage(qid);
     const bucket = skipBucketLookup ? [] : (agentBuckets[bucketKey] || []);
@@ -1834,7 +1848,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
     lastProjectedKeyRef.current = `${aid}::${bucketKey}`;
     lastProjectedMessagesLenRef.current = bucket.length;
-  }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick]);
+  }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick, chatCasual]);
 
   // v3.1.63: inject setCentered(true) when voice mode
   // (fullscreen) is entered, setCentered(false) when exited.
@@ -3502,7 +3516,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // "what quest was this message sent under." Use it
       // directly. Fall back to the local ref only for old
       // desktops (< v3.3.19) that don't stamp on the wire.
-      const aq = activeQuestRef.current;
+      const aq = chatCasualRef.current ? null : activeQuestRef.current;
       const questFromBroadcast = (typeof msg.activeQuestId === 'string' && msg.activeQuestId)
         ? { id: msg.activeQuestId, name: msg.activeQuestName || null }
         : null;
@@ -3620,7 +3634,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessagesByAgentAndQuest,
         setMessages,
         activeChatAgentIdRef.current,
-        activeChatQuestId,
+        chatCasualRef.current ? null : activeChatQuestId,
       );
       // v3.10.177: classify error bubbles so the chat
       // can render a structured card with category,
@@ -4766,7 +4780,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // voice-send time. See the comment on the desktop-echo
       // path for the rationale (snapshot-at-append, not at
       // render — the chat history is self-documenting).
-      const aq = activeQuestRef.current;
+      const aq = chatCasualRef.current ? null : activeQuestRef.current;
       // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
       //   stableHistoryMessageId so the voice-mode
       //   local bubble has the same id as the
@@ -4792,7 +4806,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessagesByAgentAndQuest,
         setMessages,
         activeChatAgentIdRef.current,
-        activeChatQuestId,
+        chatCasualRef.current ? null : activeChatQuestId,
       );
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
       const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
@@ -5226,14 +5240,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           // anchor is set, subsequent broadcasts hit Case 2
           // or Case 3 and don't write AsyncStorage again.
           setMobileActiveQuestAnchor(nextQid);
-          activeQuestRef.current = next;
+          activeQuestRef.current = next; setActiveQuestInfo((next as any) ?? null);
           setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
           return;
         }
         if (mobileActiveQuestAnchor === nextQid) {
           // Case 2: broadcast confirms our anchor.
           // No state swap; keep the ref in sync.
-          activeQuestRef.current = next;
+          activeQuestRef.current = next; setActiveQuestInfo((next as any) ?? null);
           setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
           return;
         }
@@ -5242,7 +5256,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // (projection effect won't re-fire); update
         // activeQuestRef so outgoing agent messages get
         // stamped correctly.
-        activeQuestRef.current = next;
+        activeQuestRef.current = next; setActiveQuestInfo((next as any) ?? null);
       } catch {}
     };
     syncClient.on('quests_list', onQuestsList);
@@ -5270,7 +5284,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // quest so it lands in the right bucket. The
         // append helper reads activeQuestId via the
         // activeQuestRef snapshot below.
-        const aq = activeQuestRef.current;
+        const aq = chatCasualRef.current ? null : activeQuestRef.current;
         const durationMs = (finished.endTs || Date.now()) - finished.startTs;
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}-${Math.random()}`,
@@ -5294,7 +5308,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setMessagesByAgentAndQuest,
           setMessages,
           activeChatAgentIdRef.current,
-          activeChatQuestId,
+          chatCasualRef.current ? null : activeChatQuestId,
         );
       }
     };
@@ -5695,7 +5709,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // v3.10.85: stamp with which quest was active at
       // typed-send time. Same snapshot-at-append pattern
       // as the desktop-echo and voice paths.
-      const aq = activeQuestRef.current;
+      const aq = chatCasualRef.current ? null : activeQuestRef.current;
       // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
       //   stableHistoryMessageId so the local user
       //   bubble has the SAME id as the chat_history
@@ -5745,7 +5759,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessagesByAgentAndQuest,
         setMessages,
         activeChatAgentIdRef.current,
-        activeChatQuestId,
+        chatCasualRef.current ? null : activeChatQuestId,
       );
       if (text) {
         syncClient.sendChat(text, aid);
@@ -6972,9 +6986,12 @@ useEffect(() => {
                     used a.icon directly and worked. Same chain as the
                     chat label: a.emoji (per-agent override) → a.icon
                     (sprite catalog emoji) → nothing. */}
-                {(a.emoji || a.icon) ? (
-                  <Text style={styles.companionTabEmoji}>{a.emoji || a.icon}</Text>
-                ) : null}
+                {(() => {
+                  // v3.11.44: a.emoji came through as template prose ('_your signature — pick one…_')
+                  // and stretched the tab across the screen. Only accept short, letter-free values.
+                  const e = a.emoji && a.emoji !== '🤖' && Array.from(a.emoji).length <= 4 && !/[A-Za-z]/.test(a.emoji) ? a.emoji : a.icon;
+                  return e ? <Text style={styles.companionTabEmoji}>{e}</Text> : null;
+                })()}
                 <Text style={[styles.companionTabName, isActive && styles.companionTabNameActive]} numberOfLines={1}>
                   {a.name}
                 </Text>
@@ -7535,6 +7552,22 @@ useEffect(() => {
                 the input; if a recovery shortcut is
                 wanted later we can add it back as a
                 single button instead of a row. */}
+            {activeQuestInfo && (
+              <View style={styles.ctxRow}>
+                <View style={[styles.ctxPill, chatCasual ? styles.ctxPillCasual : styles.ctxPillQuest]}>
+                  <Text style={[styles.ctxPillText, chatCasual ? styles.ctxPillTextCasual : styles.ctxPillTextQuest]} numberOfLines={1}>
+                    {chatCasual ? '💬 Casual' : '📜 ' + activeQuestInfo.name}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.ctxSwitch}
+                  onPress={() => { const next = !chatCasual; setChatCasual(next); syncClient.setChatContext(next); }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={styles.ctxSwitchText} numberOfLines={1}>↔ {chatCasual ? activeQuestInfo.name : 'Casual'}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             <View style={[styles.inputContainer, {
               // v3.10.80: Android keyboard avoidance. See
               // the comment at the keyboardHeight state
@@ -8113,6 +8146,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   },
   // v3.1.48: tighter companion tab — less padding, smaller margins.
   companionTab: {
+    maxWidth: 160,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#15151f',
@@ -8423,6 +8457,16 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   },
   emptyChat: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
   emptyChatText: { color: t.text.muted, fontSize: 14, textAlign: 'center' },
+  // v3.11.44: casual/quest toggle row
+  ctxRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingTop: 6, paddingHorizontal: 12 },
+  ctxPill: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 14, borderWidth: 1, maxWidth: 200 },
+  ctxPillQuest: { backgroundColor: 'rgba(247,147,26,0.14)', borderColor: '#f7931a' },
+  ctxPillCasual: { backgroundColor: 'rgba(148,163,184,0.12)', borderColor: '#64748b' },
+  ctxPillText: { fontSize: 12, fontWeight: '700' },
+  ctxPillTextQuest: { color: '#f7931a' },
+  ctxPillTextCasual: { color: '#cbd5e1' },
+  ctxSwitch: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14, borderWidth: 1, borderColor: '#334155', maxWidth: 170 },
+  ctxSwitchText: { color: '#94a3b8', fontSize: 12 },
   inputContainer: {
     flexDirection: 'row', alignItems: 'flex-end',
     paddingHorizontal: 12,
