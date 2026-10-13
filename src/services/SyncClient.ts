@@ -147,6 +147,9 @@ class SyncClient {
           // Auto-authenticate if we have a saved token
           if (this.token) {
             this.send({ type: 'auth', token: this.token });
+          } else {
+            // v3.11.43: no token → this desktop needs a pairing code.
+            this.emit('pairing_required', { reason: 'no_token' });
           }
           resolve();
         };
@@ -814,6 +817,9 @@ class SyncClient {
   get state(): ConnectionState { return this._state; }
   get connected(): boolean { return this._state === 'connected' || this._state === 'reconnecting'; }
   get authenticated(): boolean { return this._authenticated; }
+  // v3.11.43: socket open (may still be unpaired). `connected` only
+  // flips true after auth, so the pairing UI can't key off it.
+  get socketOpen(): boolean { return !!this.ws && this.ws.readyState === WebSocket.OPEN; }
 
   private _handleMessage(msg: any) {
     switch (msg.type) {
@@ -878,6 +884,8 @@ class SyncClient {
           this.token = null;
           AsyncStorage.removeItem(STORAGE_KEY_TOKEN);
           this.emit('auth_failed', { error: msg.error });
+          // v3.11.43: old token rejected (new desktop / reinstall) → ask for a code.
+          this.emit('pairing_required', { reason: 'token_rejected', error: msg.error });
         }
         break;
 

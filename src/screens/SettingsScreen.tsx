@@ -193,6 +193,9 @@ export default function SettingsScreen({
   // ── Connection ────────────────────────────────────────────────
   const [hostIp, setHostIp] = useState('');
   const [pairingCode, setPairingCode] = useState('');
+  // v3.11.43: drives the pairing box (was keyed on syncClient.connected,
+  // which is only true AFTER auth — so the box could never appear).
+  const [needsPairing, setNeedsPairing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('Disconnected');
   const [debugLog, setDebugLog] = useState<string[]>([]);
 
@@ -933,13 +936,22 @@ export default function SettingsScreen({
     const onStateChange = (data: any) => {
       const s = data.state;
       if (s === 'connected' || s === 'reconnecting') setConnectionStatus('Connected ✓');
-      else if (s === 'connecting') setConnectionStatus('Connecting...');
+      else if (s === 'connecting') setConnectionStatus(prev => prev.includes('not paired') ? prev : 'Connecting...');
       else if (s === 'lost') setConnectionStatus('Connection lost ✕');
       else setConnectionStatus('Disconnected');
     };
     if (syncClient.connected) setConnectionStatus('Connected ✓');
     syncClient.on('state_change', onStateChange);
+    const onPairingRequired = (msg: any) => {
+      setNeedsPairing(true);
+      setConnectionStatus('Connected — not paired');
+      const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setDebugLog(prev => [...prev, `[${ts}] 🔒 ${msg?.reason === 'token_rejected' ? 'This desktop does not know this phone' : 'Not paired yet'} — enter the pairing code below`]);
+    };
+    syncClient.on('pairing_required', onPairingRequired);
+    syncClient.on('authenticated', () => setNeedsPairing(false));
     syncClient.on('paired', () => {
+      setNeedsPairing(false);
       setConnectionStatus('Connected ✓');
       Alert.alert('Paired!', 'Mobile app is now linked to your desktop CyberClaw.');
     });
@@ -1014,6 +1026,7 @@ export default function SettingsScreen({
     fireFetch();
     return () => {
       syncClient.off('state_change', onStateChange);
+      syncClient.off('pairing_required', onPairingRequired);
       syncClient.off('cyberclaw_system', onCyberclawSystem);
       // v3.10.150: cleanup the agents_list listener too.
       syncClient.off('agents_list', onAgentsList);
@@ -1110,12 +1123,23 @@ export default function SettingsScreen({
     }
   };
 
-  const pairDevice = () => {
+  const pairDevice = async () => {
     if (!pairingCode.trim() || pairingCode.length !== 6) {
       Alert.alert('Error', 'Enter the 6-digit pairing code from your desktop');
       return;
     }
-    syncClient.pair(pairingCode, 'Android Phone');
+    // v3.11.43: the desktop drops unpaired sockets after 30s. If that
+    // happened while typing the code, reconnect first, then pair.
+    try {
+      if (!syncClient.socketOpen) {
+        const ip = hostIp.trim();
+        if (!ip) { Alert.alert('Error', 'Enter your desktop IP address'); return; }
+        await syncClient.connect(ip);
+      }
+      syncClient.pair(pairingCode.trim(), 'Android Phone');
+    } catch (e: any) {
+      Alert.alert('Pairing Failed', 'Could not reach the desktop: ' + (e?.message || String(e)));
+    }
   };
 
   // ── Settings handlers ────────────────────────────────────────
@@ -1532,7 +1556,7 @@ export default function SettingsScreen({
           <Text style={styles.statusText}>{connectionStatus}</Text>
         </View>
 
-        {syncClient.connected && !syncClient.authenticated && (
+        {needsPairing && (
           <>
             <View style={styles.divider} />
             <Label>Pairing Code (from desktop)</Label>
