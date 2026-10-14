@@ -1,45 +1,4 @@
-/**
- * SendWordScreen — dedicated page for configuring the
- * send (commit-turn) word. v3.10.167.
- *
- * Tobe (2026-08-14): "compact the send word and just make
- * a page out of it with a button for it in the settings."
- *
- * Before this screen, the Voice mode section in
- * SettingsScreen had a 100+ line inline block for the send
- * word: phrase input + save button + train button + trained
- * model badge + classifier test panel. All crammed into
- * the middle of the Voice mode section between Smart
- * silence and the cue-sound controls. Visually noisy,
- * pushing the cue-sound controls below the fold on most
- * phones.
- *
- * This screen pulls everything send-word-related into one
- * full-screen page, leaving the Voice mode section with
- * just a single "Send word" row that opens it.
- *
- * The screen owns its own copy of the relevant state
- * (phrase, saved-at, model info) and pushes changes back
- * to the parent via callbacks. This mirrors how
- * WakeSetManagerScreen is shaped, and keeps SettingsScreen
- * as the single source of truth for the persisted value
- * (the parent updates AsyncStorage and re-derives
- * sendModelInfo on every phrase change — same as before).
- *
- * Structure:
- *   - Header (← Back, title)
- *   - Hint explaining what the send word does
- *   - Phrase input + Save row
- *   - Trained model badge (matches the wake-trainer style)
- *   - "Train send word" button → opens the SendPhraseTrainer
- *   - "Test send" classifier test panel
- *
- * SettingsScreen passes the live `voiceSendPhrase`,
- * `voiceSendPhraseSavedAt`, and `sendModelInfo` as props,
- * along with callbacks to mutate them. The screen also
- * owns its `showSendPhraseTrainer` sub-state so the trainer
- * can open/close without bothering the parent.
- */
+/** SendWordScreen — dedicated page for configuring the send (commit-turn) word. */
 
 import React, { useState, useCallback } from 'react';
 import {
@@ -100,10 +59,7 @@ export default function SendWordScreen({
     }
   }, [phrase, onSaved]);
 
-  // Trainer is mounted as a full-screen overlay above this
-  // page. When training completes, the parent re-runs its
-  // `loadSendModelInfo` effect for the active phrase, so the
-  // badge updates without us needing to push anything back.
+  // Trainer is mounted as a full-screen overlay above this page.
   if (showTrainer) {
     return (
       <SendPhraseTrainer

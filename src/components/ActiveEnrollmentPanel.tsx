@@ -1,22 +1,4 @@
-/**
- * ActiveEnrollmentPanel — v3.10.62
- *
- * Lets the user lock their speaker profile in ~30 seconds
- * via a dedicated recording pass, instead of waiting for
- * natural accumulation (~30s of voice activity).
- *
- * Flow:
- *   1. User taps "Train my voice" → countdown starts
- *   2. User reads the paragraph shown (or talks freely)
- *   3. After 30s, audio capture stops automatically
- *   4. User taps "Lock profile" → profile is force-locked
- *      with whatever samples were accumulated
- *   5. Match score is shown; user can retry if score is low
- *
- * After the profile locks, the speaker gate is active
- * for both the BG service (Vosk + OWW TFLite) and the
- * foreground OWW thread.
- */
+/** ActiveEnrollmentPanel — v3.10.62 Lets the user lock their speaker profile in ~30 seconds via a dedicated recording pass, instead of… */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
@@ -33,26 +15,13 @@ import { NativeModules, NativeEventEmitter } from 'react-native';
 
 const { WakeWordModule, NativeBackground } = NativeModules;
 
-// v3.10.67: native side emits `activeEnrollmentStopped`
-// whenever the 30s auto-stop fires (and also on manual
-// stop for consistency). We listen here so the panel
-// can show a Toast + clear timers even if the auto-stop
-// happens while the user is scrolled away.
+// Native side emits `activeEnrollmentStopped` whenever the 30s auto-stop fires (and also on manual stop for consistency).
 const enrollmentEvents = WakeWordModule
   ? new NativeEventEmitter(WakeWordModule)
   : null;
 
 function showEnrollmentToast(message: string) {
   // Mirror the pattern HomeScreen uses for wake toasts.
-  // v3.10.167: defensively optional-chain `.catch()` too.
-  // `NativeBackground?.showToast?.(message)` is undefined when
-  // either NativeBackground is missing OR the showToast method
-  // isn't registered. The previous form crashed with
-  // `Cannot read property 'catch' of undefined` in that case
-  // (Tobe hit it on 2026-08-14 after tapping Stop in the
-  // enrollment panel — the bridge had torn down before the
-  // listener fired). Now the toast becomes a silent no-op
-  // when the method isn't available.
   NativeBackground?.showToast?.(message)?.catch?.(() => {});
 }
 
@@ -60,10 +29,6 @@ const DEFAULT_DURATION_MS = 30000;
 const POLL_INTERVAL_MS = 500;
 
 // Paragraph the user reads during enrollment.
-// Diverse phonemes (consonants + vowels + a couple
-// of tricky words) give the embedding model a richer
-// sample of the user's voice. Doesn't need to be
-// meaningful — just varied speech.
 const ENROLLMENT_PARA = `The quick brown fox jumps over the lazy dog. ` +
   `Pack my box with five dozen liquor jugs. ` +
   `How vexingly quick daft zebras jump. ` +
@@ -125,32 +90,12 @@ export default function ActiveEnrollmentPanel() {
         clearTimeout(watchdogRef.current);
         watchdogRef.current = null;
       }
-      // Best-effort: stop enrollment if leaving the panel
-      // v3.10.167: optional-chain .catch() too — the previous
-      // form crashed with `Cannot read property 'catch' of
-      // undefined` when the native module is torn down before
-      // the unmount cleanup runs (Tobe hit it on 2026-08-14).
+      // Best-effort: stop enrollment if leaving the panel v3.10.167: optional-chain .catch() too — the previous form crashed with `Cannot read…
       WakeWordModule?.stopActiveEnrollment?.()?.catch?.(() => {});
     };
   }, []);
 
-  // v3.10.67: react to native-side `activeEnrollmentStopped`
-  // event. Fires both when the 30s auto-stop deadline
-  // elapses AND when a manual stop completes. We use it to:
-  //   1. Show a Toast so the user knows it stopped (the
-  //      original v3.10.62 panel had no notification, which
-  //      Tobe reported as a bug)
-  //   2. Clean up the JS-side tick/poll timers in case the
-  //      auto-stop fired without JS having a chance to call
-  //      stopEnrollment() itself
-  //   3. Mark the panel as not-running
-  //
-  // The reason arg ("auto" | "manual") distinguishes
-  // auto-stop (Toasts "Listening complete — review and
-  // lock") from manual stop (Toasts "Stopped"). When the
-  // user-initiated stopEnrollment() runs, it awaits the
-  // native call and then also resets state locally, so we
-  // guard with a ref to avoid duplicate UI flips.
+  // React to native-side `activeEnrollmentStopped` event.
   const stoppedRef = useRef(false);
   useEffect(() => {
     if (!enrollmentEvents) return;
@@ -202,12 +147,7 @@ export default function ActiveEnrollmentPanel() {
     setElapsedMs(0);
     setLastResult(null);
     const start = Date.now();
-    // v3.10.67: JS-side watchdog. Native should auto-stop
-    // at DEFAULT_DURATION_MS, but if it doesn't (e.g. the
-    // thread is stuck on a slow AudioRecord.read or the
-    // process is paused), we force-stop from JS too. This
-    // is the safety net that prevents the "did not stop
-    // after 30s" symptom Tobe reported.
+    // JS-side watchdog.
     const watchdog = setTimeout(() => {
       if (running) {
         try {
@@ -431,26 +371,12 @@ export default function ActiveEnrollmentPanel() {
   );
 }
 
-/**
- * v3.10.64: strict mode toggle. When enabled AND the
- * speaker profile is locked, the BG service skips
- * Vosk processing entirely (only OWW TFLite runs).
- * Saves ~10% CPU + ~50MB RAM during continuous BG
- * listening.
- *
- * Settings persist via NativeModules.WakeWordModule
- * .setBgStrictMode / .getBgStrictMode. CyberClawService
- * reads the SharedPreferences value on init.
- */
+/** Strict mode toggle. */
 function StrictModeToggle({ locked }: { locked: boolean }) {
   const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
-    // v3.10.167: optional-chain the .then().catch() chain too.
-    // getBgStrictMode?.() can return undefined if the native
-    // side hasn't registered the method (older APK, bridge
-    // teardown). The previous form crashed with
-    // `Cannot read property 'then' of undefined` on that path.
+    // Optional-chain the .then().catch() chain too.
     const p = WakeWordModule?.getBgStrictMode?.();
     p?.then?.((v: boolean) => setEnabled(!!v))?.catch?.(() => {});
   }, []);

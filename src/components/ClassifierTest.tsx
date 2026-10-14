@@ -1,34 +1,4 @@
-/**
- * ClassifierTest — shared "test a classifier" helper.
- *
- * v3.10.25: extracted from CompanionSettingsScreen's
- * `handleTestWake` so the same runner can power
- * "Test wake" (Wake sub-page), "Test exit" (Exit
- * sub-page), and "Test send" (Send section in
- * SettingsScreen). The three classifiers share the
- * same melspec+embedding pass on the native side,
- * so the runner takes the classifier name and
- * picks the right score + event to listen for.
- *
- * Two exports:
- *   - `useClassifierTest(classifier)` — hook that
- *     returns `{running, result, start, abort}`.
- *     Result shape is per-classifier (only the
- *     relevant peak + fired/firedScore fields).
- *   - `<ClassifierTestPanel>` — drop-in UI component
- *     that renders the button + result panel. Accepts
- *     a `variant` ('wake' | 'exit' | 'send'), a
- *     `label` override, and a `hint` override. The
- *     default colors and copy match the classifier
- *     (cyan for wake, orange for exit, blue for
- *     send — mirroring the existing trainer colors).
- *
- * Why a hook + a component: the hook lets callers
- * compose their own UI (the existing wake test has
- * a specific layout inside the active-wake panel),
- * while the component gives a one-line drop-in for
- * pages that just want the standard layout.
- */
+/** ClassifierTest — shared "test a classifier" helper. */
 
 import React, { useState, useRef, useCallback } from 'react';
 import {
@@ -49,49 +19,15 @@ export type ClassifierTestResult = {
   fired: boolean;
   firedScore: number | null;
   peak: number;
-  // v3.10.30: extra diagnostic fields. Peak is the
-  // single highest score observed; the test user
-  // needs to know whether the model is hearing
-  // them at all. With just `peak`, three tries at
-  // 0% tell the user nothing — was the mic dead?
-  // The wake phrase wrong? The model broken? The
-  // user can't tell. The new fields let the
-  // result panel say "model heard 2% of your
-  // audio" vs "model heard 0% — your mic may not
-  // be picking anything up". See process()
-  // for the update logic.
+  // Extra diagnostic fields.
   avg: number;
-  // Highest single-chunk score. Useful when the
-  // user says the wake phrase very briefly —
-  // peak avg would be low (most chunks are silence)
-  // but max could still be meaningful.
+  // Highest single-chunk score.
   maxChunk: number;
-  // Average RMS energy over the test window. A
-  // proxy for "did the mic hear anything at all".
-  // Below ~0.005 means the user probably didn't
-  // speak, or the mic gain is off, or (most
-  // importantly) the OWW listener wasn't actually
-  // running during the test — see `owwWasRunning`
-  // below.
+  // Average RMS energy over the test window.
   avgRms: number;
-  // v3.10.31: was the OWW listener actually
-  // running during the test? If false, the
-  // avgRms=0 result is NOT a mic problem — it's
-  // because we never started the mic. Tobe hit
-  // this: "Tested 4 times, all 0%" was the
-  // listener not being started, not the mic
-  // being dead. The result panel now says
-  // "OWW listener wasn't running" when false.
+  // Was the OWW listener actually running during the test?
   owwWasRunning: boolean;
-  // v3.10.50: which wake model was loaded when the
-  // test ran. Used by the diagnostic tip to tell
-  // the user 'Loaded model: hey_jarvis' (the bundled
-  // default) vs 'Loaded model: hey clawsuu' (the
-  // user's trained wake). Peak=0 with the wrong model
-  // is expected (the model doesn't recognize the
-  // user's phrase); peak=0 with the right model is a
-  // genuine miss. Without this field the user can't
-  // distinguish the two.
+  // Which wake model was loaded when the test ran.
   loadedWakeword: string;
   detectorLoaded: boolean;
   final: number;
@@ -140,46 +76,7 @@ export function useClassifierTest(
     const abort = { cancelled: false };
     abortRef.current = abort;
 
-    // v3.10.45: switched classifier test from live
-    // OWW listener to recorder + offline scoring.
-    //
-    // The live listener path (v3.10.31 fix) called
-    // startOwwListening() and polled getLatestScores()
-    // + owwVad events for 4 seconds. Worked when the
-    // device's AudioRecord init succeeded. Tobe hit
-    // a v3.10.44 case where startOwwListening's
-    // AudioRecord init would silently fail (no
-    // recordingState check, no try/catch on
-    // startRecording) while the recorder's
-    // AudioRecord worked fine on the same device.
-    // Result: every wake test showed "Wake listener
-    // wasn't running" with RMS=0/peak=0, even though
-    // voice mode worked perfectly (voice mode uses
-    // the recorder path, which has the safeguards).
-    //
-    // The fix: use the recorder path for the test.
-    // Record 4s of audio to a temp WAV file, then
-    // call WakeWordModule.scoreWavFile(path) to
-    // replay the file through the OWW detector
-    // chunk-by-chunk and report peak wake score.
-    // Same output shape as the live-listener test
-    // so the result panel + diagnostic tips work
-    // unchanged. RMS comes from the WAV header's
-    // PCM data (computed natively in scoreWavFile).
-    //
-    // For exit/send, same logic applies — both also
-    // used to ride on the OWW listener. Routing
-    // them through the recorder path is symmetric
-    // and consistent.
-    //
-    // Why the live listener still exists: it's the
-    // production wake detection path (HomeScreen's
-    // startSampleMatchListener, voice mode's
-    // recording turn loop). The test path is a
-    // separate, one-shot verification of the
-    // trained model — using a recorded file is
-    // acceptable for that purpose. The live
-    // listener is untouched.
+    // Switched classifier test from live OWW listener to recorder + offline scoring.
     const startMs = Date.now();
     let peak = 0;
     let maxChunk = 0;
@@ -190,48 +87,17 @@ export function useClassifierTest(
     let fired = false;
     let avgRms = 0;
     let owwWasRunning = false;
-    // v3.10.50: track which model the detector was
-    // actually using when scoring. Used by the result
-    // panel's diagnostic tip to tell the user
-    // 'Loaded model: hey_jarvis' vs 'Loaded model: hey
-    // clawsuu' so a peak=0 result can be diagnosed
-    // without logcat. If the detector was null at
-    // score time, detectorLoaded=false; if it was
-    // loaded but with a different wakeword than the
-    // user's active one, the loadedWakeword differs.
+    // Track which model the detector was actually using when scoring.
     let loadedWakeword = '';
     let detectorLoaded = false;
 
-    // Use a tmp path inside the cache dir so the
-    // file is auto-evicted. The recorder writes
-    // 16kHz mono PCM16 WAV — same format
-    // scoreWavFile expects.
+    // Use a tmp path inside the cache dir so the file is auto-evicted.
     const tmpPath = `${RNFS?.CacheDirectoryPath || '/data/data/com.cyberclawmobile/cache'}/wake-test-${Date.now()}.wav`;
     try {
-      // 4000ms silence timeout = test ends when the
-      // user stops talking (or after 4s of silence).
-      // useSmartSilence=true (default) so the
-      // recorder works in noisy environments.
-      // 4000 = TEST_DURATION_MS; if the user is
-      // silent the whole time, the recorder fires
-      // its own silence callback at 4s and we get
-      // a 4s clip of silence. If the user says the
-      // wake phrase then stops, we get a clip up to
-      // ~silence-detection-duration of audio. Both
-      // cases produce a WAV we can score.
+      // 4000ms silence timeout = test ends when the user stops talking (or after 4s of silence).
       await WakeWordModule?.startRecorderWithSilence?.(tmpPath, TEST_DURATION_MS, true);
       owwWasRunning = true;
-      // Wait for the recorder to finish. It stops
-      // either on silence (smart-silence) or on the
-      // 4000ms timeout. Either way, stopRecorder()
-      // returns the WAV path. We poll for
-      // isRecordingState via the getLatestScores
-      // shim — actually no, simpler: just sleep for
-      // the test window. The recorder auto-stops
-      // when silence fires or the timeout hits, but
-      // its internal state isn't queryable from JS.
-      // A simple setTimeout for TEST_DURATION_MS is
-      // good enough.
+      // Wait for the recorder to finish.
       await new Promise<void>((resolve) => {
         setTimeout(resolve, TEST_DURATION_MS + 200);
       });
@@ -253,71 +119,20 @@ export function useClassifierTest(
     }
 
     if (!wavPath && tmpPath) {
-      // Recorder may not have returned a path on
-      // auto-stop; fall back to the tmpPath (the
-      // recorder writes to that path even if the
-      // promise resolves empty in some edge cases).
+      // Recorder may not have returned a path on auto-stop; fall back to the tmpPath (the recorder writes to that path even if the promise…
       wavPath = tmpPath;
     }
 
     if (wavPath && WakeWordModule?.scoreWavFile) {
       try {
-        // v3.10.48: re-init the OWW detector with the
-        // user's ACTIVE wake phrase before scoring. The
-        // detector was init'd at app start by HomeScreen
-        // with the bundled 'hey_jarvis' (hardcoded since
-        // v3.2.0). When the user has trained a custom
-        // wake ("Hey Clawsuu"), scoreWavFile would score
-        // the recorded audio against the wrong model and
-        // report peak=0 even when the user said the
-        // right phrase. Tobe hit this in v3.10.47: peak
-        // 0%, RMS 0.094, listener running — proving mic
-        // works but model mismatch was hidden in the
-        // wake-test path.
-        //
-        // If a wakeword is passed via options, initOww
-        // here. initOww is idempotent — it replaces the
-        // current detector and uses the bundled asset
-        // (for 'hey_jarvis' et al.) or the wake-set
-        // registry lookup (for custom-trained phrases
-        // like 'hey clawsuu' — see
-        // OpenWakeWordDetector.findWakeModelByPhrase).
-        // For exit/send tests, the wakeword doesn't
-        // affect scoring (we read wake/exit/send
-        // scores per kind), but re-initing here is
-        // harmless — the detector reloads its
-        // classifiers and the test still scores the
-        // right one.
-        //
-        // We DON'T restore the original detector after
-        // the test. The detector stays re-init'd with
-        // the right wake model, which is what the user
-        // wants anyway. HomeScreen's startSampleMatch
-        // Listener calls initOww('hey_jarvis', ...) on
-        // its own when it remounts, so restoring is
-        // not necessary.
+        // Re-init the OWW detector with the user's ACTIVE wake phrase before scoring.
         const wakewordToScore = options?.wakeword;
         if (wakewordToScore && WakeWordModule?.initOww) {
           try {
-            // v3.10.169: same 0.55 nudge as the
-            // production paths so the test scorer
-            // matches what the live detector uses.
-            // Without this, test results would say
-            // "match at 0.55" but the live detector
-            // would still consider 0.54 a fire —
-            // confusing. The bump applies uniformly.
+            // Same 0.55 nudge as the production paths so the test scorer matches what the live detector uses.
             await WakeWordModule.initOww(wakewordToScore, 0.55);
           } catch (e: any) {
-            // v3.10.51: don't silently swallow. Log
-            // the error so the test's log tab shows
-            // what failed. Without this, a failed
-            // initOww leaves the detector in a
-            // half-initialized state (melspec + embedding
-            // but no wake classifier) and the diagnostic
-            // tip can only say 'Loaded model: hey_jarvis'
-            // without explaining WHY. The log entry
-            // makes it clear that initOww was attempted
-            // but failed.
+            // Don't silently swallow.
             try {
               const { addLogEntry } = require('./HomeScreen');
               addLogEntry(
@@ -340,22 +155,7 @@ export function useClassifierTest(
           scoreSum = peak * scoreSamples; // approximate avg for display
           maxChunk = peak;
           final = peak;
-          // v3.10.50: surface diagnostic info from the
-          // native side. The result object now includes
-          // `loadedWakeword` (the wakeword the detector
-          // is currently using) and `detectorLoaded`
-          // (boolean). This lets the result panel tell
-          // the user WHICH model the test actually
-          // scored against — without this, peak=0
-          // always reads as 'model never matched'
-          // even when the wrong model was loaded. Tobe
-          // hit peak=0 in v3.10.48 testing where the
-          // detector may have stayed on 'hey_jarvis'
-          // despite initOww being called with the
-          // active phrase; this field would have
-          // shown that. We attach the loaded wakeword
-          // to the result object so the diagnostic
-          // tip can include it.
+          // Surface diagnostic info from the native side.
           (scored as any).__loadedWakeword = scored.loadedWakeword;
           (scored as any).__detectorLoaded = scored.detectorLoaded;
           // Also save it in a local var so we can
@@ -389,29 +189,7 @@ export function useClassifierTest(
     });
     setRunning(false);
   }, [kind, options?.wakeword]);
-  // v3.10.51: added options?.wakeword to the deps.
-  // Previously the deps were [kind] only, which meant
-  // `start` was the SAME function reference for the
-  // entire component lifetime. It captured the
-  // options object from the FIRST render — before
-  // useEffect had a chance to populate
-  // activeWakeDirect. As a result, options.wakeword
-  // was undefined at capture time, and the test path
-  // skipped initOww entirely. The detector stayed on
-  // the bundled 'hey_jarvis' (or whatever was loaded
-  // at app start). Tobe's diagnostic on v3.10.50
-  // surfaced this perfectly: 'Loaded model: hey_jarvis'
-  // meant the JS never re-init'd the detector.
-  //
-  // Adding options?.wakeword to the deps makes start
-  // re-create when the wakeword changes. The hook's
-  // consumer (CompanionSettingsScreen) passes
-  // { wakeword: activeWakeDirect?.phrase }; on the
-  // first render activeWakeDirect is null, so
-  // options.wakeword = undefined; on the second
-  // render (after useEffect populated it), it's the
-  // real phrase. start re-creates and the test path
-  // sees the new wakeword.
+  // Added options?.wakeword to the deps.
 
   return { running, result, start, abort };
 }
@@ -455,21 +233,7 @@ export function ClassifierTestPanel({
   kind: ClassifierKind;
   labelOverride?: string;
   hintOverride?: string;
-  // v3.10.52: pass wakeword through to the hook.
-  // Previously the panel called useClassifierTest(kind)
-  // WITHOUT options, so the test path's initOww was
-  // never invoked and the detector kept whatever
-  // model was loaded at app start (typically the
-  // bundled 'hey_jarvis' from HomeScreen's init).
-  // The companion-level hook at
-  // CompanionSettingsScreen.tsx:213 does pass
-  // wakeword correctly — but the wake sub-page
-  // renders ClassifierTestPanel directly, not the
-  // companion-level hook's start function. So the
-  // panel needed its own wakeword prop. Caller
-  // (CompanionSettingsScreen wake sub-page) now
-  // passes activeWakeDirect?.phrase down to the
-  // panel.
+  // Pass wakeword through to the hook.
   wakeword?: string;
 }) {
   const { running, result, start } = useClassifierTest(kind, { wakeword });
@@ -544,36 +308,9 @@ export function ClassifierTestPanel({
   );
 }
 
-// v3.10.30: dynamic diagnostic tip. Picks the
-// most likely cause based on what the test
-// observed, instead of always saying the same
-// "aim for 70%" generic message. Categories:
-//   1. mic RMS < 0.005 → "mic didn't hear
-//      anything — check mic permission, speak
-//      louder, or hold phone closer"
-//   2. peak < 5% but mic heard plenty → "model
-//      didn't recognise this voice. Retrain with
-//      cleaner samples"
-//   3. peak 5-30% → "model sees something but
-//      not enough. Try again with a clearer
-//      pronunciation, or retrain"
-//   4. peak ≥ 70% but didn't fire → "model
-//      matched but the runtime didn't trigger.
-//      Threshold is fine; check the
-//      silence/gibberish gate"
-// The default fallback keeps the original
-// "aim for 70%" tip for the common case.
+// Dynamic diagnostic tip.
 function diagnosticTip(r: ClassifierTestResult, fallback: string): string {
-  // v3.10.31: distinguish "mic not running" from
-  // "mic dead". The former is the most common
-  // cause of "0% on 4 tries" — the OWW listener
-  // is only started when the user enters voice
-  // mode, so the wake test in CompanionSettings
-  // runs against silence unless we explicitly
-  // start the listener (which v3.10.31 does).
-  // If owwWasRunning is false AFTER the test, the
-  // listener never came up — different fix than
-  // mic permission/loudness.
+  // Distinguish "mic not running" from "mic dead".
   if (!r.owwWasRunning) {
     return '⚠️ Wake listener wasn\u2019t running — opened the mic for this test, but the detector never produced audio. Try entering voice mode first (it primes the listener), then re-run the test.';
   }
@@ -581,19 +318,7 @@ function diagnosticTip(r: ClassifierTestResult, fallback: string): string {
     return '⚠️ Mic heard almost nothing. Check mic permission, speak louder, or hold the phone closer.';
   }
   if (r.peak < 0.05) {
-    // v3.10.50: distinguish 'model never matched the
-    // right phrase' from 'wrong model loaded'. Tobe
-    // hit peak=0 in v3.10.48 where the detector was
-    // probably still on 'hey_jarvis' (bundled default)
-    // despite the test calling initOww with the
-    // active phrase. The diagnostic tip should tell
-    // the user WHICH model scored the audio so they
-    // can see at a glance whether the right model
-    // was loaded. If loadedWakeword is set and
-    // matches the active phrase, it's a genuine
-    // miss (retrain needed). If loadedWakeword is
-    // 'hey_jarvis' or empty, the test scored against
-    // the wrong model.
+    // Distinguish 'model never matched the right phrase' from 'wrong model loaded'.
     const loadedLabel = r.loadedWakeword
       ? ` Loaded model: ${r.loadedWakeword}.`
       : ' Detector not loaded.';

@@ -1,14 +1,4 @@
-// Wake Mode: Intelligent Multi-Speaker Voice Control
-//
-// Feature: Always-listening wake word with sentence recording
-// Use case: Family/group conversations - only trigger when you use wake word
-//
-// Flow:
-// 1. App starts → Wake Mode listening in background
-// 2. User says "Hey Claw" → Trigger sentence recording
-// 3. User speaks sentence(s) with natural pauses
-// 4. If another "Hey Claw" during sending/reply → Interrupt & append new audio
-// 5. Response includes all spoken parts
+// Wake Mode: Intelligent Multi-Speaker Voice Control Feature: Always-listening wake word with sentence recording Use case: Family/group…
 
 import { NativeModules } from 'react-native';
 import { SimpleAudioRecorder } from '../services/SimpleAudioRecorder';
@@ -21,15 +11,7 @@ interface WakeWordSession {
   isProcessing: boolean;  // true during send/reply
 }
 
-/**
- * WakeWordController - Manages continuous listening + sentence recording
- * 
- * Key features:
- * - Always listening for wake word (low power)
- * - When detected: Start sentence recording
- * - Handle interrupts during send/reply
- * - Append new audio to existing message
- */
+/** WakeWordController - Manages continuous listening + sentence recording Key features: - Always listening for wake word (low power) - When… */
 export class WakeWordController {
   private session: WakeWordSession | null = null;
   private recorder: SimpleAudioRecorder | null = null;
@@ -126,29 +108,4 @@ export class WakeWordController {
   }
 }
 
-/**
- * Integration points in HomeScreen:
- * 
- * // At startup
- * useEffect(() => {
- *   wakeWordController.startWakeWordDetection();
- * }, []);
- * 
- * // When wake word fires (from native module)
- * const onWakeWord = () => {
- *   wakeWordController.onWakeWordDetected();
- * };
- * 
- * // During send/reply
- * const sendAudio = async (base64) => {
- *   wakeWordController.setProcessing(true);
- *   syncClient.sendAudioInput(base64, 'audio/wav');
- *   // Wait for response...
- *   wakeWordController.setProcessing(false);
- * };
- * 
- * // If wake word comes during send/reply
- * const onWakeWordDuringSend = () => {
- *   wakeWordController.onWakeWordInterrupt();
- * };
- */
+/** Integration points in HomeScreen: // At startup useEffect(() => { wakeWordController.startWakeWordDetection(); }, []); // When wake word… */

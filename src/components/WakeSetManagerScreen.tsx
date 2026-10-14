@@ -1,46 +1,4 @@
-/**
- * WakeSetManagerScreen — list / activate / rename / delete /
- * pull-from-desktop / push-to-desktop for the wake-word
- * model sets.
- *
- * v3.9.0 (wake-only first cut).
- *
- * Storage shape (Kotlin side):
- *   filesDir/wake_models/<setId>/
- *     model.tflite
- *     meta.json   { setId, phrase, scope, agentId?, createdAt }
- *
- * Multiple sets can coexist per agent. The active set is
- * the one the running detector uses; switching to another
- * hot-swaps it in. Trained .tflites the user wants to keep
- * around (e.g. "old hey-clawsu" before a retrain) just
- * sit in the list and can be re-activated anytime.
- *
- * UX:
- *   - Each row shows the setId (or a friendly alias), phrase,
- *     createdAt, sizeBytes, and an "✓ Active" badge when
- *     this set is the agent's active set.
- *   - Per-row buttons: Activate / Rename / Push to desktop
- *     / Delete.
- *   - Sticky "+ Pull from desktop" button at the bottom
- *     opens the desktop-cache list (the desktop has every
- *     .tflite it ever produced under
- *     ~/.openclaw/cyberclaw/wake-training/<agentId>/output/
- *     model/<name>.tflite) and lets the user pull any of
- *     them back into the device's local set registry.
- *
- * Cross-references:
- *   - WakeWordModule.listWakeSets / getActiveWakeSet /
- *     setActiveWakeSet / renameWakeSet / deleteWakeSet /
- *     readWakeSet
- *   - syncClient.requestListWakeSetsFromDesktop /
- *     importWakeSetFromDesktop /
- *     exportWakeSetToDesktop
- *   - Desktop main.js handlers list_wake_sets_from_desktop
- *     / import_wake_set_from_desktop /
- *     export_wake_set_to_desktop
- *   - Desktop sync-server.js wire cases
- */
+/** WakeSetManagerScreen — list / activate / rename / delete / pull-from-desktop / push-to-desktop for the wake-word model sets. */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -66,11 +24,7 @@ const { WakeWordModule, BackgroundService } = NativeModules;
 export type WakeSetEntry = {
   setId: string;
   phrase: string;
-  // v3.10.1: human-friendly display name
-  // (defaults to the typed phrase, can be
-  // edited via Rename). The manager card
-  // title uses this; setId is the
-  // filesystem-safe slug.
+  // Human-friendly display name (defaults to the typed phrase, can be edited via Rename).
   displayName?: string;
   scope: string;
   agentId?: string;
@@ -129,12 +83,7 @@ export default function WakeSetManagerScreen({
           list.push({
             setId,
             phrase: entry.phrase || setId,
-            // v3.10.1: prefer the human-friendly
-            // displayName written by the trainer
-            // (the typed phrase, e.g. "Hey Clawsuu")
-            // and fall back to phrase for legacy
-            // meta.json files that don't have the
-            // field.
+            // Prefer the human-friendly displayName written by the trainer (the typed phrase, e.g.
             displayName: entry.displayName || entry.phrase || setId,
             scope: entry.scope || '',
             agentId: entry.agentId,
@@ -171,14 +120,7 @@ export default function WakeSetManagerScreen({
       await WakeWordModule.setActiveWakeSet(agentId, setId);
       setActiveSetId(setId);
       await refresh();
-      // v3.10.1: also push the new phrase to the
-      // background-listening service. Same reason
-      // as the trainer's _onModel: the running
-      // CyberClawService (Vosk + PhoneticMatcher)
-      // cached the old phrase on start and won't
-      // pick up the change until restart. Look up
-      // the activated set's phrase from the
-      // refreshed list so we know what to set.
+      // Also push the new phrase to the background-listening service.
       try {
         const activated = sets.find((s) => s.setId === setId);
         const phrase = activated?.phrase;
@@ -291,16 +233,7 @@ export default function WakeSetManagerScreen({
           msg.phrase || setId,
         )
           .then(async () => {
-            // v3.10.1: also push the imported phrase
-            // to the BG service. Same as the
-            // trainer's _onModel and handleActivate:
-            // update audio-settings + active-wake-
-            // companion, and restart the BG service
-            // if it's enabled. Otherwise the
-            // imported set is on disk + hot-swapped
-            // in the OWW detector, but the BG
-            // service keeps listening for the old
-            // phrase.
+            // Also push the imported phrase to the BG service.
             const importedPhrase = msg.phrase || setId;
             try {
               const [settingsRaw, bgRaw] = await Promise.all([

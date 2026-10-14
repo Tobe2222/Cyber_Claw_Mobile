@@ -1,23 +1,4 @@
-// v3.10.173: Skills Library screen for the mobile app.
-//
-// Mirrors the desktop's left-sidebar skills library so Tobe can
-// browse, create, edit, and toggle per-companion skills from the
-// phone. All persistence is server-side — the mobile is a thin
-// client over the WebSocket sync bridge. The renderer's preload
-// IPCs and the SyncServer case-statements in src/sync-server.js
-// implement the same surface; this screen just consumes it.
-//
-// Layout:
-//   - Top bar: "← Back" + "📚 SKILLS LIBRARY"
-//   - "+ New Skill" button
-//   - "Seed Starter Skills" button (if empty)
-//   - List of skill cards (icon, name, description, trigger count,
-//     edit/delete buttons)
-//   - Per-companion toggle pills for the active companion
-//   - Modals for create / edit / view
-//
-// All modals are in-component (no separate files) to keep this
-// self-contained for the initial ship.
+// Skills Library screen for the mobile app.
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {

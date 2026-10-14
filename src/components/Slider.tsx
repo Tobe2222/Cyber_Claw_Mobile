@@ -1,25 +1,4 @@
-/**
- * Slider — a minimal horizontal slider with a draggable thumb.
- *
- * v3.10.93: built to mirror the desktop's `<input type="range">`
- * visual on the mobile. Supports continuous drag (not just
- * discrete taps). Uses PanResponder for the drag gesture.
- *
- * Props:
- *   min, max, step   — numeric range (step=0 means continuous)
- *   value            — controlled value
- *   onChange         — (value) => void, fires on every drag tick
- *   disabled         — disables drag
- *   trackColor       — flat track color
- *   fillColor        — color of the filled portion (left of thumb)
- *   thumbColor       — thumb color
- *   showValue        — show the numeric value to the right of the
- *                      slider (e.g. "3/5")
- *
- * The track is 32px tall with a 4px surround, the thumb is a
- * 24px circle. Tapping the track jumps the thumb to that
- * position. Dragging the thumb scrubs continuously.
- */
+/** Slider — a minimal horizontal slider with a draggable thumb. */
 
 import React, { useRef, useState, useCallback } from 'react';
 import {
@@ -50,19 +29,7 @@ export default function Slider({
   const widthRef = useRef<number>(0);
   const valueRef = useRef<number>(value);
   const disabledRef = useRef<boolean | undefined>(disabled);
-  // Mirror the current value + disabled flag into refs so the
-  // PanResponder (captured once at mount) can read the latest
-  // values without re-creating the responder on every change.
-  // v3.10.188: added disabledRef. Before this, the Slider's
-  // PanResponder captured the initial `disabled` prop in its
-  // closures — so if the parent mounted the Slider with
-  // `disabled={true}` (e.g. while a hydrate was pending) and
-  // then flipped it to `false` later, the slider was forever
-  // stuck in the disabled state. The thumb rendered, the
-  // disabledStyle opacity dropped, but the PanResponder's
-  // `onStartShouldSetPanResponder: () => !disabled` closure
-  // still returned false. Tobe reported this as 'i cant
-  // change scale for some reason' on 2026-09-04 19:27.
+  // Mirror the current value + disabled flag into refs so the PanResponder (captured once at mount) can read the latest values without…
   valueRef.current = value;
   disabledRef.current = disabled;
   const [trackWidth, setTrackWidth] = useState<number>(0);
@@ -93,10 +60,7 @@ export default function Slider({
 
   const panResponder = useRef(
     PanResponder.create({
-      // v3.10.188: read disabledRef.current instead of the
-      // captured `disabled` prop. The PanResponder is created
-      // once at mount; the prop value at that moment would
-      // otherwise be locked in forever.
+      // Read disabledRef.current instead of the captured `disabled` prop.
       onStartShouldSetPanResponder: () => !disabledRef.current,
       onMoveShouldSetPanResponder: () => !disabledRef.current,
       onPanResponderGrant: (e: GestureResponderEvent) => {

@@ -1,11 +1,4 @@
-/**
- * AudioBuffer — Rolling audio recording service
- * Records audio continuously in chunks, maintains a rolling buffer,
- * and provides lookback capability for the wake word system.
- * 
- * NOTE: File I/O (RNFS) will be integrated when actual audio recording is added.
- * For now this manages in-memory chunk references and settings only.
- */
+/** AudioBuffer — Rolling audio recording service Records audio continuously in chunks, maintains a rolling buffer, and provides lookback… */
 
 const CHUNK_DURATION_MS = 30_000; // 30 seconds per chunk
 const MAX_CHUNKS_DEFAULT = 120;   // 60 minutes at 30s chunks
@@ -52,10 +45,7 @@ class AudioBufferService {
     return { ...this.settings };
   }
 
-  /**
-   * Add a recorded chunk to the buffer
-   * Called by the native recording module
-   */
+  /** Add a recorded chunk to the buffer Called by the native recording module */
   async addChunk(path: string, startTime: number, duration: number, size: number = 0): Promise<void> {
     this.chunks.push({ path, startTime, duration, size });
 

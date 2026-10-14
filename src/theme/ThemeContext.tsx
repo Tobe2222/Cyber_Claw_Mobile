@@ -1,23 +1,4 @@
-/**
- * CyberClaw Mobile — Theme Context
- *
- * v3.10.112: Light/Dark theme support. Wraps the app with
- * `ThemeProvider`. Children consume the theme via `useTheme()`
- * or `useThemedStyles()`. Theme name is persisted under
- * THEME_STORAGE_KEY (see ./tokens.ts).
- *
- * Initial state: dark (matches the legacy hardcoded look so
- * first-launch is identical to pre-theme-toggle behavior).
- *
- * Why Context and not Redux: theme is read by ~every screen
- * and there's no need for actions/selectors. A single
- * useState + AsyncStorage write is the right granularity.
- *
- * Status bar: the provider also updates the StatusBar
- * barStyle based on the active theme (dark = light-content,
- * light = dark-content). This avoids the "white text on white
- * status bar" footgun we'd hit if a screen forgot to set it.
- */
+/** CyberClaw Mobile — Theme Context v3.10.112: Light/Dark theme support. */
 import React, {
   createContext, useContext, useEffect, useMemo, useState, useCallback,
 } from 'react';
@@ -80,10 +61,6 @@ export function ThemeProvider({ children }: ProviderProps): React.JSX.Element {
   useEffect(() => {
     const sub = Appearance.addChangeListener(({ colorScheme }) => {
       // If user has an explicit pick, ignore system changes.
-      // We don't try to detect "explicit" here — we optimistically
-      // follow system until the user taps the toggle. Tapping
-      // calls setTheme(name) which persists to storage, so the
-      // next mount will respect it.
       if (colorScheme === 'dark' || colorScheme === 'light') {
         // No-op for now; the initial hydrate handles the system
         // fallback. We don't override an in-session user's choice.
@@ -103,12 +80,7 @@ export function ThemeProvider({ children }: ProviderProps): React.JSX.Element {
   }, []);
 
   const toggle = useCallback(() => {
-    // v3.10.119: cycle through three themes: dark → forest →
-    // light → dark. The order matches Tobe's mental model:
-    // sun (light) on the left, forest in the middle, moon
-    // (dark) on the right. Cycling through 3 with a single
-    // button is still usable; users who want a specific
-    // theme can use the segmented control in SettingsScreen.
+    // Cycle through three themes: dark → forest → light → dark.
     const order: ThemeName[] = ['dark', 'forest', 'light'];
     const idx = order.indexOf(themeName);
     const next = order[(idx + 1) % order.length];
@@ -123,12 +95,7 @@ export function ThemeProvider({ children }: ProviderProps): React.JSX.Element {
     ready,
   }), [themeName, setTheme, toggle, ready]);
 
-  // Status bar follows the theme. barStyle controls the
-  // battery / clock color; backgroundColor is the Android
-  // nav bar color (iOS ignores it). v3.10.119: forest
-  // theme is a "light" theme visually (cream-white text
-  // on green/brown scene) so it gets 'dark-content' for
-  // the bar style.
+  // Status bar follows the theme.
   const isDark = themeName === 'dark';
   const statusBarBg = themes[themeName].bg.primary;
 
@@ -155,26 +122,7 @@ export function useTheme(): ThemeContextValue {
   return ctx;
 }
 
-/**
- * useThemedStyles — convenience hook for the common case
- * where a screen wants a StyleSheet that depends on the
- * current theme.
- *
- * Usage:
- *   const makeStyles = (t: Theme) => StyleSheet.create({
- *     root: { backgroundColor: t.bg.primary },
- *     title: { color: t.text.primary },
- *   });
- *
- *   function MyScreen() {
- *     const { theme, styles } = useThemedStyles(makeStyles);
- *     return <View style={styles.root}><Text style={styles.title}>...</Text></View>;
- *   }
- *
- * The factory is called every render the theme changes (rare),
- * which is fine — StyleSheet.create is cheap and the result
- * is reused by the standard RN reconciler.
- */
+/** UseThemedStyles — convenience hook for the common case where a screen wants a StyleSheet that depends on the current theme. */
 export function useThemedStyles<T extends StyleSheet.NamedStyles<T>>(
   factory: (t: Theme) => T,
 ): { theme: Theme; styles: T } {
@@ -183,7 +131,4 @@ export function useThemedStyles<T extends StyleSheet.NamedStyles<T>>(
   return { theme, styles };
 }
 
-// StyleSheet is imported at the top of this file from
-// react-native. Consumers that use useThemedStyles don't need
-// to also import StyleSheet unless they build non-themed
-// styles alongside.
+// StyleSheet is imported at the top of this file from react-native.

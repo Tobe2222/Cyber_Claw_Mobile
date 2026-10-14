@@ -1,28 +1,4 @@
-/**
- * CompanionSettingsScreen — per-companion settings as its OWN screen.
- *
- * v3.4.4: extracted from SettingsScreen into its own file so that
- * tapping a companion in Voice mode → list swaps the ENTIRE app
- * view to this screen, instead of rendering the companion detail
- * inline within SettingsScreen's scroll (which mixed companion
- * settings with Voice & Speech / Permissions / Connection sections
- * on the same scroll — confusing per Tobe's v3.4.3 feedback).
- *
- * Reached via App.tsx route 'companion' with a companionId prop.
- * Back button → returns to SettingsScreen.
- *
- * UI hierarchy (5 levels):
- *   App.tsx
- *     ↓ tap companion row in SettingsScreen
- *   <CompanionSettingsScreen>
- *     - companion overview (Wake / Exit cards)
- *         ↓ tap Wake card
- *     - Wake settings sub-page (greeting, phrases, train)
- *         ↓ back
- *     - companion overview
- *         ↓ tap Exit card
- *     - Exit settings sub-page (reply, phrases, train)
- */
+/** CompanionSettingsScreen — per-companion settings as its OWN screen. */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -30,28 +6,11 @@ import {
   StyleSheet, Alert, Platform, NativeModules, BackHandler,
   AppState, Dimensions,
 } from 'react-native';
-// v3.10.140: animated sprite view at the top of the
-// settings screen. Uses the same arena.html WebView as
-// HomeScreen, but in a small fixed-size container.
-// v3.10.146: removed setCentered(true) so the
-// companion walks naturally (animates) instead of
-// being frozen in place at scale=10. See
-// renderCompanionViewWindow below.
+// Animated sprite view at the top of the settings screen.
 import { WebView } from 'react-native-webview';
 const { WakeWordModule } = NativeModules;
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// v3.10.0: OpenWakeWordTrainer / ExitPhraseTrainer /
-// WakeSetManagerScreen are now rendered as full-screen
-// routes by App.tsx (pushed via onPushWakeTrainer /
-// onPushExitTrainer / onPushWakeManager). This file no
-// longer imports them — only their trigger buttons
-// remain.
-// v3.7.0: per-companion voice settings (engine + voice id,
-// local TTS only — Premium API scaffolding removed in
-// v3.10.154). The catalog of available voices is shared
-// with the (now-vacated) global Settings screen via
-// VoiceCatalog.ts. LOCAL_VOICES is the source of truth for
-// what the user can pick.
+// OpenWakeWordTrainer / ExitPhraseTrainer / WakeSetManagerScreen are now rendered as full-screen routes by App.tsx (pushed via…
 import {
   loadVoiceFor, saveVoiceFor, clearVoiceFor,
   loadVoiceSettings, saveSilenceMs,
@@ -61,50 +20,28 @@ import {
   LOCAL_VOICES,
   VoiceEngine,
 } from '../services/VoiceCatalog';
-// v3.10.25: shared "Test wake" panel (the wake page
-// also uses the hook internally — the wake panel
-// here renders the standard layout).
-// v3.10.26: NAMED import, not default. The component
-// is `export function ClassifierTestPanel(...)` with
-// no default export.
+// Shared "Test wake" panel (the wake page also uses the hook internally — the wake panel here renders the standard layout).
 import { ClassifierTestPanel, useClassifierTest } from '../components/ClassifierTest';
 
 // v3.10.66: removed — speaker enrollment moved to global
 // Settings screen 🎙️ Voice mode section. The import is no
 // longer needed here.// v3.7.1: syncClient for the desktop "Test voice" button.
 import syncClient from '../services/SyncClient';
-// v3.10.23: addLogEntry import removed. The speaker-enrollment
-// callbacks that referenced it (v3.10.19/v3.10.21) are gone in
-// the v3.10.23 refactor (passive global profile, no UI). If a
-// future feature here needs log output, prefer lifting
-// addLogEntry / syncLog / logListeners to a shared
-// src/services/LogStore.ts (same shape as SyncClient.ts) so
-// screens don't cross-import each other for log calls.
+// AddLogEntry import removed.
 
 type Companion = {
   id: string;
   name: string;
   emoji?: string | null;
   icon?: string | null;
-  // v3.10.139: companion skill XP + levels, mirrored from
-  // the desktop's companion-stats.json. The desktop sends
-  // these via the existing `agents_list` broadcast payload
-  // (added in desktop v3.2.84). Same shape as the desktop
-  // `getStats` IPC returns:
-  //   { level, xp, xpTotal, skills: { <name>: { level, xp } } }
-  // Missing on legacy agents / subagents → we render an
-  // "Empty" section in the Skills panel.
+  // Companion skill XP + levels, mirrored from the desktop's companion-stats.json.
   skills?: {
     level: number;
     xp: number;
     xpTotal: number;
     skills: Record<string, { level: number; xp: number }>;
   } | null;
-  // v3.10.142: companion sprite configuration mirrored
-  // from the desktop's sprites.json. Fields used by the
-  // Behaviour card on this page (sprite + scale + traits
-  // + chattiness). The edit screen (separate route) has
-  // its own hydration; this is just for read-only display.
+  // Companion sprite configuration mirrored from the desktop's sprites.json.
   spriteConfig?: {
     pixelCompanionId?: string;
     scale?: number;
@@ -112,13 +49,7 @@ type Companion = {
     chattiness?: number;
     customName?: string;
   } | null;
-  // v3.10.146: top-level sprite + chattiness fields from
-  // the broadcast payload. These are DUPLICATES of the
-  // same values in spriteConfig (the desktop sends both),
-  // but reading from the top level is cheaper than
-  // diving into spriteConfig. The view-window label
-  // uses `sprite`; future renderers might use
-  // `chattiness` for a quick-readout.
+  // Top-level sprite + chattiness fields from the broadcast payload.
   sprite?: string | null;
   chattiness?: number | null;
 };
@@ -126,12 +57,7 @@ type Companion = {
 export default function CompanionSettingsScreen({
   companionId,
   onBack,
-  // v3.10.0: push-callbacks for trainer / manager /
-  // exit-trainer sub-routes. Lifted to App.tsx as full
-  // screens instead of inline expanded panels inside
-  // this screen. Tobe: "Manage and Train buttons should
-  // really open new pages rather than expanding down the
-  // current. This should be the case for exit also."
+  // Push-callbacks for trainer / manager / exit-trainer sub-routes.
   onPushWakeTrainer,
   onPushWakeManager,
   onPushExitTrainer,
@@ -139,31 +65,12 @@ export default function CompanionSettingsScreen({
   // companion. Lifted to App.tsx as a full-screen route
   // (mirrors the desktop's Companion Forge on mobile).
   onOpenCompanionEdit,
-  // v3.10.186: split editor callbacks — Looks + Behaviour
-  // open separate screens. App.tsx wires both; if either
-  // is missing (older build), the corresponding card falls
-  // back to onOpenCompanionEdit (legacy single editor).
+  // Split editor callbacks — Looks + Behaviour open separate screens.
   onOpenCompanionLooks,
   onOpenCompanionBehaviour,
-  // v3.10.191: Models editor callback (third split-screen
-  // editor). Mirrors the Looks + Behaviour callbacks —
-  // opens a dedicated page for LLM model selection.
-  // Tobe 2026-09-07: "Lets introduce the LLM connection
-  // for each companion within the companion editor,
-  // create a new section for that with its own page like
-  // looks and behaviour." The mobile previously removed
-  // this in v3.10.94; bringing it back as its own
-  // dedicated screen with a separate Local models group.
+  // Models editor callback (third split-screen editor).
   onOpenCompanionModels,
-  // v3.10.174: open the Skills screen scoped to this
-  // companion. The companion settings page is the
-  // ONLY place the Skills screen is reachable from
-  // (Tobe: "Skills in the companion settings,
-  // nowhere else"). Passing companionId +
-  // companionName lets SkillsScreen render the
-  // per-companion toggle pills pre-bound to this
-  // companion, so the user toggles skills for THIS
-  // companion without having to pick one.
+  // Open the Skills screen scoped to this companion.
   onOpenSkills,
 }: {
   companionId: string;
@@ -172,50 +79,20 @@ export default function CompanionSettingsScreen({
   onPushWakeManager: (ctx: { companionId: string; companionName: string }) => void;
   onPushExitTrainer: (ctx: { companionId: string; companionName: string; presetPhrase?: string }) => void;
   onOpenCompanionEdit?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
-  // v3.10.186: split editor callbacks. The Behaviour card
-  // was getting cluttered (sprite + scale + chattiness +
-  // traits all in one), so the parent now renders two cards:
-  // one for Looks (sprite + scale + name), one for Behaviour
-  // (chattiness + traits). Each opens its own dedicated
-  // editor screen. The legacy onOpenCompanionEdit callback
-  // is kept for backward-compat and routes to Behaviour
-  // (the dominant section).
+  // Split editor callbacks.
   onOpenCompanionLooks?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
   onOpenCompanionBehaviour?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
-  // v3.10.191: Models editor callback prop. App.tsx wires
-  // this to push the companion-edit-models route. If
-  // missing (older build), the Models card falls back to
-  // the behaviour editor — not ideal but it keeps the
-  // page from breaking.
+  // Models editor callback prop.
   onOpenCompanionModels?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
   onOpenSkills?: (ctx: { companionId: string; companionName: string; emoji?: string | null }) => void;
 }) {
-  // v3.4.4: drill-down phase inside the companion
-  // detail view. null = overview (cards). 'wake' / 'exit'
-  // = sub-page for that phase.
-  // v3.7.0: 'voice' added — per-companion voice engine +
-  // voice picker (Use global default / Per-companion override
-  // → pick a specific Android TTS voice). v3.10.154 stripped
-  // the Premium API option; only local TTS is selectable now.
-  // v3.7.6: 'quests' removed — Quests is now a top-level
-  // screen (QuestsScreen.tsx) accessed from the arena button.
+  // Drill-down phase inside the companion detail view.
   const [companionViewPhase, setCompanionViewPhase] = useState<'wake' | 'exit' | 'voice' | null>(null);
 
-  // v3.10.175: Experience card collapsible state.
-  // Collapsed = just the character level bar + chevron
-  // (the default). Tapping the card expands it to show
-  // all 9 category XP bars below (Skyrim-style:
-  // character level is driven by sum of category XP,
-  // tapping the character bar reveals the per-category
-  // breakdown). Persists across re-renders within the
-  // screen so opening the Wake sub-page and coming back
-  // doesn't collapse it again.
+  // Experience card collapsible state.
   const [experienceExpanded, setExperienceExpanded] = useState(false);
 
-  // Companion list — owned here (not lifted to App.tsx)
-  // because this screen needs it to resolve companionId
-  // → {name, emoji}. Hydrates from the same AsyncStorage
-  // cache that HomeScreen writes.
+  // Companion list — owned here (not lifted to App.tsx) because this screen needs it to resolve companionId → {name, emoji}.
   const [availableCompanions, setAvailableCompanions] = useState<Companion[]>([]);
 
   // Per-companion settings state
@@ -230,65 +107,27 @@ export default function CompanionSettingsScreen({
   const [voiceExitPhrase, setVoiceExitPhrase] = useState('thanks');
   const [voiceExitPhraseSavedAt, setVoiceExitPhraseSavedAt] = useState<number | null>(null);
 
-  // v3.7.1: per-companion voice picker state. v3.7.0 put
-  // these inside renderCompanionVoicePage, which crashed
-  // with "Rendered more hooks than during the previous
-  // render" because the dispatch returns one of four
-  // render-functions per render, and only one of them
-  // had hooks (6 of them). When the user backed out, the
-  // next render called a different render-function with 0
-  // hooks, breaking React's hook bookkeeping.
-  //
-  // Fix: lift all voice state to the screen level, next
-  // to the wake/exit state. The render-function becomes
-  // pure, matching the existing renderCompanionWakePage /
-  // renderCompanionExitPage pattern. Hydration re-runs
-  // when the active companionId changes, mirroring the
-  // voiceExitPhrase rehydration below.
-  // v3.10.154: stripped cloud-TTS scaffolding. Voice state
-  // is now just engine + local voice id. The 'api' engine
-  // is gone; 'default' is the inheritance sentinel (means
-  // "use the global master localId"), and 'local' means
-  // "use my per-companion override". loadVoiceFor() resolves
-  // 'default' → 'local' so consumers don't have to.
+  // Per-companion voice picker state.
   const [vcEngine, setVcEngine] = useState<VoiceEngine>('default');
   const [vcLocalId, setVcLocalId] = useState<string>('default');
   const [vcSavedAt, setVcSavedAt] = useState<number | null>(null);
   const vcLoadedRef = useRef(false);
 
-  // v3.10.165: live voice list from the desktop. null =
-  // not loaded yet (picker shows the LOCAL_VOICES fallback
-  // with a "Loading from desktop..." hint). Populated on
-  // mount via syncClient.requestTtsSettings() and refreshed
-  // whenever the desktop broadcasts tts_settings_changed.
+  // Live voice list from the desktop.
   const [voiceList, setVoiceList] = useState<Array<{ id: string; label: string; desc: string; group?: string }> | null>(null);
   const [desktopVoice, setDesktopVoice] = useState<string>('lessac');
 
-  // v3.10.165: tap a voice in the picker. Updates the
-  // local state immediately (responsive UI) and sends
-  // set_tts_voice to the desktop. The desktop writes
-  // localStorage.cyberclaw-settings.ttsVoice and broadcasts
-  // tts_settings_changed to all connected mobiles. The
-  // broadcast handler below updates desktopVoice.
+  // Tap a voice in the picker.
   const onPickVoice = useCallback((voiceId: string) => {
     setVcLocalId(voiceId);
-    // Optimistic local save: also write to AsyncStorage
-    // so the picker reflects the choice even if the
-    // desktop is offline. The next request_tts_settings
-    // response (or the broadcast) will confirm or revert.
+    // Optimistic local save: also write to AsyncStorage so the picker reflects the choice even if the desktop is offline.
     saveVoiceFor(companionId, { engine: vcEngine, localId: voiceId }).catch(() => {});
     if (syncClient?.connected) {
       syncClient.setTtsVoice(voiceId);
     }
   }, [companionId, vcEngine]);
 
-  // v3.10.165: subscribe to TTS voice events from the
-  // desktop. request_tts_settings response populates
-  // voiceList + sets desktopVoice as the current
-  // selection. tts_settings_changed (sent on every voice
-  // change, including from other mobiles) just updates
-  // desktopVoice. tts_voice_set acks are ignored for now
-  // (the broadcast is the source of truth).
+  // Subscribe to TTS voice events from the desktop.
   useEffect(() => {
     const onSettings = (msg: any) => {
       if (msg?.ok && Array.isArray(msg.voices)) {
@@ -322,51 +161,18 @@ export default function CompanionSettingsScreen({
     };
   }, []);
 
-  // v3.7.2: per-companion silence timeout. Re-runs the
-  // rehydration below on companion switch (mirrors the
-  // voice config rehydration). The silence picker in the
-  // voice sub-page consumes this state.
+  // Per-companion silence timeout.
   const [vcSilenceMs, setVcSilenceMs] = useState<number>(5000);
   const [vcSilenceSavedAt, setVcSilenceSavedAt] = useState<number | null>(null);
   const vcSilenceLoadedRef = useRef(false);
 
-  // v3.7.6: Quests moved out to QuestsScreen.tsx (top-level,
-  // not per-companion). The per-companion cache keying added
-  // in v3.7.4 was speculative for "future per-companion
-  // divergence" that hasn't materialised. Re-introduce per-
-  // companion keying here when the desktop models per-
-  // companion quest assignment.
+  // Quests moved out to QuestsScreen.tsx (top-level, not per-companion).
 
   const [activeWakeCompanionId, setActiveWakeCompanionId] = useState<string | null>(null);
 
   const [savedWakeModels, setSavedWakeModels] = useState<Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>>({});
 
-  // v3.10.5: direct active-wake-phrase lookup. Single
-  // source of truth for the Wake card status line + the
-  // Wake sub-page's "Currently active" panel.
-  //
-  // Why this exists: the v3.10.4 merge of
-  // getSavedWakeModels + listWakeSets still misses the
-  // active wake when the JS companionId doesn't strictly
-  // match `meta.agentId` in some edge case (e.g. agentId
-  // casing diff, or the set was trained before the JS
-  // companionId was renamed by a desktop sync). The
-  // merge filter `e.agentId === c.id` then returns zero
-  // candidates and the card shows the misleading
-  // fallback even though the manager shows ✓ Active.
-  //
-  // getActiveWakeSet(c.id) is the canonical "what's
-  // currently active for this companion?" call — it's
-  // a single SharedPreferences read of `active_<agentId>`,
-  // the exact same key the Wake Manager reads. If it
-  // returns a setId, we have an active wake; if null,
-  // we don't. Then listWakeSets gives us the metadata
-  // for that setId (phrase, displayName, path).
-  //
-  // We keep this as a SEPARATE piece of state (not
-  // merged into savedWakeModels) so the UI displays the
-  // canonical truth directly, and so a merge bug in
-  // savedWakeModels can't mask the active binding.
+  // Direct active-wake-phrase lookup.
   const [activeWakeDirect, setActiveWakeDirect] = useState<{
     setId: string;
     phrase: string;
@@ -374,56 +180,13 @@ export default function CompanionSettingsScreen({
     path?: string;
   } | null>(null);
 
-// v3.10.25: 'Test wake' was extracted into a shared
-  // useClassifierTest hook. The wake sub-page now
-  // renders <ClassifierTestPanel kind='wake'
-  // wakeword={activeWakeDirect?.phrase} /> directly
-  // (see below). The companion-level hook here was
-  // REMOVED in v3.10.52 because it shadowed the
-  // panel's hook and produced an unused
-  // handleTestWake function. The shadowing was the
-  // root cause of the v3.10.50 'Loaded model:
-  // hey_jarvis' diagnostic — the panel called the
-  // hook without options, so the test path's initOww
-  // was never invoked. The companion-level hook had
-  // the right options but wasn't wired to the panel's
-  // button. Both fixed by deleting the companion-level
-  // call and threading wakeword through the panel's
-  // own props.
+// 'Test wake' was extracted into a shared useClassifierTest hook.
 
-  // v3.10.23: speaker enrollment was removed from
-  // CompanionSettingsScreen. The user voice profile
-  // is now a SINGLE GLOBAL thing that the OWW
-  // detector learns passively in the background
-  // (no button, no progress bar, no per-companion
-  // state). The native side auto-locks the profile
-  // after enough voice-active samples or confirmed
-  // wake-fires and gates wake detection on speaker
-  // match. Tobe's v3.10.23 direction: "lift it out
-  // entirely, learn from conversation, independent
-  // of companions, no opt-in button".
-  //
-  // All state and callbacks previously here were
-  // for v3.10.19/v3.10.21 per-companion enrollment.
-  // They're gone. CompanionSettingsScreen has no
-  // awareness of the speaker profile.
-  //
-  // If the user wants to inspect / forget the
-  // profile, that's a debug surface that would live
-  // in global Voice mode settings (not per-companion).
-  // Not in scope for v3.10.23.
-  //
+  // Speaker enrollment was removed from CompanionSettingsScreen.
   useEffect(() => {
     let cancelled = false;
     const fetch = async () => {
-      // v3.10.5: only fetch when we know which
-      // companion we're showing. The companion
-      // object is resolved from availableCompanions,
-      // which hydrates from cyberclaw-agents-cache
-      // on mount — companion may be undefined on
-      // the first render until that hydration
-      // completes. Skip in that case; the effect
-      // re-runs when availableCompanions changes.
+      // Only fetch when we know which companion we're showing.
       if (!companion) {
         setActiveWakeDirect(null);
         return;
@@ -436,12 +199,7 @@ export default function CompanionSettingsScreen({
           setActiveWakeDirect(null);
           return;
         }
-        // Look up the set's metadata in listWakeSets so
-        // we can show phrase / displayName / path. If
-        // listWakeSets fails or doesn't include this set
-        // (it should — the manager just wrote the binding),
-        // fall back to a minimal record so the UI can at
-        // least show the setId.
+        // Look up the set's metadata in listWakeSets so we can show phrase / displayName / path.
         let meta: any = null;
         try {
           const allSets = await WakeWordModule?.listWakeSets?.();
@@ -473,12 +231,7 @@ export default function CompanionSettingsScreen({
       }
     };
     fetch();
-    // Also refetch when the screen comes back to focus
-    // (e.g. user returns from the wake manager route,
-    // where they may have just activated a different
-    // set). AppState 'active' covers the focus event
-    // even when the route stack didn't unmount this
-    // screen.
+    // Also refetch when the screen comes back to focus (e.g.
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') fetch();
     });
@@ -488,35 +241,9 @@ export default function CompanionSettingsScreen({
     };
   }, [companion?.id, availableCompanions.length]);
 
-  // v3.10.23: per-companion speaker enrollment UI was
-  // removed entirely. The profile is now global and
-  // passive (handled by the OWW detector's auto-lock).
-  // CompanionSettingsScreen has no awareness of speaker
-  // enrollment. See the v3.10.23 CHANGES file for the
-  // design.
+  // Per-companion speaker enrollment UI was removed entirely.
 
-  // v3.10.2: trained-exit-phrase list for the
-  // overview card. Lifted to the screen level so
-  // the hook rule is honored — renderCompanionOverview
-  // is called from a dispatch (not always called),
-  // and putting useState/useEffect inside it would
-  // break the same-hook-order rule (same v3.7.1
-  // bug class that bit voice picker state).
-  //
-  // CRITICAL: this hook MUST live ABOVE any
-  // early-return paths (e.g. `if (!companion)
-  // return <placeholder />`) so it's called on
-  // every render. In v3.10.1 the state was
-  // declared AFTER the `if (!companion)` early
-  // return; on the first render the cache hadn't
-  // hydrated so the early return fired without
-  // the hook, then the cache populated and the
-  // hook ran on the second render — different
-  // hook counts between renders → "Rendered
-  // more hooks than during the previous render"
-  // crash. The same rule applies to the resolved
-  // `companion` lookup below — never wrap the
-  // hook declaration in conditional logic.
+  // Trained-exit-phrase list for the overview card.
   const [trainedExitPhrases, setTrainedExitPhrases] = useState<string[]>([]);
   useEffect(() => {
     (async () => {
@@ -531,38 +258,17 @@ export default function CompanionSettingsScreen({
     })();
   }, [companionId]);
 
-  // v3.10.0: trainer + manager + exit-trainer are now
-  // full-screen routes in App.tsx, pushed via
-  // onPushWakeTrainer / onPushWakeManager /
-  // onPushExitTrainer props. The local trainer-modal
-  // state below was deleted as part of that refactor;
-  // the showOwwTrainer / showWakeSetManager /
-  // showExitPhraseTrainer flags and the
-  // trainingCompanionId / editingWakePhrase helpers
-  // are gone.
+  // Trainer + manager + exit-trainer are now full-screen routes in App.tsx, pushed via onPushWakeTrainer / onPushWakeManager /…
 
   // v3.4.4: set true when the active companionId was
   // missing from a populated cache and we already auto-
   // backed out, so we don't loop onBack in render.
   const hasAutoBackedRef = useRef(false);
 
-  // v3.10.140: WebView ref for the animated sprite view
-  // at the top of the settings page. Used to inject
-  // JavaScript on companion switch (setActive +
-  // setAgents with the new companion; no setCentered
-  // since v3.10.146 so the companion keeps animating).
+  // WebView ref for the animated sprite view at the top of the settings page.
   const viewWebViewRef = useRef<WebView>(null);
 
-  // v3.10.174: track whether arena.html's JS has
-  // finished bootstrapping (received arena_loaded).
-  // Once true, the canvas-drawn companion name (above
-  // the centered sprite) is visible, so the React
-  // Native `viewWindowLabel` caption underneath is
-  // redundant. Hiding the caption when arenaReady
-  // keeps the view box clean ("less Clawsuu"). The
-  // caption stays visible during the boot window as a
-  // graceful fallback in case arena.html fails to
-  // load (e.g. asset missing, JS error → black box).
+  // Track whether arena.html's JS has finished bootstrapping (received arena_loaded).
   const [arenaReady, setArenaReady] = useState(false);
 
   // Hydrate companion list from local cache
@@ -578,26 +284,11 @@ export default function CompanionSettingsScreen({
               name: a.name,
               emoji: a.emoji || null,
               icon: a.icon || null,
-              // v3.10.139: pass through the skills payload
-              // (desktop v3.2.84 adds this to agents_list).
-              // Null for legacy agents that haven't broadcast
-              // a fresh payload yet — the Skills section
-              // renders an empty state in that case.
+              // Pass through the skills payload (desktop v3.2.84 adds this to agents_list).
               skills: a.skills ?? null,
-              // v3.10.142: pass through spriteConfig so the
-              // Behaviour card can show current values without
-              // a separate IPC round-trip. Null/undefined for
-              // legacy agents without a spriteConfig field.
+              // Pass through spriteConfig so the Behaviour card can show current values without a separate IPC round-trip.
               spriteConfig: a.spriteConfig ?? null,
-              // v3.10.146: also pass through top-level
-              // sprite + chattiness from the broadcast
-              // payload. The view-window label reads
-              // (companion as any).sprite to confirm which
-              // sprite is rendering. The cache hydration
-              // was missing these — the label showed
-              // "default sprite" even when the agent
-              // had pixelCompanionId set. Bug Tobe hit
-              // 2026-08-07 19:30.
+              // Also pass through top-level sprite + chattiness from the broadcast payload.
               sprite: a.sprite || null,
               chattiness: typeof a.chattiness === 'number' ? a.chattiness : null,
             })));
@@ -607,12 +298,7 @@ export default function CompanionSettingsScreen({
     })();
   }, []);
 
-  // v3.10.139: also subscribe to live agents_list broadcasts
-  // so the Skills section refreshes when the desktop awards
-  // XP (the desktop re-broadcasts after every addXP, see
-  // desktop v3.2.84 app.js sendChat). Without this, opening
-  // the Companion Settings before XP is awarded (or never
-  // closing it across an award) would show stale numbers.
+  // Also subscribe to live agents_list broadcasts so the Skills section refreshes when the desktop awards XP (the desktop re-broadcasts after…
   useEffect(() => {
     const handler = (msg: any) => {
       if (!msg?.agents || !Array.isArray(msg.agents)) return;
@@ -627,10 +313,7 @@ export default function CompanionSettingsScreen({
             emoji: a.emoji || null,
             icon: a.icon || null,
             skills: a.skills ?? null,
-            // v3.10.142: pass through spriteConfig on
-            // live broadcasts too (Behaviour card updates
-            // when the user saves changes via the edit
-            // route and the desktop re-broadcasts).
+            // Pass through spriteConfig on live broadcasts too (Behaviour card updates when the user saves changes via the edit route and the desktop…
             spriteConfig: a.spriteConfig ?? null,
             // v3.10.146: also pass through top-level
             // sprite + chattiness (see cache hydration
@@ -646,32 +329,7 @@ export default function CompanionSettingsScreen({
     return () => { syncClient.off?.('agents_list', handler); };
   }, []);
 
-  // v3.10.145: also update the AsyncStorage cache when
-  // agents_list arrives. Without this, the cache (which
-  // the cache hydration reads from) goes stale while
-  // the user is on a sub-screen like CompanionEditScreen.
-  //
-  // v3.10.147: REPLACE the cache with the broadcast's
-  // list (not merge). The desktop's agents_list is the
-  // authoritative list of companions. Merging with
-  // the cache's old data led to legacy entries
-  // (e.g. 'anthropic-clawsuu' from when that was the
-  // id convention) sticking around forever, even though
-  // the desktop no longer broadcasts them. Tobe hit
-  // this on 2026-08-07 23:23: opened the companion
-  // settings page and saw TWO Clawsuu entries (one
-  // with sprite=boar from the legacy entry, one with
-  // sprite=deer from the current one). Tap the wrong
-  // one and the edit went to a different agent id
-  // than the view was showing.
-  //
-  // The broadcast's list IS the source of truth —
-  // agents no longer being broadcast are intentionally
-  // removed. Replacement (not merge) is the correct
-  // semantic. This also fixes the "stale chattiness"
-  // bug: with merge, the cache kept the old chattiness
-  // value even after a fresh broadcast; with replace,
-  // the cache reflects the latest broadcast.
+  // Also update the AsyncStorage cache when agents_list arrives.
   useEffect(() => {
     const persistHandler = (msg: any) => {
       if (!msg?.agents || !Array.isArray(msg.agents)) return;
@@ -724,11 +382,7 @@ export default function CompanionSettingsScreen({
     })();
   }, [companionId]);
 
-  // v3.7.1: hydrate the per-companion voice picker state.
-  // Re-runs when the active companionId changes so the
-  // picker shows the right voice for the right companion.
-  // Mirrors the pattern of the wake-greeting and exit-phrase
-  // rehydrations above.
+  // Hydrate the per-companion voice picker state.
   useEffect(() => {
     let cancelled = false;
     vcLoadedRef.current = false;
@@ -740,10 +394,7 @@ export default function CompanionSettingsScreen({
       let storedEngine: VoiceEngine = 'default';
       try {
         const raw = await AsyncStorage.getItem(`cyberclaw-voice-engine-${companionId}`);
-        // v3.10.154: 'api' is no longer a valid engine.
-        // Anyone still storing it (pre-migration user) gets
-        // forced to 'default' which then inherits whatever
-        // the global master is. Keeps the type narrow.
+        // 'api' is no longer a valid engine.
         if (raw === 'local') {
           storedEngine = 'local';
         } else if (raw === 'default') {
@@ -760,11 +411,7 @@ export default function CompanionSettingsScreen({
     return () => { cancelled = true; };
   }, [companionId]);
 
-  // v3.7.2: hydrate the per-companion silence timeout.
-  // loadVoiceSettings reads the per-companion key first
-  // (cyberclaw-voice-silence-ms-<companionId>) and falls
-  // back to the v3.7.1 global key, so users keep their
-  // existing silence setting.
+  // Hydrate the per-companion silence timeout.
   useEffect(() => {
     let cancelled = false;
     vcSilenceLoadedRef.current = false;
@@ -778,40 +425,20 @@ export default function CompanionSettingsScreen({
     return () => { cancelled = true; };
   }, [companionId]);
 
-  // v3.10.159: when the user enters this companion's
-  // voice settings page (companionViewPhase === 'voice'),
-  // run the lazy TTS availability check. The screen
-  // itself mounts the voice page on phase enter; we key
-  // off the phase so the prompt fires once per entry,
-  // not on every render of the screen. Tobe (2026-08-11
-  // 17:28): 'it should only ask when one is trying to
-  // use a feature it depends on'.
+  // When the user enters this companion's voice settings page (companionViewPhase === 'voice'), run the lazy TTS availability check.
   useEffect(() => {
     if (companionViewPhase === 'voice') {
       promptIfMissingTtsEngine('companion-voice-page').catch(() => {});
     }
   }, [companionViewPhase]);
 
-  // v3.7.3: listen for the desktop's companion_settings_sync
-  // broadcast. If the desktop has a per-companion silence
-  // value for the active companion and we don't have one
-  // locally (e.g. fresh install, AsyncStorage wiped), use
-  // the desktop's value. We don't overwrite a local value
-  // — local is source of truth for the phone's runtime;
-  // the desktop's value is the cross-device persistence
-  // layer. The user can always tap Save to push their
-  // local value back to the desktop.
+  // Listen for the desktop's companion_settings_sync broadcast.
   useEffect(() => {
     const handler = (msg: any) => {
       if (!msg?.settings) return;
       const remote = msg.settings[companionId];
       if (!remote || typeof remote.silenceMs !== 'number') return;
-      // Only adopt the remote value if our local store has
-      // nothing for this companion. AsyncStorage.getItem
-      // is async; we just optimistically check via the
-      // vcSilenceLoadedRef — if we already loaded a local
-      // value (vcSilenceMs is non-default or we set it
-      // earlier in the session), don't clobber.
+      // Only adopt the remote value if our local store has nothing for this companion.
       AsyncStorage.getItem(`cyberclaw-voice-silence-ms-${companionId}`).then(local => {
         if (local === null) {
           setVcSilenceMs(remote.silenceMs);
@@ -846,37 +473,7 @@ export default function CompanionSettingsScreen({
     })();
   }, [availableCompanions.length, activeWakeCompanionId]);
 
-  // v3.4.4: refresh saved-wake-models whenever the
-  // companion list grows or the active companion
-  // changes (covers post-training refresh).
-  //
-  // v3.10.1: also include displayName from the
-  // native response (falls back to phrase on
-  // legacy meta) so the picker's row title can
-  // show the human-friendly name instead of the
-  // raw setId / phrase interchangeably. Also
-  // refetch on AppState 'active' transition —
-  // same reason as SettingsScreen, the picker
-  // could be stale when the user returns from
-  // the wake manager or trainer route.
-  //
-  // v3.10.4: bulletproof fetch. Calls
-  // `getSavedWakeModels` (active-only filter)
-  // AND `listWakeSets` (all sets) and merges.
-  // If the active-only filter returns empty for
-  // an agent (e.g. active binding is stale / lost
-  // / pointing at a deleted set), the fallback
-  // picks the most-recent set for that agent. The
-  // two previous versions (3.10.1, 3.10.2) only
-  // used getSavedWakeModels; Tobe hit a real
-  // gap where the manager (listWakeSets) showed
-  // an active set but the Settings + Wake
-  // Settings sub-page both showed "Not trained"
-  // — confirming the active-only filter misses
-  // sets the manager sees. The merge gives us
-  // the manager's data via a different code path
-  // and the active-only filter's data via another;
-  // whichever populates first wins.
+  // Refresh saved-wake-models whenever the companion list grows or the active companion changes (covers post-training refresh).
   useEffect(() => {
     let cancelled = false;
     const fetch = async () => {
@@ -887,11 +484,7 @@ export default function CompanionSettingsScreen({
           WakeWordModule?.listWakeSets?.().catch(() => null),
         ]);
         if (cancelled) return;
-        // Resolve the active setId for every
-        // available companion in parallel — these
-        // are cheap SharedPreferences reads, so it's
-        // safe to fan out rather than serialise in
-        // the loop below.
+        // Resolve the active setId for every available companion in parallel — these are cheap SharedPreferences reads, so it's safe to fan out…
         const activeByCompanion: Record<string, string | null> = {};
         await Promise.all(
           availableCompanions.map(async (c) => {
@@ -918,16 +511,7 @@ export default function CompanionSettingsScreen({
             }
           }
         }
-        // 2. Fill gaps from listWakeSets. For each
-        // companion in availableCompanions that
-        // doesn't have a savedModels entry, look up
-        // their active set on the manager. If the
-        // agent has any sets, pick the active one
-        // (matched via getActiveWakeSet(agentId)),
-        // otherwise pick the most-recently-created.
-        // Either way, populate out[agentId] so the
-        // per-companion page can show "Trained: X"
-        // even if the active binding is broken.
+        // 2.
         if (allSets && typeof allSets === 'object') {
           for (const c of availableCompanions) {
             if (out[c.id]?.phrase) continue; // already populated
@@ -949,14 +533,7 @@ export default function CompanionSettingsScreen({
               out[c.id] = {
                 phrase: picked.phrase,
                 displayName: picked.displayName || picked.phrase,
-                // The path stored by getSavedWakeModels
-                // is the absolute on-disk path; for the
-                // listWakeSets fallback we don't have
-                // the absolute path, but the picker only
-                // uses it for "is this row showing?"
-                // display, so a relative path works.
-                // The trainer / manager still operate
-                // off the setId directly.
+                // The path stored by getSavedWakeModels is the absolute on-disk path; for the listWakeSets fallback we don't have the absolute path, but the…
                 path: picked.path || dirPath,
                 savedAt: picked.createdAt || 0,
               };
@@ -990,10 +567,7 @@ export default function CompanionSettingsScreen({
       if (v && v.trim()) {
         try {
           const { ensureGreetingCached } = require('../services/GreetingAudioCache');
-          // v3.10.166: now async (resolves voice from
-          // AsyncStorage internally); fire-and-forget with
-          // .catch so an internal failure doesn't surface
-          // as an unhandled promise rejection.
+          // Now async (resolves voice from AsyncStorage internally); fire-and-forget with .catch so an internal failure doesn't surface as an…
           ensureGreetingCached(v.trim()).catch(() => {});
         } catch (_) {}
       }
@@ -1016,71 +590,35 @@ export default function CompanionSettingsScreen({
     }, 600);
   };
 
-  // v3.7.1: per-companion voice picker callbacks. Lifted
-  // from the renderCompanionVoicePage helper along with the
-  // state (see the comment on vcEngine above for the full
-  // reason). Both are useCallback so the Save / Reset buttons
-  // don't recreate the handler on every render.
+  // Per-companion voice picker callbacks.
   const saveVoice = useCallback(async () => {
     if (!vcLoadedRef.current) return;
     await saveVoiceFor(companionId, {
       engine: vcEngine,
       localId: vcLocalId,
     });
-    // v3.10.155: apply the voice selection to the native
-    // engine IMMEDIATELY, not just on next app start. The
-    // old code only wrote to AsyncStorage; the next speak()
-    // call would still use the engine default until the
-    // app was killed and relaunched (applyPersistedVoice
-    // only ran during getTts bind). Now the user hears the
-    // change within the same session, on the very next
-    // speak. If the engine isn't bound yet (probe at boot
-    // found nothing) this is a no-op — the persisted voice
-    // gets applied on the next successful bind.
+    // Apply the voice selection to the native engine IMMEDIATELY, not just on next app start.
     const wm = (NativeModules as any).WakeWordModule;
     if (wm?.setTtsVoice) {
       try {
         const applied = await wm.setTtsVoice(vcLocalId);
         console.log(`[Voice] applied voice "${applied ?? '(default)'}" for ${companionId}`);
       } catch (e: any) {
-        // Engine not bound yet is the common case (probe
-        // is still running or found nothing). The
-        // persisted value will be re-applied on the next
-        // bind. Log so we can diagnose from logcat.
+        // Engine not bound yet is the common case (probe is still running or found nothing).
         console.log(`[Voice] setTtsVoice deferred: ${e?.message || e}`);
       }
     }
-    // v3.10.165: ALSO drive the desktop's piper voice.
-    // The legacy wm.setTtsVoice call above only changes
-    // the Android TTS engine's local voice (the device-TTS
-    // fallback path), not the piper voice the user is
-    // actually hearing. The piper voice lives in the
-    // desktop's localStorage.cyberclaw-settings.ttsVoice
-    // and is changed by sending set_tts_voice over the
-    // sync server.
+    // ALSO drive the desktop's piper voice.
     if (syncClient?.connected) {
       syncClient.setTtsVoice(vcLocalId);
     }
 
-    // v3.10.166: clear all three piper audio caches so
-    // the next wake / exit / working cue synthesizes with
-    // the NEW voice instead of playing a stale WAV from
-    // the previous voice. The per-(phrase, voice) cache
-    // key (also new in v3.10.166) means new caches won't
-    // collide with old ones, but clearing here means the
-    // user hears the new voice immediately rather than
-    // waiting for the next wake event after the old cache
-    // entry would have been naturally evicted.
+    // Clear all three piper audio caches so the next wake / exit / working cue synthesizes with the NEW voice instead of playing a stale WAV…
     try {
       const { clearGreetingCache } = require('../services/GreetingAudioCache');
       const { clearExitReplyCache } = require('../services/ExitReplyAudioCache');
       const { clearWorkingSpeechCache: clearWorkingCache } = require('../services/WorkingSpeechAudioCache');
-      // Clear all known phrases — the cache file pattern
-      // is just `cyberclaw-greeting-*.wav` etc., so we
-      // walk the existing AsyncStorage index to find
-      // files to delete. clearGreetingCache / clearExit
-      // ReplyCache / clearWorkingSpeechCache already do
-      // this; they're now safe to call.
+      // Clear all known phrases — the cache file pattern is just `cyberclaw-greeting-*.wav` etc., so we walk the existing AsyncStorage index to…
       await clearGreetingCache();
       await clearExitReplyCache();
       if (clearWorkingCache) await clearWorkingCache();
@@ -1101,38 +639,18 @@ export default function CompanionSettingsScreen({
     setVcSavedAt(Date.now());
   }, [companionId]);
 
-  // v3.7.2: save the per-companion silence timeout.
-  // Writes the per-companion key via saveSilenceMs in
-  // VoiceSettings (the v3.7.1 global key is read-only
-  // fallback, not written here).
-  // v3.7.3: also push the silence value to the desktop on
-  // every save, so the per-companion value lives in
-  // companion-settings.json on the desktop side too. A phone
-  // reinstall recovers the value from the desktop on auth
-  // (companion_settings_sync replay). The local AsyncStorage
-  // write is still the source of truth on the phone (it runs
-  // the voice-mode loop); the push is for cross-device
-  // consistency, not for the phone's runtime behaviour.
+  // Save the per-companion silence timeout.
   const saveSilence = useCallback(async () => {
     if (!vcSilenceLoadedRef.current) return;
     await saveSilenceMs(companionId, vcSilenceMs);
-    // Push to desktop if connected. Best-effort — if the
-    // desktop is offline, the local save still works and
-    // the value will sync on next connect (the desktop
-    // doesn't yet send the value back to a phone that
-    // missed a push, so the phone will keep its local
-    // value as truth until the user changes it again).
+    // Push to desktop if connected.
     if (syncClient?.connected) {
       syncClient.setCompanionSilence(companionId, vcSilenceMs);
     }
     setVcSilenceSavedAt(Date.now());
   }, [companionId, vcSilenceMs]);
 
-  // Hardware back handler — chain through phases
-  // v3.10.0: trainer / manager / exit-trainer are now
-  // top-level routes in App.tsx, not inline modals.
-  // Back button handling is just: drill-down phase →
-  // back to overview; otherwise → onBack() to Settings.
+  // Hardware back handler — chain through phases v3.10.0: trainer / manager / exit-trainer are now top-level routes in App.tsx, not inline…
   useEffect(() => {
     const bh = BackHandler.addEventListener('hardwareBackPress', () => {
       if (companionViewPhase) { setCompanionViewPhase(null); return true; }
@@ -1157,39 +675,7 @@ export default function CompanionSettingsScreen({
     }
   }, [availableCompanions, companionId, onBack]);
 
-  // v3.10.144: when the active companion changes
-  // (e.g. user taps a different companion in the list
-  // while this screen is still mounted), re-inject
-  // setActive + setAgents so the WebView shows the
-  // new companion. The source URI is STATIC (no
-  // companion ID), so the WebView doesn't re-mount
-  // on switch — we just swap the rendered companion
-  // in place.
-  //
-  // MUST live BEFORE the `if (!companion) return` block
-  // below — putting any hook after a conditional return
-  // breaks React's hook-order invariant. Dep array uses
-  // companionId (the prop) which is always defined.
-  //
-  // Dep array is just [companionId, availableCompanions.length]
-  // — NOT the full array. We need availableCompanions to
-  // be populated BEFORE the effect can find the companion
-  // (so we depend on its length, which changes only when
-  // the list grows). We do NOT depend on the array contents
-  // because that would re-fire on every agents_list
-  // broadcast (XP awards trigger re-broadcasts every chat
-  // reply), spamming setAgents into the WebView.
-  //
-  // v3.10.146: no longer call setCentered. The previous
-  // version had a race condition where setCentered fired
-  // before setAgents finished loading sprites. We now let
-  // the companion walk naturally (no setCentered), so the
-  // race is moot. The await on setAgents is still
-  // important: if we inject setActive before setAgents
-  // finishes, the setActive call would set activeId
-  // against an empty companions array. Awaiting
-  // setAgents ensures the companion is built before we
-  // proceed.
+  // When the active companion changes (e.g.
   useEffect(() => {
     const c = availableCompanions.find(x => x.id === companionId);
     if (!c || !viewWebViewRef.current) return;
@@ -1199,17 +685,10 @@ export default function CompanionSettingsScreen({
       id: c.id,
       name: c.name,
       sprite: spriteName,
-      // scale is overridden by setCentered(true)
-      // via the ?centeredScale=5 URL param. This
-      // value is just a sensible default for the
-      // pre-centered state.
+      // Scale is overridden by setCentered(true) via the ?centeredScale=5 URL param.
       scale: 5,
     }];
-    // v3.10.148: re-inject setCentered(true) to
-    // keep the companion centered after a
-    // companion switch. The companion is at
-    // CENTERED_SCALE (5) which fills ~70% of the
-    // 240x200 box width.
+    // Re-inject setCentered(true) to keep the companion centered after a companion switch.
     viewWebViewRef.current.injectJavaScript(
       `(async function(){` +
         `if (!window.Arena) return;` +
@@ -1220,18 +699,7 @@ export default function CompanionSettingsScreen({
     );
   }, [companionId, availableCompanions.length]);
 
-  // v3.10.174: NOT resetting arenaReady on companion
-  // switch. The WebView source URI is static (no
-  // companion ID in the URL), so arena.html boots
-  // once per WebView lifetime and arena_loaded fires
-  // once. arenaReady=true persists across companion
-  // switches — which is what we want, because the
-  // canvas name follows the active companion via
-  // setActive (drawn every frame). The caption stays
-  // hidden. On full remount (navigate away and back)
-  // the WebView remounts, arenaReady resets to its
-  // initial false, the caption briefly shows, then
-  // hides again once arena_loaded arrives.
+  // NOT resetting arenaReady on companion switch.
 
   // Resolve companionId → companion object. If stale
   // (deleted from cache) show a placeholder while the
@@ -1251,72 +719,22 @@ export default function CompanionSettingsScreen({
     );
   }
 
-  // v3.10.2: per-companion status lines for the
-  // overview cards. Computed after the early
-  // return so `companion` is guaranteed to be
-  // defined (the dispatch below only runs when
-  // we have a companion). The trainedExitPhrases
-  // state + effect are at the screen level (above
-  // the early return) so this is just derivation.
+  // Per-companion status lines for the overview cards.
   const exitStatusLine = trainedExitPhrases.length > 0
     ? `Trained: "${trainedExitPhrases[0]}"`
     : voiceExitPhrase
       ? `Default: "${voiceExitPhrase}"`
       : 'Not set';
   const wakeModel = savedWakeModels[companion.id];
-  // v3.10.5: prefer the direct activeWakeDirect lookup
-  // (canonical — reads the same SharedPreferences key
-  // the manager reads) over the merged savedWakeModels.
-  // If activeWakeDirect resolves, show that phrase. If
-  // it's null but savedWakeModels has an entry (e.g. a
-  // non-active set exists for this companion), fall
-  // through to that. If both are empty, show the
-  // neutral hint.
+  // Prefer the direct activeWakeDirect lookup (canonical — reads the same SharedPreferences key the manager reads) over the merged…
   const activeWake = activeWakeDirect || (wakeModel?.phrase ? wakeModel : null);
   const wakeStatusLine = activeWake
     ? `Trained: "${activeWake.displayName || activeWake.phrase}"`
     : 'No active wake on this phone — open Wake Sets to manage trained phrases';
 
-  // v3.10.175: Skyrim-style Experience card.
-  // The character/companion level is at the top — always
-  // visible. Tapping the card expands to show all 9
-  // category XP bars below (Building / Writing / Design
-  // / Analysis / Strategy / Research / Communication /
-  // Game / General). The character level is driven by
-  // the sum of all category XP (computed on the desktop
-  // via getStats; the mobile just reads companion.skills).
-  //
-  // Previous (v3.10.139–v3.10.174) was confusing:
-  //   - "Experience · Lv.1" with "No skills earned yet"
-  //     inside contradicted itself (Lv.1 with no XP meant
-  //     the level bar was meaningless).
-  //   - Categories were hidden behind the "no skills" empty
-  //     state until the companion earned any XP.
-  //   - The category grid was a 2-col collapsed view with
-  //     no character-level overview.
-  //
-  // Now (v3.10.175):
-  //   - Always show the character bar (Lv + xp/xpToNext +
-  //     lifetime xpTotal).
-  //   - Tap the card → expand to show ALL 9 categories
-  //     (Building/Writing/etc.), each at Lv.1 + 0xp by
-  //     default. Bars are empty but visible — the user
-  //     always sees the breakdown so they know what they
-  //     can earn.
-  //   - No "no skills earned yet" empty state. Categories
-  //     are always shown when companion.skills exists.
-  //   - When companion.skills is null (legacy agent, stats
-  //     not yet populated), show a single muted hint row
-  //     instead of the empty state — keeps the section
-  //     always present so the user knows where to find it.
+  // Skyrim-style Experience card.
   function renderSkillsSection() {
-    // v3.10.139: SKILL_DEFS mirrors the desktop's
-    // SKILL_DEFS in main.js (v3.2.84). If the desktop
-    // adds/renames a category, mirror the change here.
-    // The renderer doesn't get this list via the
-    // broadcast because it's static + small; sending it
-    // over the wire would be more "accurate" but Tobe
-    // asked for "easy and less accurate".
+    // SKILL_DEFS mirrors the desktop's SKILL_DEFS in main.js (v3.2.84).
     const SKILL_DEFS = [
       { name: 'Building',     icon: '🔧' },
       { name: 'Writing',      icon: '✍️'  },
@@ -1335,18 +753,7 @@ export default function CompanionSettingsScreen({
     const xpForLevel = (level: number) =>
       Math.floor(100 * Math.pow(1.5, Math.max(1, level) - 1));
 
-    // v3.10.175: build category rows for ALL 9 categories,
-    // not just ones with XP > 0. Categories with no entry
-    // yet get the desktop's fallback shape (level: 1,
-    // xp: 0) which matches getStats()'s default (the
-    // desktop app.js renderer does the same). This makes
-    // every category visible from the start with an empty
-    // bar — the user sees what's trackable without having
-    // to earn XP first to reveal the structure.
-    //
-    // Sort: highest XP first (most "skilled" at top),
-    // ties broken by name. The "General" fallback is
-    // always last if it has any XP — same as before.
+    // Build category rows for ALL 9 categories, not just ones with XP > 0.
     const skillRows = SKILL_DEFS
       .map(def => {
         const s = companion?.skills?.skills?.[def.name];
@@ -1361,12 +768,7 @@ export default function CompanionSettingsScreen({
         return a.name.localeCompare(b.name);
       });
 
-    // Character level bar — read from companion.skills
-    // directly (the desktop computes this from the sum of
-    // category XP, mobile just renders). When companion
-    // has no stats yet (legacy agent or desktop hasn't
-    // run getStats), fall back to level=1 / xp=0 so the
-    // bar is always renderable.
+    // Character level bar — read from companion.skills directly (the desktop computes this from the sum of category XP, mobile just renders).
     const charLevel = companion?.skills?.level ?? 1;
     const charXp = companion?.skills?.xp ?? 0;
     const charXpToNext = xpForLevel(charLevel);
@@ -1414,11 +816,7 @@ export default function CompanionSettingsScreen({
         </View>
 
         {experienceExpanded && (
-          // v3.10.175: per-category breakdown. Shown only
-          // when the user taps the header. 9 rows × ~22px
-          // tall = ~200px of additional vertical space when
-          // expanded. Sort: highest XP first (matches the
-          // desktop's renderer in app.js:1137).
+          // Per-category breakdown.
           <View style={styles.skillsGrid}>
             {skillRows.map(s => {
               const xpNeeded = xpForLevel(s.level);
@@ -1444,78 +842,12 @@ export default function CompanionSettingsScreen({
     );
   }
 
-  // v3.10.140: animated sprite view window. A small
-  // WebView rendering arena.html with the active
-  // companion. v3.10.146: no longer uses
-  // setCentered(true) — that forced scale=10 and
-  // froze the companion, showing only a giant
-  // front-facing idle frame. Now the companion
-  // walks naturally at scale 4 (mobile-scale 2,
-  // 64px) so the user can see the walk
-  // animation. Controls are hidden via the
-  // wake-mode body class so the view is just the
-  // companion against the arena's background.
-  //
-  // Why a WebView instead of a static Image? Tobe
-  // (2026-08-07): "I want a window to view the
-  // companion, how it looks on the arena, its
-  // animations." The pixel-arena renders sprite
-  // animations via canvas — the only way to get the
-  // same animations as the home arena is to embed
-  // arena.html.
+  // Animated sprite view window.
   function renderCompanionViewWindow() {
-    // v3.10.144: source URI includes the URL params
-    // arena.html parses at boot:
-    //   - ?mode=wake → adds wake-mode body class
-    //     (hides arena controls)
-    //   - ?onlyActive=true → setAgents filters to
-    //     just the active companion
-    //
-    // v3.10.146: REMOVED centered=true from the URL
-    // params. Tobe's feedback (20:20): the centered
-    // mode forces scale=10 (giant) and freezes the
-    // companion (vx=0, vy=0) which means only a
-    // single front-facing idle frame is visible. We
-    // want to see the companion's animations, so we
-    // leave it un-centered and let it walk around
-    // at scale 4 (mobile-scale 2, 64px on a 240x200
-    // box).
-    //
-    // v3.10.148: RE-ADD centered=true but with
-    // centeredScale=5 so the boar fills ~70% of the
-    // box. Tobe's feedback (23:40): "the boar should
-    // occupy like 70% of the view screen. And the
-    // camera should be fixed on him, making him
-    // always in the middle. Its just a zoom of him
-    // in the arena."
-    //
-    // Previous (3.10.140–3.10.147) had the companion
-    // walking around at small scale. That was wrong
-    // — the user wants a fixed zoom, not a wandering
-    // sprite.
-    //
-    // Source URI is STATIC (no companion ID) so the
-    // WebView doesn't re-mount on companion switch.
-    // The companion is set via setActive + setAgents
-    // injection in onLoadEnd + the companion-change
-    // useEffect. URL params alone don't add a
-    // companion to the array — only setAgents does.
+    // Source URI includes the URL params arena.html parses at boot: - ?mode=wake → adds wake-mode body class (hides arena controls) -…
     const sourceUri = `file:///android_asset/arena.html?v=${ARENA_HTML_VERSION}&platform=mobile&mode=wake&onlyActive=true&centered=true&centeredScale=5`;
 
-    // v3.10.145: fallback display. If the WebView
-    // fails to load (e.g. arena.html missing from
-    // APK assets, JS error in the page, etc.) the
-    // user sees a black box. Render a labelled
-    // placeholder underneath showing the companion's
-    // emoji + name + sprite, so at minimum the user
-    // gets useful info about which companion the
-    // view window is supposed to represent.
-    //
-    // This sits OVER the WebView (absolute
-    // positioning) so it's only visible if the
-    // WebView is transparent/blank. When the WebView
-    // renders correctly, the placeholder is hidden
-    // behind it.
+    // Fallback display.
     const placeholderEmoji = (companion as any)?.emoji
       || (companion as any)?.icon
       || '🐾';
@@ -1534,13 +866,7 @@ export default function CompanionSettingsScreen({
           javaScriptEnabled
           allowFileAccess
           originWhitelist={['*']}
-          // v3.10.144: arena.html events treated as
-          // no-ops. The settings view is read-only.
-          // v3.10.174: EXCEPT arena_loaded — flip
-          // arenaReady so the React Native caption can
-          // be hidden (the canvas-drawn name is
-          // sufficient once arena.html has
-          // bootstrapped).
+          // Arena.html events treated as no-ops.
           onMessage={(event) => {
             try {
               const msg = JSON.parse(event.nativeEvent.data || '{}');
@@ -1549,34 +875,7 @@ export default function CompanionSettingsScreen({
               }
             } catch (_) { /* ignore non-JSON */ }
           }}
-          // v3.10.145: track load state. arena.html
-          // fires `arena_loaded` once the catalog is
-          // v3.10.146: Tobe's feedback (20:20):
-          // "I want a window to view the companion,
-          // how it looks on the arena, its
-          // animations" — the previous approach
-          // used setCentered(true) which forces
-          // scale=10 (huge, fills the whole box)
-          // AND freezes the companion in place with
-          // vx=0, vy=0. Result: a giant
-          // front-facing idle sprite that doesn't
-          // move.
-          //
-          // New approach: do NOT use setCentered.
-          // Set scale to 4 (which the arena halves
-          // to mobile-scale 2 → 64px on a 240x200
-          // box) and let the companion walk
-          // naturally. The walk animation plays
-          // continuously, the user sees the
-          // companion in motion against the arena
-          // background.
-          //
-          // The downside: the companion wanders
-          // around the box, not always centered.
-          // That's the trade-off for showing
-          // animations. If the user wants a static
-          // centered view, we can add a future
-          // option.
+          // Track load state.
           onLoadEnd={() => {
             const c = availableCompanions.find(x => x.id === companionId);
             if (!c) return;
@@ -1586,13 +885,7 @@ export default function CompanionSettingsScreen({
               id: c.id,
               name: c.name,
               sprite: spriteName,
-              // scale is ignored when setCentered(true)
-              // is called — arena.html overrides it
-              // with CENTERED_SCALE (5 for the mobile
-              // settings view, via the ?centeredScale=5
-              // URL param). The scale field here is
-              // just a placeholder for the
-              // pre-centered state.
+              // Scale is ignored when setCentered(true) is called — arena.html overrides it with CENTERED_SCALE (5 for the mobile settings view, via the…
               scale: 5,
             }];
             viewWebViewRef.current?.injectJavaScript(
@@ -1600,14 +893,7 @@ export default function CompanionSettingsScreen({
                 `if (!window.Arena) return;` +
                 `window.Arena.setActive(${JSON.stringify(c.id)});` +
                 `await window.Arena.setAgents(${JSON.stringify(slim)});` +
-                // v3.10.148: RE-ADD setCentered(true).
-                // Previous v3.10.146–3.10.147 removed
-                // this because the implicit scale=10
-                // was too big. Now arena.html reads
-                // ?centeredScale from the URL params
-                // and uses 5 instead of 10, giving
-                // the user a boar at ~70% of the
-                // 240x200 box width.
+                // RE-ADD setCentered(true).
                 `window.Arena.setCentered(true);` +
               `})(); true;`
             );
@@ -1639,34 +925,7 @@ export default function CompanionSettingsScreen({
     );
   }
 
-  // v3.10.142: Behaviour card. Shows the companion's
-  // sprite + scale + traits + chattiness as a read-only
-  // summary card, with an Edit button that opens the
-  // existing CompanionEditScreen route (where the user
-  // can change sprite/scale/traits/chattiness).
-  //
-  // Why a separate route instead of an inline editor?
-  // The full edit screen (CompanionEditScreen) has a
-  // sprite grid, multiple sliders, a traits multi-select,
-  // and soul/memory previews — ~1000 lines of UI. Folding
-  // it all into an inline expansion here would balloon
-  // this file. The card-on-page + Edit-button-on-route
-  // pattern gives Tobe the "see current values on the main
-  // page" UX he wanted without re-implementing the whole
-  // picker.
-  // v3.10.144: trait id → display label. Mirrors the
-  // TRAITS table in CompanionEditScreen.tsx (which is
-  // the editor). Keeping this local for now — a future
-  // refactor could move TRAITS to a shared module
-  // (e.g. src/services/traits.ts) so both screens
-  // share one source of truth. For now, duplicated
-  // and labeled to keep them in sync.
-  //
-  // The id values MUST match what the desktop's
-  // sprite_config_sync whitelist accepts (see
-  // src/sync-server.js on the desktop) — those are
-  // the canonical strings that go into
-  // sprites.json.
+  // Behaviour card.
   const TRAIT_LABELS: Record<string, string> = {
     sassy: '😏 Sassy',
     curious: '🔍 Curious',
@@ -1679,22 +938,14 @@ export default function CompanionSettingsScreen({
     goblin: '👺 Goblin',
   };
 
-  // v3.10.186: split the Behaviour card into Looks + Behaviour.
-// Sprite + scale are visual identity (Looks); chattiness +
-// traits are personality (Behaviour). Each card has its own
-// Edit button that opens a dedicated editor screen, matching
-// the screenshot Tobe sent (2026-09-04 16:08) where each
-// property group had its own card-style entry point.
+  // Split the Behaviour card into Looks + Behaviour.
 function renderLooksCard(companion: Companion) {
   const sc = (companion as any).spriteConfig || {};
   const spriteName = sc.pixelCompanionId
     ? (sc.pixelCompanionId.charAt(0).toUpperCase() + sc.pixelCompanionId.slice(1))
     : 'Default';
   const scale = typeof sc.scale === 'number' ? sc.scale : '?';
-  // Prefer the split-screen callback (v3.10.186); fall back
-  // to the legacy onOpenCompanionEdit so older builds that
-  // haven't wired the new callback still get a working Edit
-  // button (routes to the behaviour editor in that case).
+  // Prefer the split-screen callback (v3.10.186); fall back to the legacy onOpenCompanionEdit so older builds that haven't wired the new…
   const openEditor = onOpenCompanionLooks || onOpenCompanionEdit;
 
   return (
@@ -1798,74 +1049,29 @@ function renderBehaviourCard(companion: Companion) {
     );
   }
 
-  // v3.10.191: Models card — summary of the
-  // companion's LLM configuration. Mirrors the
-  // shape of renderLooksCard / renderBehaviourCard
-  // (title row with an Edit button, then a list of
-  // name/value rows). The rows are:
-  //   Primary — the active model (e.g.
-  //     "Anthropic / Claude Opus 4"). Falls back
-  //     to "Default" when the companion has no
-  //     explicit primary (the desktop default
-  //     anthropic/claude-opus-4-6 is used).
-  //   Secondary — the fallback model, or "None"
-  //     if there's no secondary configured.
-  // Tobe 2026-09-07: "Lets introduce the LLM
-  // connection for each companion within the
-  // companion editor, create a new section for
-  // that with its own page like looks and
-  // behaviour. We do have this on the desktop
-  // already so import that setup." This card is
-  // the entry point to the dedicated Models
-  // editor screen.
+  // Models card — summary of the companion's LLM configuration.
   function renderModelsCard(companion: Companion) {
     const sc = (companion as any).spriteConfig || {};
-    // v3.10.191: model fields on the spriteConfig
-    // object. Desktop forge stores them as
-    // primaryModel / secondaryModel (the wire-
-    // protocol field names; see desktop
-    // sprite_config_sync ALLOWED whitelist in
-    // src/sync-server.js). Both are "provider/model"
-    // strings (e.g. "anthropic/claude-opus-4-6"
-    // or "ollama/llama3").
+    // Model fields on the spriteConfig object.
     const primary = typeof sc.primaryModel === 'string' && sc.primaryModel
       ? sc.primaryModel
       : '';
     const secondary = typeof sc.secondaryModel === 'string' && sc.secondaryModel
       ? sc.secondaryModel
       : '';
-    // v3.10.191: split a "provider/model" string
-    // into display-friendly parts. Falls back to
-    // the raw string when the slash separator
-    // isn't present (shouldn't happen for desktop-
-    // configured models, but defensive against
-    // legacy data).
+    // Split a "provider/model" string into display-friendly parts.
     const splitModel = (m: string): { provider: string; name: string; isLocal: boolean } => {
       if (!m) return { provider: '', name: '', isLocal: false };
       const idx = m.indexOf('/');
       const provider = idx >= 0 ? m.slice(0, idx) : '';
       const name = idx >= 0 ? m.slice(idx + 1) : m;
-      // v3.10.191: local providers include
-      // ollama (most common — the desktop forge
-      // ships with an "ollama/llama3" default),
-      // plus lmstudio / llamacpp / vllm which the
-      // desktop's IPC layer also accepts. Keep
-      // this list in sync with the Models editor's
-      // LOCAL_PROVIDERS constant.
+      // Local providers include ollama (most common — the desktop forge ships with an "ollama/llama3" default), plus lmstudio / llamacpp / vllm…
       const localProviders = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm']);
       return { provider, name, isLocal: localProviders.has(provider.toLowerCase()) };
     };
     const primaryParts = splitModel(primary);
     const secondaryParts = splitModel(secondary);
-    // v3.10.191: pretty-print the model id. Maps
-    // "claude-opus-4-6" → "Claude Opus 4",
-    // "gpt-4o" → "GPT-4o", "gemini-2.5-pro" →
-    // "Gemini 2.5 Pro", and leaves Ollama tags
-    // alone ("llama3", "mistral", "codellama").
-    // Mirrors the desktop forge's
-    // formatModelName() in src/js/app.js so the
-    // mobile and desktop show the same display
-    // names for the same model id.
+    // Pretty-print the model id.
     const prettyProvider = (p: string): string => {
       if (!p) return '';
       const lower = p.toLowerCase();
@@ -1965,14 +1171,7 @@ function renderBehaviourCard(companion: Companion) {
     );
   }
 
-  // v3.10.142: compact settings card. Just shows the
-  // current value inline + chevron + tap to navigate to
-  // the existing sub-page (which already exists for
-  // wake/exit/voice). Replaces the old verbose cards
-  // that showed "Greeting, trained wake words, train a
-  // new wake phrase" sub-text — Tobe wanted a cleaner
-  // overview where each setting is one row, current
-  // value inline.
+  // Compact settings card.
   function renderSettingsCard(opts: {
     emoji: string;
     title: string;
@@ -2011,18 +1210,7 @@ function renderBehaviourCard(companion: Companion) {
   }
   return renderCompanionOverview(companion);
 
-  // Overview (cards)
-  // v3.10.142: redesigned layout per Tobe 2026-08-07.
-  // Order top→bottom:
-  //   1. Animated sprite view window (v3.10.140)
-  //   2. Skills grid (compact, 2-col) — moved up
-  //   3. Behaviour card (sprite/scale/traits/chattiness
-  //      current values + Edit button → existing
-  //      CompanionEditScreen route)
-  //   4. Separator
-  //   5. Settings cards (Wake, Exit, Voice) — collapsed
-  //      to "current value + chevron", tap → existing
-  //      sub-pages
+  // Overview (cards) v3.10.142: redesigned layout per Tobe 2026-08-07.
   function renderCompanionOverview(companion: Companion) {
     return (
       <View style={styles.container}>
@@ -2138,12 +1326,7 @@ function renderBehaviourCard(companion: Companion) {
           {renderSettingsCard({
             emoji: '🔊',
             title: 'Voice',
-            // v3.10.142: show current voice + engine.
-            // Reads from the per-companion voice state
-            // hydrated earlier in the screen. Falls back
-            // to "Not set" if neither has a value.
-            // v3.10.154: stripped 'api' engine branch —
-            // there's only local TTS now.
+            // Show current voice + engine.
             currentValue:
               vcLocalId && vcLocalId !== 'default'
                 ? `Local · ${vcLocalId}`
@@ -2517,19 +1700,9 @@ function renderBehaviourCard(companion: Companion) {
     );
   }
 
-  // v3.7.0: per-companion voice settings sub-page. v3.7.1:
-  // this is now a pure render function — all state lives at
-  // the screen level (next to the wake/exit state). The
-  // dispatch at the top of the screen picks one of the four
-  // render-functions per render; previously only this one
-  // had hooks, which broke React's hook accounting when the
-  // user navigated away.
+  // Per-companion voice settings sub-page.
   function renderCompanionVoicePage(companion: Companion) {
-    // Resolve the effective voice id for the "what would
-    // actually be used right now?" status row. v3.10.154:
-    // there is only one engine (local) now; we just show
-    // whether the user has a per-companion override or is
-    // inheriting the global master.
+    // Resolve the effective voice id for the "what would actually be used right now?" status row.
     const effectiveLocalId: string =
       vcEngine === 'local' ? vcLocalId : 'default';
 
@@ -2732,24 +1905,7 @@ function WakePhrasePicker({
   onRetrain: (companionId: string, phrase: string) => void;
   onDelete: (companionId: string) => void;
 }) {
-  // v3.10.0: defensive re-fetch. The parent screen
-  // already calls getSavedWakeModels on mount +
-  // companion-list growth, but if the cache is stale or
-  // the active-only filter misses something, this
-  // picker would render the "no trained" hint even
-  // though the Wake Manager (separate code path) shows
-  // a trained set. Re-fetch here as a fallback so the
-  // hint text is always accurate.
-  //
-  // v3.10.4: merged getSavedWakeModels + listWakeSets,
-  // same as the parent screen's effect. Picker rows
-  // should show the same set the manager sees; the
-  // active-only filter from getSavedWakeModels can
-  // miss sets whose meta.json is missing agentId (the
-  // listWakeSets path doesn't require agentId presence
-  // for the display, only for the active check). With
-  // this fallback, a picker row for a companion that
-  // has an active set always appears.
+  // Defensive re-fetch.
   const [localSavedModels, setLocalSavedModels] = useState<
     Record<string, { phrase: string; path: string; savedAt: number; displayName?: string }>
   >({});
@@ -2779,12 +1935,7 @@ function WakePhrasePicker({
             }
           }
         }
-        // Fill gaps from listWakeSets. For every companion
-        // we know about, if it doesn't have a savedModels
-        // entry yet, look up sets that match (or have no
-        // agentId — legacy) and pick the active one, or
-        // the most recently created. Either way, the
-        // picker can show a row.
+        // Fill gaps from listWakeSets.
         if (allSets && typeof allSets === 'object') {
           for (const c of companions) {
             if (out[c.id]?.phrase) continue;
@@ -2813,28 +1964,11 @@ function WakePhrasePicker({
           }
         }
         // Note: only write if we actually have data.
-        // Parent's effect is the authoritative source for
-        // the wake-status-line display; this local cache is
-        // best-effort and only writes when it has rows
-        // (so it doesn't clobber a populated parent with
-        // an empty result in a race).
         if (Object.keys(out).length > 0 && !cancelled) setLocalSavedModels(out);
       } catch (_) {}
     };
     fetch();
-    // v3.10.1: also re-fetch on focus. The
-    // parent's effect covers mount + dep
-    // changes, but returning from the wake
-    // manager route doesn't change the parent's
-    // deps (the active binding didn't change,
-    // the agent list didn't grow) so the
-    // picker's localSavedModels would stay
-    // stale. AppState 'active' fires when the
-    // screen comes back to focus from the
-    // trainer/manager route (those are full-
-    // screen pushes that don't change the JS
-    // app state to background, but the focus
-    // still happens when the route pops).
+    // Also re-fetch on focus.
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') fetch();
     });
@@ -2853,22 +1987,13 @@ function WakePhrasePicker({
       name: c.name,
       emoji: c.emoji || c.icon || '🐾',
       phrase: merged[c.id].phrase,
-      // v3.10.1: prefer the human-friendly
-      // displayName for the row's phrase
-      // display. Falls back to phrase on
-      // legacy meta.
+      // Prefer the human-friendly displayName for the row's phrase display.
       displayName: merged[c.id].displayName || merged[c.id].phrase,
       savedAt: merged[c.id].savedAt,
     }));
 
   if (trainedRows.length === 0) {
-    // v3.10.0: removed the "No trained wake phrases yet"
-    // hardcoded text. Tobe hit this in v3.9.9 where the
-    // hint said "no trained" even though the manager
-    // (separate code path) showed a trained set. Replaced
-    // with a neutral hint that doesn't make a false claim.
-    // The two buttons below ("Train new wake phrase" /
-    // "Manage wake sets") already explain what to do.
+    // Removed the "No trained wake phrases yet" hardcoded text.
     return (
       <View style={styles.trainedPickerHint}>
         <Text style={{ color: '#888', fontSize: 12, fontStyle: 'italic' }}>
@@ -3002,24 +2127,9 @@ function PerCompanionExitPicker({ companionId, activePhrase, onSelect, onRetrain
   );
 }
 
-// v3.7.1: Test voice helpers, moved here from SettingsScreen
-// (the global Voice & Speech section is gone). The Test
-// buttons in the per-companion Voice sub-page call these.
-// Both are module-level so they aren't recreated on every
-// render and don't take any state — they just trigger TTS
-// on the Android engine (local) or via the WebView's
-// speechSynthesis (desktop).
+// Test voice helpers, moved here from SettingsScreen (the global Voice & Speech section is gone).
 
-/** Test the local Android TTS engine with a fixed phrase.
- *  Doesn't read the per-companion voice id — the Android
- *  TTS engine picks the voice from the system default
- *  (the per-companion "local voice" choice is forward-
- *  looking; the TTS layer doesn't read it yet). The test
- *  still confirms the engine is installed and working.
- *
- *  v3.1.90: probes for a TTS engine before speaking so
- *  we can offer to install Google TTS / eSpeak NG if
- *  missing. */
+/** Test the local Android TTS engine with a fixed phrase. */
 function testLocalVoice() {
   const phrase = 'Ready to chat. The boar is happy.';
   const wm = (NativeModules as any).WakeWordModule;
@@ -3062,10 +2172,7 @@ function testLocalVoice() {
   }
 }
 
-/** Test the desktop's WebView speechSynthesis with a
- *  fixed phrase. Sends an eval_js action via the
- *  SyncClient to the desktop, which then speaks the
- *  phrase in the active companion's voice. */
+/** Test the desktop's WebView speechSynthesis with a fixed phrase. */
 function testDesktopVoice() {
   const phrase = 'Tobe is the coolest and most handsome man on the planet';
   const escaped = phrase.replace(/'/g, "\\'");
@@ -3084,45 +2191,15 @@ function testDesktopVoice() {
   Alert.alert('🔊 Sent to desktop', 'The desktop should speak the test phrase.');
 }
 
-// v3.10.140: animated sprite view window at the top
-// of the settings page. The companion renders inside a
-// small arena.html WebView with setCentered(true), so it
-// stays centered in the container instead of wandering
-// around like in the home arena.
-//
-// Dimensions: a square-ish 240x200 fixed-size box keeps
-// the companion visible regardless of phone aspect
-// ratio. arena.html's canvas fills 100% of its container,
-// so we just need to pass the right init(W, H).
-//
-// Why a fixed-size box instead of the home arena's
-// "fill remaining space" pattern? The home arena needs
-// the room because companions wander. The settings view
-// uses setCentered(true) which pins the companion to the
-// canvas center, so a small box is fine.
+// Animated sprite view window at the top of the settings page.
 const VIEW_BOX_W = 240;
 const VIEW_BOX_H = 200;
-// v3.10.140: same cache-buster as HomeScreen (arena.html
-// doesn't get re-fetched on app upgrade unless we bump
-// the version query param). Bumping this means a fresh
-// WebView will pull the latest arena.html even if the
-// Android WebView has it cached.
+// Same cache-buster as HomeScreen (arena.html doesn't get re-fetched on app upgrade unless we bump the version query param).
 const ARENA_HTML_VERSION = '3.10.140';
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
-  // v3.4.5: bumped paddingTop from 16 → 50 on BOTH Android
-  // and iOS. Tobe's screenshot showed the section still
-  // flush against the status bar even after the first
-  // bump — the device was actually an iPhone (Dynamic
-  // Island in the status bar) so the iOS=10 path was
-  // insufficient. 50pt clears both Android status bars
-  // (~30-40dp) and iOS Dynamic Island (~30pt + safe area).
-  // SafeAreaView in App.tsx handles the iOS bottom inset
-  // but the ScrollView still needs explicit top padding
-  // because the SafeAreaView's top extends to the top of
-  // the device edge — we want the scroll to start below
-  // the status bar.
+  // Bumped paddingTop from 16 → 50 on BOTH Android and iOS.
   scroll: { padding: 16, paddingTop: 50, paddingBottom: 60 },
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingTop: Platform.OS === 'android' ? 34 : 10 },
   backBtn: { paddingVertical: 4, paddingRight: 12 },
@@ -3216,14 +2293,7 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'center',
   },
-  // v3.10.140: animated sprite view window. A small
-  // box at the top of the page containing an arena.html
-  // WebView. The companion renders at 100% of this box
-  // (no scaling beyond arena's own internal sprite size)
-  // because arena.html's canvas fills its container.
-  // overflow:hidden ensures arena.html's 100vh canvas
-  // doesn't bleed past the box on devices with rounded
-  // screen corners or other overflow weirdness.
+  // Animated sprite view window.
   viewWindow: {
     width: VIEW_BOX_W,
     height: VIEW_BOX_H,
@@ -3235,13 +2305,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#0a0a2e',
   },
-  // v3.10.145: small label at the bottom of the
-  // view window. Shows the companion's name + sprite
-  // id so the user can confirm the view is showing
-  // the right companion. Sits at the bottom of the
-  // box (where the arena is mostly empty space
-  // anyway because the sprite is centered higher
-  // up).
+  // Small label at the bottom of the view window.
   viewWindowLabel: {
     position: 'absolute',
     bottom: 6,
@@ -3262,12 +2326,7 @@ const styles = StyleSheet.create({
   },
   trainBtnText: { fontSize: 15, fontWeight: '600' },
   trainBtnSub: { color: '#888', fontSize: 11, marginTop: 4 },
-  // v3.10.5: "Currently active wake" panel on the Wake
-  // sub-page. Shows the active phrase + setId + .tflite
-  // path so the user doesn't have to drill into the
-  // manager to see what's bound. Mirrors the visual
-  // language of the green ◉ indicator used elsewhere
-  // (e.g. voice picker rows) so it reads as "active".
+  // "Currently active wake" panel on the Wake sub-page.
   activeWakePanel: {
     backgroundColor: '#0f1626',
     borderRadius: 10,
@@ -3321,24 +2380,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontStyle: 'italic',
   },
-  // v3.10.8: test-wake button + result styles. The
-  // button is a small teal pill that starts a 4-second
-  // listening window. Result is a small panel showing
-  // the peak wake/exit/send scores observed.
-  // v3.10.25: styles orphaned by the move to
-  // ClassifierTestPanel. Removed; the panel component
-  // owns its own styles now.
-  // v3.10.23: activeWakeTestBtnEnrolled removed
-  // (no "voice is enrolled" UI anymore — enrollment
-  // is global and silent).
-  // v3.10.23: passive learning progress UI removed
-  // (no button, no progress bar in v3.10.23 — the
-  // OWW detector handles enrollment silently in
-  // the background).
-  // v3.7.0: radio-style row for the per-companion voice picker.
-  // v3.10.154: reused for engine (Use global default / Per-companion override).
-  // The old third option (Premium API) is gone.
-  // and for the voice lists under each engine.
+  // Test-wake button + result styles.
   radioRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3366,10 +2408,7 @@ const styles = StyleSheet.create({
     padding: 14,
     marginVertical: 6,
   },
-  // v3.10.175: tappable header now wraps the whole row
-  // (icon + title + xp/desc + chevron). Removed the
-  // explicit marginBottom so the char bar sits flush
-  // under the header.
+  // Tappable header now wraps the whole row (icon + title + xp/desc + chevron).
   skillsSectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3377,10 +2416,7 @@ const styles = StyleSheet.create({
   },
   skillsSectionIcon: { fontSize: 22 },
   skillsSectionTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  // v3.10.175: current XP / XP-to-next-level inline with
-  // the title. Replaces the previous "Lv.N" suffix so
-  // the user can see progress at a glance without
-  // expanding.
+  // Current XP / XP-to-next-level inline with the title.
   skillsSectionXp: { color: '#f7931a', fontSize: 11, fontWeight: '600' },
   skillsSectionDesc: { color: '#9aa0b4', fontSize: 12, marginTop: 2 },
   // v3.10.175: chevron that rotates 90° when expanded.
@@ -3397,11 +2433,7 @@ const styles = StyleSheet.create({
   skillsSectionChevronOpen: {
     transform: [{ rotate: '90deg' }],
   },
-  // v3.10.175: character XP bar — always visible,
-  // even when the card is collapsed. Shows overall
-  // companion progress. Slightly thicker than the
-  // per-category bars (4px vs 3px) to read as the
-  // primary bar.
+  // Character XP bar — always visible, even when the card is collapsed.
   charBar: {
     height: 6,
     backgroundColor: '#222',
@@ -3420,11 +2452,7 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   skillsEmptyText: { color: '#888', fontSize: 12, fontStyle: 'italic', textAlign: 'center' },
-  // v3.10.142: compact 2-col grid replaces the vertical
-  // list (skillsList + skillRow*). Each cell is a
-  // fixed-aspect box with icon + name + Lv + thin bar.
-  // flexWrap:'wrap' + width:'48%' gives us 2 cols on
-  // phones (one column would be too narrow for name+lv).
+  // Compact 2-col grid replaces the vertical list (skillsList + skillRow*).
   skillsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   skillGridCell: {
     width: '48%',
@@ -3473,13 +2501,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   behaviourEditBtnText: { color: '#000', fontSize: 12, fontWeight: '700' },
-  // v3.10.174: Skills library entry-point card on
-  // the companion overview. Mirrors the dark card
-  // style of the existing skills/behaviour cards but
-  // with a blue accent to distinguish it as a
-  // navigation target (the existing cards are
-  // information + inline-edit). 16px icon, white
-  // title, gray desc, chevron right.
+  // Skills library entry-point card on the companion overview.
   skillsLibraryCard: {
     backgroundColor: '#0f1626',
     borderRadius: 12,
@@ -3509,23 +2531,7 @@ const styles = StyleSheet.create({
   },
   behaviourChattinessTickActive: { backgroundColor: '#f7931a' },
   behaviourChattinessNum: { color: '#f7931a', fontSize: 12, fontWeight: '700', minWidth: 16, textAlign: 'right' },
-  // v3.10.191: Models card bits. Three new styles
-  // for the renderModelsCard helper:
-  //   modelLocalDot — small green dot prefixed to a
-  //     local-model row so the user can see at a
-  //     glance "this companion is running against a
-  //     local LLM." Green (not orange) because
-  //     "connected to a self-hosted runtime" is a
-  //     positive signal — the chat is local,
-  //     private, offline-safe. Same green family as
-  //     the quest-active pill.
-  //   modelDefault — muted color for the "Default"
-  //     / "None" placeholder values so they read
-  //     as "nothing was set" rather than "this IS
-  //     the value".
-  //   modelFooterHint — small italic line under
-  //     the rows in the Models card explaining what
-  //     "Secondary" means.
+  // Models card bits.
   modelLocalDot: {
     color: '#10b981',
     fontSize: 11,
@@ -3542,10 +2548,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     lineHeight: 15,
   },
-  // v3.10.144: traits as wrap chips. Tobe wanted to
-  // see all traits with their emoji, not a truncated
-  // comma-separated string. Chips wrap to next line
-  // when they overflow, so all traits stay visible.
+  // Traits as wrap chips.
   traitsChips: {
     flex: 1,
     flexDirection: 'row',
@@ -3581,10 +2584,7 @@ const styles = StyleSheet.create({
   settingsCardTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
   settingsCardValue: { color: '#10b981', fontSize: 11, marginTop: 2, fontStyle: 'italic' },
   settingsCardArrow: { color: '#888', fontSize: 22, marginLeft: 4 },
-  // v3.10.142: visual separator between the "about this
-  // companion" sections (view + skills + behaviour) and
-  // the "settings" sections (wake/exit/voice). Just a
-  // small label + line.
+  // Visual separator between the "about this companion" sections (view + skills + behaviour) and the "settings" sections (wake/exit/voice).
   overviewSeparator: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,54 +1,4 @@
-/**
- * CompanionEditScreen — phone-side companion Personalize screen.
- *
- * v3.10.92: mirrors the desktop Companion Forge (v3.2.26)
- * for the fields the mobile can edit. The mobile currently
- * surfaces:
- *   - Name (customName)
- *   - Scale (1–8)
- *   - Traits (9 checkboxes matching the desktop set)
- *   - Primary / Secondary model
- *   - Chattiness (1–5)
- *
- * The sprite picker (pixelCompanionId) is intentionally NOT
- * here — the desktop forge is the source of truth for sprite
- * swaps because the sprite catalog is bundled with the desktop
- * and regenerating the avatar on the phone would require
- * shipping the same PNG atlas on both. The Settings →
- * Companions list shows the Edit button as the desktop forge
- * entry point for sprite changes; the Personalize screen on
- * mobile complements that for everything else.
- *
- * Reached via App.tsx as the 'companion-edit' route with a
- * companionId prop. Back button → returns to the previous
- * route (CompanionSettingsScreen → Settings, or HomeScreen's
- * Settings button).
- *
- * The save flow (v3.10.185):
- *   1. Store partial patch in local state (instant UI feedback)
- *   2. Persist patch to AsyncStorage on every change (offline-safe)
- *   3. On unmount (back button / swipe / navigating away) →
- *      send the latest patch to the desktop via sprite_config_sync
- *   4. The next agents_list broadcast (triggered by the desktop's
- *      mobile-sprite-config-saved handler) updates the in-memory
- *      cache so the Settings list reflects the new chattiness /
- *      scale / name.
- *
- * Section layout (v3.10.185):
- *   🎨 Looks group — Sprite + Size (visual identity)
- *   🎭 Behaviour group — Chattiness + Personality Traits (how they act)
- *   The split makes it obvious which fields shape what the
- *   companion *looks like* vs how they *behave* — previously
- *   everything was under one "Behaviour" umbrella on the parent
- *   CompanionSettingsScreen, which made Sprite feel misplaced.
- *
- * Back swipe (v3.10.185):
- *   A BackHandler is registered so the Android hardware-back
- *   gesture / iOS edge-swipe closes the editor instead of
- *   exiting the app. Without this, tapping ← at the top of the
- *   screen leaves the editor but the OS-level swipe still goes
- *   to the home screen.
- */
+/** CompanionEditScreen — phone-side companion Personalize screen. */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -58,36 +8,17 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
-// v3.10.187: live WebView preview at the top of the Looks
-// editor. Mirrors the parent CompanionSettingsScreen's
-// centered-preview WebView but is bound to the local scale
-// state — dragging the scale slider injects
-// `window.Arena.setCenteredScale(n)` so the canvas re-paints
-// at the new size on the next frame.
+// Live WebView preview at the top of the Looks editor.
 import { WebView } from 'react-native-webview';
-// v3.10.187: native Picker for the sprite dropdown. The
-// previous grid-of-emoji-cards picker felt too small for the
-// desktop-forge-style editor Tobe wanted — the dropdown is
-// the obvious "pick one of N options" control and matches
-// the desktop's preset dropdown exactly.
+// Native Picker for the sprite dropdown.
 import { Picker } from '@react-native-picker/picker';
 // v3.10.93: shared Slider matches the desktop's native
 // <input type="range">. PanResponder-driven drag + tap.
 import Slider from '../components/Slider';
-// v3.10.93: bundled sprite catalog (5 sprites, mirrors the
-// desktop's src/assets/companions/catalog.json). We strip the
-// animation frames + file paths on the mobile — the icon is
-// all the user needs to make a choice. The full catalog is
-// loaded from disk on the desktop; the mobile ships a
-// hand-curated subset because the assets themselves aren't
-// needed for the picker (only the metadata).
+// Bundled sprite catalog (5 sprites, mirrors the desktop's src/assets/companions/catalog.json).
 import spriteCatalog from '../data/companion-catalog.json';
 
-// v3.10.92: trait list mirrors the desktop forge's
-// #forge-traits-grid. The id is the bare trait key (no prefix),
-// which matches what the desktop's saveSpriteConfig expects in
-// the `traits` array (see getCheckedTraits() in src/js/app.js,
-// which uses cb.id.replace('trait-', '')).
+// Trait list mirrors the desktop forge's #forge-traits-grid.
 const TRAITS = [
   { id: 'sassy', label: '😏 Sassy', desc: 'Witty comebacks and attitude' },
   { id: 'curious', label: '🔍 Curious', desc: 'Asks questions and digs deeper' },
@@ -100,11 +31,7 @@ const TRAITS = [
   { id: 'goblin', label: '👺 Goblin', desc: 'Angry smartass, curses freely' },
 ];
 
-// v3.10.92: chattiness descriptions mirror the desktop's
-// CHATTINESS_DESCRIPTIONS table in src/js/app.js. Keeping
-// these in sync is important — the user sees one number +
-// description on each surface; if they drift, the screens
-// disagree about what the value means.
+// Chattiness descriptions mirror the desktop's CHATTINESS_DESCRIPTIONS table in src/js/app.js.
 const CHATTINESS_DESCRIPTIONS = {
   1: 'Silent — never randomly comments.',
   2: 'Quiet — comments every 3–6 hours.',
@@ -113,44 +40,7 @@ const CHATTINESS_DESCRIPTIONS = {
   5: 'Very chatty — comments every 15–30 minutes.',
 };
 
-// v3.10.191: model catalog. Mirrors the desktop
-// forge's <select> dropdown in src/index.html
-// (forge-model-primary / forge-model-secondary),
-// grouped by provider so the picker renders as a
-// virtual optgroup structure (React Native's
-// <Picker> doesn't have a native optgroup
-// component, so we emulate the grouping with a
-// non-selectable "── Provider ──" item between
-// groups — see the picker JSX below).
-//
-// Each entry is { value, label } where:
-//   value = the raw "provider/model" string the
-//     desktop sprite_config_sync handler accepts
-//     verbatim (no transformation)
-//   label = the display-friendly name shown in
-//     the picker (e.g. "Claude Opus 4" instead
-//     of "claude-opus-4-6"). Same display names
-//     the desktop forge's formatModelName() uses
-//     in src/js/app.js so the user sees the
-//     same string on both surfaces.
-//
-// Keep this list in sync with the desktop forge's
-// v3.10.192: provider-first model picker constants.
-// Tobe 2026-09-07 follow-up to v3.10.191: "the
-// catalog is not up to date. There have been several
-// releases lately. ... Could we add a generic input
-// also? Where the user can input Whatever he has?"
-//
-// The new flow: pick a provider (drives the suggested
-// key env var + provider prefix), optionally enter an
-// API key, then type any model id. No catalog
-// restriction. The local-runtimes section (Ollama /
-// LM Studio / llama.cpp / vLLM) is preserved for the
-// self-hosted case.
-//
-// Curated provider list mirrors the desktop forge's
-// FORGE_PROVIDERS table in src/js/app.js. Keep in
-// sync.
+// Model catalog.
 const MODEL_DEFAULT_NONE = '__cyberclaw_no_model__';
 const PROVIDERS_CURATED = [
   { id: '',              label: '— Choose a provider —' },
@@ -163,10 +53,7 @@ const PROVIDERS_CURATED = [
   { id: 'groq',          label: '⚡  Groq',           keyEnv: 'GROQ_API_KEY',       placeholder: 'llama-3.3-70b-versatile' },
   { id: 'custom',        label: '🛠️  Custom',         keyEnv: '',                   placeholder: 'my-model-id' },
 ];
-// v3.10.192: local provider list (self-hosted / private
-// runtimes). Kept here because the local-model UX is
-// fundamentally different from cloud providers — it
-// needs an endpoint picker, not an API key field.
+// Local provider list (self-hosted / private runtimes).
 const PROVIDERS_LOCAL = [
   { id: '',          label: '— Choose a local runtime —' },
   { id: 'ollama',    label: '🦙 Ollama',     placeholder: 'llama3' },
@@ -174,10 +61,7 @@ const PROVIDERS_LOCAL = [
   { id: 'llamacpp',  label: '⚙️ llama.cpp',   placeholder: 'local-model' },
   { id: 'vllm',      label: '🚀 vLLM',       placeholder: 'local-model' },
 ];
-// v3.10.192: kept for backward-compat with the
-// Models card's local-dot rendering in
-// CompanionSettingsScreen. isLocalModel() is still
-// imported by that screen.
+// Kept for backward-compat with the Models card's local-dot rendering in CompanionSettingsScreen.
 const LOCAL_PROVIDER_IDS = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm']);
 function isLocalModel(modelStr: string): boolean {
   if (!modelStr) return false;
@@ -186,20 +70,10 @@ function isLocalModel(modelStr: string): boolean {
   return LOCAL_PROVIDER_IDS.has(modelStr.slice(0, idx).toLowerCase());
 }
 
-// v3.10.187: arena.html asset cache-buster for the Looks
-// editor's live preview WebView. Bumped whenever the
-// inline JS in arena.html changes (e.g. setCenteredScale
-// added in this release) so the APK ships a fresh copy
-// and the WebView doesn't serve a stale cached version
-// from the previous APK. Increment this for any
-// arena.html change.
+// Arena.html asset cache-buster for the Looks editor's live preview WebView.
 const LOOKS_ARENA_HTML_VERSION = '3.10.187';
 
-// v3.10.192: wire-format helpers. The mobile stores
-// the model as separate provider + modelId state, but
-// the desktop sprite_config_sync whitelist accepts a
-// single `primaryModel` string of the form
-// `provider/model`. These helpers bridge the two.
+// Wire-format helpers.
 function splitModelRef(modelStr: string): { provider: string; modelId: string } {
   if (!modelStr) return { provider: '', modelId: '' };
   const idx = modelStr.indexOf('/');
@@ -214,42 +88,14 @@ function composeModelRef(provider: string, modelId: string): string {
   return p + '/' + m;
 }
 
-// v3.10.94: model list removed from the mobile (Tobe:
-// "We can remove LLM options on the mobile end, that
-// can be desktop only"). The Models section + the entire
-// ModelPicker component + the related state were dropped
-// in this release. The desktop's sprite_config_sync
-// whitelist still accepts primaryModel/secondaryModel, so
-// a future "also let the phone pick a model" reversal is
-// a one-component re-add.
+// Model list removed from the mobile (Tobe: "We can remove LLM options on the mobile end, that can be desktop only").
 
 export default function CompanionEditScreen({
   companionId,
   companionName,
   initialEmoji,
   onBack,
-  // v3.10.186: mode selects which section group this
-  // screen instance shows. App.tsx routes:
-  //   'companion-edit-looks'     → mode='looks'
-  //     (Name + Sprite + Size, what's visible)
-  //   'companion-edit-behaviour' → mode='behaviour'
-  //     (Chattiness + Personality Traits, how they act)
-  //   'companion-edit-models'    → mode='models'
-  //     (Primary + Secondary model pickers, with
-  //     a dedicated Local models section. Tobe
-  //     2026-09-07: "Lets introduce the LLM
-  //     connection for each companion ... create a
-  //     new section for that with its own page like
-  //     looks and behaviour. ... Create a separation
-  //     for local models also.")
-  //   'companion-edit' (legacy)  → mode='behaviour'
-  //     (kept as an alias for backward-compat)
-  // Both modes still write to the same spriteConfig on the
-  // desktop — they're just focused UIs over a shared model.
-  // The auto-save unmount handler reads from refs and only
-  // ships fields that have actually changed in the relevant
-  // scope, so partial edits don't accidentally clobber the
-  // other side.
+  // Mode selects which section group this screen instance shows.
   mode = 'behaviour',
 }: {
   companionId: string;
@@ -260,64 +106,26 @@ export default function CompanionEditScreen({
 }) {
   const [name, setName] = useState(companionName || '');
   const [scale, setScale] = useState<number>(4);
-  // v3.10.93: sprite picker state. pixelCompanionId
-  // matches the desktop's catalog id (fox, boar, deer, hare,
-  // black_grouse). Bundle icons with the catalog so the
-  // picker renders without a separate icon asset fetch.
+  // Sprite picker state.
   const [pixelCompanionId, setPixelCompanionId] = useState<string>('boar');
   const [traits, setTraits] = useState<Set<string>>(new Set());
   // v3.10.92: chattiness is the headline new feature. Default
   // 3 if the companion has no value yet (legacy companion).
   const [chattiness, setChattiness] = useState<number>(3);
-  // v3.10.192: model selection state. Tobe 2026-09-07
-  // follow-up: "remove fallbacks and update the
-  // catalog, and make it easy for the user so it just
-  // needs to select a provider and then their keys or
-  // similar ... add a generic input also?"
-  //
-  // New state model:
-  //   primaryProvider     — the chosen provider id (e.g.
-  //     'anthropic', 'openai', 'minimax', 'ollama',
-  //     'custom'). Drives the wire prefix
-  //     `provider/` and the API key field.
-  //   primaryModelId      — the model id part
-  //     (e.g. 'claude-opus-4-8', 'gpt-5.5',
-  //     'MiniMax-M3'). Free-text, no catalog
-  //     restriction. Combined with primaryProvider
-  //     on save, it forms the wire value
-  //     `primaryProvider/primaryModelId`.
-  //   primaryApiKey       — the API key the user
-  //     pasted. Sent to the desktop's
-  //     providers:save IPC on save (which writes
-  //     providers.json). Same as the desktop forge's
-  //     key flow.
-  // The secondaryModel state is dropped — Tobe
-  // wants no fallback dropdown. The wire field
-  // secondaryModel is still in the sprite_config_sync
-  // whitelist for backward-compat with existing
-  // sprites.json entries, but we never write it.
+  // Model selection state.
   const [primaryProvider, setPrimaryProvider] = useState<string>('');
   const [primaryModelId, setPrimaryModelId] = useState<string>('');
   const [primaryApiKey, setPrimaryApiKey] = useState<string>('');
-  // v3.10.185: no more Save button — edits apply instantly
-  // to local state, persist to AsyncStorage on every change,
-  // and ship to the desktop on unmount (back tap / swipe /
-  // navigating away). saving/savedAt state is gone.
+  // No more Save button — edits apply instantly to local state, persist to AsyncStorage on every change, and ship to the desktop on unmount…
   const [hydrated, setHydrated] = useState<boolean>(false);
   const hydratedRef = useRef<boolean>(false);
-  // v3.10.185: track the latest patch values via refs so
-  // the unmount cleanup can read the freshest values
-  // without re-running the cleanup effect on every change
-  // (which would clobber a partial save with stale state).
+  // Track the latest patch values via refs so the unmount cleanup can read the freshest values without re-running the cleanup effect on every…
   const nameRef = useRef<string>('');
   const scaleRef = useRef<number>(4);
   const pixelCompanionIdRef = useRef<string>('boar');
   const traitsRef = useRef<Set<string>>(new Set());
   const chattinessRef = useRef<number>(3);
-  // v3.10.192: model selection refs. Mirror the
-  // useState values so the unmount cleanup can read
-  // the freshest strings without re-running on every
-  // dropdown change.
+  // Model selection refs.
   const primaryProviderRef = useRef<string>('');
   const primaryModelIdRef = useRef<string>('');
   const primaryApiKeyRef = useRef<string>('');
@@ -325,38 +133,19 @@ export default function CompanionEditScreen({
   // mount. Subsequent state changes inside the same mount
   // only persist locally (no desktop spam).
   const autoSavedRef = useRef<boolean>(false);
-  // v3.10.187: WebView ref + arena-ready flag for the
-  // live Looks preview. The ref is used to inject JS into
-  // the WebView on scale/sprite changes. The flag tracks
-  // whether arena.html has finished bootstrapping (the
-  // arena_loaded message) so we don't fire setActive /
-  // setCenteredScale before the JS is ready to receive
-  // them — arena.html ignores injected calls until its
-  // init runs.
+  // WebView ref + arena-ready flag for the live Looks preview.
   const previewWebViewRef = useRef<WebView>(null);
   const [previewReady, setPreviewReady] = useState<boolean>(false);
-  // v3.10.103: soul + memory are read-only on mobile.
-  // The desktop's Companion Forge is the editor. We just
-  // display the desktop's read response so the user can
-  // see what their companion's character + remembered
-  // facts look like. Memory has a Clear button that calls
-  // the desktop's companion:clear-memory IPC.
+  // Soul + memory are read-only on mobile.
   const [soulContent, setSoulContent] = useState<string>('');
   const [soulLoading, setSoulLoading] = useState<boolean>(true);
   const [memoryContent, setMemoryContent] = useState<string>('');
   const [memoryLoading, setMemoryLoading] = useState<boolean>(true);
   const [clearingMemory, setClearingMemory] = useState<boolean>(false);
-  // v3.10.93: safe-area insets so the header doesn't sit
-  // under the status bar (Tobe's v3.10.92 feedback). Used
-  // for paddingTop on the page container + the toast's
-  // bottom inset.
+  // Safe-area insets so the header doesn't sit under the status bar (Tobe's v3.10.92 feedback).
   const insets = useSafeAreaInsets();
 
-  // v3.10.185: mirror state into refs so the unmount
-  // cleanup (and the local-persist effect below) can read
-  // the freshest values without re-running the cleanup
-  // on every change. Same values, two storage forms:
-  // useState drives the UI; refs drive the auto-save.
+  // Mirror state into refs so the unmount cleanup (and the local-persist effect below) can read the freshest values without re-running the…
   useEffect(() => { nameRef.current = name; }, [name]);
   useEffect(() => { scaleRef.current = scale; }, [scale]);
   useEffect(() => { pixelCompanionIdRef.current = pixelCompanionId; }, [pixelCompanionId]);
@@ -367,20 +156,7 @@ export default function CompanionEditScreen({
   useEffect(() => { primaryModelIdRef.current = primaryModelId; }, [primaryModelId]);
   useEffect(() => { primaryApiKeyRef.current = primaryApiKey; }, [primaryApiKey]);
 
-  // v3.10.187: live preview scale update. When the user
-  // drags the scale slider in the Looks editor, push
-  // the new value to the WebView so the canvas re-paints
-  // at the new size on the next frame. Cheap — arena.html
-  // just mutates the companion's c.scale + c.x/c.y and
-  // returns. The WebView isn't reloaded.
-  //
-  // The 1.6× multiplier maps the editor's 1–8 "looks
-  // scale" to arena.html's centered scale range (which
-  // goes up to 20). At scale=8 the preview sprite fills
-  // the whole box width (32px frame × 1.6 × 8 ≈ 410px
-  // on a 412px-wide phone). At scale=1 it's a 50px
-  // companion in the middle of the box. Same mapping as
-  // the desktop Companion Forge's centered preview.
+  // Live preview scale update.
   useEffect(() => {
     if (mode !== 'looks') return;
     if (!previewReady) return;
@@ -391,15 +167,7 @@ export default function CompanionEditScreen({
     );
   }, [scale, previewReady, mode]);
 
-  // v3.10.187: live preview sprite swap. When the user
-  // picks a new sprite from the dropdown, push the new
-  // sprite id to the WebView. arena.html re-loads the
-  // sprite frames asynchronously, so the preview shows
-  // the new companion within ~100ms.
-  //
-  // We don't push name changes to the WebView because
-  // the canvas name is rendered via setActive's name
-  // parameter and updates on every companion switch.
+  // Live preview sprite swap.
   useEffect(() => {
     if (mode !== 'looks') return;
     if (!previewReady) return;
@@ -425,13 +193,7 @@ export default function CompanionEditScreen({
     );
   }, [pixelCompanionId, previewReady, mode, companionId, name, companionName]);
 
-  // v3.10.187: also push the initial companion to the
-  // preview after it boots (when previewReady flips to
-  // true). This handles the case where the WebView
-  // remounts but the user hasn't touched the sprite /
-  // scale controls — without this the preview would
-  // show the default centered companion (boar at scale
-  // 5) instead of the actual companion.
+  // Also push the initial companion to the preview after it boots (when previewReady flips to true).
   useEffect(() => {
     if (mode !== 'looks') return;
     if (!previewReady) return;
@@ -457,19 +219,7 @@ export default function CompanionEditScreen({
     );
   }, [previewReady]);  // intentionally only fires on the ready transition
 
-  // v3.10.185: local-persist effect — writes the patch to
-  // AsyncStorage on every meaningful change. The desktop
-  // is NOT touched here; the desktop round-trip happens on
-  // unmount (next useEffect). Persisting locally on every
-  // change makes the UI feel instant: if the user crashes
-  // mid-edit, the next mount of this screen picks up the
-  // latest local values instead of reverting to whatever
-  // the last desktop broadcast had.
-  //
-  // The local cache (`cyberclaw-agents-cache`) also gets
-  // patched on every change so the CompanionSettingsScreen
-  // card updates immediately when the user backs out —
-  // before the desktop even sees the change.
+  // Local-persist effect — writes the patch to AsyncStorage on every meaningful change.
   useEffect(() => {
     if (!hydrated) return; // wait until the hydrate useEffect finished
     // v3.10.192: build the wire primaryModel from
@@ -483,11 +233,7 @@ export default function CompanionEditScreen({
       pixelCompanionId: pixelCompanionIdRef.current,
       traits: Array.from(traitsRef.current),
       chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
-      // v3.10.192: model selection in the local patch.
-      // Persisted to AsyncStorage on every change so the
-      // offline fallback path restores them on remount.
-      // secondaryModel is intentionally omitted — Tobe
-      // removed the fallback dropdown.
+      // Model selection in the local patch.
       primaryModel: composedPrimary,
       primaryProvider: primaryProviderRef.current,
       primaryModelId: primaryModelIdRef.current,
@@ -513,10 +259,7 @@ export default function CompanionEditScreen({
           chattiness: patch.chattiness,
           ...(patch.customName ? { name: patch.customName } : {}),
         });
-        // v3.10.192: also patch the spriteConfig
-        // primaryModel so the Models card on the
-        // parent screen reflects the change without
-        // waiting for the desktop broadcast.
+        // Also patch the spriteConfig primaryModel so the Models card on the parent screen reflects the change without waiting for the desktop…
         if (list[idx].spriteConfig) {
           list[idx].spriteConfig = Object.assign({}, list[idx].spriteConfig, {
             primaryModel: patch.primaryModel,
@@ -527,10 +270,7 @@ export default function CompanionEditScreen({
     }).catch(() => {});
   }, [hydrated, name, scale, pixelCompanionId, traits, chattiness, primaryProvider, primaryModelId, companionId]);
 
-  // v3.10.92: hydrate from the local AsyncStorage cache
-  // AND the latest agents_list broadcast. The cache is the
-  // single source of truth on the mobile side — `agents_list`
-  // writes to it on every broadcast, so we just read it back.
+  // Hydrate from the local AsyncStorage cache AND the latest agents_list broadcast.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -555,25 +295,7 @@ export default function CompanionEditScreen({
           // the preview frame at the size slider's scale.
           if (typeof a.avatar === 'string' && a.avatar) { /* consumed: avatar broadcast received */ }
         }
-        // v3.10.95: the desktop's agents_list broadcast (v3.2.27)
-        // now carries the full spriteConfig object including
-        // traits. The mobile's Personalize screen was rendering
-        // empty trait checkboxes (no current selection visible)
-        // because the agents_list broadcast didn't include
-        // traits. Tobe's v3.10.94 feedback: "i still dont get
-        // the current settings. If you see the behaviours, none
-        // of them are selected, even tho they are on the
-        // desktop. The settings should be consistent between
-        // desktop and phone."
-        //
-        // Hydration order (most-recent-wins):
-        //   1. agents_list broadcast (the desktop's source of
-        //      truth, refreshed every ~60s and on every
-        //      sprite_config_sync)
-        //   2. local cache (cyberclaw-companion-edit-{id}) —
-        //      offline fallback for the case where the
-        //      desktop hasn't broadcast yet
-        //   3. component defaults
+        // The desktop's agents_list broadcast (v3.2.27) now carries the full spriteConfig object including traits.
         const spriteConfig = a?.spriteConfig;
         if (spriteConfig) {
           if (typeof spriteConfig.scale === 'number') setScale(Math.max(1, Math.min(8, spriteConfig.scale)));
@@ -587,27 +309,15 @@ export default function CompanionEditScreen({
           if (typeof spriteConfig.customName === 'string' && spriteConfig.customName) {
             setName(spriteConfig.customName);
           }
-          // v3.10.192: hydrate model selection from the
-          // agents_list broadcast. The desktop forge's
-          // sprite_config_sync writes the wire value
-          // `provider/model` as primaryModel. Split it
-          // into provider + model id for the new panel.
+          // Hydrate model selection from the agents_list broadcast.
           if (typeof spriteConfig.primaryModel === 'string' && spriteConfig.primaryModel) {
             const { provider, modelId } = splitModelRef(spriteConfig.primaryModel);
             setPrimaryProvider(provider);
             setPrimaryModelId(modelId);
           }
-          // v3.10.192: ignore any stale secondaryModel —
-          // we never write it and never display it.
-          // Kept here only as a comment so the
-          // sprite_config_sync ALLOWED-whitelist behavior
-          // is documented.
+          // Ignore any stale secondaryModel — we never write it and never display it.
         } else {
-          // v3.10.92: fallback for older broadcasts that
-          // don't have spriteConfig. The local cache is
-          // the only source of truth for traits on the
-          // mobile in that case. The desktop will send the
-          // full spriteConfig on the next ~60s sync.
+          // Fallback for older broadcasts that don't have spriteConfig.
           const localRaw = await AsyncStorage.getItem(`cyberclaw-companion-edit-${companionId}`);
           if (cancelled) return;
           if (localRaw) {
@@ -637,40 +347,11 @@ export default function CompanionEditScreen({
     return () => { cancelled = true; };
   }, [companionId]);
 
-  // v3.10.92: listen for sprite_config_sync_ok / _failed to
-  // surface the result. We also pick up the agents_list update
-  // automatically via the existing SetAgents hook in the
-  // parent screen.
+  // Listen for sprite_config_sync_ok / _failed to surface the result.
   useEffect(() => {
     const onOk = (msg: any) => {
       if (msg.agentId !== companionId) return;
-      // v3.10.185: removed setSaving(false) + setSavedAt() —
-      // the Save button is gone. The local cache patch below
-      // still runs because the agents_list broadcast that
-      // arrives after sprite_config_sync_ok contains the
-      // canonical values the desktop persisted.
-      // v3.10.146: also persist the agents list to cache
-      // on save success. Bug Tobe hit: edited chattiness
-      // to 2, saved, returned to CompanionSettingsScreen,
-      // still showed 1. Root cause: the cache
-      // (`cyberclaw-agents-cache`) is only written by
-      // HomeScreen and CompanionSettingsScreen's
-      // agents_list listener. While CompanionEditScreen
-      // is open, both are unmounted. The next
-      // agents_list broadcast arrives, the desktop
-      // updates its in-memory state, but the cache
-      // doesn't get the new value. When the user
-      // taps back, CompanionSettingsScreen re-hydrates
-      // from the stale cache.
-      //
-      // Fix: CompanionEditScreen proactively updates
-      // the cache when the save succeeds. It reads the
-      // current cache, finds this companion, merges the
-      // patch (the values the user just saved), and
-      // writes back. The companion-stats in the cache
-      // might be slightly stale (XP, sleep state) but
-      // those update on the next agents_list broadcast
-      // when the user returns to CompanionSettingsScreen.
+      // Removed setSaving(false) + setSavedAt() — the Save button is gone.
       try {
         AsyncStorage.getItem('cyberclaw-agents-cache').then(raw => {
           if (!raw) return;
@@ -703,10 +384,7 @@ export default function CompanionEditScreen({
           AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(list)).catch(() => {});
         }).catch(() => {});
       } catch (_) { /* cache is best-effort */ }
-      // v3.10.185: removed the 'Saved!' toast — the user
-      // doesn't need confirmation that something they
-      // didn't have to do succeeded. Edits are silent
-      // and instant.
+      // Removed the 'Saved!' toast — the user doesn't need confirmation that something they didn't have to do succeeded.
     };
     const onFail = (msg: any) => {
       if (msg.agentId !== companionId) return;
@@ -717,13 +395,7 @@ export default function CompanionEditScreen({
     };
     syncClient.on('sprite_config_sync_ok', onOk);
     syncClient.on('sprite_config_sync_failed', onFail);
-    // v3.10.95: also pick up live agents_list broadcasts
-    // while the screen is open. The desktop re-broadcasts
-    // agents_list after every sprite_config_sync (within
-    // ~100ms of the save), so the personalise screen sees
-    // the new sprite config / avatar / traits without
-    // waiting for a remount. The agents_list event is
-    // emitted by SyncClient with the full payload.
+    // Also pick up live agents_list broadcasts while the screen is open.
     const onAgentsList = (msg: any) => {
       if (!Array.isArray(msg?.agents)) return;
       const a = msg.agents.find((x: any) => x.id === companionId);
@@ -742,13 +414,7 @@ export default function CompanionEditScreen({
         if (typeof spriteConfig.customName === 'string' && spriteConfig.customName) {
           setName(spriteConfig.customName);
         }
-        // v3.10.191: live model updates from
-        // agents_list. If the desktop changes the
-        // companion's model while the editor is
-        // open (e.g. via the desktop forge), the
-        // pickers update in place so the user sees
-        // the current state, not the stale one.
-        // v3.10.192: split provider + model id.
+        // Live model updates from agents_list.
         if (typeof spriteConfig.primaryModel === 'string' && spriteConfig.primaryModel) {
           const { provider, modelId } = splitModelRef(spriteConfig.primaryModel);
           setPrimaryProvider(provider);
@@ -764,17 +430,7 @@ export default function CompanionEditScreen({
     };
   }, [companionId]);
 
-  // v3.10.103: soul + memory are read-only on mobile.
-  // On mount we ask the desktop for both files; the
-  // responses arrive asynchronously via the
-  // 'companion_soul' / 'companion_memory' events. The
-  // Clear-memory button sends 'clear_companion_memory'
-  // and waits for 'companion_memory_cleared' to refresh
-  // the viewer. The desktop is the source of truth for
-  // both files — there is no on-device cache because
-  // the soul is the personality definition and the
-  // memory is auto-written by the companion's chat
-  // pipeline (which runs on the desktop).
+  // Soul + memory are read-only on mobile.
   useEffect(() => {
     setSoulLoading(true);
     setMemoryLoading(true);
@@ -850,36 +506,10 @@ export default function CompanionEditScreen({
 
   const onSave = useCallback(async () => {
     if (!hydrated) return;
-    // v3.10.185: no more setSaving/savedAt/setBanner for the
-    // save action — edits are auto-persisted, and the desktop
-    // round-trip happens on unmount (see the cleanup
-    // useEffect below). The Save button was removed in this
-    // release because:
-    //   (a) every change already persists to AsyncStorage, so
-    //       the phone has the truth at all times,
-    //   (b) sending the patch to the desktop on every change
-    //       would spam the WS (a slider drag = 30+ frames of
-    //       state changes), and
-    //   (c) the desktop's agents_list broadcast after each
-    //       sprite_config_sync would echo back the in-flight
-    //       state mid-edit, fighting the user's drag.
-    //
-    // The patch is now sent on unmount: one final sprite_config_sync
-    // with the latest values, then the screen goes away.
-    //
-    // Kept as onSave for backward-compat (it was exported in
-    // some earlier pre-release versions of this file). It's
-    // a no-op now — the real save happens in the unmount effect.
+    // No more setSaving/savedAt/setBanner for the save action — edits are auto-persisted, and the desktop round-trip happens on unmount (see the…
   }, [hydrated]);
 
-  // v3.10.185: unmount handler — ship the final patch to
-  // the desktop exactly once, no matter how the user leaves
-  // the screen (← Back tap, hardware back button, swipe back,
-  // navigate to a sibling route). The guard ensures we only
-  // do this once per mount — if the same patch is sent twice
-  // (e.g. cleanup runs and then the screen re-mounts within
-  // the same tick), the desktop's idempotent save handler
-  // treats it as a no-op.
+  // Unmount handler — ship the final patch to the desktop exactly once, no matter how the user leaves the screen (← Back tap, hardware back…
   useEffect(() => {
     return () => {
       if (autoSavedRef.current) return;
@@ -890,21 +520,10 @@ export default function CompanionEditScreen({
         pixelCompanionId: pixelCompanionIdRef.current,
         traits: Array.from(traitsRef.current),
         chattiness: Math.max(1, Math.min(5, chattinessRef.current)),
-        // v3.10.192: model field. Composed from the
-        // new provider + modelId inputs as a single
-        // wire string (`provider/model`). The desktop
-        // writes this verbatim into sprites.json +
-        // merges into the agent's primaryModel.
-        // secondaryModel is intentionally omitted —
-        // Tobe removed the fallback dropdown.
+        // Model field.
         primaryModel: composeModelRef(primaryProviderRef.current, primaryModelIdRef.current) || undefined,
       };
-      // v3.10.192: if the user pasted an API key
-      // (and it's not the masked placeholder),
-      // ship it to the desktop on unmount so the
-      // desktop's providers.json registry stays
-      // in sync with the mobile. The desktop
-      // already has a providers:save IPC handler.
+      // If the user pasted an API key (and it's not the masked placeholder), ship it to the desktop on unmount so the desktop's providers.json…
       const apiKey = (primaryApiKeyRef.current || '').trim();
       if (apiKey && apiKey !== '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' && primaryProviderRef.current && primaryProviderRef.current !== 'custom') {
         try {
@@ -917,27 +536,13 @@ export default function CompanionEditScreen({
         syncClient.setSpriteConfig(companionId, patch);
         autoSavedRef.current = true;
       } catch (e: any) {
-        // The desktop may already be unreachable (mobile WS
-        // disconnected). The local AsyncStorage cache still
-        // has the patch, so the next time the user reconnects
-        // and the desktop does a sprite-config reconcile, the
-        // changes will flow through. Don't throw — this is a
-        // best-effort fire-and-forget on unmount.
+        // The desktop may already be unreachable (mobile WS disconnected).
         console.warn('[CompanionEdit] unmount send failed:', e?.message);
       }
     };
   }, [companionId]);
 
-  // v3.10.185: register a BackHandler so the Android
-  // hardware-back button (and the iOS edge-swipe, which
-  // routes through the same BackHandler on Android-tablet
-  // builds) closes the editor instead of exiting the app.
-  // Without this, tapping ← Back in the header goes to the
-  // previous screen BUT the OS-level swipe / hardware button
-  // pops the whole app — the two navigation paths drift
-  // apart. Registering here pins them together: BackHandler
-  // intercepts the hardware event and calls onBack(), which
-  // returns to CompanionSettingsScreen.
+  // Register a BackHandler so the Android hardware-back button (and the iOS edge-swipe, which routes through the same BackHandler on…
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       // Returning true tells the OS: "I handled this, do
@@ -1191,14 +796,7 @@ export default function CompanionEditScreen({
                   onValueChange={(v: string | number) => {
                     const s = String(v);
                     setPrimaryProvider(s);
-                    // When switching providers, clear
-                    // the model id (the user almost
-                    // certainly wants to pick a
-                    // different model). Keep the api
-                    // key (different providers can
-                    // share keys in theory, but it's
-                    // safer to clear it too — the
-                    // user can re-paste).
+                    // When switching providers, clear the model id (the user almost certainly wants to pick a different model).
                     if (s !== primaryProvider) {
                       setPrimaryModelId('');
                     }
@@ -1508,11 +1106,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  // v3.10.185: section-group label (LOOKS / BEHAVIOUR).
-  // Dimmer than sectionTitle so the section cards inside
-  // the group stay the visual anchor. Tight vertical
-  // margin so the group label sits close to its first
-  // section card and the eye reads them as one block.
+  // Section-group label (LOOKS / BEHAVIOUR).
   groupLabel: {
     fontSize: 11,
     fontWeight: '700',
@@ -1527,11 +1121,7 @@ const styles = StyleSheet.create({
     color: '#888',
     marginBottom: 8,
   },
-  // v3.10.192: inline code chip for showing
-  // composed wire values (e.g. `anthropic/
-  // claude-opus-4-8`) in section hints. Same
-  // monospace + tinted look as the Quests page's
-  // path display, so the visual cue is consistent.
+  // Inline code chip for showing composed wire values (e.g.
   codeInline: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     fontSize: 11,
@@ -1556,12 +1146,7 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginTop: 8,
   },
-  // v3.10.187: Looks editor styles. The sprite picker is now
-  // a native dropdown (Picker) so the old grid of cards is
-  // replaced with a single wrap that fills the section
-  // width. The live preview sits in a 240×240 centered box
-  // (matches the parent CompanionSettingsScreen's preview
-  // box height so the two views feel consistent).
+  // Looks editor styles.
   looksPreviewWrap: {
     width: '100%',
     height: 240,
@@ -1604,23 +1189,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
   },
-  // v3.10.191: LOCAL MODELS section divider. The
-  // big purple "💻 LOCAL MODELS" header sits
-  // between the cloud providers and the local
-  // runtime pickers so the user immediately
-  // understands "this is a different category."
-  // Purple (not orange) because:
-  //   - The cloud pickers use the page's default
-  //     accent (orange).
-  //   - The active-quest visual language on the
-  //     Quests page already uses purple
-  //     (#a855f7) to signal "different category."
-  //   - The desktop forge's "Local" optgroup is
-  //     also visually distinguished (its label is
-  //     "Local" not "Local Models", but the
-  //     grouping itself is the visual cue).
-  // Reusing purple keeps the "this category is
-  // special" signal consistent across the app.
+  // LOCAL MODELS section divider.
   localModelsHeader: {
     marginTop: 24,
     marginBottom: 8,
@@ -1640,10 +1209,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  // v3.10.191: hint box at the bottom of the
-  // Models page pointing the user at the desktop
-  // for setup + reachability checks. Soft purple
-  // tint to match the local models section.
+  // Hint box at the bottom of the Models page pointing the user at the desktop for setup + reachability checks.
   localHint: {
     marginTop: 16,
     paddingVertical: 10,
@@ -1658,26 +1224,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
   },
-  // v3.10.94: preview frame mirrors the desktop's
-  // .forge-companion-preview (200×200, 2px border, dark
-  // background, rounded corners). On the mobile the
-  // preview is responsive: width matches the section
-  // content (100%) and the inner box is a 200px square
-  // (capped to keep tall phones from going huge).
-  // The emoji inside scales with the size slider so the
-  // user can see "this is what the sprite looks like
-  // at scale N" without leaving the screen.
-  // v3.10.97: previewFrame / previewEmoji / previewLabel
-  // / previewLabelScale styles removed along with the
-  // Preview section. The Section now goes straight from
-  // the Sprite picker to the Size slider. The user can
-  // see the sprite at the chosen scale in the Companion
-  // tab of the WebView arena (no in-Personalize preview
-  // needed).
-  // v3.10.93: dark base for the empty checkbox icon.
-  // The active state (☑) is rendered in the same color
-  // as the active border so the checkbox visually ties
-  // to the selected state.
+  // Preview frame mirrors the desktop's .forge-companion-preview (200×200, 2px border, dark background, rounded corners).
   traitBox: {
     fontSize: 18,
     color: '#555',
@@ -1687,14 +1234,7 @@ const styles = StyleSheet.create({
   traitBoxActive: {
     color: '#f7931a',
   },
-  // v3.10.94: 2-column trait grid. Tobe's v3.10.93
-  // feedback: "make the behaviours smaller and 2 or 3
-  // in a row". Dropped the description text (was the
-  // bulky bit) and the bigger padding. Each trait is
-  // now ~48% wide so 2 fit per row with the existing
-  // 6px gap. With 9 traits that fits 4 rows + a single
-  // half-width orphan (the desktop forge has the same
-  // 9 traits in 2 columns = 4 rows + orphan).
+  // 2-column trait grid.
   traitsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1727,10 +1267,7 @@ const styles = StyleSheet.create({
   traitLabelActive: {
     color: '#f7931a',
   },
-  // v3.10.185: removed the footer/saveBtn/saveBtnText/
-  // saveBtnDisabled/savedHint styles. The Save button is
-  // gone — edits apply automatically and the desktop
-  // round-trip happens on unmount.
+  // Removed the footer/saveBtn/saveBtnText/ saveBtnDisabled/savedHint styles.
   toast: {
     position: 'absolute',
     bottom: 32,
@@ -1751,12 +1288,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 13,
   },
-  // v3.10.103: soul + memory viewer surfaces. Read-only
-  // box with a thin gold border + monospace-feeling
-  // mono text to make it look like a "definition" panel.
-  // Match the desktop forge's textarea styling (#0a0a1a
-  // background, #3a3a55 border) so the mobile doesn't
-  // feel like a different app.
+  // Soul + memory viewer surfaces.
   soulViewer: {
     backgroundColor: '#0a0a1a',
     borderColor: '#3a3a55',
@@ -1777,10 +1309,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontStyle: 'italic',
   },
-  // v3.10.103: clear-memory button — muted grey
-  // (not primary) so the user doesn't mistake it for
-  // the Save button. The companion is the writer; the
-  // Clear button is the escape hatch.
+  // Clear-memory button — muted grey (not primary) so the user doesn't mistake it for the Save button.
   clearBtn: {
     marginTop: 10,
     paddingVertical: 8,

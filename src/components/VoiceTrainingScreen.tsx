@@ -1,42 +1,4 @@
-/**
- * VoiceTrainingScreen — full-page voice-training
- * configuration. v3.10.168.
- *
- * Tobe (2026-08-14):
- *   - "go ahead, and make sure to make the tier user
- *     visible, so they see in voice mode that its
- *     training toward tier 2 or 3 or 4"
- *   - "the training in settings is tier 1"
- *   - "the user does not need to use that if their at
- *     some training threshold"  → B-threshold, hide
- *     when samplesTotal >= 20.
- *   - "perhaps we should have a button for voice
- *     training with explanation within it so to
- *     compact the settings page"
- *
- * This screen owns the long-form explanation card
- * + active enrollment panel + a tier summary. The
- * Settings page now just has a single "🎤 Voice
- * training" button that opens it (hidden once the
- * user is past the B threshold of 20 samples, since
- * natural accumulation handles training from there).
- *
- * Tier ladder (see speakerTier.ts):
- *   Tier 0 — no profile
- *   Tier 1 — locked (5+ samples). This screen is the
- *            "Tier 1 unlock" path.
- *   Tier 2 — 100+ samples
- *   Tier 3 — 1000+ samples (natural lock threshold)
- *   Tier 4 — 5000+ (terminal)
- *
- * Tier upgrades are visible in this screen via the
- * tier summary card + the recent-upgrade list. The
- * native side is still discrete (lock is a one-time
- * step) so the upgrade list is presentational — it
- * logs when each tier is reached but doesn't hot-
- * swap the embedding. v3.10.169 will add the hot-
- * swap.
- */
+/** VoiceTrainingScreen — full-page voice-training configuration. */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -63,10 +25,7 @@ import {
 
 const { WakeWordModule } = NativeModules;
 
-// Local mirror of the live speaker status — we poll
-// because the enrollment UI flips through several
-// async states (started → listening → locked) and we
-// want the tier summary to update in real time.
+// Local mirror of the live speaker status — we poll because the enrollment UI flips through several async states (started → listening →…
 type SpeakerStatus = {
   samplesTotal: number;
   hasEnrollment: boolean;
@@ -74,19 +33,9 @@ type SpeakerStatus = {
   matchScore: number | null;
 };
 
-// v3.10.168: persistent tier-up log. Records the
-// timestamp of each tier reached, by polling the
-// native status every few seconds. Stored in
-// AsyncStorage so the page remembers across
-// restarts. Future tier ups are detected by checking
-// the current native tier against the highest
-// persisted tier.
+// Persistent tier-up log.
 const TIER_LOG_KEY = 'cyberclaw-speaker-tier-log';
-// Tier-up events span minutes (T2 takes ~30 minutes
-// of natural use, T3 takes hours). Polling every 5s
-// is fine for the running enrollment panel and
-// cheap. The tier log is read every poll to detect
-// new tier-up events.
+// Tier-up events span minutes (T2 takes ~30 minutes of natural use, T3 takes hours).
 const TIER_POLL_INTERVAL_MS = 4000;
 
 type TierEvent = {
@@ -209,11 +158,7 @@ export default function VoiceTrainingScreen({
       })
     : 0;
   const tierDef = SPEAKER_TIER_DEFINITIONS[tier];
-  // "Show the active enrollment panel" when the
-  // user is below Tier 1 (no profile) OR when they
-  // explicitly want to re-train (Tier 1 already
-  // achieved). Past Tier 1, the panel is hidden
-  // because the bar handles progress visibility.
+  // "Show the active enrollment panel" when the user is below Tier 1 (no profile) OR when they explicitly want to re-train (Tier 1 already…
   const showActiveEnrollment = tier < 2;
 
   return (

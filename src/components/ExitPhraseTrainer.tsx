@@ -1,30 +1,4 @@
-/**
- * ExitPhraseTrainer — Record user samples + train an exit-phrase model.
- * v3.2.25 (refined in v3.4.9, retargeted in v3.5.0).
- *
- * Records 6 audio samples of the user's chosen exit phrase
- * (e.g. "thanks", "goodbye", "stop"). Each sample is captured
- * as raw PCM16 mono 16kHz WAV via WakeWordModule.startSampleRecord.
- *
- * v3.5.0: ships the samples to the desktop for openWakeWord
- * training (mirror of OpenWakeWordTrainer), receives the
- * trained .tflite back, hot-swaps it into the running exit
- * classifier via WakeWordModule.setExitModelFromBase64.
- *
- * The result: "thanks" spoken in voice mode instantly exits,
- * even when STT transcription hasn't fired yet. The
- * text-fallback (ExitPhraseMatcher) is kept as a safety net
- * during the training window and for the (rare) cases where
- * the ML classifier gives a softer score.
- *
- * Legacy (pre-v3.5.0): The samples used to be locally
- * extracted into AudioFeatures and saved to AsyncStorage
- * for a DTW runtime detector that was promised but never
- * shipped (v3.2.26). The v3.4.9 honest message flagged this.
- * v3.5.0 replaces that path entirely — the samples now go
- * straight to the desktop for ML training instead of into
- * a dead-end feature cache.
- */
+/** ExitPhraseTrainer — Record user samples + train an exit-phrase model. */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
@@ -42,12 +16,7 @@ import {
 import RNFS from 'react-native-fs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules } from 'react-native';
-// v3.5.0: extractAudioFeatures + base64ToInt16Array were used by
-// the pre-v3.5.0 feature-extraction save path. The trainer now
-// ships raw WAVs to the desktop for ML training instead, so these
-// are no longer needed. Kept the comment so a future feature
-// (e.g. on-device DTW fallback during offline mode) doesn't get
-// forgotten.
+// ExtractAudioFeatures + base64ToInt16Array were used by the pre-v3.5.0 feature-extraction save path.
 import syncClient from '../services/SyncClient';
 import {
   getExitSamplesKey,
@@ -73,22 +42,7 @@ type Stage =
   | 'error';
 
 export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel, onComplete }: {
-  // v3.4.0: companionId is REQUIRED for per-companion
-  // storage. The trainer writes its samples to
-  // cyberclaw-exit-samples-<companionId>-<phrase>
-  // and the active phrase to
-  // cyberclaw-exit-phrase-<companionId>.
-  // v3.3.0: optional preset phrase. When set, the
-  // trainer's TextInput initializes with this string
-  // instead of the default 'thanks'. Used by the
-  // per-row "Retrain" button in the new ExitPhrasePicker
-  // to pre-fill the trainer with the existing phrase so
-  // the user can re-record samples without accidentally
-  // training a different word. If the user changes the
-  // phrase text and saves, it becomes a new entry in the
-  // pickup list (the old one stays until manually
-  // deleted) — which is the same behavior as first-time
-  // training.
+  // CompanionId is REQUIRED for per-companion storage.
   companionId: string;
   presetPhrase?: string;
   onCancel: () => void;
@@ -244,11 +198,7 @@ export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel,
           trimmed,
           msg.base64,
         );
-        // v3.5.0: write a small AsyncStorage marker so the
-        // "Currently trained" picker list knows about this
-        // phrase even though we no longer store features
-        // locally. The marker is just enough metadata to
-        // render the row + know when it was trained.
+        // Write a small AsyncStorage marker so the "Currently trained" picker list knows about this phrase even though we no longer store features…
         try {
           await AsyncStorage.setItem(
             getExitSamplesKey(companionId, trimmed),
@@ -257,11 +207,7 @@ export default function ExitPhraseTrainer({ companionId, presetPhrase, onCancel,
         } catch (_) {}
         setStage('complete');
         setLastSavedAt(Date.now());
-        // v3.5.0: this is real now, not a promise. The
-        // exit model is hot-swapped into the running
-        // OWW detector, so saying "thanks" exits voice
-        // mode immediately. The text-fallback still
-        // works as a safety net.
+        // This is real now, not a promise.
         setStatusMsg(`✅ Exit phrase ready. Model saved to ${savedPath.split('/').pop()}. Try saying "${trimmed}" in voice mode.`);
         // Best-effort cleanup of the temp WAVs — the
         // model is now the artifact, the WAVs are gone.

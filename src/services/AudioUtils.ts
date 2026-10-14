@@ -1,11 +1,4 @@
-/**
- * AudioUtils — Convert between audio formats
- * 
- * Handles:
- * - Base64 ↔ binary conversion
- * - PCM16 array creation
- * - WAV file parsing
- */
+/** AudioUtils — Convert between audio formats Handles: - Base64 ↔ binary conversion - PCM16 array creation - WAV file parsing */
 
 /**
  * Convert base64 string to Int16Array (PCM16 audio)
@@ -78,22 +71,7 @@ export function normalizeAudio(pcm16: Int16Array): Float32Array {
   return normalized;
 }
 
-/**
- * Simple audio validation - check if audio has content
- *
- * v3.1.78: minDuration 0.15 → 0.08s. Consonant attacks in
- * "hey" are 30-80ms; 0.15s required the trailing "y" to
- * finish, which is unintuitive. 0.08s still rejects
- * accidental taps (typically <50ms) but accepts clipped
- * "hey" attempts.
- *
- * v3.1.78: split the "is this real audio" check into two:
- *   1) overall non-zero ratio (loose — 5% of samples > 200)
- *   2) first 50ms must contain at least one sample > 1000
- * The second catches the "recorder fired silence immediately"
- * bug where the native module returns 0 audio but the
- * silence event still fires, leaving a 0-length file.
- */
+/** Simple audio validation - check if audio has content v3.1.78: minDuration 0.15 → 0.08s. */
 export function validateAudio(pcm16: Int16Array, minDuration: number = 0.08): {
   valid: boolean;
   reason?: string;

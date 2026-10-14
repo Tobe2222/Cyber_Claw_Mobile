@@ -1,106 +1,11 @@
-/**
- * VOICE SETTINGS — v3.2.20 / v3.4.0 / v3.6.0
- *
- * AsyncStorage-backed settings for the multi-turn voice-mode loop.
- *
- * Keys (v3.7.2 — per-companion silence):
- *   - cyberclaw-voice-silence-ms-<companionId>  Number (2000..10000),
- *                                          continuous silence in ms
- *                                          that closes a recording
- *                                          turn. Default 5000. Per-
- *                                          companion so chatty vs
- *                                          terse companions can have
- *                                          different silence.
- *   - cyberclaw-voice-silence-ms          Legacy v3.7.1 global key,
- *                                          read as a fallback for
- *                                          companions without a
- *                                          per-companion override.
- *                                          Not written by v3.7.2+.
- *
- * Keys (v3.4.0 — per-companion exit phrase):
- *   - cyberclaw-exit-phrase-<companionId>  String, the user's active
- *                                          exit phrase per companion
- *                                          (default 'thanks'). Empty
- *                                          disables the feature.
- *   - cyberclaw-exit-samples-<companionId>-<phrase>
- *                                         Per-companion per-phrase
- *                                         training samples, stored
- *                                         as JSON AudioFeatures.
- *
- * Keys (v3.6.0 — global send word):
- *   - cyberclaw-send-phrase                String, the user's active
- *                                          send word (e.g. 'send').
- *                                          Empty disables. Global,
- *                                          NOT per-companion — the
- *                                          send word is a single user
- *                                          habit, not a per-companion
- *                                          convention.
- *   - cyberclaw-send-samples-<phrase>     Training samples for the
- *                                          send word, stored as JSON
- *                                          AudioFeatures. Global.
- *
- * Voice mode reads these fresh on every recording start so that a
- * Settings change takes effect immediately for the next turn (no
- * mode restart needed).
- *
- * v3.2.20 simplification: dropped the multi-phrase list (8 max)
- * and the preset toggles. Single phrase only. The user can also
- * train the phrase with 6 audio samples (see ExitPhraseTrainer),
- * which enables the in-audio-stream detector that closes voice
- * mode the moment the user says the phrase (no STT wait).
- *
- * v3.4.0: storage keys became per-companion (matches the new
- * 3-level Settings hierarchy: Voice mode → companion list →
- * per-companion detail). Legacy keys (no companionId prefix)
- * are no longer read or written by this module but are NOT
- * deleted — if the user reverts to v3.3.0 they still find their
- * old training. A separate migration on first launch of v3.4.0
- * reads the legacy keys and writes them under the active
- * companion's namespace so the user doesn't lose data on upgrade.
- *
- * v3.6.0: added the send word (explicit end-of-utterance cue)
- * to the same architecture. Like exit, single word, with 6-sample
- * trainer. Unlike exit, it's global — one send word across all
- * companions, like the wake word itself.
- */
+/** VOICE SETTINGS — v3.2.20 / v3.4.0 / v3.6.0 AsyncStorage-backed settings for the multi-turn voice-mode loop. */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// v3.7.2: SILENCE_MS_KEY is now the *fallback* key. The
-// per-companion key (getSilenceMsKey(companionId)) is
-// consulted first; if missing, we fall back to the global
-// value stored under SILENCE_MS_KEY. v3.7.1 users have a
-// value in SILENCE_MS_KEY (their existing global silence
-// setting); that value becomes the default for any
-// companion without a per-companion override, so they
-// don't lose their setting on upgrade. The first time
-// they touch the silence slider in a companion's voice
-// sub-page, that companion gets its own per-companion value.
+// SILENCE_MS_KEY is now the *fallback* key.
 export const SILENCE_MS_KEY = 'cyberclaw-voice-silence-ms';
 
-// v3.11.36 — tightened defaults. The native-side
-// silence detector now does proper hysteresis
-// (speech-band RMS 0.010, silence-band RMS 0.005,
-// v3.9.5/v3.10.12) which absorbs natural inter-word
-// drops without bleeding into ambient noise. Combined
-// with the smart-silence toggle (relative threshold,
-// v3.10.28), a 1.8s trailing-silence window reliably
-// detects sentence-end for normal conversational speech
-// without cutting off mid-thought hesitations. Old
-// default was 6s (paired with 5s countdown = 11s total)
-// — way too laggy for back-and-forth voice chat. New
-// total sleep = ~3s (1.8s silence + ~1s visual
-// countdown).
-//
-// MIN 800ms lets the aggressive end of the slider work
-// for users with clear, snappy speech patterns. MAX 6s
-// keeps the slow-but-sure end of the slider reachable
-// for users who draw out words while thinking.
-// Tobe's 2026-10-07 ask: "we need a better way of
-// recognizing end of user sentence." This is the
-// incremental improvement without bringing in a full
-// trained VAD (Silero / LiveKit turn-detector, planned
-// for v3.11.37+ as a separate native-module integration).
+// Tightened defaults.
 export const DEFAULT_SILENCE_MS = 1800;
 export const MIN_SILENCE_MS = 800;
 export const MAX_SILENCE_MS = 6000;
@@ -117,55 +22,14 @@ export const MAX_PHRASE_LENGTH = 40;
 export const SEND_PHRASE_KEY = 'cyberclaw-send-phrase';
 export const DEFAULT_SEND_PHRASE = 'send';
 
-/**
- * v3.9.8: your-turn cue sound. Plays after the desktop's
- * audio response finishes and we're about to start the
- * next recording window. Tells the user "your turn to
- * talk now" via a short gentle sound instead of relying
- * on visual overlay alone. Values:
- *   - 'off'         no sound (default; conservative)
- *   - 'bird'        synthesized 3-note rising bird chirp (0.5s)
- *   - 'bell'        soft two-tone bell, E5+B5 (1.0s)
- *   - 'ding'        single gentle A5 ding (0.8s)
- *   - 'chime'       C5-E5-G arpeggio chime (0.9s)
- *
- * The actual WAV files are bundled at android/app/src/main/
- * assets/sounds/turn-{id}.wav. Synthesized from sine waves
- * at build time (zero external assets, zero license
- * concerns). The setting is global (not per-companion) for
- * v3.9.8; per-companion cue sounds are planned for v3.10.0.
- */
+/** Your-turn cue sound. */
 export const TURN_CUE_KEY = 'cyberclaw-voice-turn-cue';
 export const LEGACY_TURN_CUE_KEY = 'cyberc…-turn-cue'; // v3.10.1: was the canonical key by accident; SettingsScreen wrote/read `cyberclaw-voice-turn-cue`, so the user-selected cue was never read by WakeModeScreen and no cue ever played. Fixed by aligning the two paths to the SettingsScreen canonical key.
 export const DEFAULT_TURN_CUE = 'off';
 export const TURN_CUE_OPTIONS = ['off', 'bird', 'bell', 'ding', 'chime'] as const;
 export type TurnCueId = typeof TURN_CUE_OPTIONS[number];
 
-/**
- * v3.10.34: 'working' / 'thinking' cue + speech while the
- * LLM is processing. Tobe (post v3.10.33): "It seems that
- * the companion response actually has a delay now, its
- * still in responding some seconds after the sound
- * sentence is finished... Working response where the user
- * can input 'working' or 'digging' or whatever he
- * wants."
- *
- * Two related settings, distinct UX purposes:
- *   - WORKING_CUE: a short non-verbal sound (same WAV
- *     options as TURN_CUE, e.g. 'chime') that plays once
- *     when the LLM is taking longer than
- *     DEFAULT_WORKING_DELAY_MS to respond. Gives the user
- *     audio feedback that the desktop pipeline is alive
- *     without committing to a verbal phrase (which uses
- *     Android TTS — different voice from the companion's).
- *   - WORKING_SPEECH: the verbal phrase the user chooses
- *     (default 'Working on it...'). TTS-rendered via the
- *     same Android TTS engine the greetings + exit replies
- *     use. Plays once AFTER the cue, only if the LLM is
- *     still working when WORKING_SPEECH_DELAY_MS has
- *     passed since the cue (so quick responses don't get
- *     a spoken phrase interrupting the actual answer).
- */
+/** 'working' / 'thinking' cue + speech while the LLM is processing. */
 export const WORKING_CUE_KEY = 'cyberclaw-voice-working-cue';
 export const DEFAULT_WORKING_CUE = 'off';
 export const WORKING_CUE_OPTIONS = ['off', 'bird', 'bell', 'ding', 'chime'] as const;
@@ -179,26 +43,7 @@ export const MAX_WORKING_SPEECH_DELAY_MS = 5000;
 export const WORKING_SPEECH_DELAY_KEY = 'cyberclaw-voice-working-delay-ms';
 export const DEFAULT_WORKING_DELAY_MS = 1500;
 
-/**
- * v3.10.1: migrate the legacy turn-cue key
- * (cyberc…-turn-cue, with the ellipsis as a typo'd
- * abbreviation) to the canonical key
- * (cyberclaw-voice-turn-cue). Tobe's v3.9.8 + v3.10.0
- * installs wrote to the canonical key (SettingsScreen
- * always used it) but WakeModeScreen's TURN_CUE_KEY
- * constant pointed at the typo'd legacy key. As a
- * result WakeModeScreen always read the default
- * ('off') and never played a cue, even when Tobe had
- * set one in Settings.
- *
- * Idempotent: runs on app start (App.tsx
- * initial-load effect). If the legacy key has a
- * value AND the canonical key is unset, copy the
- * legacy value to the canonical key and clear the
- * legacy key. If the canonical key already has a
- * value, leave it alone (it was set by SettingsScreen
- * and reflects the user's current choice).
- */
+/** Migrate the legacy turn-cue key (cyberc…-turn-cue, with the ellipsis as a typo'd abbreviation) to the canonical key… */
 export async function migrateLegacyTurnCueKey(): Promise<boolean> {
   try {
     const AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -232,66 +77,20 @@ export const getExitPhraseKey = (companionId: string) =>
 export const getExitSamplesKey = (companionId: string, phrase: string) =>
   `cyberclaw-exit-samples-${companionId}-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 
-/**
- * v3.10.154: per-companion voice settings stripped of all
- * cloud / API scaffolding. ElevenLabs and Google Cloud TTS
- * were decorative (desktop never honored them, never even
- * had an ElevenLabs client). All TTS now routes through the
- * device's Android TextToSpeech engine.
- *
- * Companion-specific overrides let the user pick a different
- * voice per companion (e.g. Lamasuu = Male, Clawsuu = Female)
- * without changing the global default.
- *
- * Each per-companion key is independent. A missing key means
- * "use the global default" — see loadVoiceFor() below.
- *
- * Keys:
- *   - cyberclaw-voice-engine-<companionId>       'local' | 'default'
- *   - cyberclaw-voice-local-id-<companionId>     voice id
- *                                                (e.g. 'slt', 'clb', 'bdl',
- *                                                'male', 'female', 'default')
- *
- * Obsolete keys (removed in v3.10.154, cleared on first launch
- * by migrateV3_10_154_dropCloudTts() below):
- *   - cyberclaw-voice-api-provider-<companionId>  (was ElevenLabs / Google)
- *   - cyberclaw-voice-api-voice-<companionId>     (was the voice id)
- *   - cyberclaw-voice-api-provider               (global)
- *   - cyberclaw-voice-api-voice                  (global)
- *   - cyberclaw-voice-api-key                    (ElevenLabs key)
- *   - cyberclaw-voice-engine='api'               (forces back to 'default')
- */
+/** Per-companion voice settings stripped of all cloud / API scaffolding. */
 export const getVoiceEngineKey = (companionId: string) =>
   `cyberclaw-voice-engine-${companionId}`;
 
 export const getVoiceLocalIdKey = (companionId: string) =>
   `cyberclaw-voice-local-id-${companionId}`;
 
-/**
- * v3.10.154: a resolved voice config for one companion, with
- * every field guaranteed non-null. If the per-companion
- * override is missing, the corresponding global default is
- * used instead.
- *
- *   engine:    'local' | 'default' (always resolves to 'local'
- *              for callers; 'default' is just the inheritance
- *              sentinel and never escapes loadVoiceFor)
- *   localId:   one of LOCAL_VOICES[].id
- *
- * The 'default' engine value (stored when the user picks
- * "Use global default") is resolved here to the effective
- * engine, so consumers don't have to special-case it.
- */
+/** A resolved voice config for one companion, with every field guaranteed non-null. */
 export type ResolvedVoiceConfig = {
   engine: 'local';
   localId: string;
 };
 
-/**
- * Legacy v3.3.0 keys (no companionId prefix). Read by the v3.4.0
- * migration on first launch to seed per-companion data, but no
- * longer read or written by this module after migration.
- */
+/** Legacy v3.3.0 keys (no companionId prefix). */
 export const LEGACY_EXIT_PHRASE_KEY = 'cyberclaw-voice-exit-phrase';
 export const getLegacyExitSamplesKey = (phrase: string) =>
   `cyberclaw-exit-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
@@ -300,41 +99,18 @@ export type VoiceSettings = {
   silenceMs: number;
   exitPhrase: string;
   sendPhrase: string;
-  // v3.10.34: working cue + speech during LLM processing.
-  // workingCue is the non-verbal sound id (same WAV options
-  // as turnCue). workingSpeech is the user-configurable
-  // phrase. workingDelayMs is the wait-after-user-speech
-  // before the cue fires (so quick responses don't get a
-  // working cue interrupting them).
+  // Working cue + speech during LLM processing.
   workingCue: WorkingCueId;
   workingSpeech: string;
   workingDelayMs: number;
 };
 
-/**
- * Read settings fresh from storage. Returns defaults if any key
- * is missing or corrupt. silenceMs is clamped to
- * [MIN_SILENCE_MS, MAX_SILENCE_MS] so a bad stored value (e.g.
- * from an older build) can never break the recording loop.
- *
- * v3.4.0: takes companionId — exit phrase is now per-companion.
- * Voice mode passes the active companionId here so the right
- * exit phrase is loaded for the active companion.
- *
- * v3.6.0: also loads the global send word. The send word is the
- * same regardless of companionId — it's a single user habit, not
- * a per-companion convention.
- */
+/** Read settings fresh from storage. */
 export async function loadVoiceSettings(companionId?: string): Promise<VoiceSettings> {
   let silenceMs = DEFAULT_SILENCE_MS;
   let exitPhrase = DEFAULT_EXIT_PHRASE;
   let sendPhrase = DEFAULT_SEND_PHRASE;
-  // v3.7.2: silence is now per-companion. Read the
-  // per-companion key first; fall back to the global
-  // key (v3.7.1 value) if missing, then to the default.
-  // This way v3.7.1 users keep their existing silence
-  // setting for any companion that hasn't been
-  // overridden.
+  // Silence is now per-companion.
   let rawSilence: string | null = null;
   if (companionId) {
     try {
@@ -409,10 +185,7 @@ export async function loadVoiceSettings(companionId?: string): Promise<VoiceSett
 }
 
 export async function saveSilenceMs(companionId: string, ms: number): Promise<void> {
-  // v3.7.2: silence is per-companion. The save always
-  // writes to the per-companion key; the global key
-  // (SILENCE_MS_KEY) is read-only fallback, not written
-  // by this function.
+  // Silence is per-companion.
   const clamped = Math.max(MIN_SILENCE_MS, Math.min(MAX_SILENCE_MS, Math.round(ms)));
   await AsyncStorage.setItem(getSilenceMsKey(companionId), String(clamped));
 }
@@ -425,24 +198,14 @@ export async function saveExitPhrase(companionId: string, phrase: string): Promi
   return finalPhrase;
 }
 
-/**
- * v3.6.0: persist the send word. Single word, lowercase, trimmed.
- * Unlike exit phrase, no companionId — it's a global setting.
- * Empty string clears the send word (disable the feature).
- */
+/** Persist the send word. */
 export async function saveSendPhrase(phrase: string): Promise<string> {
   const sanitized = phrase.trim().toLowerCase().slice(0, MAX_PHRASE_LENGTH);
   await AsyncStorage.setItem(SEND_PHRASE_KEY, sanitized);
   return sanitized;
 }
 
-/**
- * v3.10.34: persist the working cue sound id, the user's
- * working speech phrase, and the working delay. Each
- * clamped / validated to its allowed range; an invalid
- * value is rejected (function throws) rather than silently
- * written. Settings UI calls these on every change.
- */
+/** Persist the working cue sound id, the user's working speech phrase, and the working delay. */
 export async function saveWorkingCue(cue: WorkingCueId): Promise<void> {
   if (!(WORKING_CUE_OPTIONS as readonly string[]).includes(cue)) {
     throw new Error(`Invalid working cue: ${cue}`);
@@ -465,12 +228,7 @@ export async function saveWorkingDelayMs(ms: number): Promise<number> {
   return clamped;
 }
 
-/**
- * v3.6.0: read the trained samples for the active send word.
- * Returns null if no training exists. Used by the native OWW
- * bridge (setSendModelFromBase64) to install a freshly-trained
- * classifier.
- */
+/** Read the trained samples for the active send word. */
 export async function loadSendSamples(phrase: string): Promise<any[] | null> {
   try {
     const raw = await AsyncStorage.getItem(getSendSamplesKey(phrase));
@@ -494,19 +252,7 @@ export async function clearSendSamples(phrase: string): Promise<void> {
   await AsyncStorage.removeItem(getSendSamplesKey(phrase));
 }
 
-/**
- * v3.8.3: read the trained-model metadata for the active
- * send word. Returns null if no training exists for this
- * phrase. The send-word trainer writes
- * `{ trainedAt, modelPath }` to the same AsyncStorage key
- * after a successful hot-swap; this helper reads that
- * shape (not the legacy `{ phrase, features, savedAt }`
- * shape that loadSendSamples expects, which the trainer
- * never writes). Used by the settings UI to render a
- * "Listening for: <phrase>" badge and a timestamp so the
- * user can see at a glance whether a trained model is
- * installed, when it was trained, and on which file.
- */
+/** Read the trained-model metadata for the active send word. */
 export async function loadSendModelInfo(
   phrase: string,
 ): Promise<{ trainedAt: number; modelPath: string } | null> {
@@ -523,11 +269,7 @@ export async function loadSendModelInfo(
   }
 }
 
-/**
- * Read the per-companion per-phrase training samples. Returns
- * null if no training exists. Used by the voice-mode detector
- * to match against the live audio stream.
- */
+/** Read the per-companion per-phrase training samples. */
 export async function loadExitSamples(companionId: string, phrase: string): Promise<any[] | null> {
   try {
     const raw = await AsyncStorage.getItem(getExitSamplesKey(companionId, phrase));
@@ -551,18 +293,7 @@ export async function clearExitSamples(companionId: string, phrase: string): Pro
   await AsyncStorage.removeItem(getExitSamplesKey(companionId, phrase));
 }
 
-/**
- * v3.10.154: load the resolved voice config for a companion.
- *
- * Reads the two per-companion keys. For each field, if the
- * per-companion key is missing, falls back to the global
- * default (the keys the v3.6.2 Settings screen writes:
- * cyberclaw-voice-engine, cyberclaw-voice-local).
- *
- * The 'default' engine value is resolved to 'local' so the
- * consumer doesn't have to special-case it. There is no 'api'
- * engine anymore.
- */
+/** Load the resolved voice config for a companion. */
 export async function loadVoiceFor(companionId: string): Promise<ResolvedVoiceConfig> {
   let rawEngine: string | null = null;
   let rawLocalId: string | null = null;
@@ -593,17 +324,7 @@ export async function loadVoiceFor(companionId: string): Promise<ResolvedVoiceCo
   };
 }
 
-// v3.10.166: small helper used by the greeting / exit-reply /
-// working-speech audio caches. Returns the local piper voice
-// id that should be used as the cache key for audio
-// synthesized against the given companion. Falls back to
-// 'lessac' (the desktop's default) if anything goes wrong
-// reading AsyncStorage.
-//
-// The companionId is optional; when omitted, only the global
-// voice (cyberclaw-voice-local) is consulted. When the user
-// hasn't picked a voice, the AsyncStorage value is null and
-// this returns 'lessac'.
+// Small helper used by the greeting / exit-reply / working-speech audio caches.
 export async function getCurrentVoiceIdForCache(companionId?: string): Promise<string> {
   try {
     if (companionId) {
@@ -616,16 +337,7 @@ export async function getCurrentVoiceIdForCache(companionId?: string): Promise<s
   return 'lessac';
 }
 
-/**
- * v3.10.154: persist a companion's voice config. Pass any field
- * as undefined to leave it unchanged; pass an explicit value
- * to set it (including the empty string to clear a per-
- * companion override, reverting to the global default).
- *
- * The 'api' engine value is normalized to 'default' so any
- * leftover callers from v3.7.0–v3.10.153 that still pass
- * engine: 'api' don't write an invalid value to disk.
- */
+/** Persist a companion's voice config. */
 export async function saveVoiceFor(
   companionId: string,
   patch: {
@@ -635,10 +347,7 @@ export async function saveVoiceFor(
 ): Promise<void> {
   const ops: Array<Promise<void>> = [];
   if (patch.engine !== undefined) {
-    // v3.10.154: 'api' is no longer a valid engine. Anyone
-    // passing it gets 'default' instead — keeps the type
-    // permissive for transitional callers, but never
-    // persists an invalid value.
+    // 'api' is no longer a valid engine.
     const safeEngine: 'local' | 'default' = patch.engine === 'local' ? 'local' : 'default';
     ops.push(AsyncStorage.setItem(getVoiceEngineKey(companionId), safeEngine));
   }
@@ -648,11 +357,7 @@ export async function saveVoiceFor(
   await Promise.all(ops);
 }
 
-/**
- * v3.10.154: clear the per-companion voice overrides for one
- * companion, reverting to the global defaults. The TTS layer
- * will pick up the global values again.
- */
+/** Clear the per-companion voice overrides for one companion, reverting to the global defaults. */
 export async function clearVoiceFor(companionId: string): Promise<void> {
   await Promise.all([
     AsyncStorage.removeItem(getVoiceEngineKey(companionId)),
@@ -660,29 +365,7 @@ export async function clearVoiceFor(companionId: string): Promise<void> {
   ]);
 }
 
-/**
- * v3.10.154: one-time migration that drops all the
- * cloud-TTS scaffolding. Runs on app start (App.tsx
- * initial-load effect). Idempotent — safe to call on every
- * launch.
- *
- * What it does:
- *   1. Walks all AsyncStorage keys for the legacy cloud-TTS
- *      ones (per-companion + global) and removes them.
- *   2. Any per-companion or global engine value of 'api'
- *      gets rewritten to 'default' (so the user with
- *      engine='api' falls back to whatever the global master
- *      voice is, instead of staying stuck on a now-invalid
- *      engine).
- *   3. Any per-companion or global localId of 'nova' (the
- *      ElevenLabs Nova voice default from v3.6.x) gets
- *      rewritten to 'default' — Nova is no longer a valid
- *      voice id and would otherwise fail to resolve.
- *
- * Returns a small summary so callers can log the migration
- * for debugging ("cleared 4 cloud-tts keys, normalized 2
- * engines, normalized 1 voice id").
- */
+/** One-time migration that drops all the cloud-TTS scaffolding. */
 export async function migrateV3_10_154_dropCloudTts(): Promise<{
   clearedKeys: number;
   normalizedEngines: number;
@@ -703,9 +386,6 @@ export async function migrateV3_10_154_dropCloudTts(): Promise<{
     );
     if (legacyKeys.length > 0) {
       // AsyncStorage v3 renamed multiRemove → removeMany.
-      // Cast to any to avoid pulling type changes into
-      // every caller — the runtime method exists in both
-      // versions of the library.
       await (AsyncStorage as any).removeMany
         ? (AsyncStorage as any).removeMany(legacyKeys)
         : (AsyncStorage as any).multiRemove(legacyKeys);
@@ -757,18 +437,7 @@ export async function migrateV3_10_154_dropCloudTts(): Promise<{
   return result;
 }
 
-/**
- * v3.4.0: one-time migration from v3.3.0's global exit-phrase
- * storage to per-companion. Reads the legacy keys
- * (cyberclaw-voice-exit-phrase + cyberclaw-exit-samples-<phrase>)
- * and writes them under the given companionId. Idempotent — if
- * no legacy keys exist, this is a no-op. Should be called from
- * SettingsScreen on mount (after the agent cache is hydrated).
- *
- * Future cleanup pass (v3.5.0+): delete the legacy keys once
- * we're confident users have migrated. For now we leave them
- * in place so a downgrade to v3.3.0 doesn't lose training.
- */
+/** One-time migration from v3.3.0's global exit-phrase storage to per-companion. */
 export async function migrateLegacyExitSamples(companionId: string): Promise<void> {
   try {
     // Migrate the active exit phrase string.
@@ -788,19 +457,7 @@ export async function migrateLegacyExitSamples(companionId: string): Promise<voi
       !k.includes(`${companionId}-`)  // already migrated
     );
     for (const oldKey of legacySampleKeys) {
-      // Skip keys that already have a companionId prefix (some
-      // keys look like 'cyberclaw-exit-samples-<word>-<word>'
-      // — we can't easily tell those apart from the legacy
-      // pattern without a heuristic). The heuristic: legacy
-      // keys store a single phrase (no hyphen between companionId
-      // and phrase). New keys always have companionId-then-phrase.
-      // Since companionIds are UUIDs (contain hyphens), and old
-      // keys had a single phrase with optional hyphens, we use
-      // the rule "no UUID-shaped prefix" by checking that the
-      // suffix isn't a phrase we already have stored.
-      // v3.4.0 simplification: just attempt migration and let
-      // AsyncStorage's key collision logic resolve. If the key
-      // already exists in the new namespace, skip.
+      // Skip keys that already have a companionId prefix (some keys look like 'cyberclaw-exit-samples-<word>-<word>' — we can't easily tell those…
       const raw = await AsyncStorage.getItem(oldKey);
       if (!raw) continue;
       // Extract the phrase from the legacy key.

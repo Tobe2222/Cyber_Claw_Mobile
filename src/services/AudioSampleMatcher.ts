@@ -1,16 +1,4 @@
-/**
- * AudioSampleMatcher — Compare incoming audio against training samples
- * 
- * Approach:
- * 1. Load training audio samples from AsyncStorage
- * 2. Record incoming audio
- * 3. Extract audio features (energy envelope, zero-crossing rate)
- * 4. Compare using dynamic time warping
- * 5. Score similarity (0-1)
- * 6. Threshold match if > 0.7
- * 
- * This avoids speech-to-text entirely and compares waveforms directly
- */
+/** AudioSampleMatcher — Compare incoming audio against training samples Approach: 1. */
 
 export interface AudioFeatures {
   // Energy frame-by-frame (volume envelope)
@@ -23,10 +11,7 @@ export interface AudioFeatures {
   duration: number;
 }
 
-/**
- * Extract audio features from PCM16 data
- * Processes ~512 samples at a time (32ms at 16kHz)
- */
+/** Extract audio features from PCM16 data Processes ~512 samples at a time (32ms at 16kHz) */
 export function extractAudioFeatures(
   pcm16Data: Int16Array,
   sampleRate: number = 16000,
@@ -64,10 +49,7 @@ export function extractAudioFeatures(
   };
 }
 
-/**
- * Dynamic Time Warping — compare two sequences of different lengths
- * Returns similarity score 0-1 (1 = identical, 0 = completely different)
- */
+/** Dynamic Time Warping — compare two sequences of different lengths Returns similarity score 0-1 (1 = identical, 0 = completely different) */
 export function compareAudioFeatures(
   features1: AudioFeatures,
   features2: AudioFeatures,
@@ -101,10 +83,7 @@ export function compareAudioFeatures(
   return energyWeight * energyScore + zcrWeight * zcrScore;
 }
 
-/**
- * Simplified DTW distance
- * Lower = more similar
- */
+/** Simplified DTW distance Lower = more similar */
 function dtw(seq1: number[], seq2: number[]): number {
   const n = seq1.length;
   const m = seq2.length;
@@ -125,10 +104,7 @@ function dtw(seq1: number[], seq2: number[]): number {
   return cost[n][m];
 }
 
-/**
- * Match incoming audio against training samples
- * Returns: { matched: boolean, score: number, bestMatch: number }
- */
+/** Match incoming audio against training samples Returns: { matched: boolean, score: number, bestMatch: number } */
 export async function matchAgainstTraining(
   incomingFeatures: AudioFeatures,
   trainingFeaturesList: AudioFeatures[],
@@ -156,16 +132,7 @@ export async function matchAgainstTraining(
   };
 }
 
-/**
- * v3.1.67: per-companion matching. Each companion can have
- * its own wake word (e.g. "hey clawsuu" for clawsuu, "yo
- * lamasuu" for lamasuu). The wake listener matches against
- * ALL companions' training data and returns the matched
- * companionId so the wake mode can show the right one.
- * Tobe: "we should rather train other wake words for other
- * companions. So, in the settings for wake training the
- * user should select which companion to train for."
- */
+/** Per-companion matching. */
 export async function matchAgainstAllCompanions(
   incomingFeatures: AudioFeatures,
   companionsTraining: Array<{ companionId: string; features: AudioFeatures[] }>,

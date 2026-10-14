@@ -1,39 +1,4 @@
-/**
- * LlmStatusPill — mobile mirror of the desktop's local-LLM
- * status pill. Sits above the chat TextInput in HomeScreen so
- * the user can see at a glance whether the active companion's
- * LLM is loaded, cold, or the local server is down. Tapping
- * the action button invokes the same action on the desktop via
- * the sync-server, so the user can start Ollama from the phone
- * after a reboot without needing to touch the desktop.
- *
- * v3.10.183: initial implementation. Mirrors CyberClaw v3.3.5
- * pill semantics — same 4 states (running/cold/down/too-big),
- * same action buttons (Unload/Warm up/Start). Tap targets are
- * 44pt high to match mobile HIG. We deliberately do NOT poll
- * — the desktop pushes status updates via the `llm_status`
- * broadcast on chat-open and after each action.
- *
- * Props:
- *   status     — { state, model, modelId, baseUrl,
- *                  providerName, vram } from the most recent
- *                  `llm_status` broadcast. null = no signal yet.
- *   activeAgentId — the companion whose chat is open. Used to
- *                  decide whether to show the pill (we hide it
- *                  if status.model belongs to a different agent).
- *   onAction   — async ({ model, action }) => void. The parent
- *                  (HomeScreen) calls syncClient.llmAction().
- *                  Pill disables the button while the call is
- *                  in flight.
- *
- * Visual: a single rounded row with a colored dot + label on
- * the left and an action button on the right. Color theme
- * matches the desktop:
- *   running  → green   (#00ff80)
- *   cold     → amber   (#f7931e)
- *   down     → red     (#ff5050)
- *   too-big  → orange  (#ffb400)
- */
+/** LlmStatusPill — mobile mirror of the desktop's local-LLM status pill. */
 
 import React, { useState } from 'react';
 import {
@@ -78,12 +43,6 @@ export default function LlmStatusPill({ status, activeAgentId, onAction }: Props
 
   if (!status || !status.state) return null;
   // Don't show for companions that aren't the active chat.
-  // The desktop broadcasts `agentId` on every event; if the
-  // mobile receives a stale event from a previous companion
-  // tab, just hide.
-  // We tolerate missing agentId in the broadcast because
-  // mobile-initiated actions (which trigger broadcasts back
-  // to mobile) don't always carry it.
   if (status.state === 'unsupported') return null;
 
   const dotColor = COLORS[status.state as keyof typeof COLORS] || COLORS.unsupported;

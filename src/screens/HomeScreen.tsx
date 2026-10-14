@@ -1,7 +1,4 @@
-/**
- * HomeScreen - CyberClaw mobile companion
- * Arena (real sprites) + Chat/Events/Log tabs + TTS + background service
- */
+/** HomeScreen - CyberClaw mobile companion Arena (real sprites) + Chat/Events/Log tabs + TTS + background service */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
@@ -21,15 +18,9 @@ import { extractAudioFeatures, matchAgainstTraining, matchAgainstAllCompanions, 
 import { base64ToInt16Array } from '../services/AudioUtils';
 import { version as APP_VERSION } from '../../package.json';
 import RemoteToolHandler from '../services/RemoteToolHandler';
-// v3.10.183: local-LLM status pill above the chat input. Lets
-// the user see at a glance whether the active companion's LLM
-// is loaded, cold, or the local server is down, and trigger
-// warm/start/unload actions from the phone.
+// Local-LLM status pill above the chat input.
 import LlmStatusPill from '../components/LlmStatusPill';
-// v3.10.113: theme support. The container, top bar, and
-// chat input bar follow the active theme. The arena (WebView)
-// and chat messages are media content and stay dark — they
-// ship their own backgrounds via the WebView's CSS.
+// Theme support.
 import { useTheme } from '../theme/ThemeContext';
 import { Theme } from '../theme/tokens';
 
@@ -39,32 +30,11 @@ const { BackgroundService, AppControl, WakeWordModule } = NativeModules;
 // (bridge may not be ready). Create on first use instead.
 let _wakeWordEmitter: NativeEventEmitter | null = null;
 
-// Module-level wake-recovery state. These survive React re-renders (and
-// the per-render watcher effect below uses them to re-apply fullscreen
-// whenever the state gets wiped). They do NOT survive a full component
-// unmount, but that's handled by the AsyncStorage-based recovery in
-// the useEffect above.
+// Module-level wake-recovery state.
 let moduleLevelWakePending = false;
 let moduleLevelWakePendingAt = 0;
 
-// v3.5.1: in-memory guard so HomeScreen's checkPending
-// effect cannot immediately re-trigger voice mode after
-// the user just exited it. The AsyncStorage-based check
-// is racy (removeItem in App.tsx's onExit is async; HomeScreen's
-// mount runs getItem in parallel and can see the still-set
-// flag). This guard survives re-mounts within the same JS
-// process but is intentionally NOT persisted — the
-// AsyncStorage flag is still the source of truth for the
-// "activity-torn-down" case where the JS process was killed.
-//
-// v3.5.2: bumped default window 3s → 5s. Tobe reported
-// v3.5.1 still re-opened voice mode twice after exit,
-// suggesting the OWW detector (still running across the
-// screen change) emits a queued owwWakeDetected within
-// ~2-4s of the close. 5s gives ample headroom for the
-// detector to settle past its 2s cooldown and the JS
-// event queue to drain, without keeping the user locked
-// out of a re-trigger for an unreasonably long time.
+// In-memory guard so HomeScreen's checkPending effect cannot immediately re-trigger voice mode after the user just exited it.
 let _wakeJustExitedUntil = 0;
 export const markWakeJustExited = (windowMs: number = 5000) => {
   _wakeJustExitedUntil = Date.now() + windowMs;
@@ -85,20 +55,7 @@ const getWakeSamplesKey = (phrase: string) =>
   `cyberclaw-wake-samples-${phrase.toLowerCase().replace(/\s+/g, '-')}`;
 const SAMPLE_MATCH_THRESHOLD_FG = 0.55; // foreground - more lenient
 
-// v3.1.29: lookup the most recent training samples across all
-// phrases. Used as a fallback when the user has trained for
-// "hey clawsuu" but the settings say "hey claw" (or any
-// other mismatch). Scans AsyncStorage for the
-// cyberclaw-wake-samples-* keys and returns the first one
-// with valid training data. Returns `null` if no training
-// data exists for any phrase.
-//
-// We don't try to migrate the keys when the phrase changes
-// in settings — that would silently re-train the user on a
-// different phrase without their consent. The fallback is
-// for "I had it working, the settings got reset, I don't
-// want to re-train right now". The user can re-train to
-// permanently fix the mismatch.
+// Lookup the most recent training samples across all phrases.
 async function findAnyWakeSamples(): Promise<{ key: string; phrase: string; training: any } | null> {
   let keys: string[] = [];
   try {
@@ -132,18 +89,7 @@ function startSampleMatchListener(
   onLog?: (msg: string) => void,
   threshold?: number,
 ): () => void {
-  // v3.1.95: replaced DTW-based sample matcher with openWakeWord
-  // TFLite inference. The native side runs ML inference on the
-  // audio stream and emits 'owwWakeDetected' when a wake word
-  // is recognized. This is far more accurate than the DTW
-  // matcher (~95%+ vs ~30%) and has near-zero false positives.
-  //
-  // The 'companionsTraining' parameter is kept for API
-  // compatibility but no longer used for matching — the
-  // companionId routing is now done by the active companion
-  // when the wake word fires (any wake word → active companion).
-  // Per-companion wake words with custom-trained models are
-  // the next step (requires the desktop training pipeline).
+  // Replaced DTW-based sample matcher with openWakeWord TFLite inference.
   let stopped = false;
   const sub = wakeWordEmitter?.addListener('owwWakeDetected', (e: { score: number; wakeword: string }) => {
     if (stopped) return;
@@ -155,18 +101,6 @@ function startSampleMatchListener(
     if (activeId) onDetected(activeId);
   });
   // Initialize OWW with the bundled pre-trained model, then start listening.
-  // The init is async but the start call is fire-and-forget — if init
-  // fails, the wake listener just won't fire (logged in onLog).
-  // v3.2.30: thread the caller's threshold through to
-  // initOww. Previously the threshold parameter was
-  // accepted but ignored, hardcoding 0.5 (50% confidence)
-  // regardless of what the foreground/background settings
-  // said. With the fix, the caller's threshold (0.55 FG,
-  // 0.65 BG by default; user-configurable in Settings) is
-  // passed to the native detector, which the v3.2.30
-  // Kotlin-side fix now actually reads (previously the
-  // listening loop ignored the threshold field and just
-  // hardcoded 0.5f).
   WakeWordModule?.initOww?.('hey_jarvis', threshold ?? 0.5)
     .catch((e: any) => onLog?.(`initOww failed: ${e?.message}`))
     .then(() => WakeWordModule?.startOwwListening?.())
@@ -182,22 +116,7 @@ async function startBgService() {
   try {
     const enabled = await AsyncStorage.getItem('cyberclaw-bg-listening');
     if (enabled !== 'false' && BackgroundService) {
-      // v3.10.4: prefer the trained wake phrase from
-      // the active set (the manager's source of truth)
-      // over `cyberclaw-audio-settings.wakeWord`. The
-      // audio-settings key is correct MOST of the time
-      // (the trainer / manager write it on every wake
-      // update), but if it's stale — e.g. the user
-      // toggled BG listening on BEFORE training their
-      // first wake phrase, or the key was wiped by a
-      // test path that bypassed the v3.10.1 sync — the
-      // BG service would fall back to the
-      // 'hey clawsuu' default and false-trigger on
-      // any Vosk partial containing 'hey'. The active
-      // set is the actual bound phrase the OWW
-      // detector is using; passing it through keeps
-      // BG service in lockstep with the foreground
-      // detector.
+      // Prefer the trained wake phrase from the active set (the manager's source of truth) over `cyberclaw-audio-settings.wakeWord`.
       const settingsRaw = await AsyncStorage.getItem('cyberclaw-audio-settings').catch(() => null);
       let phrase = settingsRaw ? JSON.parse(settingsRaw).wakeWord : '';
       if (!phrase) {
@@ -233,10 +152,7 @@ interface AttachmentItem {
   uri: string;
   name: string;
   type: string;
-  // v3.10.132: pre-read base64 of the file. Read at picker
-  // time so the send path doesn't have an async race or
-  // silent failure. Optional — if the read at picker time
-  // failed, the send path will retry from `uri`.
+  // Pre-read base64 of the file.
   data?: string;
   size?: number;
 }
@@ -260,21 +176,7 @@ interface ChatMessage {
   // entire old history.
   activeQuestId?: string | null;
   activeQuestName?: string | null;
-  // v3.10.177.1: error-only diagnostic metadata attached
-  // when this bubble closes a task session as 'failed'.
-  // Tobe's 2026-08-28 clarification: this is ONLY for
-  // errors. Successful agent replies render normally
-  // without any summary footer, so the renderer only
-  // needs to handle the failed branch.
-  //
-  // The renderer swaps the bubble's visual treatment
-  // with a structured error card (category icon +
-  // duration + captured steps + Retry + Copy buttons).
-  // The original error text is preserved above the card
-  // so no information is lost.
-  //
-  // Undefined on successful bubbles, user bubbles, and
-  // any chat bubble that didn't close a task session.
+  // Error-only diagnostic metadata attached when this bubble closes a task session as 'failed'.
   taskSummary?: {
     status: 'failed';
     durationMs: number;
@@ -300,15 +202,7 @@ interface LogEntry {
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-// v3.10.123: reduced from 0.68×w (cap 320) to 0.61×w
-// (cap 290). Tobe's 2026-08-01 15:22 follow-up: "lets
-// reduce the Height a bit but keep same gap to
-// settings. By perhaps 10% such that we lift the chat
-// Height to replace. Chat needs to be taller while
-// arena smaller." ~10% reduction. Cap at 290 keeps
-// it from getting too small on wider phones. The
-// ~30dp savings goes to the chat list (more
-// messages visible above the input row).
+// Reduced from 0.68×w (cap 320) to 0.61×w (cap 290).
 const ARENA_HEIGHT = Math.min(SCREEN_WIDTH * 0.61, 290);
 const CHAT_STORAGE_KEY = 'cyberclaw-chat-history';
 const ARCHIVE_STORAGE_KEY = 'cyberclaw-chat-archive';
@@ -360,41 +254,7 @@ const getDateBucketLabel = (ts: number): string => {
 export const syncLog: LogEntry[] = [];
 const logListeners: ((e: LogEntry) => void)[] = [];
 
-// v3.10.177: per-turn task session tracking. While the
-// agent is "thinking" (typing:true from the desktop), we
-// capture every log entry into a `taskSession`. When the
-// reply arrives (or an error bubble arrives), we close
-// the session and attach a summary to the resulting
-// chat bubble so the user can see:
-//
-//   - how long the task took
-//   - which mobile-side events happened during it
-//     (audio sent, tools referenced in logs, errors
-//     encountered before the bubble)
-//   - whether the task ran to completion or hit a
-//     timeout/crash
-//
-// Why this lives here (vs. inside HomeScreen): HomeScreen
-// unmounts when the user navigates to Settings/Wake mode,
-// but the agent's work continues running on the desktop.
-// Module scope survives unmounts so the captured task
-// session is still there when the user comes back.
-//
-// Captures mobile-side log entries (which include:
-// typing:true, agent_tool events if any, any error
-// log entries from the IPC path, and the agent reply's
-// 📨 arrival log). The desktop's in-app chat pipeline
-// doesn't currently broadcast per-step tool progress
-// (only Discord-routed sessions do, and those are
-// suppressed per v3.2.25). When the desktop wires
-// `task_progress` events for in-app pipelines in the
-// future, the same log capture picks them up with no code
-// change here.
-//
-// Pattern from v3.10.133 (thinkingEscalateTimerRef) and
-// v3.10.120 (chatDraft module-scope) — module scope is
-// the right tool for state that has to outlive a single
-// HomeScreen instance.
+// Per-turn task session tracking.
 interface TaskStep {
   ts: number;
   // Short label like "tool: exec", "audio sent",
@@ -407,10 +267,7 @@ interface TaskStep {
 interface TaskSession {
   id: string;
   startTs: number;
-  // Snapshot of the user's request at the moment we
-  // opened the session, so the summary bubble can show
-  // "Task: <first 60 chars>..." even after the user has
-  // cleared the input or navigated away.
+  // Snapshot of the user's request at the moment we opened the session, so the summary bubble can show "Task: <first 60 chars>..." even after…
   requestText: string;
   agentId: string;
   agentName?: string;
@@ -476,10 +333,7 @@ function closeTaskSession(status: 'done' | 'failed', errorText?: string): TaskSe
 // abbreviations we want to surface in the task summary.
 function stepLabelFromLogEntry(e: LogEntry): string | null {
   const t = e.text || '';
-  // Map common patterns from addLogEntry call sites to
-  // compact step labels. We don't try to be exhaustive —
-  // anything we don't recognize just shows as its full
-  // text in the steps list.
+  // Map common patterns from addLogEntry call sites to compact step labels.
   if (/^🟢 send: pressed/.test(t)) return 'send pressed';
   if (/^→ \[.+\]/.test(t)) return 'sent chat to desktop';
   if (/^📨 Chat message received from server/i.test(t)) return 'agent reply arrived';
@@ -503,11 +357,7 @@ export function addLogEntry(text: string, type: LogEntry['type'] = 'info') {
   syncLog.push(e);
   if (syncLog.length > 300) syncLog.splice(0, syncLog.length - 300);
   logListeners.forEach(fn => fn(e));
-  // v3.10.177: when a task session is open, mirror the
-  // entry into it as a step. We do it inline (vs. via a
-  // wrapper function) so every call site automatically
-  // participates — adding a new addLogEntry site doesn't
-  // require updating a tracking list.
+  // When a task session is open, mirror the entry into it as a step.
   if (activeTaskSession) {
     const label = stepLabelFromLogEntry(e);
     if (label) {
@@ -543,24 +393,7 @@ export function formatTaskDuration(ms: number): string {
   return rs === 0 ? `${m}m` : `${m}m ${rs}s`;
 }
 
-// v3.10.120: module-scoped chat draft. Persists the typed
-// text across HomeScreen unmounts so navigating to Settings
-// and back doesn't wipe the user's in-progress message.
-// Tobe's report (2026-08-01): "when i type, then go check
-// settings, my text disappears, it should be remembered."
-//
-// v3.11.34: per-(agent, quest) drafts. Discord-style — every
-// conversation remembers its own draft independently, so
-// switching to a different chat (companion tab or quest)
-// swaps the visible input to that chat's draft instead of
-// clobbering it with the previous chat's draft.
-//
-// Module-scoped because HomeScreen unmounts on navigation
-// (App.tsx switches screen='home' -> 'settings'), so any
-// useState inside the component resets to '' on remount.
-// Module scope survives unmounts. Empty drafts are deleted
-// from the map (rather than stored as '') so the map stays
-// sparse across many chats.
+// Module-scoped chat draft.
 const chatDraftByKey: Record<string, string> = {};
 const chatDraftKey = (aid: string | null, qid: string | null): string =>
   `${aid ?? 'null'}::${qid ?? 'null'}`;
@@ -608,67 +441,19 @@ export function loadChatUiState(): Promise<void> {
   return chatUiLoaded;
 }
 
-// v3.10.122: arenaHidden persistence. Same module-scope
-// pattern as chatDraft (v3.10.120) — survives HomeScreen
-// unmount on Settings navigation. Default false (arena
-// shown) so existing users see no change until they tap
-// the hide-arena button.
+// ArenaHidden persistence.
 let arenaHiddenPersistent = false;
 export function getArenaHidden() { return arenaHiddenPersistent; }
 export function setArenaHiddenPersistent(v: boolean) { arenaHiddenPersistent = v; }
 
 type TabId = 'chat' | 'events' | 'log';
 
-// v3.11.0: per-quest chat bucketing. TypeScript's Record
-// keys must be `string | number | symbol` — `null` isn't
-// allowed as an indexer. We use a stable string sentinel
-// (`DEFAULT_QUEST_KEY`) for the "no quest / default chat"
-// bucket, and translate between `null` (the public API for
-// "no active quest") and the sentinel at every boundary:
-// the append helper, the view-sync effect, the hydrate /
-// persist effects, and the onScroll handler.
-//
-// Why a sentinel and not a Map: Map would work but rippling
-// the type change through every reader (migrations,
-// AsyncStorage, JSX inline lambdas) is more work than just
-// translating at the boundaries. The sentinel is invisible
-// outside of this file.
+// Per-quest chat bucketing.
 const DEFAULT_QUEST_KEY = '__default__';
 
-// v3.11.21: stable message IDs for history/replay paths.
-// Pre-v3.11.21 the onAgentHistory / onChatHistory /
-// seedFromLegacy paths generated IDs as
-// `hist-${m.ts}-${Math.random()}`. The random suffix
-// changed on every re-hydrate (WS reconnect, agent-tab
-// switch, foreground, etc.), so even though the SAME
-// message was being re-pushed into the bucket, the
-// `lastMessageIdRef` in the auto-scroll-to-new-message
-// effect saw a different last.id and triggered
-// scrollToEnd. Tobe 2026-09-30 10:38: 'now the mobile
-// end chat is spamming up and down... I get a
-// notification of a new message even tho there are
-// none but the chat seems to refresh and think there
-// are and then starts spam scrolling fast up and down
-// to the same positions.' The root cause was the
-// random ID change on every reconnect, which fired
-// the auto-scroll effect on every reconnect storm.
-//
-// Fix: deterministic IDs derived from ts + text hash.
-// `ts` is the desktop-side timestamp; `text` is the
-// message body. Two messages with the same ts and
-// text get the same ID. The hash is a tiny string
-// slice + char-code sum (no external dep, fast) —
-// collisions across very different messages are
-// extraordinarily rare in practice; even if they
-// collide, the dedupe in appendAgentMessage catches
-// them by normalized-text match anyway.
+// Stable message IDs for history/replay paths.
 function stableHistoryMessageId(ts: number, text: string, suffix?: string): string {
-  // 16 chars of text prefix is enough for human-readable
-  // uniqueness; combined with ts it gives near-zero
-  // collision probability. The `suffix` is for backward
-  // compat with old message records that included a
-  // random component — preserved here so existing
-  // dedupe keys still match.
+  // 16 chars of text prefix is enough for human-readable uniqueness; combined with ts it gives near-zero collision probability.
   const t = (typeof ts === 'number' && isFinite(ts)) ? ts : 0;
   const textPart = (text || '').replace(/\s+/g, ' ').trim().slice(0, 16);
   let hash = 0;
@@ -678,63 +463,9 @@ function stableHistoryMessageId(ts: number, text: string, suffix?: string): stri
   return `hist-${t}-${textPart}-${hash}${suffix ? '-' + suffix : ''}`;
 }
 
-// v3.11.2: per-device active-quest anchor. Tracks the
-// active quest that THIS device has chosen (either from
-// the initial quests_list broadcast or from a user
-// tap in QuestsScreen.handleSetActive). The mobile's
-// `onQuestsList` listener uses this to decide whether a
-// incoming broadcast should update the visible chat
-// selection.
-//
-// Bug history (2026-09-24): while an LLM reply was in
-// flight on the website quest, the mobile's chat flashed
-// to the Hive Control bucket for ~1s, then reverted
-// when the user navigated away/back. Root cause: the
-// mobile's `onQuestsList` listener blindly trusted the
-// desktop's `q.active` flag in every broadcast. The
-// desktop re-broadcasts quests_list on every saveQuests
-// (which fires on every chat-pipeline log append, every
-// quest metadata edit, every mobile reconnect), and the
-// cached `_lastQuestsList` payload could carry a stale
-// or transient `q.active` (e.g. a stale replay after
-// the user previously had Hive Control active during
-// testing). Each broadcast re-runs the projection
-// effect, which swaps `messages` to the broadcast's
-// quest's bucket — so a 1-frame flash to the wrong chat
-// becomes user-visible.
-//
-// Module-scoped (not component-scoped) because both
-// HomeScreen's `onQuestsList` and QuestsScreen's
-// `handleSetActive` need to read/write it. The ref
-// survives HomeScreen unmount during navigation. Reset
-// to null on app cold start (process restart) — that's
-// the same as "no anchor yet," and the initial broadcast
-// seeds it.
-//
-// Type:
-//   null        — no anchor yet (initial state). The
-//                  first `quests_list` broadcast seeds
-//                  it; subsequent broadcasts that
-//                  agree with the anchor are no-ops and
-//                  broadcasts that DISAGREE are ignored.
-//   string|undefined — the user's chosen or adopted
-//                  active quest id. `undefined` mirrors
-//                  v3.11.0's `activeChatQuestId` state
-//                  sentinel for "no active quest on
-//                  desktop."
-//
-// Note: this anchor is ON THE MOBILE only. The desktop
-// remains the source of truth for cross-device broadcasts
-// (the agent reply stamping still uses the desktop's
-// broadcast value). The mobile's visible chat is the
-// mobile user's choice.
+// Per-device active-quest anchor.
 let mobileActiveQuestAnchor: string | null | undefined = null;
-// v3.11.6: persisted copy of the anchor across cold
-// starts. AsyncStorage is async so we keep the
-// module-scope variable as the synchronous source and
-// mirror to storage on every change. On module init
-// (process restart) we read the persisted value
-// asynchronously and apply it before any render fires.
+// Persisted copy of the anchor across cold starts.
 const ANCHOR_STORAGE_KEY = 'cyberclaw-mobile-active-quest-anchor';
 // Subscribers re-render when the bootstrap completes.
 // Each subscriber's callback receives the new value
@@ -746,76 +477,17 @@ function notifyAnchorSubscribers(qid: string | null | undefined) {
     try { fn(qid); } catch (_) { /* defensive */ }
   }
 }
-// v3.11.7: tracks whether the module-init bootstrap IIFE
-// has completed at least once. We need this to distinguish
-// "bootstrap hasn't run yet" (don't replay — the subscriber
-// will be notified when it completes) from "bootstrap
-// resolved with a value before the subscriber registered"
-// (REPLAY the value to the new subscriber so React gets a
-// re-render trigger).
-//
-// Without this flag, the v3.11.6 bootstrap had a race:
-//   1. Module load → IIFE kicks off AsyncStorage.getItem.
-//   2. HomeScreen mounts → first render commits →
-//      projection effect fires with anchor=null → DEFAULT
-//      bucket is rendered.
-//   3. AsyncStorage.getItem resolves (fast on Hermes —
-//      sometimes under one frame).
-//   4. notifyAnchorSubscribers fires on an empty Set —
-//      no React state update, no re-projection.
-//   5. The user sees the DEFAULT bucket forever (until
-//      they navigate to Quests and back, which forces
-//      a remount and re-reads the module-scope anchor).
-//
-// Tobe hit exactly this on 2026-09-25: "I still started
-// with the no quest chat on startup, even tho i had
-// website quest active. It refreshes to the correct
-// after i go into quests and out again." Anchor IS
-// persisted (he picked it once), but the projection
-// effect never re-fires on cold start.
+// Tracks whether the module-init bootstrap IIFE has completed at least once.
 let _anchorBootstrapResolved = false;
 export function subscribeMobileActiveQuestAnchor(fn: AnchorSubscriber) {
   _anchorSubscribers.add(fn);
-  // v3.11.7: replay the current anchor value to the new
-  // subscriber IF the bootstrap has already resolved.
-  // This closes the race where the bootstrap's notify
-  // fires before any subscriber registered. We pass
-  // the current `mobileActiveQuestAnchor` value:
-  //   - string qid: re-trigger the projection with the
-  //     persisted quest.
-  //   - null: re-trigger with "user explicitly deactivated"
-  //     (re-project to DEFAULT bucket, which is correct
-  //     in this case — the user wanted no active quest).
-  //   - undefined: bootstrap resolved with no persisted
-  //     value (first run) — don't replay, the next
-  //     broadcast will seed via Case 1 and the subscriber
-  //     will be notified then.
+  // Replay the current anchor value to the new subscriber IF the bootstrap has already resolved.
   if (_anchorBootstrapResolved) {
     try { fn(mobileActiveQuestAnchor); } catch (_) { /* defensive */ }
   }
   return () => { _anchorSubscribers.delete(fn); };
 }
-// Bootstrap: kick off an async load at module init
-// so by the time HomeScreen mounts the anchor is
-// hydrated. We don't await — the read finishes
-// during the first render cycle and the subscribers
-// re-trigger the projection effect.
-//
-// v3.11.7: when the read completes (success or empty),
-// set `_anchorBootstrapResolved = true` so any future
-// `subscribeMobileActiveQuestAnchor` call can replay
-// the current value. The previous version only set
-// the flag on the `next !== undefined` branch, which
-// meant a first-run install (no persisted value) would
-// leave the flag false forever and a late-registered
-// subscriber would never get a replay (correct, in
-// that case — there's nothing to replay) but ALSO
-// wouldn't be protected if the bootstrap resolved
-// just after the subscriber registered (the notify
-// would land on a populated Set and the subscriber
-// would fire normally). The flag now reflects "the
-// bootstrap IIFE has completed" regardless of whether
-// a value was found.
+// Bootstrap: kick off an async load at module init so by the time HomeScreen mounts the anchor is hydrated.
 (async () => {
   try {
     const v = await AsyncStorage.getItem(ANCHOR_STORAGE_KEY);
@@ -843,10 +515,7 @@ export function getMobileActiveQuestAnchor() {
 }
 export function setMobileActiveQuestAnchor(qid: string | null | undefined) {
   mobileActiveQuestAnchor = qid;
-  // Persist asynchronously; the module-scope variable
-  // is the synchronous source so the projection effect
-  // doesn't need to wait. The bootstrap read on next
-  // cold start will restore the value.
+  // Persist asynchronously; the module-scope variable is the synchronous source so the projection effect doesn't need to wait.
   try {
     if (qid == null) {
       // Distinguish "user explicitly deactivated" from
@@ -858,10 +527,7 @@ export function setMobileActiveQuestAnchor(qid: string | null | undefined) {
     }
   } catch (_) { /* defensive */ }
 }
-// v3.11.0: stringify/parse helpers for the per-(agent,
-// quest) AsyncStorage keys. Kept module-scope so all
-// readers/writers agree on the encoding (and so a future
-// change to the sentinel is one-line).
+// Stringify/parse helpers for the per-(agent, quest) AsyncStorage keys.
 function questKeyForStorage(qid: string | null | undefined): string {
   return qid == null ? DEFAULT_QUEST_KEY : qid;
 }
@@ -869,14 +535,7 @@ function questKeyFromStorage(qid: string): string | null {
   return qid === DEFAULT_QUEST_KEY ? null : qid;
 }
 
-// v3.1.17: per-companion chat helper. We use this in two ways:
-//   1. Append a freshly arrived message to a specific companion's
-//      history (server tells us which agent it belongs to).
-// v3.10.122: helper for the arenaStrip's left-side label
-// (active companion's icon + name). Mirrors the desktop's
-// companion-tab visual. Falls back to 🐾 emoji when the
-// active agent isn't found in the agents list (e.g. boot
-// race before the first agents_list broadcast lands).
+// Per-companion chat helper.
 function companionIconForActive(
   agents: Array<{ id: string; emoji?: string | null; icon?: string | null }>,
   activeId: string | null,
@@ -886,19 +545,7 @@ function companionIconForActive(
   return a?.emoji || a?.icon || '🐾';
 }
 
-//   2. Update the `messages` view-state when the user switches
-//      companion tabs, so the FlatList re-renders.
-//
-// Both updates are batched into a single setMessagesByAgentAndQuest
-// call so the (agent, quest) bucket never gets out of sync with
-// the view.
-//
-// v3.11.0: the per-agent chat is now a per-(agent, quest) map.
-// The `questId` parameter is the quest that was active when
-// the message was created — it's stamped onto the message via
-// the existing `msg.activeQuestId` field AND used to choose
-// which bucket to write into. `questId === null` means the
-// default no-quest / default-chat bucket.
+// 2.
 function appendAgentMessage(
   msg: ChatMessage,
   agentId: string,
@@ -912,44 +559,7 @@ function appendAgentMessage(
     const agentBuckets = prev[agentId] || {};
     const bucketKey = questKeyForStorage(questId);
     const list = agentBuckets[bucketKey] || [];
-    // v3.10.17: expanded dedupe. Was (ts within 2s AND
-    // same text). Tobe's v3.10.16 report: voice messages
-    // appeared twice in chat — once as a local add and
-    // once as the desktop echo. The 2s window was too
-    // tight because the desktop echo's timestamp can
-    // lag the mobile-side timestamp by several seconds
-    // (network + STT + IPC round-trip).
-    //
-    // v3.10.42 (Tobe's v3.10.38+ report): voice transcripts
-    // STILL doubled despite the 30s defensive window.
-    // Two distinct reasons:
-    //  1. The mobile's local voice-mode add uses
-    //     `text: msg.transcript` (raw transcript). The
-    //     desktop's `addChatMsg('user', msg.transcript)`
-    //     prepends `🎤 ` before pushing into the chat
-    //     history and broadcasting the event. Result:
-    //     mobile's local text (no prefix) vs the desktop
-    //     echo's text (with emoji prefix) — they differ
-    //     by exactly the prefix chars. Strict equality
-    //     misses.
-    //  2. Old sessions linger across desktop restarts.
-    //     The mobile's cyberclaw-chat-byagent cache
-    //     survives app restarts and includes old user
-    //     messages. The desktop's chatHistoryByAgent is
-    //     empty after restart, but agent_history requests
-    //     read the persisted localStorage history (which
-    //     has both the old messages with `ts = yesterday`
-    //     AND recent messages). A message with yesterday's
-    //     ts that now appears alongside a fresh ts from
-    //     after the restart passes the 30s window
-    //     because the ts diff is hours, not seconds.
-    //
-    // v3.10.42 fix: dedupe by NORMALIZED text. Strip
-    // leading non-alphanumeric chars (emojis, "[From X]"
-    // prefixes, whitespace) before comparing. Same text
-    // on both sides after normalization = duplicate,
-    // regardless of timestamps. Plus a 1-hour window
-    // for ts-tolerant cases (cross-restart).
+    // Expanded dedupe.
     const dupWindowMs = 60000;
     const dupWindowMsCrossRestart = 60 * 60 * 1000;  // 1h
     // v3.10.68: also strip a leading `[From: ...]`
@@ -978,10 +588,7 @@ function appendAgentMessage(
     )) {
       return prev;
     }
-    // Stage 2: same text + same isUser + within 1h —
-    // catches cross-restart cases where mobile ts
-    // (yesterday) and desktop-rebroadcast ts (boot time)
-    // differ by minutes.
+    // Stage 2: same text + same isUser + within 1h — catches cross-restart cases where mobile ts (yesterday) and desktop-rebroadcast ts (boot…
     if (list.some(m =>
       matchingText(m) &&
       m.isUser === msg.isUser &&
@@ -989,32 +596,7 @@ function appendAgentMessage(
     )) {
       return prev;
     }
-    // Stage 3: same normalized text within 5 minutes —
-    // catches the mobile-local ↔ desktop-echo pair
-    // when timestamps drift far apart (slow network, STT
-    // backlog). 5 minutes is enough for the echo round-
-    // trip in normal conditions; longer than that means
-    // it's a fresh send, not an echo.
-    //
-    // v3.10.89 fix: removed the "anywhere in history"
-    // version of Stage 3 that was in v3.10.42..v3.10.88.
-    // Tobe reported (2026-07-23 17:54 then 18:03): "Hey"
-    // sent via mobile chat didn't appear because Stage 3
-    // matched the new "Hey" against an OLD cached "Hey"
-    // in cyberclaw-chat-byagent and dropped it. The
-    // local append returned prev (no state change), so
-    // the message never appeared in the chat — even
-    // though the desktop received the message, ran the
-    // agent pipeline, and echoed a reply. The agent's
-    // reply also matched the dedupe path so no "Hey"
-    // showed up at all.
-    //
-    // The 5-minute window matches typical echo round-trips
-    // (network + IPC + agent response). If the round-trip
-    // ever exceeds 5 minutes we have bigger problems
-    // (the desktop is hung). Past 5 minutes we trust
-    // that any matching text is a re-send by the user,
-    // not an echo.
+    // Stage 3: same normalized text within 5 minutes — catches the mobile-local ↔ desktop-echo pair when timestamps drift far apart (slow…
     const dupWindowMsCrossEcho = 5 * 60 * 1000;  // 5 min
     // v3.10.110: limit cross-echo dedupe to SAME isUser
     // type. Previously Stage 3 matched any message with
@@ -1046,59 +628,7 @@ function appendAgentMessage(
         [bucketKey]: [...list, msg],
       },
     };
-    // v3.11.1: always sync the visible chat to the active
-    // (agent, quest) bucket — NOT just when the new message's
-    // bucket matches.
-    //
-    // Tobe's 2026-09-23 report:
-    //   "i noticed a weird behaviour in the chat of cyberclaw.
-    //    i dont recieve clawsuus replies before i send something
-    //    myself, then right as i send the reply appears above
-    //    my text. Also, i saw chat change behaviour this last
-    //    time, indicating that a new reply had landed i think,
-    //    but it did not appear."
-    //
-    // Root cause: the previous `if (agentId === activeAgentId
-    // && activeQuestId !== undefined && (...))` guard was
-    // over-strict. The flat `messages` list is a *projection* of
-    //   next[activeAgentId][activeBucketKey]
-    // i.e. the bucket the user is currently looking at. The
-    // correct sync is: project the active bucket from `next`,
-    // regardless of which bucket the incoming message landed in.
-    //
-    // The old guard also dropped the projection in two real cases:
-    //   (a) `activeChatQuestId` was still `undefined` (initial
-    //       state, before the first quests_list broadcast) — but
-    //       the user was already chatting in the default bucket
-    //       and a reply came in. The projection was skipped even
-    //       though the reply WAS for the active (default) bucket.
-    //   (b) `activeChatQuestId` was a quest id string, but the
-    //       incoming reply happened to be stamped with `null`
-    //       (race between the local ref and the state mirror —
-    //       `activeQuestRef.current` was still `null` when the
-    //       onChat listener captured it). The reply landed in
-    //       the default bucket, but the projection skipped
-    //       because the active quest's bucket is the *quest*
-    //       bucket, not the default one.
-    //
-    // In both cases the bucket got the new message but the
-    // visible flat list stayed stale — until the user sent
-    // their next message, at which point the projection
-    // refreshed and "the reply appeared above my text".
-    //
-    // The fix: project from the ACTIVE bucket, not the message's
-    // bucket. If the user is on the active quest and a stale
-    // reply from a previous (different) quest arrives, the
-    // active bucket is unchanged so we re-set it to its
-    // (unchanged) contents — a no-op re-render at worst. The
-    // stale reply sits in its own bucket and shows up when the
-    // user switches back to it.
-    //
-    // Skip the sync only when there's no active agent (the
-    // pre-agents_list state where `messages` is genuinely empty
-    // and re-projecting to [] would wipe whatever the renderer
-    // is currently showing). When activeAgentId is null we
-    // leave `messages` alone.
+    // Always sync the visible chat to the active (agent, quest) bucket — NOT just when the new message's bucket matches.
     if (activeAgentId != null) {
       const activeBucketKey = questKeyForStorage(
         activeQuestId === undefined ? null : activeQuestId
@@ -1111,16 +641,9 @@ function appendAgentMessage(
   });
 }
 
-// v3.1.52: added onActiveCompanionChange prop. HomeScreen reports
-// the currently selected chat companion (activeChatAgentId) back to
-// App.tsx so the App-level state stays in sync. This is what the
-// wake mode / voice mode uses to know which companion to show.
+// Added onActiveCompanionChange prop.
 export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQuests, onOpenSkills, onActiveCompanionChange, onAgentsChange }: { onOpenSettings: () => void; onOpenVoiceMode?: () => void; onOpenQuests?: () => void; onOpenSkills?: () => void; onActiveCompanionChange?: (id: string) => void; onAgentsChange?: (agents: Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>) => void }) {
-  // v3.10.113: theme-aware container + chrome. The arena
-  // (WebView) and chat messages are media content and stay
-  // dark — they ship their own backgrounds via the
-  // WebView's CSS — but the rest of the screen (top bar,
-  // chat input, modals) follows the active theme.
+  // Theme-aware container + chrome.
   const { theme } = useTheme();
   const t = theme;
   // Build the styles from the active theme. The styles
@@ -1128,14 +651,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const styles = useMemo(() => makeStyles(t), [t]);
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  // v3.11.42: derived list of image attachments from the
-  // current chat. Used by the image-gallery button and
-  // the gallery overlay. Walks the messages array (NOT
-  // the paginated visibleMessages slice) so the gallery
-  // shows ALL images from the chat, not just the visible
-  // window. Cheap O(N) walk; with a few hundred messages
-  // this is sub-millisecond. Memoized so it doesn't
-  // recompute on every render.
+  // Derived list of image attachments from the current chat.
   const chatImages = useMemo(() => {
     const out: { msgId: string; att: { uri: string; type: string; name: string; data?: string } }[] = [];
     for (const m of messages) {
@@ -1148,132 +664,43 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
     return out;
   }, [messages]);
-  // v3.11.41: pagination. The chat only renders the most
-  // recent N messages by default. The user can click
-  // "Load more ↑" at the top of the chat to reveal
-  // additional older messages in batches. This matches
-  // Discord's "scroll up to load history" model, but
-  // explicit-click rather than infinite-scroll.
-  //
-  // The visible count resets when the user switches to a
-  // different chat (so they get the most-recent N of the
-  // new chat, not the N they happened to have open in the
-  // previous chat). The reset is handled in the projection
-  // effect via a `lastProjectedKeyRef !== new key` check.
+  // Pagination.
   const VISIBLE_BATCH = 50;
   const [visibleCount, setVisibleCount] = useState<number>(VISIBLE_BATCH);
-  // v3.1.17: per-companion chat history. The mobile companion tab
-  // bar lets the user switch between companions; each companion has
-  // its own chat history on the desktop that we mirror locally.
-  // `messages` above is a view of
-  //   messagesByAgentAndQuest[activeChatAgentId][activeQuestIdOrNull]
-  // i.e. the active chat agent's bucket for the active quest (or the
-  // default/null-quest bucket when no quest is active).
-  //
-  // v3.11.0: per-quest buckets. Each (agent, quest) pair has its
-  // own message list. `null` quest = the "no quest / default chat"
-  // bucket — messages accumulate there when no quest is active.
-  // Old shape (v3.10.x) was Record<agentId, ChatMessage[]>. New
-  // shape is Record<agentId, Record<questId|null, ChatMessage[]>>.
-  // Migration is read-from-old-key / write-to-new-key on first
-  // launch with the new build — see the hydrate useEffect below.
+  // Per-companion chat history.
   const [isThinking, setIsThinking] = useState(false);
   const [messagesByAgentAndQuest, setMessagesByAgentAndQuest] = useState<Record<string, Record<string, ChatMessage[]>>>({});
   // v3.1.17: which companion's chat is currently shown. The
   // companion tab bar updates this when the user taps a tab.
   const [activeChatAgentId, setActiveChatAgentId] = useState<string | null>(null);
 
-  // v3.11.0: which quest's chat bucket is currently shown. Mirrors
-  // `activeQuestRef` into state so the per-quest effects below can
-  // subscribe to quest changes via React's dependency array (refs
-  // don't trigger re-renders). `undefined` = quests haven't loaded
-  // yet from the desktop (treat as default/null bucket for
-  // rendering; the append helper stamps the actual quest id on
-  // each message). `null` = no active quest — messages go to the
-  // default chat bucket. `string` = the active quest id.
+  // Which quest's chat bucket is currently shown.
   const [activeChatQuestId, setActiveChatQuestId] = useState<string | null | undefined>(undefined);
 
-  // v3.11.34: per-chat draft refs. Mirrored from the
-  // (activeChatAgentId, activeChatQuestId) state by the
-  // chatDraftSyncEffect below so the setInputText
-  // wrapper (which is called from many places, including
-  // useRef-style event listeners) always reads the LATEST
-  // conversation context without a stale-closure bug.
-  //
-  // lastDraftKeyRef tracks the previous (aid, qid) so we
-  // can detect an actual conversation switch vs a no-op
-  // re-render and avoid clobbering what the user is
-  // typing on every state bump.
+  // Per-chat draft refs.
   const lastDraftKeyRef = useRef<string | null>(null);
   // v3.11.44/45: casual chat view (declared early — drafts depend on it)
   const [chatCasual, setChatCasual] = useState(false);
   const draftAidRef = useRef<string | null>(activeChatAgentId);
-  // v3.11.37: projection effect refs. Track the last
-  // (aid, bucket) we rendered AND the last bucket length
-  // we saw, so the projection effect can decide whether
-  // to scroll to the bottom (bucket switched OR messages
-  // just arrived in an empty bucket) without firing on
-  // every subsequent chat-history batch.
+  // Projection effect refs.
   const lastProjectedKeyRef = useRef<string | null>(null);
   const lastProjectedMessagesLenRef = useRef<number>(0);
-  // v3.11.40: scroll-to-bottom latch. The projection effect
-  // sets this when the chat needs to be scrolled to the
-  // bottom (bucket changed or grew); the FlatList's
-  // onContentSizeChange handler consumes it on the first
-  // fire where the FlatList has measured non-zero content.
-  // This is the v3.11.40 fix for "the chat still starts at
-  // the top" — the previous rAF-based scheduling fired too
-  // early (before FlatList measurement), scrollToEnd was a
-  // no-op, and the rAF consumed the latch, cancelling the
-  // 100ms setTimeout fallback. Driving the scroll off
-  // onContentSizeChange (which fires AFTER measurement)
-  // makes it land reliably.
+  // Scroll-to-bottom latch.
   const pendingScrollKeyRef = useRef<string | null>(null);
   const pendingScrollLenRef = useRef<number>(0);
-  // v3.11.41: track the latest onScroll values so the
-  // onContentSizeChange handler can compute distance-from-
-  // end when content grows (e.g., "Load more" prepending
-  // older messages). Without these refs, contentSize
-  // growth would leave the at-bottom state stale.
+  // Track the latest onScroll values so the onContentSizeChange handler can compute distance-from- end when content grows (e.g., "Load more"…
   const lastScrollYRef = useRef<number>(0);
   const lastViewportHeightRef = useRef<number>(0);
   const draftQidRef = useRef<string | null>(
     activeChatQuestId === undefined ? null : activeChatQuestId);
 
-  // v3.11.34: per-chat draft sync effect. Mirrors the
-  // current (agent, quest) into the draftAidRef /
-  // draftQidRef that the setInputText wrapper reads, and
-  // re-syncs the visible inputText when the conversation
-  // switches. When the user clicks a different companion
-  // tab or quest, the input swaps to that chat's draft
-  // (Discord-style — each conversation remembers its own
-  // in-progress text independently).
-  //
-  // Why not initialize refs in the same render as the
-  // state? Because on the FIRST render the refs are
-  // initialized with the state values, but if the state
-  // changes before the effect runs (very unlikely but
-  // possible during concurrent rendering), the refs
-  // would be stale. Effect-level mirroring is the safe
-  // pattern.
-  //
-  // Edge: on quest resolution the activeChatQuestId flips
-  // to null. setInputTextLocal reads getDraft(null) which
-  // returns '' for the no-quest bucket — the user loses
-  // their draft when a quest ends. That's intentional
-  // (the chat is now a different conversation with no
-  // quest attribution), and matches what the chat scroll
-  // already does on quest resolution.
+  // Per-chat draft sync effect.
   useEffect(() => {
     const aid: string | null = activeChatAgentId;
     const qid: string | null = (chatCasual || activeChatQuestId === undefined) ? null : activeChatQuestId;
     draftAidRef.current = aid;
     draftQidRef.current = qid;
-    // Only swap the visible text if the conversation
-    // actually changed. We compare against the previous
-    // (aid, qid) tuple via a ref so a no-op re-run (e.g.,
-    // a messages-state bump that re-renders the parent)
-    // doesn't clobber what the user is typing.
+    // Only swap the visible text if the conversation actually changed.
     const prev = lastDraftKeyRef.current;
     const next = `${aid ?? 'null'}::${qid ?? 'null'}`;
     lastDraftKeyRef.current = next;
@@ -1282,10 +709,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
   }, [activeChatAgentId, activeChatQuestId, chatCasual]);
 
-  // v3.1.52: report the active chat companion back to App.tsx so
-  // WakeModeScreen knows which companion to display. Fires on
-  // mount (with the initial value) and every time the user taps
-  // a different companion tab.
+  // Report the active chat companion back to App.tsx so WakeModeScreen knows which companion to display.
   useEffect(() => {
     if (activeChatAgentId) onActiveCompanionChange?.(activeChatAgentId);
   }, [activeChatAgentId, onActiveCompanionChange]);
@@ -1294,20 +718,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [chatUnreadByAgent, setChatUnreadByAgent] = useState<Record<string, number>>({});
   const [events, setEvents] = useState<string[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([...syncLog]);
-  // v3.10.120: inputText persists across Settings navigation
-  // via module-scope `chatDraft`. Tobe's 2026-08-01 feedback:
-  // "when i type, then go check settings, my text disappears,
-  // it should be remembered." Initializing from chatDraft
-  // restores on remount; the local setInputText wrapper keeps
-  // the module-scope copy in sync so the next remount sees it.
-  //
-  // v3.11.34: per-(agent, quest) drafts. The wrapper reads
-  // the CURRENT (agent, quest) from refs (kept in sync via
-  // effects below) so the typed text always lands in the
-  // right conversation's slot — not the previous chat's.
-  // Effect `chatDraftSyncEffect` below mirrors
-  // (activeChatAgentId, activeChatQuestId) into those refs
-  // and resyncs inputText when the user switches chats.
+  // InputText persists across Settings navigation via module-scope `chatDraft`.
   const [inputText, setInputTextLocal] = useState(() =>
     getChatDraft(activeChatAgentId, activeChatQuestId ?? null));
   // v3.11.45: restore drafts saved before the app was closed.
@@ -1321,81 +732,28 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     setChatDraft(draftAidRef.current, draftQidRef.current, s);
     setInputTextLocal(s);
   };
-  // v3.10.183: local-LLM pill state. Holds the most recent
-  // `llm_status` broadcast from the desktop. Cleared when the
-  // user switches to a different companion tab (or stays
-  // around if the new companion's model isn't local).
+  // Local-LLM pill state.
   const [llmStatus, setLlmStatus] = useState<any | null>(null);
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
-  // v3.10.20: fullscreen attachment viewer. When the user
-  // taps an image preview in the chat, we open this modal
-  // with the full-size image and a close button. Tobe's
-  // v3.10.19 feedback: "images dont attach themselves to
-  // the chat, such that one can Click them and look at them
-  // also, like discord does".
+  // Fullscreen attachment viewer.
   const [fullscreenAttachment, setFullscreenAttachment] = useState<{ uri: string; type: string; name: string; data?: string } | null>(null);
-  // v3.11.42: image gallery overlay. Tobe 2026-10-07 16:03:
-  // "perhaps a button in the top right of the chat to view
-  // the images stored in the chat." A floating button in
-  // the top right of the chat FlatList (similar to the
-  // existing ↓ jump-to-bottom button) opens a grid
-  // overlay of all images from the current chat. Each
-  // image is tappable to open the fullscreen viewer.
+  // Image gallery overlay.
   const [galleryOpen, setGalleryOpen] = useState<boolean>(false);
 
   const [connState, setConnState] = useState<string>(syncClient.state);
   const [activeTab, setActiveTab] = useState<TabId>('chat');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  // v3.10.80: keyboard height tracking. v3.10.71 disabled
-  // KeyboardAvoidingView on Android and relied on
-  // windowSoftInputMode="adjustResize" to push the chat
-  // input up. That worked on older Android, but Android 15+
-  // (the app's targetSdk is 36) enforces edge-to-edge and
-  // SILENTLY DISABLES adjustResize when the system bars are
-  // transparent — which is forced on edge-to-edge apps.
-  // Result: the chat input sits at the bottom of the
-  // unresized window and the keyboard covers it
-  // (Tobe reported 2026-07-23, "input field etc seems stuck
-  // on the bottom now. It should be above the keyboard").
-  //
-  // The fix is to track the keyboard height ourselves and
-  // apply it as paddingBottom on the inputContainer. This
-  // works regardless of adjustResize / edge-to-edge mode
-  // because we're moving the input up directly via padding,
-  // not relying on the OS to resize the window.
-  //
-  // iOS still uses KeyboardAvoidingView with behavior=
-  // 'padding' (above the KeyboardAvoidingView), so we only
-  // apply the manual padding on Android.
+  // Keyboard height tracking.
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
-  // v3.11.1: Claude-style action log. When the agent runs a
-  // tool (via the desktop's `agent_tool` event), we push the
-  // friendly text here and the thinking-bar shows the last
-  // few actions below the spinner. Currently the desktop
-  // only emits `agent_tool` for Discord-routed sessions
-  // (suppressed per v3.2.25), so this list stays empty for
-  // mobile-initiated chats until that gap is closed on the
-  // desktop side. The infra is wired up here so when the
-  // desktop starts emitting tool events, the UI is ready.
+  // Claude-style action log.
   const [chatActions, setChatActions] = useState<string[]>([]);
-  // Animated value driving the pulsing-dot "is thinking..."
-  // spinner. 0 → 1 → 0 → 1... in a 1.2s loop. The render
-  // reads this for the indicator bar; a separate opacity
-  // animation fades the bar in/out when chatVoiceStatus
-  // flips so the indicator doesn't pop.
+  // Animated value driving the pulsing-dot "is thinking..." spinner.
   const thinkPulse = useRef(new Animated.Value(0)).current;
   const indicatorOpacity = useRef(new Animated.Value(0)).current;
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
-  // v3.10.122: arena can be hidden to give the chat list
-  // more vertical room. Tobe's 2026-08-01 13:52 follow-up:
-  // "we should also add a hide arena button, perhaps in the
-  // bottom middle of the arena." When true, the arena
-  // collapses to a thin strip (~64dp) with the active
-  // companion sprite + a "▼ Show" button to bring it back.
-  // Persisted in module scope so it survives Settings
-  // round-trip (mirrors the chatDraft pattern in v3.10.120).
+  // Arena can be hidden to give the chat list more vertical room.
   const [arenaHidden, setArenaHidden] = useState(getArenaHidden());
   const toggleArenaHidden = () => {
     const next = !arenaHidden;
@@ -1404,38 +762,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   };
   const [silenceCountdown, setSilenceCountdown] = useState(0);
   const [isLandscape, setIsLandscape] = useState(false);
-  // v3.10.180: Set of bubble ids whose error card is
-  // currently collapsed. A card collapses automatically
-  // once the user sends a NEW message after the failure —
-  // the card is stale noise at that point (the user has
-  // moved on to a new turn), so we hide the Retry/Copy
-  // actions and reduce it to a one-line summary. The user
-  // can tap the summary to re-expand if they still want
-  // to retry the failed task.
-  //
-  // Why Set (not an attached field on the bubble): the
-  // collapse is purely a presentational choice and
-  // shouldn't be persisted across app restarts. If the
-  // user reopens the app and sees the same failure card,
-  // it should be expanded again (the failure just
-  // happened from their perspective). Module-scope would
-  // survive an unmount but not a restart, which is fine.
-  //
-  // Why useState (not a ref): the renderer needs to
-  // re-render when the Set changes.
+  // Set of bubble ids whose error card is currently collapsed.
   const [collapsedTaskCards, setCollapsedTaskCards] = useState<Set<string>>(new Set());
   const [voiceStatus, setVoiceStatus] = useState<string>('idle');
   const [voiceLogs, setVoiceLogs] = useState<string[]>([]);
   const [companionId, setCompanionId] = useState('boar');
-  // v3.1.15: full list of agents (id, name, sprite) broadcast by the
-  // desktop so the mobile arena can show all companions, not just
-  // the active one. Empty array = unknown (still works in single-
-  // companion fallback).
-  // v3.1.18: initialise from AsyncStorage so the companion tab bar
-  // shows immediately on mount, even before the desktop's
-  // agents_list replay arrives. The desktop broadcast (or the
-  // on-mount requestAgentsList call) refreshes the cached list
-  // shortly after.
+  // Full list of agents (id, name, sprite) broadcast by the desktop so the mobile arena can show all companions, not just the active one.
   const [agents, setAgents] = useState<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null; sleepState?: 'awake' | 'sleeping' }>>(() => {
     try {
       // Eager synchronous read isn't possible with AsyncStorage, so
@@ -1456,47 +788,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const pendingRestoreRef = useRef<string | null>(null);
   const eventsRef = useRef<FlatList>(null);
   const logRef = useRef<FlatList>(null);
-  // v3.1.57: only auto-scroll the log to the bottom if the
-  // user is already near the bottom. If the user has scrolled
-  // up to read older entries, new log entries should NOT jump
-  // them to the bottom. We track the last-known content offset
-  // + content size in the onScroll handler, and only call
-  // scrollToEnd if the user was within ~32px of the bottom
-  // when the new content was added.
+  // Only auto-scroll the log to the bottom if the user is already near the bottom.
   const logStickyBottomRef = useRef(true);
   const webViewRef = useRef<WebView>(null);
-  // v3.10.184: latest known WebView container size. We re-inject
-  // Arena.init(w, h) every time onLayout fires (which happens
-  // on tilt, fullscreen toggle, and arena show/hide). Without
-  // this, the arena canvas stays locked to the original
-  // SCREEN_WIDTH × ARENA_HEIGHT set at mount, so treats dropped
-  // after tilt are clamped to stale canvas dims and appear in
-  // the bottom-right corner of the visually-wider arena. See
-  // CHANGES_3.10.184.md for the full repro and reasoning.
+  // Latest known WebView container size.
   const webViewSizeRef = useRef<{ w: number; h: number } | null>(null);
-  // v3.1.14: chat auto-scroll state — only auto-scroll to the newest
-  // message when the user is already at (or near) the bottom of the
-  // chat. When they've scrolled up to read history, leave them there
-  // and show a "↓ new messages" badge so they can jump back down.
+  // Chat auto-scroll state — only auto-scroll to the newest message when the user is already at (or near) the bottom of the chat.
   const [chatAtBottom, setChatAtBottom] = useState(true);
-  // v3.8.6: mirror `chatAtBottom` into a ref so the
-  // FlatList's `onContentSizeChange` handler can read the
-  // latest value without a stale closure. The previous
-  // version captured `chatAtBottom` directly inside the
-  // inline arrow; on a race between onScroll (which
-  // updates chatAtBottom) and a new message arriving (which
-  // triggers onContentSizeChange), the handler would see
-  // the stale "true" value and scroll even though the user
-  // had actually scrolled up. The inverse race was the
-  // one Tobe hit: onScroll set chatAtBottom to false
-  // before our scrollToEnd had a chance to land.
+  // Mirror `chatAtBottom` into a ref so the FlatList's `onContentSizeChange` handler can read the latest value without a stale closure.
   const chatAtBottomRef = useRef(true);
   useEffect(() => { chatAtBottomRef.current = chatAtBottom; }, [chatAtBottom]);
-  // v3.11.1: continuous pulse loop for the thinking-dot
-  // spinner. 0 → 1 over 600ms, then 1 → 0 over 600ms, repeat.
-  // Uses `Animated.loop` so the OS keeps the animation alive
-  // without us re-firing the effect. The render reads
-  // thinkPulse (interpolated 0..1) to scale the dot.
+  // Continuous pulse loop for the thinking-dot spinner.
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
@@ -1507,19 +809,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     loop.start();
     return () => loop.stop();
   }, [thinkPulse]);
-  // v3.11.1: fade the indicator bar in/out when chatVoiceStatus
-  // flips. A hard show/hide makes the bar pop in instantly and
-  // disappear without warning. A 180ms cross-fade gives the
-  // user a clear "thinking started" / "thinking stopped"
-  // transition. We use a derived `chatVoiceStatus` watcher
-  // (separate useEffect) so the timing controls stay simple.
-  //
-  // We ALSO clear chatActions on the off→on transition (the
-  // start of a NEW turn) so the action log from the previous
-  // turn doesn't linger. We don't clear on on→off because the
-  // last action of the current turn is still the most useful
-  // thing to show for a beat as the indicator fades out — and
-  // a new turn's typing=true will clear it then.
+  // Fade the indicator bar in/out when chatVoiceStatus flips.
   const lastVoiceStatusRef = useRef<string | null>(null);
   useEffect(() => {
     const wasOn = lastVoiceStatusRef.current != null;
@@ -1532,72 +822,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       Animated.timing(indicatorOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start();
     }
   }, [chatVoiceStatus, indicatorOpacity]);
-  // v3.11.33: SCROLL BEHAVIOR REWRITE.
-  //   The previous logic (v3.1.14 through v3.11.27) accumulated
-  //   12 layers of band-aids around the question "should the
-  //   chat auto-scroll on new content?". Tobe's 2026-10-07
-  //   request: NO auto-scroll. The chat only moves when the
-  //   user does (or when they tap the ↓ jump-to-bottom button).
-  //   On opening / switching to a chat, always start at the
-  //   bottom (Discord cold-start behavior).
-  //
-  // v3.11.37: the dedicated scroll-to-bottom useEffect that
-  //   v3.11.33 added was firing on every chat_history batch
-  //   because it watched anchorHydrateTick. Three batches in
-  //   two seconds meant three animated scrollToEnd calls
-  //   back-to-back (Tobe 2026-10-07: "going berzerk up and
-  //   down to the same positions"). Moved the scroll-to-
-  //   bottom scheduling into the projection effect itself
-  //   with a latch on (lastProjectedKey, lastProjectedMessages
-  //   LenRef) so it triggers exactly once per chat switch or
-  //   per empty→populated transition, never on subsequent
-  //   chat_history batches.
-  //
-  // v3.11.38: hot-foreground reconnect had the chat settling
-  //   "above the new bottom" by N bubble-heights because
-  //   the bucket already had messages (so messagesArrived
-  //   was false) but grew due to agent_history / chat_history
-  //   re-hydration. Tobe 2026-10-07 14:04: "opened it non
-  //   fresh again and this time it does not want to stay
-  //   at the bottom, it just jumps up a bit." Added the
-  //   `bucketGrew` condition so any bucket growth triggers
-  //   a single scrollToEnd. Also switched from animated:true
-  //   to animated:false so the scroll lands in one frame
-  //   (animation drift during contentSize growth was
-  //   contributing to the wrong-target settle).
-  //
-  //   Removed (all in service of the now-deleted auto-scroll /
-  //   scroll-restore path):
-  //     - chatLayoutSeenRef
-  //     - chatInitialDecisionRef
-  //     - chatScrollOffsetByAgent / chatScrollOffsetRef
-  //     - chatScrollKey
-  //     - chatRestoreAgentRef / chatRestoreQuestIdRef /
-  //       chatRestoreOffsetRef
-  //     - prevMessagesLengthRef / prevContentHeightRef
-  //     - lastDistanceFromEndRef
-  //     - scrollSettleTimerRef
-  //     - chatHydrateDoneRef
-  //     - chatScrollSaveTimerRef
-  //
-  //   Re-added (projection effect's scroll latch):
-  //     - lastProjectedKeyRef (with lastProjectedMessagesLenRef)
-  //       — see the projection effect comment below.
-  //
-  //   Kept:
-  //     - chatAtBottom state + chatAtBottomRef — needed to
-  //       decide when to show the ↓ jump-to-bottom button.
-  //     - chatUnreadCount — used by the existing "↓ N new
-  //       messages" badge. Without auto-scroll, the badge
-  //       becomes the user's only signal that new content
-  //       has arrived below the fold. Still useful.
+  // SCROLL BEHAVIOR REWRITE.
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
-  // v3.10.70: mirror of activeTab so the chat-event
-  // handler can check whether the chat tab is the
-  // currently visible tab without a stale-closure
-  // bug. Used to decide whether to fire a system
-  // notification for a companion reply.
+  // Mirror of activeTab so the chat-event handler can check whether the chat tab is the currently visible tab without a stale-closure bug.
   const activeTabRef = useRef<TabId>('chat');
   const isWakeWordStoppedRef = useRef<boolean>(true);
   const sampleListenerCleanupRef = useRef<(() => void) | null>(null);
@@ -1606,48 +834,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // sync-event handlers (defined inside the main useEffect) can
   // read the latest values without a stale-closure bug.
   const activeChatAgentIdRef = useRef<string | null>(null);
-  // v3.11.0: ref mirror of the per-(agent,quest) chat cache.
-  // Same shape as the state. Used by sync-event handlers and the
-  // append helper so they read the latest bucket without a stale
-  // closure over messagesByAgentAndQuest.
+  // Ref mirror of the per-(agent,quest) chat cache.
   const messagesByAgentRef = useRef<Record<string, Record<string, ChatMessage[]>>>({});
-  // v3.10.103: forward-declared ref to sendMessage so the
-  // recent-pills long-press handler (defined inline in the
-  // JSX) can call the latest sendMessage without re-rendering
-  // the JSX tree. The ref is set inside sendMessage's
-  // useCallback body on every render.
+  // Forward-declared ref to sendMessage so the recent-pills long-press handler (defined inline in the JSX) can call the latest sendMessage…
   const sendMessageRef = useRef<(() => Promise<void>) | null>(null);
   // v3.1.16: same trick for the agents list so onTyping and
   // other handlers can read the latest names without a stale
   // closure over the `agents` state.
   const agentsRef = useRef<Array<{ id: string; name: string; sprite?: string | null; scale?: number | null; emoji?: string | null; icon?: string | null; iconFile?: string | null; iconDataUri?: string | null }>>([]);
-  // v3.1.59: report the latest agents list to App.tsx so
-  // WakeModeScreen (which mounts a fresh WebView) can call
-  // setAgents with the same data. Without this, the wake
-  // mode WebView has no companions in its array and the
-  // companion is missing from wake mode. Use a ref so the
-  // useEffect can read the latest value without re-running
-  // on every state change.
+  // Report the latest agents list to App.tsx so WakeModeScreen (which mounts a fresh WebView) can call setAgents with the same data.
   const onAgentsChangeRef = useRef(onAgentsChange);
   onAgentsChangeRef.current = onAgentsChange;
-  // v3.1.27: the companion id the WebView was initialised with.
-  // The WebView's source URI includes this on first mount so it
-  // knows which sprite to render on first paint. After that, the
-  // WebView keeps its own active companion state and is swapped
-  // via `injectJavaScript('setCompanion(id)')` — the URI MUST NOT
-  // change or react-native-webview will re-mount the WebView and
-  // re-trigger the ping-pong. This ref captures the value used
-  // on first mount so subsequent `companionId` state changes
-  // don't affect the URI.
+  // The companion id the WebView was initialised with.
   const initialArenaCompanionRef = useRef<string | null>(null);
   if (initialArenaCompanionRef.current === null) {
     initialArenaCompanionRef.current = companionId;
   }
-  // v3.1.27: set to true the first time agents_list arrives, so
-  // we only inject the initial companion sprite into the WebView
-  // once. Subsequent agents_list broadcasts (e.g. after a
-  // settings change) don't re-swap the active sprite, since the
-  // user may have clicked a different tab in the meantime.
+  // Set to true the first time agents_list arrives, so we only inject the initial companion sprite into the WebView once.
   const initialArenaInjectedRef = useRef(false);
 
   const isConnected = connState === 'connected' || connState === 'reconnecting';
@@ -1657,16 +860,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // stale values.
   useEffect(() => { activeChatAgentIdRef.current = activeChatAgentId; }, [activeChatAgentId]);
   useEffect(() => { messagesByAgentRef.current = messagesByAgentAndQuest; }, [messagesByAgentAndQuest]);
-  // v3.11.6: subscribe to the mobileActiveQuestAnchor
-  // module-scope bootstrap read. When the cold-start
-  // AsyncStorage read completes (typically a few ms
-  // after HomeScreen mounts), the subscriber bumps a
-  // counter state so the projection effect's deps
-  // change and the chat re-projects to the persisted
-  // anchor's bucket. The anchor itself is the source
-  // of truth for the qid — we just need a re-render
-  // trigger. The counter is unused otherwise; it
-  // exists solely to make React notice the dep change.
+  // Subscribe to the mobileActiveQuestAnchor module-scope bootstrap read.
   const [anchorHydrateTick, setAnchorHydrateTick] = useState(0);
   useEffect(() => {
     const unsubscribe = subscribeMobileActiveQuestAnchor((qid) => {
@@ -1674,24 +868,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     });
     return unsubscribe;
   }, []);
-  // v3.11.5: per-device quest name lookup. Populated from
-  // every `quests_list` broadcast so the chat-bubble
-  // header can render the active quest's name on each
-  // bubble. Keyed by quest id; falls back to '(unnamed
-  // quest)' if the id isn't in the map (rare; happens
-  // for messages stamped with a quest that was deleted).
+  // Per-device quest name lookup.
   const [questNameById, setQuestNameById] = useState<Record<string, string>>({});
   const questNameByIdRef = useRef<Record<string, string>>({});
   useEffect(() => { questNameByIdRef.current = questNameById; }, [questNameById]);
 
-  // v3.10.85: snapshot of the active quest at any given moment.
-  // Updated by a quests_list listener below (same broadcast
-  // QuestsScreen subscribes to). Used to stamp each new chat
-  // message with `activeQuestId` / `activeQuestName` at append
-  // time so the chat history shows which quest (if any) was
-  // active when each message was sent. `null` = no active
-  // quest (the v3.10.82 default state). `undefined` =
-  // quests haven't loaded yet from the desktop.
+  // Snapshot of the active quest at any given moment.
   const activeQuestRef = useRef<{ id: string; name: string } | null | undefined>(undefined);
   // v3.11.44: casual/quest chat toggle (mirrors the desktop). The quest
   // stays ACTIVE; this only switches which chat is shown and where new
@@ -1705,109 +887,22 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     return () => syncClient.off('chat_context', onCtx);
   }, []);
   useEffect(() => { if (!activeQuestInfo) setChatCasual(false); }, [activeQuestInfo]);
-  // v3.11.2: per-device active-quest anchor lives in
-  // module-scope (`mobileActiveQuestAnchor` near the top
-  // of this file) so both HomeScreen's `onQuestsList`
-  // and QuestsScreen's `handleSetActive` can read/write
-  // it without prop-drilling. The listener uses it to
-  // decide whether to adopt the broadcast's `q.active`
-  // or ignore it. See the comment near
-  // `mobileActiveQuestAnchor` for the full bug history
-  // and fix rationale.
-  // v3.10.108: sticky thinking flag. Mirrors Discord's
-  // server-authoritative typing indicator: once set true
-  // by a `typing: true` from desktop, stays true (and
-  // the React chatStatusBar keeps showing "X is
-  // thinking...") until EITHER:
-  //   (a) desktop sends `typing: false` (success path
-  //       from sendChatMessage's finally block), OR
-  //   (b) a fresh agent message lands in this chat
-  //       (appendAgentMessage call clears it).
-  // Replaces the previous behavior where HomeScreen
-  // unmount/remount on foreground transition wiped the
-  // bubble — Tobe's 2026-07-29 complaint that the
-  // thinking indicator "disappears after i went into
-  // another app and back again".
+  // Per-device active-quest anchor lives in module-scope (`mobileActiveQuestAnchor` near the top of this file) so both HomeScreen's…
   const thinkingStickyRef = useRef(false);
-  // v3.10.133: long-wait escalation refs.
-  //   - thinkingStartedAtRef: timestamp the typing bubble went
-  //     up, so we can show "still working..." / "taking longer
-  //     than usual..." escalations at 30s/90s/4min. Without
-  //     this, the mobile user sees the same generic
-  //     "Clawsuu is thinking..." string for the whole wait and
-  //     has no signal that progress is being made. Tobe
-  //     2026-08-04 wanted observable progress on long waits.
-  //   - thinkingEscalateTimerRef: the currently-armed escalation
-  //     setTimeout. Cleared on agent-message arrival (the
-  //     bubble goes away) or on a fresh typing=true (the bubble
-  //     text resets and the timer re-arms).
+  // Long-wait escalation refs.
   const thinkingStartedAtRef = useRef<number | null>(null);
   const thinkingEscalateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
-  // v3.10.79: sync the visible `messages` view to the
-  // active agent's bucket whenever activeChatAgentId
-  // changes. Tobe reported on 2026-07-22 that a new
-  // companion reply didn't appear in the chat until he
-  // manually clicked the red badge on the companion tab,
-  // even though his UI showed that companion tab as
-  // already active. The root cause was that some
-  // activeChatAgentId updates (e.g. the agents-list
-  // boot path) set the active agent without going
-  // through switchToAgent — leaving `messages` set to a
-  // stale agent's chat. This effect guarantees they
-  // stay in sync.
-  //
-  // We depend on `activeChatAgentId` only (NOT
-  // `messagesByAgent`) to avoid the loop where adding
-  // a message causes messagesByAgent to change,
-  // which re-runs this effect, which calls setMessages
-  // again with the same content. We use the ref to
-  // read the latest bucket without subscribing.
-  //
-  // v3.11.0: also re-sync on quest change so switching
-  // quests swaps the FlatList's data to the new
-  // quest's bucket. Old code only re-synced on agent
-  // switch; quest switching left the previous quest's
-  // chat visible.
+  // Sync the visible `messages` view to the active agent's bucket whenever activeChatAgentId changes.
   useEffect(() => {
     if (activeChatAgentId == null) {
-      // No active agent — leave `messages` as-is, in
-      // case the user is in the middle of typing and we
-      // don't want to wipe the visible chat. The empty
-      // case is rare (only happens before the first
-      // agents list loads).
+      // No active agent — leave `messages` as-is, in case the user is in the middle of typing and we don't want to wipe the visible chat.
       return;
     }
     const aid = activeChatAgentId;
-    // v3.11.5: prefer `mobileActiveQuestAnchor` over
-    // `activeQuestRef.current` for the projection
-    // bucket key. The anchor is the single source of
-    // truth for "what quest should the chat show right
-    // now?" — it's updated synchronously by both
-    // QuestsScreen.handleSetActive (user-initiated) and
-    // the onQuestsList broadcast listener (broadcast-
-    // initiated), and it survives component remounts.
-    //
-    // The previous design (v3.11.4) preferred the ref
-    // and fell back to the anchor. That worked for
-    // remount cases but failed for the deactivate case
-    // — Tobe's 2026-09-24 21:33 retest showed the chat
-    // staying on website's content even after he
-    // tapped "Deactivate." The ref got cleared (null)
-    // but the bucket lookup still resolved to website
-    // somehow — likely because the projection effect's
-    // useState-driven re-render raced against the
-    // QuestsScreen's optimistic anchor update. With
-    // the anchor as the primary source, the projection
-    // effect reads the user's intent directly.
-    //
-    // `activeQuestRef` is still used inside
-    // `appendAgentMessage` to stamp incoming replies
-    // (the ref is the fast synchronous source for
-    // event handlers that can't read state). The
-    // anchor is for the view-projection.
+    // Prefer `mobileActiveQuestAnchor` over `activeQuestRef.current` for the projection bucket key.
     let qid: string | null;
     let skipBucketLookup = false;
     if (mobileActiveQuestAnchor !== null && mobileActiveQuestAnchor !== undefined) {
@@ -1815,32 +910,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // a fresh broadcast). Use it directly.
       qid = mobileActiveQuestAnchor;
     } else if (!_anchorBootstrapResolved) {
-      // v3.11.10: bootstrap pending. Don't fall through
-      // to the ref-and-default-bucket fallback — the
-      // bootstrap will resolve shortly and set the
-      // anchor (which triggers a re-run via
-      // setAnchorHydrateTick). Show empty until then.
-      //
-      // The previous behavior fell to activeQuestRef
-      // (undefined on a fresh mount) → qid = null →
-      // DEFAULT bucket lookup. If a chat_history
-      // response had populated the DEFAULT bucket in
-      // the gap, the user saw pre-v3.11.0 legacy
-      // content. Tobe hit this on 2026-09-25 ~20:14.
+      // Bootstrap pending.
       qid = null;
       skipBucketLookup = true;
     } else if (activeQuestRef.current !== undefined) {
-      // Anchor is null AND the bootstrap has resolved
-      // AND returned null (user explicitly deactivated).
-      // The ref may also be set if a fresh broadcast
-      // landed; prefer that.
+      // Anchor is null AND the bootstrap has resolved AND returned null (user explicitly deactivated).
       qid = activeQuestRef.current?.id ?? null;
     } else {
-      // Anchor is null AND bootstrap resolved with null
-      // AND no ref is set. User explicitly deactivated
-      // and no broadcast has landed yet. Show DEFAULT
-      // bucket content (which is what "no active quest"
-      // means).
+      // Anchor is null AND bootstrap resolved with null AND no ref is set.
       qid = null;
     }
     if (chatCasual) { qid = null; skipBucketLookup = false; } // v3.11.44
@@ -1848,40 +925,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const bucketKey = questKeyForStorage(qid);
     const bucket = skipBucketLookup ? [] : (agentBuckets[bucketKey] || []);
     setMessages(bucket);
-    // v3.11.40: scroll-to-bottom latch moves to onContentSizeChange.
-    //   The previous design (v3.11.37 / v3.11.38 / v3.11.39)
-    //   scheduled the scroll via rAF (+ 100ms setTimeout
-    //   fallback in v3.11.39). The rAF fired before the
-    //   FlatList had measured its content, scrollToEnd read
-    //   contentSize=0, was a no-op, and the rAF consumed the
-    //   latch — cancelling the setTimeout fallback. Result:
-    //   chat stayed at the natural mount position (scrollY=0).
-    //   Tobe 2026-10-07 17:29 retest: "It still started at
-    //   top."
-    //
-    //   The fix: instead of scheduling the scroll from the
-    //   projection effect, set a LATCH (pendingScrollKeyRef)
-    //   that the FlatList's onContentSizeChange handler
-    //   consumes. onContentSizeChange fires AFTER the
-    //   FlatList has measured its content — exactly the
-    //   moment when scrollToEnd actually works. The latch
-    //   ensures the scroll fires exactly once per
-    //   chat-switch / re-hydration, regardless of how many
-    //   times onContentSizeChange re-fires during
-    //   measurement (the v3.11.27 multi-pass concern).
+    // Scroll-to-bottom latch moves to onContentSizeChange.
     const chatChanged =
       lastProjectedKeyRef.current !== null &&
       lastProjectedKeyRef.current !== `${aid}::${bucketKey}`;
     const bucketGrew =
       bucket.length > lastProjectedMessagesLenRef.current;
-    // v3.11.41: reset pagination when the user switches
-    // to a different (agent, quest) chat. Otherwise the
-    // new chat opens with the visibleCount from the
-    // previous chat, which would be wrong (e.g., the
-    // previous chat might have shown 200 messages; the
-    // new chat has only 5, and showing 200 of those
-    // would just show all 5 plus trigger a no-op
-    // load-more button).
+    // Reset pagination when the user switches to a different (agent, quest) chat.
     if (chatChanged) {
       setVisibleCount(VISIBLE_BATCH);
     }
@@ -1898,21 +948,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     lastProjectedMessagesLenRef.current = bucket.length;
   }, [activeChatAgentId, activeChatQuestId, anchorHydrateTick, chatCasual]);
 
-  // v3.1.63: inject setCentered(true) when voice mode
-  // (fullscreen) is entered, setCentered(false) when exited.
-  // Tobe: "voice mode should have the same look as wake mode"
-  // (centered companion on black bg). v3.1.62 added the
-  // setCentered function to window.Arena, but the useEffect
-  // that calls it was lost in the diff. Without this, voice
-  // mode keeps the regular home view (forest bg, both
-  // companions in default layout) instead of the wake-mode
-  // look. The wake listener is NOT involved — this is purely
-  // visual; voice mode keeps its VAD + recorder logic.
-  //
-  // v3.1.65: voice mode now uses a dedicated VoiceModeScreen
-  // (same component as WakeModeScreen, voiceMode prop), so
-  // the home screen's fullscreen mode is unused for voice.
-// (no setCentered injection needed)
+  // Inject setCentered(true) when voice mode (fullscreen) is entered, setCentered(false) when exited.
 
   // v3.1.18: hydrate the agents list from AsyncStorage on mount so
   // the companion tab bar shows immediately, even if the desktop
@@ -1924,10 +960,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setAgents(parsed);
-          // v3.1.59: propagate cached agents to App.tsx too,
-          // so WakeModeScreen has the list immediately if the
-          // user opens wake mode before the WebSocket delivers
-          // a fresh agents_list.
+          // Propagate cached agents to App.tsx too, so WakeModeScreen has the list immediately if the user opens wake mode before the WebSocket…
           onAgentsChangeRef.current?.(parsed);
           addLogEntry(`Loaded ${parsed.length} companion(s) from local cache`, 'info');
         }
@@ -1935,24 +968,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }).catch(() => {});
   }, []);
 
-  // v3.1.18: persist the agents list whenever it changes so a
-  // remount (e.g. user opens Wake Mode and comes back) can
-  // rebuild the tab bar from cache while waiting for the desktop
-  // to send a fresh list.
+  // Persist the agents list whenever it changes so a remount (e.g.
   useEffect(() => {
     if (agents.length === 0) return;
     AsyncStorage.setItem('cyberclaw-agents-cache', JSON.stringify(agents)).catch(() => {});
   }, [agents]);
 
-  // v3.10.44: derive a sleep styling flag from the active
-  // agent's sleepState. Tobe's report (v3.10.43): "the
-  // companions dont sleep on the phone, they should".
-  // Computed at the top of the component (not in JSX) so
-  // the arena conditional below can stay flat — v3.10.43
-  // tried to wrap the arena block in an IIFE to compute this
-  // inline, but the IIFE left the outer <View> unclosed and
-  // the build broke. The flat form below is the same logic
-  // without the JSX-balance risk.
+  // Derive a sleep styling flag from the active agent's sleepState.
   const sleepOverlay = (() => {
     const active = agents.find(a => a.id === activeChatAgentId);
     return active?.sleepState === 'sleeping';
@@ -1967,15 +989,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       }
     }).catch(() => {});
 
-    // v3.1.17: ask the desktop for the current agents list on every
-    // mount. This rebuilds the companion tab bar when the user
-    // comes back from Wake Mode (HomeScreen unmounts/remounts),
-    // reconnects after a network blip, or the desktop was restarted
-    // while the app was in the background. The desktop's sync server
-    // caches the last agents_list and replays it.
-    // v3.1.18: retry a few times in case the WebSocket isn't open
-    // yet on the very first mount (the SyncClient may still be
-    // connecting when this effect runs).
+    // Ask the desktop for the current agents list on every mount.
     const requestWithRetry = (attempt: number) => {
       try {
         if (syncClient.connected) {
@@ -2008,10 +1022,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
   }, []);
 
-  // v3.11.33: stop speech + flush scroll state on unmount.
-  // (scroll-flush is now a no-op since we don't persist
-  // scroll positions any more — but the speech cancel
-  // remains for the WebView TTS fallback.)
+  // Stop speech + flush scroll state on unmount.
   useEffect(() => {
     return () => {
       try {
@@ -2104,23 +1115,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // Simplified enterVoiceMode - only handles wakeword wake-up
   const enterVoiceMode = useCallback(async (source: 'wakeword' | 'focus' = 'focus') => {
     addLogEntry(`🎙️ enterVoiceMode called (source=${source})`, 'info');
-    // v3.10.3: kick the active companion awake on any voice-mode
-    // entry. The user is about to start talking, so a sleeping
-    // companion should wake up before their first utterance
-    // arrives. Wrapped in try/catch — failure here just means
-    // the sprite stays sleeping until the first user message
-    // arrives and triggers the explicit wake in
-    // sendChatMessage() on the desktop side.
+    // Kick the active companion awake on any voice-mode entry.
     try {
       const aid = activeChatAgentIdRef.current || 'companion';
       syncClient.sendWakeAgent(aid);
     } catch (_) {}
-    // For wakeword, route to the dedicated WakeModeScreen — same as the
-    // user tapping the Wake Mode button. The in-home "voice input"
-    // fullscreen was a separate leftover UI from before Wake Mode was a
-    // thing; the user expects wake word → Wake Mode → recording, all in
-    // the same fullscreen, and to ALWAYS land on Wake Mode regardless of
-    // what screen they were on (chat, settings, etc).
+    // For wakeword, route to the dedicated WakeModeScreen — same as the user tapping the Wake Mode button.
     if (source === 'wakeword') {
       // Clear the in-home fullscreen state — we're handing off to the
       // dedicated screen which manages its own UI and recording.
@@ -2130,11 +1130,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       }
       setIsWakeWordMode(false);
       isWakeWordModeRef.current = false;
-      // v3.1.26: the per-render watcher that depended on this
-      // module-level flag is gone. The AsyncStorage 'wake-pending'
-      // flag is still the recovery signal for the activity-torn-
-      // down case (App.tsx + HomeScreen's wakePendingCheckCounter
-      // both watch it).
+      // The per-render watcher that depended on this module-level flag is gone.
       try { await AsyncStorage.removeItem('cyberclaw-wake-pending'); } catch (_) {}
       wakeWordBusyRef.current = false;
       addLogEntry('🎙️ Voice Mode: handing off to dedicated VoiceModeScreen', 'info');
@@ -2308,10 +1304,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           'info',
         );
       }
-      // v3.1.12: openArenaSettings is a no-op now. The mobile is just an
-      // extension of the desktop, which owns arena background / companion
-      // show/hide. If a stale WebView still sends this, ignore gracefully
-      // so we don't crash on undefined onOpenArenaSettings.
+      // OpenArenaSettings is a no-op now.
       if (msg.type === 'openArenaSettings') {
         addLogEntry('openArenaSettings ignored — mobile uses desktop arena settings', 'debug');
         return;
@@ -2324,19 +1317,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       }
 
       if (msg.type === 'fullscreen') {
-        // v3.1.65: route to the dedicated VoiceModeScreen
-        // (same component as WakeModeScreen but with the wake
-        // listener replaced by the VAD + recorder). This gives
-        // voice mode the same visual as wake mode (centered
-        // companion on black bg) while keeping its own
-        // functionality (VAD + recorder + auto-send). Tobe:
-        // "wake mode looks good, just copy the style of wake
-        // mode. It should look exactly the same."
-        // v3.2.18: Wake Mode is gone. The arena's "Voice Mode" button
-        // is the only fullscreen entry point. The `wakeword`
-        // message type from the arena is also routed to voice
-        // mode (kept for backwards compatibility with any saved
-        // arena state).
+        // Route to the dedicated VoiceModeScreen (same component as WakeModeScreen but with the wake listener replaced by the VAD + recorder).
         addLogEntry(`🎙️ Voice Mode: opening dedicated screen`, 'debug');
         onOpenVoiceMode?.();
       }
@@ -2347,10 +1328,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         onOpenVoiceMode?.();
       }
       if (msg.type === 'exitFullscreen') {
-        // X button in Voice Mode — Voice Mode owns its own
-        // onExit handler. The arena's exitFullscreen is a no-op
-        // for the dedicated screen; the wake module close button
-        // goes through WakeModeScreen.onExit directly.
+        // X button in Voice Mode — Voice Mode owns its own onExit handler.
         addLogEntry('Exiting fullscreen via X button', 'debug');
         onOpenVoiceMode && closeFullscreen();
       }
@@ -2361,12 +1339,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         AsyncStorage.setItem('cyberclaw-arena-comp', msg.value);
       }
       if (msg.type === 'quests') {
-        // v3.7.6: arena Quests button (top-left, mirrors Voice
-        // Mode at top-right). Routes to the GLOBAL Quests page
-        // — Quests are not per-companion on the desktop, so
-        // they shouldn't be per-companion on the mobile either.
-        // Tobe: "the quests are still within the companion
-        // settings for some reason. It should be separated."
+        // Arena Quests button (top-left, mirrors Voice Mode at top-right).
         if (onOpenQuests) {
           addLogEntry('📜 Arena Quests → global Quests page', 'debug');
           onOpenQuests();
@@ -2375,11 +1348,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         }
       }
       if (msg.type === 'skills') {
-        // v3.10.173: arena Skills button → global Skills page
-        // (mirror of the Quests flow). Skills live on the
-        // desktop's left sidebar; on the mobile they get their
-        // own top-level screen so the per-companion toggle UI
-        // doesn't have to share space with companion settings.
+        // Arena Skills button → global Skills page (mirror of the Quests flow).
         if (onOpenSkills) {
           addLogEntry('📚 Arena Skills → global Skills page', 'debug');
           onOpenSkills();
@@ -2388,27 +1357,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         }
       }
       if (msg.type === 'treat_placed') {
-        // v3.10.72: arena forwarded a treat_drop success.
-        // Forward to desktop so the AI can react ("I just
-        // gave you X. What do you think?"). Tobe's
-        // screenshot in v3.10.70 had no companion reply
-        // for treats because there was no path at all —
-        // this is the new path.
-        // v3.10.137: pass the object directly to
-        // syncClient.send() — it already calls
-        // JSON.stringify internally. The previous
-        // syncClient.send(JSON.stringify({...})) double-
-        // stringified, so the desktop's JSON.parse
-        // returned the inner string, msg.type was
-        // undefined, and the case dispatch silently
-        // fell through. That's why no companion reaction
-        // fired even though the WebView→RN handoff
-        // worked correctly. Tobe 2026-08-05 12:45.
-        // v3.10.138: forward the arena's `companionId`
-        // (which sprite the food was dropped near) so the
-        // desktop can route the chat reaction to that
-        // companion specifically, instead of defaulting
-        // to whichever companion's chat tab is open.
+        // Arena forwarded a treat_drop success.
         syncClient.send({
           type: 'arena_treat_placed',
           treat: msg.treat,
@@ -2416,19 +1365,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         });
       }
       if (msg.type === 'treat_eaten') {
-        // v3.10.72: companion ate a treat. Forward to
-        // desktop so the AI can react ("Yum, that was
-        // good. Thanks!"). Mirrors the desktop's
-        // promptCompanionEat(eatenType) callback that
-        // fires from inside the seek-and-eat logic.
-        // v3.10.137: same double-stringify fix as
-        // treat_placed above.
-        // v3.10.138: forward the arena's `companionId`
-        // (which sprite actually ate it) so the desktop
-        // routes the reaction to the right companion's
-        // chat. Tobe 2026-08-06: "track which companion
-        // that actually eats the food and make it
-        // comment it".
+        // Companion ate a treat.
         syncClient.send({
           type: 'arena_treat_eaten',
           treat: msg.treat,
@@ -2438,11 +1375,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     } catch {}
   }, [closeFullscreen, onOpenQuests]);
 
-  // Handle Android back button in fullscreen mode
-  // v3.2.18: Wake Mode is gone. Back in Voice Mode goes
-  // through the WakeModeScreen's own back handler. Home
-  // Screen's fullscreen exit closes the in-home fullscreen
-  // overlay (legacy, kept for parity).
+  // Handle Android back button in fullscreen mode v3.2.18: Wake Mode is gone.
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (fullscreen) {
@@ -2454,44 +1387,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     return () => backHandler.remove();
   }, [fullscreen, closeFullscreen]);
 
-  // Wake word → enter voice mode with lock screen
-  // Wake word → hand off to the dedicated WakeModeScreen
-  //
-  // v3.1.26: this is now a thin wrapper. The previous version
-  // toggled setIsWakeWordMode(true) + moduleLevelWakePending +
-  // setFullscreen(false) before routing to onOpenWakeMode, and a
-  // per-render watcher would re-apply the in-home fullscreen state
-  // if React state got wiped. That caused the OLD in-home fullscreen
-  // overlay (with Voice Mode / Wake Mode buttons) to flash on top of
-  // the new WakeModeScreen for ~50ms whenever a wake event fired.
-  //
-  // The wake path now has exactly one destination — the dedicated
-  // WakeModeScreen. We:
-  //   1. Stop the in-home sample listener (it conflicts with the
-  //      WakeModeScreen's own recorder).
-  //   2. Show a toast + log so the user can confirm the event
-  //      reached JS.
-  //   3. Set busyRef so the sample listener's own restart-after-
-  //      error path doesn't double-fire.
-  //   4. Hand off to onOpenWakeMode, which switches App.tsx's screen
-  //      to 'wake-mode' and unmounts HomeScreen.
-  //   5. Restart the sample listener on the WakeModeScreen's
-  //      teardown (not here, because we won't be around).
-  //
-  // The AsyncStorage 'cyberclaw-wake-pending' flag is still set
-  // because the App.tsx polling effect and HomeScreen's own
-  // wake-pending check both watch it as a fallback for the
-  // activity-torn-down case.
+  // Wake word → enter voice mode with lock screen Wake word → hand off to the dedicated WakeModeScreen v3.1.26: this is now a thin wrapper.
   const handleWakeWord = useCallback(async (matchedCompanionId?: string) => {
-    // v3.5.2: also respect the just-exited guard at the
-    // listener level, not just in checkPending. v3.5.1's
-    // fix only short-circuited the AsyncStorage-flag
-    // path; if the OWW detector itself fires
-    // owwWakeDetected shortly after voice mode closes
-    // (the detector was running through voice mode and
-    // may have audio frames already classified), this
-    // listener would still trigger a re-open. The
-    // checkPending guard alone is not enough.
+    // Also respect the just-exited guard at the listener level, not just in checkPending.
     if (isWakeJustExited()) {
       addLogEntry('🎤 Wake detected but just exited — ignoring', 'debug');
       return;
@@ -2516,10 +1414,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     sampleListenerCleanupRef.current?.();
     sampleListenerCleanupRef.current = null;
 
-    // Persist the wake event. This is the safety net for the
-    // activity-torn-down case: App.tsx's checkPending and
-    // HomeScreen's wakePendingCheckCounter both watch this flag and
-    // will switch to the wake-mode screen on the next tick.
+    // Persist the wake event.
     try { await AsyncStorage.setItem('cyberclaw-wake-pending', '1'); } catch (_) {}
     setTimeout(() => { AsyncStorage.removeItem('cyberclaw-wake-pending').catch(() => {}); }, 30000);
 
@@ -2530,23 +1425,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   }, [onOpenVoiceMode]);
 
   // Check for a pending wake event from a previous mount or state wipe.
-  // The wake-event handler persists a flag to AsyncStorage, and we read
-  // it here. Runs on mount, on every app-state change, and on every
-  // render (via the `wakePendingCheckCounter` dep, incremented every
-  // 2s). This catches all three cases: re-mount, app-state change, and
-  // silent state wipe while component stays mounted.
   const [wakePendingCheckCounter, setWakePendingCheckCounter] = useState(0);
   useEffect(() => {
     let consumed = false;
     const checkPending = () => {
       if (consumed) return;
-      // v3.5.1: skip the check entirely if we just exited
-      // voice mode within the last few seconds. The
-      // AsyncStorage clear in App.tsx's onExit is async and
-      // can race the getItem here; this guard closes that
-      // race without needing to make the storage layer
-      // synchronous. Without it, HomeScreen's first mount
-      // after exit can re-open voice mode within ~300ms.
+      // Skip the check entirely if we just exited voice mode within the last few seconds.
       if (isWakeJustExited()) return;
       AsyncStorage.getItem('cyberclaw-wake-pending').then(pending => {
         if (consumed) return;
@@ -2583,43 +1467,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     return () => clearInterval(interval);
   }, []);
 
-  // v3.1.26: the per-render watcher that re-applied setFullscreen(true)
-  // during a wake event was REMOVED. It was a leftover from the old
-  // architecture (v3.1.11 and earlier) where wake mode was an in-home
-  // fullscreen overlay and the watcher was the safety net for state
-  // wipes. In v3.1.12+ the wake path is App-level (App.tsx switches to
-  // the dedicated WakeModeScreen), so re-applying setFullscreen(true)
-  // here was actively breaking the new flow: it would briefly render
-  // the OLD in-home fullscreen overlay (the one with Voice Mode / Wake
-  // Mode buttons) before the App-level screen switch could unmount
-  // HomeScreen. Wake now has exactly one destination — the
-  // WakeModeScreen — and no in-home path to "restore".
-  //
-  // The module-level `moduleLevelWakePending` flag and the
-  // `wakePendingCheckCounter` polling effect (above) are still here
-  // because App.tsx's checkPending effect AND the new
-  // wakePendingCheckCounter re-entry both use the AsyncStorage
-  // 'cyberclaw-wake-pending' flag (the shared recovery signal) —
-  // the module-level variable is dead but harmless to keep for now.
+  // The per-render watcher that re-applied setFullscreen(true) during a wake event was REMOVED.
 
-  // Load persisted chat
-  //
-  // v3.1.27: also load into `messagesByAgent` (per-agent) so tab
-  // switching doesn't lose history. v3.1.26 (and earlier) only
-  // loaded into the single `messages` view, so when the user
-  // clicked a different companion tab the new tab's
-  // `setMessages(messagesByAgent[a.id] || [])` would see an empty
-  // slot and wipe the visible chat. The desktop restart also
-  // drops the in-memory `chatHistoryByAgent`, so the mobile's
-  // own copy is the only persistent record.
-  //
-  // The legacy `cyberclaw-chat-history` key holds the pre-
-  // per-agent flat array (with `agentId` on each message). We
-  // group by `agentId` and seed `messagesByAgent` from it. We
-  // also save a per-agent key `cyberclaw-chat-byagent` for
-  // future loads (the persist effect below writes both for
-  // compatibility, but the per-agent one is the new source of
-  // truth).
+  // Load persisted chat v3.1.27: also load into `messagesByAgent` (per-agent) so tab switching doesn't lose history.
   useEffect(() => {
     let cancelled = false;
     const seedFromLegacy = async () => {
@@ -2631,12 +1481,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const filtered = loaded.filter((m: any) =>
           m && typeof m.text === 'string' && m.ts && typeof m.isUser === 'boolean');
         if (filtered.length === 0) return;
-        // v3.1.16 migration: v3.1.15 stored the array in reversed
-        // (newest→oldest) order for an inverted FlatList. v3.1.16
-        // uses chronological order. If the stored data starts with
-        // a ts that's later than the last item, it's reversed —
-        // flip it back. This is non-destructive (no chat clearing)
-        // and handles persisted data from any prior version.
+        // V3.1.16 migration: v3.1.15 stored the array in reversed (newest→oldest) order for an inverted FlatList.
         let ordered = filtered;
         if (filtered.length >= 2) {
           const firstTs = filtered[0].ts;
@@ -2644,19 +1489,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           if (firstTs > lastTs) ordered = filtered.slice().reverse();
         }
         if (cancelled) return;
-        // Group by agentId. Pre-per-agent data typically has
-        // `agentId = 'clawsuu'` (or undefined). Route anything
-        // without an agentId to 'clawsuu' for backwards compat.
-        //
-        // v3.11.0: per-quest buckets. The legacy
-        // `cyberclaw-chat-history` key holds messages from
-        // before quest attribution was added — every
-        // message goes into the `null` (default / no-quest)
-        // bucket. Per-quest bucketing didn't exist back
-        // then, so there's no way to retroactively split
-        // them. The migration just preserves the existing
-        // data into the new shape; new messages from this
-        // point on get bucketed properly.
+        // Group by agentId.
         const grouped: Record<string, Record<string, ChatMessage[]>> = {};
         for (const m of ordered) {
           const aid: string = m.agentId || 'clawsuu';
@@ -2668,26 +1501,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             agentId: aid,
             agentName: m.agentName,
             ts: m.ts,
-            // v3.11.30 FIX (Tobe 2026-10-05 08:32):
-            //   forward attachments from the legacy
-            //   chat cache. Older versions never wrote
-            //   `attachments` to the cache; newer
-            //   v3.11.30+ does. Preserve either way.
+            // V3.11.30 FIX (Tobe 2026-10-05 08:32): forward attachments from the legacy chat cache.
             attachments: Array.isArray(m.attachments) && m.attachments.length > 0
               ? m.attachments
               : undefined,
           });
         }
-        // v3.1.27: also seed the visible `messages` from the
-        // first non-empty slot so the chat isn't blank on
-        // startup. (The tab bar's onPress will switch this if
-        // the user clicks a different tab.)
+        // Also seed the visible `messages` from the first non-empty slot so the chat isn't blank on startup.
         setMessagesByAgentAndQuest(prev => {
-          // Merge: prefer the new grouped data for slots that
-          // are currently empty, but don't overwrite slots
-          // that already have messages (in case the user has
-          // a fresh agent that arrived via agents_list while
-          // we were loading the legacy cache).
+          // Merge: prefer the new grouped data for slots that are currently empty, but don't overwrite slots that already have messages (in case the…
           const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
           for (const [aid, questBuckets] of Object.entries(grouped)) {
             const existing = next[aid];
@@ -2707,57 +1529,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           }
           return next;
         });
-        // Show the first non-empty slot (or the active tab's
-        // slot, if any) as the visible chat.
-        //
-        // v3.11.8: the legacy `cyberclaw-chat-history` key
-        // pre-dates quest attribution — every message it
-        // holds is un-attributed (treated as DEFAULT /
-        // no-quest). If the user has an active quest
-        // (anchor !== null), the legacy content is NOT
-        // relevant to that quest's view. Skip the legacy
-        // bucket and bump anchorHydrateTick so the
-        // projection effect picks a clean empty render for
-        // the active quest's bucket.
-        //
-        // v3.11.11: parity with v3.11.10's onChatHistory fix.
-        // This `activeQid === null` check conflates two
-        // states: "bootstrap pending (anchor will become
-        // something soon)" and "bootstrap resolved with null
-        // (user explicitly deactivated)". The previous
-        // v3.11.10 patch only fixed onChatHistory; this
-        // seedFromLegacy path was missed. On a slow first
-        // start (AsyncStorage.getItem takes >300ms), this
-        // could leak the legacy DEFAULT bucket content into
-        // a user's active-quest view IF the bootstrap
-        // hasn't run yet but the activeChatAgentId was
-        // already set (e.g. from a cached agents_list).
-        //
-        // Fix: also gate on _anchorBootstrapResolved. While
-        // bootstrap is pending, return prev (don't surface
-        // the legacy DEFAULT bucket). The projection effect
-        // will re-run after the bootstrap resolves (the
-        // subscriber bumps anchorHydrateTick). This matches
-        // v3.11.10's onChatHistory behavior exactly.
+        // Show the first non-empty slot (or the active tab's slot, if any) as the visible chat.
         setMessages(prev => {
           if (prev.length > 0) return prev; // already populated
           const activeQid = mobileActiveQuestAnchor ?? null;
           if (activeQid !== null) {
-            // User has an active quest (anchor set). Don't
-            // surface legacy DEFAULT content — bump tick so
-            // the projection effect drives an empty render
-            // for the active quest's bucket.
+            // User has an active quest (anchor set).
             setAnchorHydrateTick(t => t + 1);
             return prev;
           }
-          // activeQid === null. Two meanings:
-          //   (a) Bootstrap pending → show empty (don't leak
-          //       legacy DEFAULT into the chat panel).
-          //   (b) Bootstrap resolved with null → user
-          //       explicitly deactivated → show legacy
-          //       DEFAULT bucket (that's what "no quest"
-          //       means).
-          // Distinguish via _anchorBootstrapResolved.
+          // ActiveQid === null.
           if (!_anchorBootstrapResolved) {
             // (a) Bootstrap pending. Same as onChatHistory:
             // return prev, projection effect will re-run
@@ -2781,17 +1562,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       }
     };
 
-    // v3.1.27: also load the per-agent key (the new source of
-    // truth). The legacy key still works as a fallback for users
-    // upgrading from v3.1.26.
-    //
-    // v3.11.0: extended for per-quest buckets. Reads the
-    // NEW key (`cyberclaw-chat-byagent-byquest`) first; falls
-    // back to the OLD per-agent-only key and migrates its
-    // contents into the new shape (each agent's flat array
-    // becomes that agent's `null`-quest bucket). On
-    // successful migration the old key is deleted so the
-    // next launch skips the migration path. Idempotent.
+    // Also load the per-agent key (the new source of truth).
     const seedFromPerAgent = async () => {
       try {
         // v3.11.0: prefer the new per-quest key.
@@ -2818,14 +1589,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                   ts: m.ts,
                   activeQuestId: m.activeQuestId ?? questId,
                   activeQuestName: m.activeQuestName ?? null,
-                  // v3.11.30 FIX (Tobe 2026-10-05 08:32):
-                  //   forward attachments from the
-                  //   persisted local cache. The new
-                  //   v3.11.30 local-append path writes
-                  //   attachments onto user messages; the
-                  //   older legacy cache (pre-v3.11.30)
-                  //   has no `attachments` field — that's
-                  //   fine, fall through to undefined.
+                  // V3.11.30 FIX (Tobe 2026-10-05 08:32): forward attachments from the persisted local cache.
                   attachments: Array.isArray(m.attachments) && m.attachments.length > 0
                     ? m.attachments
                     : undefined,
@@ -2842,22 +1606,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setMessages(prev => {
             if (prev.length > 0) return prev;
             const aid = activeChatAgentIdRef.current;
-            // v3.11.4: prefer the active quest's bucket
-            // over the iteration-order first bucket.
-            //
-            // v3.11.8: when the active quest's bucket has
-            // no data, do NOT silently fall back to the
-            // DEFAULT bucket. The legacy DEFAULT bucket
-            // holds pre-v3.11.0 messages with no quest
-            // attribution — showing them when the user
-            // has a quest active is the chat-flash bug.
-            //
-            // Fall back to DEFAULT ONLY when the user
-            // actually has no active quest (anchor === null).
-            // Otherwise return prev and let the projection
-            // effect re-run with the populated bucket map
-            // (we bump anchorHydrateTick below to trigger
-            // that re-run).
+            // Prefer the active quest's bucket over the iteration-order first bucket.
             if (aid && parsed[aid]) {
               const activeQid = mobileActiveQuestAnchor ?? null;
               const activeKey = questKeyForStorage(
@@ -2867,32 +1616,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 return parsed[aid][activeKey];
               }
               // Active quest bucket has no data on disk.
-              // Only fall back to DEFAULT if the user
-              // genuinely has no active quest. If anchor
-              // is set (a specific quest), leave messages
-              // untouched so the projection effect can
-              // pick a clean empty render for that quest.
               if (activeQid === null) {
                 const defaultKey = DEFAULT_QUEST_KEY;
                 if (parsed[aid][defaultKey] && parsed[aid][defaultKey].length > 0) {
                   return parsed[aid][defaultKey];
                 }
               }
-              // No fallback to "any bucket of any agent" —
-              // the previous version's last-resort path
-              // could leak the legacy DEFAULT bucket into
-              // a user's active-quest view. Tobe hit this
-              // on 2026-09-25 15:39 (intermittent) and on
-              // 2026-09-24 21:33 (chat flashed to legacy).
+              // No fallback to "any bucket of any agent" — the previous version's last-resort path could leak the legacy DEFAULT bucket into a user's…
             }
-            // Trigger a projection-effect re-run so the
-            // freshly-populated bucket map drives the
-            // visible chat. Without this, the projection
-            // effect (which has anchorHydrateTick in its
-            // deps) wouldn't re-fire after the bucket map
-            // changed, and any messages state we'd
-            // computed here would be the only signal the
-            // user sees for the rest of the session.
+            // Trigger a projection-effect re-run so the freshly-populated bucket map drives the visible chat.
             setAnchorHydrateTick(t => t + 1);
             return prev;
           });
@@ -2933,10 +1665,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               }
               return next;
             });
-            // Persist the migrated data under the new key
-            // and remove the old key. Best-effort — the
-            // next launch will just re-migrate if the
-            // writes fail.
+            // Persist the migrated data under the new key and remove the old key.
             await AsyncStorage.setItem(
               'cyberclaw-chat-byagent-byquest',
               JSON.stringify(migrated),
@@ -2946,29 +1675,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setMessages(prev => {
             if (prev.length > 0) return prev;
             const aid = activeChatAgentIdRef.current;
-            // v3.11.8: legacy migration only adds a
-            // DEFAULT bucket (the old data has no quest
-            // attribution). If the user has an active
-            // quest (anchor !== null), don't surface the
-            // legacy DEFAULT bucket — let the projection
-            // effect drive an empty render for the active
-            // quest. If the user explicitly has no active
-            // quest, the DEFAULT bucket IS what they want.
-            //
-            // v3.11.11: parity with v3.11.10's onChatHistory
-            // fix — also gate on _anchorBootstrapResolved to
-            // distinguish "bootstrap pending" from "user
-            // explicitly deactivated". While bootstrap is
-            // pending, return prev and let the projection
-            // effect drive the render after bootstrap
-            // completes. Same reasoning as the seedFromLegacy
-            // path above.
+            // Legacy migration only adds a DEFAULT bucket (the old data has no quest attribution).
             const activeQid = mobileActiveQuestAnchor ?? null;
             if (activeQid !== null) {
-              // User has an active quest; the legacy
-              // DEFAULT bucket doesn't belong in their
-              // active-quest view. Trigger a projection
-              // re-run with the populated empty bucket.
+              // User has an active quest; the legacy DEFAULT bucket doesn't belong in their active-quest view.
               setAnchorHydrateTick(t => t + 1);
               return prev;
             }
@@ -3030,21 +1740,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
   }, [messages]);
 
-  // v3.1.27: persist the per-agent chat cache so tab switching
-  // can restore history even if the desktop is offline / has
-  // been restarted. The legacy single-list persist above still
-  // runs for backward compat (and the Log / archive key), but
-  // this is the new source of truth for the tab-switch UX.
-  // We debounce writes (every 1.5s after a messagesByAgent
-  // change) so rapid incoming messages don't hammer storage.
-  //
-  // v3.11.0: extended for per-quest buckets. Snapshot is
-  // now Record<agentId, Record<questId|null, ChatMessage[]>>.
-  // We trim each bucket to the last 200 messages and write
-  // the whole thing under `cyberclaw-chat-byagent-byquest`
-  // (the new key). The old `cyberclaw-chat-byagent` key is
-  // removed on first persist so storage doesn't bloat with
-  // both copies.
+  // Persist the per-agent chat cache so tab switching can restore history even if the desktop is offline / has been restarted.
   useEffect(() => {
     const handle = setTimeout(() => {
       // Snapshot via the ref so we always read the latest, even
@@ -3067,9 +1763,6 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         for (const [qidKey, msgs] of Object.entries(questBuckets)) {
           if (!Array.isArray(msgs) || msgs.length === 0) continue;
           // Keep the last 200 per (agent, quest) bucket.
-          // The bucket key is already the storage form
-          // (string sentinel for the default bucket); we
-          // pass it through unchanged.
           trimmedBuckets[qidKey] = msgs.slice(-200);
         }
         if (Object.keys(trimmedBuckets).length > 0) out[aid] = trimmedBuckets;
@@ -3079,10 +1772,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         'cyberclaw-chat-byagent-byquest',
         JSON.stringify(out),
       ).catch(() => {});
-      // v3.11.0: remove the old key once we've written
-      // the new one. Best-effort — if the write above
-      // failed, the old key still has the data and the
-      // next launch will re-migrate from it.
+      // Remove the old key once we've written the new one.
       AsyncStorage.removeItem('cyberclaw-chat-byagent').catch(() => {});
     }, 1500);
     return () => clearTimeout(handle);
@@ -3103,28 +1793,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', (e) => {
       setKeyboardVisible(true);
-      // v3.10.81: compute the keyboard's visual height
-      // from `endCoordinates.screenY` rather than
-      // `endCoordinates.height`. On Android 15+ with
-      // edge-to-edge, `height` is the keyboard's content
-      // area only and EXCLUDES the suggestion bar (~50-
-      // 60dp on Gboard, ~70-80dp on Samsung Keyboard)
-      // and any top decoration. `screenY` is the Y
-      // position of the keyboard's actual top edge in
-      // screen coordinates, so `screen_height - screenY`
-      // gives the true visible height including the
-      // suggestion bar. Tobe hit this on v3.10.80
-      // (2026-07-23): the input row sat right at the
-      // top of the keys area, with the suggestion bar
-      // covering its bottom edge.
-      //
-      // Fall back to `endCoordinates.height` if screenY
-      // is missing (older RN versions / iOS). Use
-      // `Dimensions.get('screen').height` (full physical
-      // screen) rather than `Dimensions.get('window').height`
-      // because the window may be resized by adjustResize
-      // (in case it ever starts working again on some
-      // devices) and we want the full-screen reference.
+      // Compute the keyboard's visual height from `endCoordinates.screenY` rather than `endCoordinates.height`.
       const coords = e?.endCoordinates;
       const visualHeight = coords
         ? (typeof coords.screenY === 'number'
@@ -3159,15 +1828,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       const goingBackground = nextAppState === 'background' || nextAppState === 'inactive';
       const goingForeground = nextAppState === 'active';
 
-      // v3.1.36: de-spam. AppState 'change' can fire MANY times in
-      // a row (e.g. when the keyboard opens/closes, when the
-      // WebView mounts, or just on Android lifecycle churn), and
-      // each fire used to (a) re-apply the sample listener
-      // setup and (b) log 'App foregrounded / backgrounded'.
-      // Both are wasteful when nothing material changed. Skip the
-      // no-op transition entirely, and rate-limit any actual
-      // transition to at most once per 1.5s so a quick back-and-
-      // forth (e.g. transient inactive states) doesn't double-log.
+      // De-spam.
       if (nextAppState === prev) return;
       const now = Date.now();
       if (now - lastAppStateLogRef.current < 1500) {
@@ -3180,26 +1841,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       lastAppStateLogRef.current = now;
 
       if (goingForeground && wasBackground) {
-        // v3.10.108: re-apply the thinking-bubble state
-        // when the user comes back to foreground. Tobe's
-        // 2026-07-29 feedback: "the clawsuu is thinking
-        // still disappears after i went into another app
-        // and back again". If the desktop is still working
-        // on a reply (typing active, no message yet), the
-        // sticky ref re-applies the chatVoiceStatus so the
-        // bubble reappears. Discord's "X is typing..."
-        // indicator is the model here.
+        // Re-apply the thinking-bubble state when the user comes back to foreground.
         if (thinkingStickyRef.current && !fullscreenRef.current) {
           const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
           const name = a?.name || 'Companion';
-          // v3.10.133: pick the right "still working" label based
-          // on how long the bubble has been up. Without this, a
-          // foreground transition from a long wait would reset
-          // the text to "is thinking..." even when we're already
-          // past 30s/90s/4min into the wait — visually a
-          // regression because the user just lost the
-          // escalation context. Use the same 30s/90s/4min
-          // thresholds as the onTyping escalation.
+          // Pick the right "still working" label based on how long the bubble has been up.
           const elapsed = thinkingStartedAtRef.current ? (Date.now() - thinkingStartedAtRef.current) : 0;
           let label = 'is thinking...';
           if (elapsed >= 240000) label = 'is taking very long (model may retry in the background)...';
@@ -3208,18 +1854,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setChatVoiceStatus(`${name} ${label}`);
           setIsThinking(true);
           setArenaThinking(true);
-          // Re-arm the next escalation if we just transitioned
-          // to a new tier (e.g. user backgrounded at 60s, came
-          // back, we just rendered "is still working..." at 60s,
-          // but the next tier ("taking longer than usual...") is
-          // at 90s — we still have 30s on the original timer, so
-          // it's fine; no new timer needed. If the original
-          // timer already fired and was a no-op because
-          // thinkingStickyRef was already false at that moment,
-          // the next tier is now stranded. That's a
-          // contradiction because we just re-applied sticky=true,
-          // so the no-op couldn't have happened. Leave the
-          // existing timer to fire as scheduled.).
+          // Re-arm the next escalation if we just transitioned to a new tier (e.g.
         }
         // Came back to foreground - restart listener with foreground (lenient) threshold
         if (!isWakeWordModeRef.current && !fullscreenRef.current) {
@@ -3266,14 +1901,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               (msg) => addLogEntry(msg, 'debug'),
               fgThr,
             );
-            // v3.1.30: log the threshold change so the user
-            // can see why a previously-stable 60% (or
-            // whatever) suddenly becomes 55%. The
-            // foreground threshold is intentionally lower
-            // (more lenient) than the background one
-            // because the phone mic is closer to the
-            // user and the audio is cleaner when the app
-            // is foregrounded.
+            // Log the threshold change so the user can see why a previously-stable 60% (or whatever) suddenly becomes 55%.
             addLogEntry(
               `🎙️ App foregrounded — wake threshold: ${Math.round(fgThr * 100)}% (was stricter in background)`,
               'info',
@@ -3325,10 +1953,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 'info',
               );
             }
-            // v3.1.29: removed the Vosk fallback here. If
-            // there's no training data, just skip — the
-            // user will need to train or the foreground
-            // restart will pick it up.
+            // Removed the Vosk fallback here.
           } else if (wakeMode === 'porcupine' && ppnPath) {
             WakeWordModule?.startPorcupine?.(ppnPath).catch(() => {});
           }
@@ -3358,14 +1983,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       const wakeMode = wakeModeRaw || 'sample';
       const phrase = settings.wakeWord || 'hey claw';
       if (wakeMode === 'sample') {
-        // v3.1.29: first try the specific phrase the settings
-        // ask for; if that has no training data, fall back to
-        // any trained phrase (so the user doesn't lose wake
-        // detection just because the settings got reset).
-        // Vosk is no longer a fallback — it requires a 50MB
-        // model download and the sample matcher is more
-        // reliable. If neither path has data, just don't
-        // start wake detection and tell the user to train.
+        // First try the specific phrase the settings ask for; if that has no training data, fall back to any trained phrase (so the user doesn't…
         let trainingJson = await AsyncStorage.getItem(getWakeSamplesKey(phrase))
           .catch(() => null);
         // v3.1.67: per-companion matcher. Load all
@@ -3428,10 +2046,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // App is backgrounded - wake word will be started by AppState listener
     }
 
-    // v3.1.12: wake event listening moved to App.tsx. App-level listener
-    // switches to the dedicated WakeModeScreen, which has its own
-    // wake + recording + audio-response flow. HomeScreen no longer
-    // handles the wake event (it would race with App.tsx).
+    // Wake event listening moved to App.tsx.
     const wakeSub = null; // (was: wakeWordEmitter?.addListener('wakeWordDetected', handleWakeWord))
     const wakeOpenSub = null; // (was: DeviceEventEmitter.addListener('wakeWordOpenedApp', handleWakeWord))
     // Monitor silence detection for voice mode auto-stop
@@ -3464,10 +2079,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       // Show connection notifications via Toast (small, subtle)
       if (data.state === 'connected') {
         addLogEntry('Connected - receiving updates from desktop', 'info');
-        // v3.1.17: re-request the agents list on every reconnect. The
-        // desktop caches and replays the last agents_list, so this
-        // rebuilds the companion tab bar even if we lost connection
-        // mid-session or the desktop was restarted.
+        // Re-request the agents list on every reconnect.
         try {
           syncClient.requestAgentsList();
           addLogEntry('→ Re-requested agents list (reconnect)', 'sent');
@@ -3494,112 +2106,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
     const onChat = (msg: any) => {
       addLogEntry(`📨 Chat message received from server`, 'received');
-      // v3.10.11: allow user messages through to the chat
-      // history. Previously we skipped them, which meant
-      // voice-message transcriptions (the desktop sends
-      // these back via sync-broadcast-chat with isUser=true)
-      // never appeared in the chat. Tobe reported "I saw my
-      // interpreted voice message in the chat but it
-      // vanished. It should stay in the chat." The
-      // vanishing was because:
-      //   1. Voice audio is sent via sendAudioInput (no
-      //      local appendAgentMessage call)
-      //   2. Desktop transcribes + calls
-      //      sync-broadcast-chat with isUser=true
-      //   3. Mobile receives chat event, this handler
-      //      filtered it out as a duplicate-skip
-      //   4. The transcript was therefore never added to
-      //      the chat history at all
-      //
-      // Removing the skip lets voice transcriptions land
-      // in the chat. The existing dedupe in
-      // appendAgentMessage (ts+text within 2s) prevents
-      // duplicates when the user TYPES a message — that
-      // path adds locally first, then the desktop echoes
-      // back, and the second append is deduped by the
-      // ts+text check.
-      //
-      // For voice messages, the desktop's STT sometimes
-      // produces a slightly different transcript than the
-      // raw speech (correcting "um"s, fixing grammar),
-      // so the ts+text match might miss. But the user
-      // has no local copy for voice messages (we never
-      // added one), so a missed dedupe just means the
-      // transcription is the only entry — no duplicate.
+      // Allow user messages through to the chat history.
       const aid: string = msg.agentId || activeChatAgentIdRef.current || 'companion';
-      // v3.10.85 + v3.11.12: stamp the message with which
-      // quest was active when it landed. The desktop echo
-      // can lag the mobile's local copy by a few seconds
-      // (network + STT + IPC round-trip), so the snapshot
-      // taken at append time may differ from what's active
-      // now — that's correct, it reflects the state at the
-      // time the user/agent actually exchanged the message.
-      //
-      // v3.11.12: prefer the desktop's broadcast
-      // `msg.activeQuestId` / `msg.activeQuestName` (set by
-      // the desktop's addChatMsg using ITS activeQuestId
-      // at append time) over the mobile's local
-      // `activeQuestRef.current`. v3.10.85..v3.11.11 used
-      // only the mobile's ref, which had two failure
-      // modes that bit Tobe repeatedly:
-      //
-      //   (a) Cold start: ref is null until the first
-      //       quests_list broadcast lands. Realtime chat
-      //       messages arriving in that window were stamped
-      //       with activeQuestId: null even though the
-      //       desktop sent them under an active quest.
-      //       The chat-flash symptom.
-      //
-      //   (b) Desync: if the mobile's anchor becomes stale
-      //       (e.g. bootstrap read a different value than
-      //       what the desktop just broadcasted), realtime
-      //       messages get routed to the wrong bucket on
-      //       the mobile while the desktop's chat_history
-      //       routes correctly. The user sees messages
-      //       arrive in one bucket, then disappear when
-      //       the projection effect refreshes to the other
-      //       bucket. The same loop symptom.
-      //
-      // The desktop's broadcast is the source of truth for
-      // "what quest was this message sent under." Use it
-      // directly. Fall back to the local ref only for old
-      // desktops (< v3.3.19) that don't stamp on the wire.
+      // Stamp the message with which quest was active when it landed.
       const aq = chatCasualRef.current ? null : activeQuestRef.current;
       const questFromBroadcast = (typeof msg.activeQuestId === 'string' && msg.activeQuestId)
         ? { id: msg.activeQuestId, name: msg.activeQuestName || null }
         : null;
-      // v3.11.24: if the broadcast has no activeQuestId
-      // (e.g. the desktop's module-scope activeQuestId was
-      // null at broadcast time, an old desktop, or a
-      // race during a desktop reload), fall back to the
-      // mobile's anchor. Without this, the message lands
-      // in the DEFAULT bucket and the user — whose mobile
-      // anchor is on a specific quest — never sees it.
-      // Tobe 2026-09-30 17:29: 'the rate limit error
-      // appears, but again that does not come through to
-      // the mobile, only on desktop for some reason.'
-      // The message is broadcast with activeQuestId=null
-      // (whatever the reason — desktop reload race,
-      // mobile-side desync, etc.) and routed to DEFAULT
-      // bucket on the mobile, which is invisible to a
-      // user with an active quest anchor. Fall back to
-      // the anchor so the error lands in the user's
-      // visible bucket.
-      //
-      // v3.11.28: skip the anchor fallback when the
-      // desktop explicitly stamped `forceNoQuest: true`
-      // on the broadcast (v3.3.31 desktop). That flag
-      // means "this bubble belongs in the no-quest chat
-      // regardless of any active quest" — used for
-      // companion-reaction bubbles (toy dropped, snack
-      // eaten, ball fetched, etc.). Tobe 2026-10-01
-      // 12:20: "I just want that speech the companion
-      // does into the no quest chat, not any quest so
-      // it does not clutter those conversations."
-      // Without this guard, the v3.11.26 anchor fallback
-      // would re-route toy-reaction bubbles from DEFAULT
-      // back to the user's anchor bucket, defeating the
-      // v3.3.31 desktop intent.
+      // If the broadcast has no activeQuestId (e.g.
       const forceNoQuest = msg.forceNoQuest === true;
       const questForRoute = forceNoQuest
         ? null
@@ -3609,27 +2123,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       const qidForRoute = questForRoute
         ? questForRoute.id
         : null;
-      // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
-        //   stableHistoryMessageId instead of
-        //   `${ts}-${random}`. The random suffix
-        //   guaranteed uniqueness within the app
-        //   session but made the realtime bubble's
-        //   id DIFFERENT from the chat_history
-        //   replay's id (chat_history uses
-        //   stableHistoryMessageId(ts, text)).
-        //   Without id-match, chat_history replays
-        //   on every reconnect pushed duplicates
-        //   even for messages the local already
-        //   had from the realtime broadcast.
-        //   Symptom: '2 new messages' badge appears
-        //   on every chat refresh, messages.length
-        //   keeps growing in the bucket, the chat
-        //   flickers as duplicates scroll in/out.
-        //
-        //   Now the realtime id matches the
-        //   chat_history id (both = hist-{ts}-
-        //   {first16text}-{hash}), so the chat_history
-        //   dedupe skips already-known entries.
+      // V3.11.31 FIX (Tobe 2026-10-05 18:43): use stableHistoryMessageId instead of `${ts}-${random}`.
         const incoming: ChatMessage = {
         id: stableHistoryMessageId(msg.ts || Date.now(), msg.text || ''),
         text: msg.text,
@@ -3637,40 +2131,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         agentId: aid,
         agentName: msg.agentName,
         ts: msg.ts || Date.now(),
-        // Stamp the broadcast-derived quest id on the
-        // message bubble so the v3.11.5 pill shows the
-        // correct quest name even when the mobile's anchor
-        // is null or stale.
+        // Stamp the broadcast-derived quest id on the message bubble so the v3.11.5 pill shows the correct quest name even when the mobile's anchor…
         activeQuestId: questForStamp?.id ?? null,
         activeQuestName: (questForStamp as any)?.name ?? null,
-        // v3.11.13: forward `attachments` from the desktop's
-        // chat_message broadcast. The desktop v3.3.20+ sends
-        // attachments for image bubbles (the [SCREENSHOT
-        // target=...] directive flow), and the renderer's
-        // user-side send path already uses attachments for
-        // image-bearing messages. The bubble renderer
-        // (renderMessage in this file, around line 6190)
-        // already accepts `attachments` and renders image
-        // previews — we just had to pass them through here.
-        //
-        // Without this, the mobile's chat_message arrived
-        // with `attachments: undefined`, so the bubble
-        // rendered text-only even when the desktop showed a
-        // screenshot thumbnail. Tobe 2026-09-29 11:38:
-        // 'clawsuu is posting pictures in the desktop app
-        // but they dont come through to the mobile end.'
-        // The desktop-side fix ships in v3.3.20; this is
-        // the mobile-side counterpart.
-        //
-        // We only forward the attachments on agent-image
-        // bubbles (or any future visual-only bubble type)
-        // to avoid inflating regular text chats with empty
-        // `attachments: []` arrays — the dedupe in
-        // appendAgentMessage normalizes text, and an empty
-        // text + non-empty attachments would dedupe OK but
-        // a stale `attachments: undefined` won't. Keeping
-        // it conservative for now: only attach when the
-        // broadcast explicitly includes them.
+        // Forward `attachments` from the desktop's chat_message broadcast.
         attachments: Array.isArray(msg.attachments) && msg.attachments.length > 0
           ? msg.attachments
           : undefined,
@@ -3684,14 +2148,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         activeChatAgentIdRef.current,
         chatCasualRef.current ? null : activeChatQuestId,
       );
-      // v3.10.177: classify error bubbles so the chat
-      // can render a structured card with category,
-      // duration, and partial-step list. The desktop
-      // prefixes error bubbles with "Error:" (see
-      // app.js addChatMsg('error', ...) call sites).
-      // We classify into timeout / crash / network /
-      // generic-error based on substring patterns in
-      // the error text.
+      // Classify error bubbles so the chat can render a structured card with category, duration, and partial-step list.
       let errorCategory: 'timeout' | 'crash' | 'network' | 'error' | null = null;
       if (!incoming.isUser && typeof incoming.text === 'string') {
         const t = incoming.text;
@@ -3707,22 +2164,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           }
         }
       }
-      // v3.10.177.1: close the active task session when an
-      // agent reply lands. We do this BEFORE the rest of
-      // the onChat handling so the captured steps are
-      // frozen even if the message processing throws.
-      //
-      // Tobe's 2026-08-28 clarification: this is ONLY for
-      // errors. So we attach `taskSummary` only when the
-      // message classified as an error bubble
-      // (errorCategory is set). Successful replies
-      // render normally with no summary attachment.
+      // Close the active task session when an agent reply lands.
       if (!incoming.isUser) {
         const finished = closeTaskSession(errorCategory ? 'failed' : 'done', incoming.text);
-        // Attach taskSummary only when the bubble is an
-        // error. The captured steps (from the Log tab
-        // events during typing) let the user see what
-        // the agent had already done before failing.
+        // Attach taskSummary only when the bubble is an error.
         const shouldAttach = !!errorCategory;
         if (shouldAttach && finished) {
           const durationMs = (finished.endTs || Date.now()) - finished.startTs;
@@ -3734,12 +2179,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             errorCategory: errorCategory!,
             errorText: incoming.text,
           };
-          // Mutate the bubble we just appended via the
-          // messagesByAgent state for this agent.
-          //
-          // v3.11.0: per-quest buckets. The incoming
-          // message's quest is stamped on it (activeQuestId);
-          // we look up the same bucket here.
+          // Mutate the bubble we just appended via the messagesByAgent state for this agent.
           setMessagesByAgentAndQuest(prev => {
             const agentBuckets = prev[aid] || {};
             const qid: string | null =
@@ -3772,74 +2212,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           }
         }
       }
-      // v3.10.108: any new message (user or agent) lands
-      // here. If it's an agent message, the typing
-      // indicator should clear — the response arrived. If
-      // it's a user message echo from the desktop, the
-      // sticky flag is also reset (it'll be set again on
-      // the next typing:true).
-      //
-      // v3.10.133: same clearing now handles the new
-      // long-wait escalate timer (and the started-at ref).
-      // Without this, a {active:true} escalation that
-      // scheduled a 30s/90s/4min setTimeout would keep
-      // firing after the bubble already went away — the
-      // pre-v3.10.133 mobile design relied on the bubble
-      // vanishing via explicit typing=false, so any
-      // active timer was cleared implicitly with the
-      // bubble's render. Now that typing=false is a no-op,
-      // we have to clear the timer explicitly. Same effect
-      // for the started-at ref (so the next typing:true
-      // restarts the clock from zero).
+      // Any new message (user or agent) lands here.
       if (!incoming.isUser) {
-        // v3.11.1: gate the indicator clear on whether the
-        // reply is for the ACTIVE (agent, quest) bucket.
-        // Before this, an agent reply routed to a
-        // different quest's bucket would wipe the
-        // "Clawsuu is thinking..." indicator even though
-        // the user is still waiting for THEIR active
-        // quest's reply — because the desktop emits
-        // typing=true/false per-agent, not per-quest, so a
-        // late Quest A reply landing while the user is on
-        // Quest B would clear Quest B's waiting indicator.
-        // Tobe's 2026-09-23 report: "the clawsuu is
-        // thinking... disappears sometimes shortly after i
-        // sent something when i know hes thinking or
-        // working." Leaving the indicator up when the
-        // reply is for a non-active bucket keeps the user
-        // informed that their turn is still in flight.
+        // Gate the indicator clear on whether the reply is for the ACTIVE (agent, quest) bucket.
         const replyBucketKey = questKeyForStorage(
           incoming.activeQuestId === undefined ? null : incoming.activeQuestId
         );
-        // v3.11.32 FIX (Tobe 2026-10-05 22:53): use
-        //   the same source for `activeBucketKey` as
-        //   the projection effect at line 1723 uses
-        //   for its `qid`. Previously read
-        //   `activeChatQuestId` state. Problem: the
-        //   onQuestsList handler's Case 3 path
-        //   (~line 5460) updates
-        //   `activeQuestRef.current` to the desktop's
-        //   new active quest but does NOT update
-        //   `activeChatQuestId` state (the comment
-        //   explains why: we don't swap state
-        //   without user intent). The state is
-        //   therefore stuck on whatever quest was
-        //   active when the user last interacted
-        //   with the mobile (e.g. HIVE_CONTROL
-        //   earlier in the day). The ref tracks the
-        //   current desktop active (Cyber_Computer
-        //   now). Projection effect reads the ref
-        //   and correctly shows Cyber_Computer
-        //   content. Thinking clear reads the
-        //   state, sees HIVE_CONTROL, doesn't match
-        //   the reply's Cyber_Computer bucket, and
-        //   leaves the indicator up. Symptom:
-        //   'clawsuu is still working even when he
-        //   is done.'
-        //
-        //   Fix: read the ref, not the state. Same
-        //   source as the projection effect so the
-        //   clear matches what's on screen.
+        // V3.11.32 FIX (Tobe 2026-10-05 22:53): use the same source for `activeBucketKey` as the projection effect at line 1723 uses for its `qid`.
         const activeQidFromRef = activeQuestRef.current?.id ?? null;
         const activeBucketKey = questKeyForStorage(
           activeQidFromRef
@@ -3858,38 +2237,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setArenaThinking(false);
           setChatVoiceStatus(null);
         }
-        // If replyIsForActiveBucket is false, leave the
-        // sticky flag and timer alone — the indicator
-        // stays up for the still-in-flight active
-        // request.
+        // If replyIsForActiveBucket is false, leave the sticky flag and timer alone — the indicator stays up for the still-in-flight active request.
       }
       if (aid !== activeChatAgentIdRef.current) {
         setChatUnreadByAgent(prev => ({ ...prev, [aid]: (prev[aid] || 0) + 1 }));
       }
-      // v3.10.70: fire a system notification when a
-      // companion replies and the user isn't actively
-      // watching the chat for that companion. Skips:
-      //   - User messages (isUser=true) — we don't ping
-      //     ourselves
-      //   - App is in foreground AND chat tab is active
-      //     AND agent matches — user can already see it
-      //   - Voice mode is open — the voice response is
-      //     playing through the audio system, a separate
-      //     notification would just clash
-      //   - Wake mode is open and idle — same logic as
-      //     voice mode: there's already audio
-      //   - v3.10.120: replay=true (sync-server tagged
-      //     this chat_message as a reconnect-replay of a
-      //     cached AI reply). The user wasn't there when
-      //     the reply landed; we still want the chat
-      //     history to fill in (handled above by the
-      //     appendAgentMessage call), but a system
-      //     notification would just spam the tray. Tobe
-      //     reported (2026-08-01): "for some reason i get
-      //     notification from earlier messages" — that
-      //     was the 50-message rolling-buffer replay
-      //     firing one notification per cached reply on
-      //     reconnect.
+      // Fire a system notification when a companion replies and the user isn't actively watching the chat for that companion.
       const isOwnReply = !msg.isUser;
       if (isOwnReply && !msg.replay) {
         const isChatFocused =
@@ -3979,10 +2332,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             } catch (_) {}
           };
 
-          // Desktop sends audio_response (synthesized WAV) - onAudioResponse plays it
-          // and will call restartWakeListening via audioPlayerFinished event.
-          // Don't call speak() here - it would conflict with startPlayer().
-          // Fallback: if audio_response never arrives, restart after estimated duration.
+          // Desktop sends audio_response (synthesized WAV) - onAudioResponse plays it and will call restartWakeListening via audioPlayerFinished event.
           const wordCount = msg.text.split(/\s+/).length;
           const fallbackMs = Math.max(6000, Math.ceil((wordCount / 130) * 60 * 1000) + 3000);
           ttsTimeoutId = setTimeout(restartWakeListening, fallbackMs);
@@ -4019,14 +2369,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onTyping = (msg: any) => {
       setIsThinking(!!msg.active);
       setArenaThinking(!!msg.active);
-      // v3.10.177: when typing starts (and a session
-      // isn't already open), open one. This catches
-      // voice-mode paths and any future path that
-      // doesn't go through the typed-send button.
-      // The sendMessage() call site also opens a
-      // session; opening twice is fine — the second
-      // start is a no-op when a session is already
-      // open.
+      // When typing starts (and a session isn't already open), open one.
       if (msg.active && !activeTaskSession) {
         const _a2 = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
         const _aid2 = activeChatAgentIdRef.current || 'companion';
@@ -4043,17 +2386,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
         const name = a?.name || 'Companion';
         setChatVoiceStatus(`${name} is thinking...`);
-        // v3.10.133: stamp the moment the indicator went up so
-        // the long-wait escalation (below) can flip the text to
-        // "still working..." after 30s, 90s, and 4min. The
-        // desktop already escalates via the typing bubble text,
-        // but the mobile receives the bubble verbatim — for
-        // long tasks where the desktop is wedged on a sub-task
-        // (Tobe 2026-08-04: "there is a small delay or issue on
-        // mobile with the clawsuu is thinking still"), the
-        // mobile user sees the same generic string for the
-        // whole wait. The mobile-side escalation gives them
-        // observable progress.
+        // Stamp the moment the indicator went up so the long-wait escalation (below) can flip the text to "still working..." after 30s, 90s, and 4min.
         thinkingStartedAtRef.current = Date.now();
         // Cancel any previous long-wait timer; restart fresh.
         if (thinkingEscalateTimerRef.current) {
@@ -4065,9 +2398,6 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const scheduleNext = (delayMs: number, label: string) => {
           thinkingEscalateTimerRef.current = setTimeout(() => {
             // Only escalate if the bubble is STILL up — i.e.
-            // the desktop is still typing (sticky ref). If we
-            // already cleared (agent message arrived, error
-            // arrived, etc.), no-op.
             if (!thinkingStickyRef.current) return;
             if (fullscreenRef.current) return; // don't override voice-mode status
             const a2 = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
@@ -4082,232 +2412,42 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // 4 min: 'taking very long — may retry soon'
         scheduleNext(240000, 'is taking very long (model may retry in the background)...');
       }
-      // v3.10.108: keep the thinking bubble sticky across
-      // app foreground/background cycles. Tobe's 2026-07-29
-      // feedback: "the clawsuu is thinking still disappears
-      // after i went into another app and back again". What
-      // was happening: the mobile's chatVoiceStatus state was
-      // wiped when HomeScreen's useEffect re-ran on foreground
-      // (every WebSocket reconnect), and the previous code
-      // dropped the `{active:false}` message without restoring
-      // the bubble — even though the desktop might still be
-      // working on the reply. Discord's "X is typing..."
-      // indicator is server-authoritative: once the typing
-      // stream starts, the bubble stays until either an
-      // explicit `typing: false` arrives OR an agent message
-      // lands. We're mirroring that model: keep the bubble
-      // visible until the next agent message or an explicit
-      // {active:false} arrives, regardless of foreground
-      // transitions.
-      //
-      // v3.10.133: when the desktop sends {active:false} we
-      // still KEEP the bubble visible. Reasoning: the desktop
-      // side sometimes clears typing slightly before the agent
-      // reply round-trips through `addChatMsg('agent', ...)`,
-      // OR the typing=false arrives while the reply is still
-      // in flight (Tobe 2026-08-04: "It says that he is
-      // thinking for about 5-10 seconds, then it takes some
-      // time before the reply comes"). With strict
-      // server-authoritative clearing, the bubble would vanish
-      // mid-flight and the user thinks the agent died.
-      //
-      // New rule: typing=false is informational only. Clear
-      // the bubble ONLY when a real terminal event lands:
-      //   (a) an agent message arrives via onChat
-      //       (appendAgentMessage path)
-      //   (b) the user sends a new message (which will
-      //       fire its own typing=true shortly, replacing the
-      //       bubble)
-      //   (c) onSendError fires (e.g. audio_input error)
-      // Set a client-side sticky flag the moment we receive
-      // {active:true}; clear it ONLY when a real terminal
-      // event lands. {active:false} from the desktop does
-      // NOT clear the sticky flag on its own.
+      // Keep the thinking bubble sticky across app foreground/background cycles.
       if (msg.active) {
         thinkingStickyRef.current = true;
         thinkingStartedAtRef.current = Date.now();
       }
-      // v3.10.133: explicit {active:false} is now a no-op
-      // on its own. The bubble stays until an agent message
-      // or error arrives. The desktop still sends it so the
-      // renderer-side 'isThinking' flag mirrors the desktop's
-      // state, but the user-visible text persists. See the
-      // onChat handler below for the agent-message clearing
-      // path.
+      // Explicit {active:false} is now a no-op on its own.
     };
 
-    // v3.10.87: tool-call events from the desktop's
-    // OpenClaw session tailer. When the agent runs an
-    // exec/read/write/etc. tool, the desktop emits
-    // `agent_tool` with a short, concise friendly name
-    // (e.g. "Running command..."). We use this to show
-    // a more accurate indicator than the generic
-    // "thinking..." — the user sees what the agent is
-    // actually doing.
-    //
-    // Tobe asked for "short and concise" — the desktop
-    // caps each friendly text at ~25 chars. We don't
-    // add a prefix like "💭" — the indicator bar is
-    // already visually distinct, and a prefix makes
-    // it longer than necessary.
-    //
-    // Falls back to "thinking..." if the desktop sends
-    // an unknown tool. Clears the indicator when the
-    // agent finishes (typing=false clears it).
+    // Tool-call events from the desktop's OpenClaw session tailer.
     const onAgentTool = (msg: any) => {
       if (!msg || typeof msg.friendly !== 'string') return;
       setChatVoiceStatus(msg.friendly);
-      // v3.11.1: Claude-style action log. Push each
-      // tool call's friendly text onto a short rolling
-      // list (last 3) and render them below the
-      // spinner. The user sees "Reading file X" →
-      // "Running command Y" → "Writing file Z" as the
-      // agent works, instead of just a generic
-      // "thinking..." string for the entire run. Empty
-      // when the desktop doesn't emit agent_tool (which
-      // is the current state for mobile-routed chats;
-      // see v3.2.25 in main.js).
+      // Claude-style action log.
       const friendly = msg.friendly;
       setChatActions(prev => {
         const next = [...prev, friendly];
-        // Keep the last 3 (oldest drops first). Cap at
-        // 3 because the bar is short; longer lists
-        // would either wrap or push the input off
-        // screen on small phones.
+        // Keep the last 3 (oldest drops first).
         return next.length > 3 ? next.slice(next.length - 3) : next;
       });
-      // v3.10.177: also capture this as a task step so
-      // the structured error/timeout bubble can show
-      // which tools the agent ran before failing. The
-      // desktop currently only emits agent_tool events
-      // for Discord-routed sessions (those are
-      // suppressed per v3.2.25), but if/when that
-      // changes for in-app pipelines, this listener is
-      // already wired up.
+      // Also capture this as a task step so the structured error/timeout bubble can show which tools the agent ran before failing.
       appendTaskStep({ label: `tool: ${friendly.substring(0, 40)}` });
     };
 
     const onChatHistory = (msg: any) => {
       if (Array.isArray(msg.messages) && msg.messages.length > 0) {
         addLogEntry(`← Loaded ${msg.messages.length} messages from desktop`, 'info');
-        // v3.1.16: data is stored in chronological order (oldest→newest).
-        // The desktop sends it that way; we keep it as-is.
-        // v3.3.19 + v3.11.12: the desktop's chatHistory flat
-        // mirror now stamps `activeQuestId` and
-        // `activeQuestName` per message. With this stamping,
-        // we can route each historical message to its correct
-        // per-quest bucket on the mobile side, instead of
-        // dumping everything into DEFAULT. Pre-v3.3.19
-        // desktops sent messages with `activeQuestId`
-        // missing (the field didn't exist on the desktop's
-        // flat mirror); those land in DEFAULT as before.
-        //
-        // v3.11.12 keeps the v3.11.10 / 11 bootstrap-pending
-        // guard but refines the "all to DEFAULT" behavior:
-        //   * If the active quest's bucket has no data AND
-        //     the user has an active quest → keep the
-        //     messages state untouched (don't flash DEFAULT
-        //     content) AND bump anchorHydrateTick so the
-        //     projection effect re-runs against the freshly-
-        //     populated buckets.
-        //   * If the user has no active quest (anchor is
-        //     null) → land everything in DEFAULT (the
-        //     historical behavior).
-        //
-        // v3.11.12: per-quest attribution check. If the
-        // desktop v3.3.19+ stamped activeQuestId on every
-        // message, route per-message instead of all-to-DEFAULT.
-        // Old desktops have the field missing entirely
-        // (undefined) which fails this check; they fall
-        // through to the legacy DEFAULT-bucket path below.
+        // Data is stored in chronological order (oldest→newest).
         if (msg.messages.every((m: any) => 'activeQuestId' in m)) {
-          // Per-quest attribution is present on all
-          // messages. Group by (questId, agentId) and
-          // write each group to its own bucket.
-          //
-          // v3.11.23: dedupe by ID before pushing. The
-          // desktop sends chat_history on every WS
-          // reconnect; without dedupe, the bucket
-          // grows unbounded (every reconnect duplicates
-          // every historical message). The auto-scroll
-          // effect then bumps the unread badge once per
-          // duplicate because last.id changes when the
-          // array length changes. Tobe 2026-09-30 14:18
-          // report: '1 new message... 4 new but i am at
-          // the bottom of the chat already and it is no
-          // more new texts, not even on the desktop.' —
-          // the 4 was 4 reconnect replays of the same
-          // messages, each bumping the badge once. With
-          // the dedupe below, replays no-op on already-
-          // seen message IDs and the badge only
-          // increments for genuinely new arrivals.
+          // Per-quest attribution is present on all messages.
           const aid = activeChatAgentIdRef.current || 'companion';
           setMessagesByAgentAndQuest(prev => {
             const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
             for (const m of msg.messages) {
               const mAid: string = m.agentId || aid;
               const rawQid: string | null = (typeof m.activeQuestId === 'string') ? m.activeQuestId : null;
-              // v3.11.26: if the desktop stamped this
-              // message with activeQuestId: null (because
-              // the desktop's module-scope activeQuestId
-              // was null at addChatMsg time — e.g. mid-
-              // reload race, post-deactivation, or the
-              // user hadn't activated a quest when the
-              // message was sent), fall back to the mobile
-              // anchor. Without this, the message lands in
-              // the DEFAULT bucket and the user — whose
-              // mobile anchor is on a specific quest — never
-              // sees it on the chat_history fetch (which
-              // happens on every WS reconnect, every cold
-              // start, and every tab-switch back to chat).
-              //
-              // Tobe 2026-10-01 07:18: 'a timeout error
-              // appeared i see on the desktop end. Again,
-              // its not showing up on the mobile.' — the
-              // v3.11.24 fix handled the realtime broadcast
-              // path (onChat), but the chat_history path
-              // (this handler) was still routing messages
-              // with desktop-activeQuestId=null to DEFAULT.
-              // If the mobile was disconnected (Android doze,
-              // background, etc.) when the timeout broadcast
-              // fired and reconnected after, the desktop's
-              // chat_history replay sent the error message
-              // with activeQuestId=null, the mobile routed
-              // it to DEFAULT, and the projection effect
-              // (showing the anchor's bucket) never rendered
-              // it.
-              //
-              // The fallback is only applied when:
-              //   - the desktop's stamp is null/missing
-              //     (a wrong non-null stamp is preserved
-              //     as the desktop is source of truth for
-              //     non-null values), AND
-              //   - the mobile anchor has a non-null value
-              //     (don't fall back if the user explicitly
-              //     deactivated on the mobile side).
-              //
-              // We re-stamp the message's activeQuestId too
-              // so the per-bubble pill (rendered from
-              // activeQuestName) shows the anchor's name,
-              // matching the realtime broadcast path's
-              // behavior in v3.11.24.
-              //
-              // v3.11.28: respect the desktop's `forceNoQuest`
-              // flag (v3.3.31). When the desktop stamps
-              // forceNoQuest: true on a message, it means
-              // "this bubble belongs in the no-quest chat
-              // regardless of any active quest" — used for
-              // companion-reaction bubbles (toy dropped,
-              // snack eaten, ball fetched, etc.). Don't
-              // fall back to the anchor in that case.
-              // Tobe 2026-10-01 12:20: "I just want that
-              // speech the companion does into the no quest
-              // chat, not any quest so it does not clutter
-              // those conversations." Without this guard,
-              // the v3.11.26 anchor fallback would re-route
-              // toy-reaction bubbles from DEFAULT back to
-              // the user's anchor bucket, defeating the
-              // v3.3.31 desktop intent.
+              // If the desktop stamped this message with activeQuestId: null (because the desktop's module-scope activeQuestId was null at addChatMsg time…
               const mForceNoQuest = m.forceNoQuest === true;
               const useAnchorFallback = !mForceNoQuest && rawQid == null && !!mobileActiveQuestAnchor;
               const mQid: string | null = useAnchorFallback
@@ -4320,41 +2460,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               if (!next[mAid]) next[mAid] = {};
               if (!next[mAid][mKey]) next[mAid][mKey] = [];
               const id = stableHistoryMessageId(m.ts, m.text);
-              // v3.11.31 FIX (Tobe 2026-10-05 18:43):
-              //   Stage 1 fallback dedupe. The realtime
-              //   onChat handler and the local user
-              //   sendMessage path now use
-              //   stableHistoryMessageId too (see
-              //   ~line 3793 and ~line 5775), so the
-              //   id-based dedupe below should usually
-              //   skip replays of messages already in
-              //   the bucket. BUT the local append's
-              //   `ts` is the mobile's Date.now() at
-              //   send time, while the desktop's
-              //   chatHistory mirror records the message
-              //   with the desktop's Date.now() at
-              //   addChatMsg time (typically a few
-              //   ms later for user bubbles, ~200ms
-              //   later for agent replies that go
-              //   through the LLM pipeline). The ts
-              //   values differ, so the
-              //   stableHistoryMessageId hashes differ,
-              //   and the id-dedupe misses.
-              //
-              //   Stage 1 fallback: match by text +
-              //   isUser + ts-window (the same
-              //   criteria appendAgentMessage uses for
-              //   the realtime echo dedupe). 60s window
-              //   to be generous (the chat_history
-              //   response could arrive seconds after
-              //   the realtime one). Tobe's chat was
-              //   getting duplicate 'user [From:..]'
-              //   bubbles from chat_history replays
-              //   on every WS reconnect, bumping
-              //   messages.length and triggering the
-              //   '↓ N new messages' badge on every
-              //   refresh — chat flashed and looked
-              //   like it kept gaining content.
+              // V3.11.31 FIX (Tobe 2026-10-05 18:43): Stage 1 fallback dedupe.
               const mIsUser = typeof m.isUser === 'boolean' ? m.isUser : (m.type === 'user');
               const incomingTs = (typeof m.ts === 'number' && isFinite(m.ts)) ? m.ts : 0;
               const stage1Dup = next[mAid][mKey].some((existing: any) =>
@@ -4363,38 +2469,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 Math.abs((existing.ts || 0) - incomingTs) < 60000
               );
               if (stage1Dup) continue;
-              // Skip if we've already stored a message
-              // with this ID in this bucket. The dedupe
-              // key is the stable ID from v3.11.21
-              // (ts + text hash); without it, every
-              // reconnect looked like a fresh batch.
-              //
-              // v3.11.26: also check the OLD bucket
-              // (desktop's stamp bucket) for the same ID.
-              // If the desktop sends a chat_history
-              // response where the error was previously
-              // stored in DEFAULT (because we routed it
-              // there before this fix), and we now want to
-              // move it to the anchor's bucket, we need to
-              // recognize that the same message ID already
-              // exists in DEFAULT and either move it or
-              // skip the duplicate. The simplest approach:
-              // dedupe across ALL buckets for this agent,
-              // not just the target bucket. That way, if
-              // the same message is in DEFAULT from a
-              // previous chat_history response, we don't
-              // duplicate it into the anchor bucket.
+              // Skip if we've already stored a message with this ID in this bucket.
               if (next[mAid][mKey].some((existing: ChatMessage) => existing.id === id)) {
                 continue;
               }
-              // Cross-bucket dedupe: if this message ID
-              // exists in any other bucket for this agent
-              // (e.g. DEFAULT from a prior chat_history
-              // response before the anchor-fallback fix),
-              // skip pushing it again. This prevents the
-              // error from appearing twice (once in
-              // DEFAULT, once in HIVE_CONTROL) after the
-              // fix is deployed and the user reconnects.
+              // Cross-bucket dedupe: if this message ID exists in any other bucket for this agent (e.g.
               let foundInOtherBucket = false;
               for (const [otherKey, otherList] of Object.entries(next[mAid])) {
                 if (otherKey === mKey) continue;
@@ -4413,20 +2492,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 ts: m.ts,
                 activeQuestId: mQid,
                 activeQuestName: mQname,
-                // v3.11.30 FIX (Tobe 2026-10-05 08:32):
-                //   forward attachments from chat_history
-                //   messages. The desktop v3.3.36+ now
-                //   includes user-bubble attachments in
-                //   the chatHistoryByAgent mirror and the
-                //   chat_history / agent_history responses.
-                //   Preserve them here so a cold-start /
-                //   reconnect hydrate shows image
-                //   previews. Without this, the bucket
-                //   rebuild from chat_history would wipe
-                //   attachments even though the desktop
-                //   sent them. The dedupe by id (above)
-                //   catches the case where the local
-                //   bubble already has the same id.
+                // V3.11.30 FIX (Tobe 2026-10-05 08:32): forward attachments from chat_history messages.
                 attachments: Array.isArray(m.attachments) && m.attachments.length > 0
                   ? m.attachments
                   : undefined,
@@ -4439,20 +2505,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setAnchorHydrateTick(t => t + 1);
           return;
         }
-        // v3.10.107: preserve attachments through the
-        // history re-deserialization. Tobe's 2026-07-29
-        // feedback: image previews "sometimes get into the
-        // message and other times it vanishes and its only
-        // the text which gets sent". The local bubble HAS
-        // the attachments when the user sends the message
-        // (we set them right above), but on the next
-        // chat-history pull (reconnect, foreground, tab
-        // switch, desktop-echo reconcile), this map wiped
-        // them — so the second you backgrounded the app
-        // and reopened it, every image preview vanished.
-        // Forwarding the field is the minimal fix; the
-        // long-term fix (desktop-side image rendering)
-        // is out of scope for this release.
+        // Preserve attachments through the history re-deserialization.
         const loaded = msg.messages.map((m: any) => ({
           id: stableHistoryMessageId(m.ts, m.text),
           text: m.text,
@@ -4462,20 +2515,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           ts: m.ts,
           attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
         }));
-        // v3.1.17: route the legacy flat chat_history response to
-        // the active companion. The desktop sends this on first
-        // connect; the per-agent request fires afterwards for each
-        // tab in the companion bar.
-        //
-        // v3.11.0: per-quest buckets. The legacy
-        // chat_history response has no quest attribution
-        // (the desktop's chatHistoryByAgent predates quest
-        // bucketing), so EVERYTHING lands in the default
-        // bucket — regardless of which quest is currently
-        // active. Putting pre-attribution messages into a
-        // specific quest's bucket would silently corrupt
-        // that quest's history. The default bucket is
-        // where unattributed history belongs.
+        // Route the legacy flat chat_history response to the active companion.
         const aid = activeChatAgentIdRef.current || 'companion';
         const bucketKey = DEFAULT_QUEST_KEY;
         setMessagesByAgentAndQuest(prev => {
@@ -4490,66 +2530,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             [aid]: { ...agentBuckets, [bucketKey]: loaded },
           };
         });
-        // v3.11.0: only push to the visible chat if the
-        // active quest is the default bucket. Otherwise
-        // (a specific quest is active), leave the visible
-        // chat alone — the view-sync effect will refresh
-        // it from the active quest's bucket on the next
-        // render. Otherwise we'd briefly show the default
-        // bucket's content in the active-quest view.
-        //
-        // v3.11.9: the v3.11.0 check used
-        // `activeChatQuestId === undefined || null`, which
-        // was wrong on cold start: activeChatQuestId is
-        // `undefined` (initial state) until the first
-        // quests_list broadcast lands, but
-        // `mobileActiveQuestAnchor` may already be set
-        // (from the v3.11.6/7 bootstrap) to a specific
-        // quest. Reading activeChatQuestId here would
-        // surface the legacy DEFAULT bucket content into
-        // a user's active-quest view — the chat-flash
-        // bug.
-        //
-        // The anchor is the source of truth (set by the
-        // bootstrap or by handleSetActive, both sync). If
-        // it's a non-null quest id, the user has a quest
-        // active and the legacy DEFAULT bucket content
-        // doesn't belong in their active-quest view.
-        //
-        // v3.11.10: the v3.11.9 check `anchor === null`
-        // was correct for "user has explicitly
-        // deactivated" but WRONG for "bootstrap pending".
-        // On a slow first start (AsyncStorage.getItem
-        // takes >300ms), chat_history fires before the
-        // bootstrap reads the persisted anchor. anchor
-        // is still null at that moment — but it would
-        // become 'database' (or whatever's persisted)
-        // moments later. Reading anchor === null without
-        // also checking whether the bootstrap has
-        // resolved leaked the DEFAULT bucket content in
-        // the gap.
-        //
-        // Fix: only surface DEFAULT content if both the
-        // bootstrap has resolved AND the resolved value
-        // is null (user explicitly deactivated). While
-        // the bootstrap is pending, return without
-        // touching `messages`. The projection effect
-        // will run after the bootstrap completes (the
-        // subscriber bumps anchorHydrateTick, which is
-        // in the effect's deps).
-        //
-        // Edge case: the projection effect's deps don't
-        // include the chat_history event, so it won't
-        // re-fire after this setMessages runs. But
-        // because we no longer write the wrong bucket
-        // here, the projection effect's previous render
-        // (showing the correct empty/active-quest bucket)
-        // stands. If the active quest's bucket is empty,
-        // the user sees empty chat (consistent with
-        // v3.11.8's seed paths). If it has content from
-        // agent_history or seedFromPerAgent, that content
-        // is already in messages from those earlier
-        // async paths.
+        // Only push to the visible chat if the active quest is the default bucket.
         if (_anchorBootstrapResolved && mobileActiveQuestAnchor === null) {
           setMessages(loaded);
         }
@@ -4583,15 +2564,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setVoiceStatus('playing');
         }
 
-        // v3.10.161: use the shared playCachedGreeting
-        // helper for consistent audio focus + lifecycle
-        // handling across all desktop-synthesized audio
-        // (greeting, response, exit reply, attachment
-        // viewer). Previously we inlined startPlayer
-        // here AND in WakeModeScreen, both with their
-        // own lifecycle quirks. Centralizing on one
-        // helper means a fix in one place applies
-        // everywhere.
+        // Use the shared playCachedGreeting helper for consistent audio focus + lifecycle handling across all desktop-synthesized audio (greeting,…
         try {
           const { playAudioFile } = require('../services/AudioPlayer');
           await playAudioFile(tmpPath);
@@ -4726,18 +2699,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     };
     syncClient.on('companion_id', onCompanionChange);
 
-    // v3.1.27: the v3.1.26 version of onCompanionChange set
-    // `companionId` state, which triggered the per-companionId
-    // useEffect to reload the WebView. Combined with the
-    // desktop echoing the companionId back, this caused a
-    // reload ping-pong every 3-8 seconds (visible in the Log
-    // tab as "Companion updated: hare / boar"). The v3.1.27
-    // WebView doesn't need React state for its active
-    // companion — it keeps its own state and handles
-    // setCompanion() calls injected from the React side. The
-    // `companionId` state is now ONLY used for the initial
-    // query param on WebView mount (see <WebView source=
-    // `?companion=${companionId}` below).
+    // The v3.1.26 version of onCompanionChange set `companionId` state, which triggered the per-companionId useEffect to reload the WebView.
 
     syncClient.on('typing', onTyping);
     // v3.10.87: tool-call events (see comment on the
@@ -4745,12 +2707,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     syncClient.on('agent_tool', onAgentTool);
     syncClient.on('chat_history', onChatHistory);
     syncClient.on('arena', onArena);
-    // v3.10.183: local-LLM pill status from the desktop. We
-    // store the most recent broadcast and let the LlmStatusPill
-    // component decide whether to show it (it hides itself if
-    // the active companion's model isn't local, etc.). The
-    // broadcast carries `agentId` so we can verify it's for
-    // the currently-open chat.
+    // Local-LLM pill status from the desktop.
     const onLlmStatus = (msg: any) => {
       // We always update state, then let the pill decide.
       // If agentId is null/missing (mobile-initiated action
@@ -4759,23 +2716,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     };
     syncClient.on('llm_status', onLlmStatus);
     syncClient.on('audio_response', onAudioResponse);
-    // v3.2.29: cache the desktop-synthesized audio for
-    // both the wake greeting AND the exit reply. These
-    // come back as `audio_response` messages with
-    // requestId='greeting' or requestId='exit_reply' on a
-    // sibling channel; SyncClient re-emits them as
-    // 'greeting_audio' and 'exit_reply_audio'. The save
-    // functions write the WAV to DocumentDirectoryPath so
-    // the next wake/close can play from cache without
-    // waiting for a fresh synthesis round-trip.
+    // Cache the desktop-synthesized audio for both the wake greeting AND the exit reply.
     const onGreetingAudio = (msg: any) => {
       if (msg?.text && msg?.audio) {
         const { saveGreetingAudio } = require('../services/GreetingAudioCache');
-        // v3.10.166: forward msg.voice from the desktop so
-        // the cache writes to the same (phrase, voice)
-        // slot the desktop synthesized against. If absent,
-        // saveGreetingAudio falls back to the resolved
-        // current voice (via getCurrentVoiceIdForCache).
+        // Forward msg.voice from the desktop so the cache writes to the same (phrase, voice) slot the desktop synthesized against.
         saveGreetingAudio(msg.text, msg.audio, msg.voice).catch(() => {});
       }
     };
@@ -4797,47 +2742,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         return;
       }
       addLogEntry(`Transcribed: "${msg.transcript}"`, 'received');
-      // Display transcript in UI. v3.10.17: use the
-      // shared appendAgentMessage helper so the local
-      // voice-add goes to BOTH messages (view) and
-      // messagesByAgent (per-companion store). Without
-      // this, the local add lives only in messages, and
-      // the desktop echo (which appends via the same
-      // helper but with the desktop's timestamp) doesn't
-      // see the local entry in messagesByAgent — its
-      // dedupe misses, and the user sees their message
-      // twice. Tobe's v3.10.16 screenshot showed exactly
-      // this: 'The windows build does not create the
-      // hive_control...' appearing as two consecutive
-      // user bubbles.
-      //
-      // Why not drop the local add entirely? Without it,
-      // there's a visible delay between the user speaking
-      // and the message appearing in chat (waiting for
-      // the desktop echo round-trip). The local add makes
-      // the UI feel instant; the dedupe just needs to be
-      // coordinated across both adds.
+      // Display transcript in UI.
       const aid = activeChatAgentIdRef.current || 'companion';
       const localTs = Date.now();
-      // v3.10.68: match the typed-message prefix
-      // behavior — voice transcripts get the same
-      // `[From: <deviceName>] ` prefix so the desktop's
-      // echo dedupes correctly.
+      // Match the typed-message prefix behavior — voice transcripts get the same `[From: <deviceName>] ` prefix so the desktop's echo dedupes…
       const deviceName = syncClient.getDeviceName?.() || 'Android Phone';
-      // v3.10.85: stamp with which quest was active at
-      // voice-send time. See the comment on the desktop-echo
-      // path for the rationale (snapshot-at-append, not at
-      // render — the chat history is self-documenting).
+      // Stamp with which quest was active at voice-send time.
       const aq = chatCasualRef.current ? null : activeQuestRef.current;
-      // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
-      //   stableHistoryMessageId so the voice-mode
-      //   local bubble has the same id as the
-      //   chat_history replay entry. Same fix as
-      //   the typed-send path (~line 5871). The
-      //   random `user-local-{...}-{rand}` suffix
-      //   made the local id different from the
-      //   chat_history id, causing duplicates on
-      //   every reconnect.
+      // V3.11.31 FIX (Tobe 2026-10-05 18:43): use stableHistoryMessageId so the voice-mode local bubble has the same id as the chat_history replay…
       const localUserMsg: ChatMessage = {
         id: stableHistoryMessageId(localTs, `[From: ${deviceName}] ${msg.transcript}`),
         text: `[From: ${deviceName}] ${msg.transcript}`,
@@ -4869,57 +2781,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     };
     syncClient.on('voice_received', onVoiceReceived);
 
-    // v3.1.17: per-agent chat history response. Fills the
-    // messagesByAgent slot for the agent named in the response.
-    // If that agent is the currently active chat companion, we
-    // also update the visible `messages` state so the FlatList
-    // shows the loaded history immediately.
-    //
-    // v3.1.27: if the desktop sends back an EMPTY response
-    // (`loaded.length === 0`) and we already have local
-    // history (from the persisted `cyberclaw-chat-byagent`
-    // cache, or from previous messages), we KEEP the local
-    // history. The desktop's `chatHistoryByAgent` is in-memory
-    // only and gets wiped on restart, so an empty response is
-    // the normal post-restart case. Replacing the local
-    // history with `[]` would clear the chat. Only adopt the
-    // empty response if the local slot is also empty.
+    // Per-agent chat history response.
     const onAgentHistory = (msg: any) => {
       if (!msg?.agentId) return;
       const aid = msg.agentId;
-      // v3.10.33: defend against legacy desktop shape.
-      // Until v3.2.9 the desktop's mobile-request-agent-history
-      // handler sent messages in the internal
-      // `chatHistoryByAgent` shape: {type, text, name, emoji,
-      // ts} — which has NO `isUser` field. The mobile's
-      // renderMessage guard rejects messages where
-      // `typeof item.isUser !== 'boolean'`, so the whole
-      // history rendered as empty <View /> bubbles. Tobe's
-      // report: "the voice mode conversation is not in the
-      // chat". If a desktop older than v3.2.9 returns that
-      // shape (e.g. someone updates only the mobile), infer
-      // isUser from `type === 'user'` and agentName from
-      // `name` as a fallback. New desktops (v3.2.9+) already
-      // send the normalized shape and these fallbacks are
-      // no-ops.
-      //
-      // v3.11.12: BREAKING CHANGE on desktop wire format.
-      // The desktop v3.3.19+ now sends `buckets` (a Record
-      // keyed by questKeyForStorage(qid)) instead of a flat
-      // `messages` array. The v3.3.19 desktop ALSO sends a
-      // flat `messages` field as a backwards-compat fallback
-      // (sourced from the DEFAULT bucket, or the first
-      // non-empty bucket if DEFAULT is empty) so that
-      // v3.11.11 and earlier mobile builds keep working.
-      //
-      // The new path routes per-bucket messages to their
-      // own slot in messagesByAgentAndQuest. This is what
-      // fixes the "— No quest" chat-flash after a cold
-      // start: previously, only DEFAULT-bucket content
-      // reached the mobile regardless of which quest was
-      // active, so the active-quest view stayed empty and
-      // the user saw DEFAULT content under "— No quest"
-      // pills.
+      // Defend against legacy desktop shape.
       if (msg.buckets && typeof msg.buckets === 'object' && !Array.isArray(msg.buckets)) {
         const bucketsMsg = msg.buckets;
         setMessagesByAgentAndQuest(prev => {
@@ -4956,17 +2822,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               ts: m.ts,
               activeQuestId: m.activeQuestId ?? (bucketKey === DEFAULT_QUEST_KEY ? null : bucketKey),
               activeQuestName: m.activeQuestName ?? null,
-              // v3.11.20: forward attachments on history
-              // sync. The desktop v3.3.20+ persists
-              // agent-image bubbles in the per-quest bucket
-              // (including the attachments field), so the
-              // history response carries them. Without this,
-              // history sync would strip image attachments
-              // even though the realtime chat_message path
-              // preserves them — the user would see the
-              // image when the realtime broadcast lands but
-              // not on a subsequent reconnect. Tobe 2026-09-29
-              // 16:10 report.
+              // Forward attachments on history sync.
               attachments: Array.isArray(m.attachments) && m.attachments.length > 0
                 ? m.attachments
                 : undefined,
@@ -4976,13 +2832,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           next[aid] = mergedForAgent;
           return next;
         });
-        // Bump the anchor re-trigger counter so the projection
-        // effect re-runs with the freshly-populated bucket map.
-        // Without this, the visible chat wouldn't refresh
-        // unless something else also changed activeChatQuestId
-        // or activeChatAgentId. We don't clobber `messages`
-        // state here — the projection effect will pick the
-        // right bucket for the current anchor.
+        // Bump the anchor re-trigger counter so the projection effect re-runs with the freshly-populated bucket map.
         setAnchorHydrateTick(t => t + 1);
         return;
       }
@@ -4996,32 +2846,16 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         agentId: m.agentId || m.name || aid,
         agentName: m.agentName || m.name || null,
         ts: m.ts,
-        // v3.11.20: forward attachments on history sync.
-        // The desktop v3.3.20+ persists agent-image bubbles
-        // in chatHistory (the flat mirror that the legacy
-        // /chat_history path serves). Without this, history
-        // sync strips image attachments even though the
-        // realtime chat_message path preserves them. Tobe
-        // 2026-09-29 16:10 report.
+        // Forward attachments on history sync.
         attachments: Array.isArray(m.attachments) && m.attachments.length > 0
           ? m.attachments
           : undefined,
       }));
       addLogEntry(`← Loaded ${loaded.length} messages for ${aid}`, 'info');
       const agentBuckets = (messagesByAgentRef.current || {})[aid] || {};
-      // v3.11.0: agent_history responses are pre-per-quest
-      // (the desktop's chatHistoryByAgent has no quest
-      // attribution), so they land in the default bucket.
-      // The active quest bucket is independent — any
-      // messages already there are preserved.
+      // Agent_history responses are pre-per-quest (the desktop's chatHistoryByAgent has no quest attribution), so they land in the default bucket.
       const localSlot = agentBuckets[DEFAULT_QUEST_KEY] || [];
-      // Decide what to put in the slot. If the desktop
-      // returned messages, use them (they may include the
-      // latest items we don't have yet). If the desktop
-      // returned an empty list, only adopt that if we don't
-      // already have local history (e.g. brand new agent);
-      // otherwise keep the local copy so the chat isn't
-      // wiped just because the desktop restarted.
+      // Decide what to put in the slot.
       if (loaded.length > 0) {
         setMessagesByAgentAndQuest(prev => {
           const existingBuckets = prev[aid] || {};
@@ -5035,12 +2869,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
             },
           };
         });
-        // If this is the active companion AND the active
-        // quest is `null` (default bucket), swap the
-        // visible messages to the freshly loaded history.
-        // For non-null active quests, don't clobber the
-        // visible chat (which shows the active quest's
-        // bucket) with the default bucket's content.
+        // If this is the active companion AND the active quest is `null` (default bucket), swap the visible messages to the freshly loaded history.
         if (
           activeChatAgentIdRef.current === aid &&
           activeChatQuestId !== undefined &&
@@ -5067,10 +2896,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setMessages([]);
         }
       } else {
-        // Desktop says empty but we have local history
-        // (e.g. the desktop restarted). KEEP the local
-        // copy. The user can still see their old messages.
-        // v3.11.46: desktop is the source of truth — empty there means empty here.
+        // Desktop says empty but we have local history (e.g.
         addLogEntry(`← Desktop history empty for ${aid}, clearing local copy (${localSlot.length} msg)`, 'info');
         setMessagesByAgentAndQuest(prev => ({ ...prev, [aid]: { ...(prev[aid] || {}), [DEFAULT_QUEST_KEY]: [] } }));
         if (activeChatAgentIdRef.current === aid && activeChatQuestId === null) setMessages([]);
@@ -5086,30 +2912,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onAgentsList = (msg: any) => {
       if (Array.isArray(msg?.agents)) {
         addLogEntry(`← Agents list: ${msg.agents.length} companion(s)`, 'info');
-        // v3.1.28: the mobile trusts the desktop's list as the
-        // source of truth. The desktop (v3.1.19) caps the
-        // visibleOrder at 6 (MAX_ARENA_COMPANIONS) before
-        // broadcasting, so the mobile should see at most 6
-        // entries here. The v3.1.27 version had a redundant
-        // mobile-side cap, but the cap belongs at the source
-        // (the desktop) — mirroring it on the mobile hides
-        // desktop-side bugs and means the mobile UI doesn't
-        // agree with the desktop on what the limit is.
+        // The mobile trusts the desktop's list as the source of truth.
         setAgents(msg.agents);
         // v3.1.59: propagate to App.tsx so WakeModeScreen has
         // the current list when it mounts.
         onAgentsChangeRef.current?.(msg.agents);
-        // v3.1.17: initialise per-companion chat slots and request
-        // each companion's history from the desktop. The desktop
-        // stores chatHistoryByAgent[id] and we mirror it locally so
-        // switching tabs is instant on subsequent visits.
-        //
-        // v3.11.0: per-quest buckets. Each agent slot starts
-        // as an empty per-quest map; the `null` (default)
-        // bucket gets populated when agent_history responses
-        // arrive. No quest buckets are pre-created here —
-        // they're created lazily by appendAgentMessage when
-        // the first message lands.
+        // Initialise per-companion chat slots and request each companion's history from the desktop.
         setMessagesByAgentAndQuest(prev => {
           const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
           for (const a of msg.agents) {
@@ -5125,17 +2933,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           const first = msg.agents[0];
           return first ? first.id : null;
         });
-        // v3.1.31: the mobile arena.html is now a multi-companion
-        // renderer. We tell it the FULL list of companions on every
-        // agents_list broadcast, plus which one is active. The
-        // WebView rebuilds its sprite list internally (cheaper than
-        // trying to diff-and-update, and avoids the reload ping-
-        // pong that the v3.1.26 per-companionId reload caused).
-        //
-        // We do this on EVERY agents_list arrival, not just the
-        // first one — if a new companion is added on the desktop,
-        // the next agents_list will include it and the WebView
-        // will show it. No React state change, no WebView reload.
+        // The mobile arena.html is now a multi-companion renderer.
         if (Array.isArray(msg.agents) && msg.agents.length > 0 && webViewRef.current) {
           // Strip to the fields the WebView needs (id, name, sprite, scale)
           const slim = msg.agents.map((a: any) => ({
@@ -5149,10 +2947,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           } catch (e: any) {
             addLogEntry(`✗ Failed to inject setAgents: ${e?.message || e}`, 'error');
           }
-          // Persist the first agent's sprite for next app start
-          // (only the sprite is used by the legacy persistence
-          // path; the WebView now derives the active companion
-          // from the agents_list + tab clicks).
+          // Persist the first agent's sprite for next app start (only the sprite is used by the legacy persistence path; the WebView now derives the…
           if (slim[0]?.sprite) {
             AsyncStorage.setItem('cyberclaw-arena-comp', slim[0].sprite).catch(() => {});
           }
@@ -5172,28 +2967,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     };
     syncClient.on('agents_list', onAgentsList);
 
-    // v3.10.85: track the active quest so each new chat
-    // message can be stamped with which quest (if any)
-    // was active when it was sent. The desktop broadcasts
-    // quests_list whenever a quest is created, edited,
-    // set-active, deleted, or marked-complete. Same
-    // broadcast QuestsScreen subscribes to (which keeps
-    // the full list). We only need the active one.
-    //
-    // Why a ref (not state): this is read at message-append
-    // time (inside the syncClient listeners and the user-
-    // send handler). Using state would cause stale reads
-    // because the listeners were registered with empty
-    // deps. The ref is always current.
+    // Track the active quest so each new chat message can be stamped with which quest (if any) was active when it was sent.
     const onQuestsList = (msg: any) => {
       try {
         const quests = Array.isArray(msg?.quests) ? msg.quests : [];
-        // v3.11.5: always populate the quest name lookup
-        // map from every broadcast (including cache
-        // replays). The map is data-only and used by the
-        // bubble header to render per-bubble quest labels.
-        // Updates here are idempotent (same key, same
-        // value) so cache replays don't churn React.
+        // Always populate the quest name lookup map from every broadcast (including cache replays).
         if (quests.length > 0) {
           setQuestNameById(prev => {
             let changed = false;
@@ -5212,101 +2990,14 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           ? { id: active.id, name: active.name || '(unnamed quest)' }
           : null;
         const nextQid: string | null | undefined = next ? next.id : null;
-        // v3.11.2 (revised 2026-09-24 ~10:20): Tobe
-        // clarified that the chat didn't flash — it
-        // STAYED on the wrong quest until he navigated
-        // Quests and back. That means the listener
-        // permanently adopted the wrong active. Root
-        // cause: under the original v3.11.2 design, the
-        // listener treated every broadcast equally, so a
-        // stale cached replay (e.g. from a desktop
-        // restart that kept `_lastQuestsList` from before
-        // the user switched to website) could seed the
-        // anchor at Case 1 with the wrong value, and
-        // every subsequent legitimate broadcast got
-        // ignored under Case 3.
-        //
-        // Fix: the desktop now tags each broadcast with
-        // a `source` field — `'broadcast'` for fresh
-        // broadcasts (always reflecting the just-saved
-        // state) and `'cache_replay'` for replays served
-        // from `_lastQuestsList` on reconnect /
-        // request_state / request_quests_list. We trust
-        // only fresh broadcasts for state-mutation; cache
-        // replays populate the quest list data but don't
-        // seed the anchor.
-        //
-        // For the anchor's lifetime in this device:
-        //   - First fresh broadcast: Case 1 seeds the
-        //     anchor.
-        //   - Subsequent fresh broadcasts:
-        //     Case 2 (anchor matches — adopt) or
-        //     Case 3 (anchor differs — ignore the active
-        //     but keep the ref in sync for stamping).
-        //   - Cache replays: always adopt for data
-        //     population, never seed the anchor. This
-        //     protects against the "first broadcast was
-        //     a stale replay" path.
+        // Tobe clarified that the chat didn't flash — it STAYED on the wrong quest until he navigated Quests and back.
         const isFreshBroadcast = msg?.source !== 'cache_replay';
         if (!isFreshBroadcast) {
-          // Cache replay. Data-only — do NOT touch
-          // activeQuestRef or activeChatQuestId. The
-          // reason: a cache replay can arrive AFTER a
-          // fresh broadcast has already seeded the
-          // ref/state to the correct value, and writing
-          // the cache's (potentially stale) ref value
-          // here would corrupt the projection effect's
-          // view.
-          //
-          // Tobe's 2026-09-24 repro on v3.11.2 (revised)
-          // hit exactly this: the fresh broadcast seeded
-          // the ref to website, then a cache replay
-          // arrived carrying Hive Control and the ref
-          // flipped to Hive Control. The projection
-          // effect's bucket lookup returned the
-          // legacy/DEFAULT bucket (which Hive Control
-          // happens to map to via the null-active-quest
-          // path), and the chat flashed to the
-          // pre-v3.3.11 legacy history.
-          //
-          // The correct ref/state values come only from
-          // fresh broadcasts (Case 1/2/3 below). Cache
-          // replays are useful only for populating the
-          // QuestsScreen card list, which the renderer
-          // handles separately via its own listener.
+          // Cache replay.
           return;
         }
         if (mobileActiveQuestAnchor === null) {
-          // Case 1: no anchor yet. Fresh broadcast —
-          // adopt.
-          //
-          // v3.11.11: persist via setMobileActiveQuestAnchor
-          // instead of direct assignment. The desktop-driven
-          // anchor (set here when the user never tapped a
-          // quest on mobile) needs to survive the JS process
-          // being killed by Android (which happens after the
-          // app is backgrounded for a while). Without this,
-          // a user who relies entirely on desktop-driven
-          // anchor (the common case — most users activate
-          // quests on the desktop, not on the mobile) would
-          // see "— No quest" on every cold start because
-          // the bootstrap AsyncStorage read returns no key
-          // and falls back to module-init null. Tobe hit
-          // this on 2026-09-27 12:31 (Cyber_Database quest
-          // active on desktop, mobile showed DEFAULT bucket
-          // with "— No quest" pill on every bubble).
-          //
-          // setMobileActiveQuestAnchor:
-          //   - writes the module-scope variable
-          //   - persists to AsyncStorage (fire-and-forget)
-          //   - null → '__null__' sentinel
-          //   - string → the qid
-          //
-          // Safe to call here: this branch only fires when
-          // the anchor is null AND a fresh broadcast is
-          // confirming the desktop's current active. Once the
-          // anchor is set, subsequent broadcasts hit Case 2
-          // or Case 3 and don't write AsyncStorage again.
+          // Case 1: no anchor yet.
           setMobileActiveQuestAnchor(nextQid);
           activeQuestRef.current = next; setActiveQuestInfo((next as any) ?? null);
           setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
@@ -5319,10 +3010,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
           return;
         }
-        // v3.11.46: Case 3 — desktop is the source of truth for the
-        // active quest. A fresh broadcast always wins over the phone's
-        // cached anchor (before, the phone kept its own and could show
-        // a different quest chat than the desktop).
+        // Case 3 — desktop is the source of truth for the active quest.
         setMobileActiveQuestAnchor(nextQid);
         activeQuestRef.current = next; setActiveQuestInfo((next as any) ?? null);
         setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
@@ -5340,19 +3028,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setChatVoiceStatus(null);
         addLogEntry('Not connected - reconnect and try again', 'error');
       }
-      // v3.10.177: any send_error during an active task
-      // session closes it as failed. We render an
-      // Error: bubble in the chat (mirrors the desktop's
-      // addChatMsg('error', ...) path) so the user sees
-      // the failure inline with their conversation, not
-      // just buried in the Log tab.
+      // Any send_error during an active task session closes it as failed.
       const finished = activeTaskSession ? closeTaskSession('failed', e?.message || 'send error') : null;
       if (finished && finished.steps.length > 0) {
         const aid = activeChatAgentIdRef.current || 'companion';
-        // v3.11.0: stamp the error bubble with the active
-        // quest so it lands in the right bucket. The
-        // append helper reads activeQuestId via the
-        // activeQuestRef snapshot below.
+        // Stamp the error bubble with the active quest so it lands in the right bucket.
         const aq = chatCasualRef.current ? null : activeQuestRef.current;
         const durationMs = (finished.endTs || Date.now()) - finished.startTs;
         const errorMsg: ChatMessage = {
@@ -5397,10 +3077,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
     return () => {
       remoteToolHandler.destroy();
-      // v3.10.133: cancel any pending long-wait escalation
-      // timer before tearing down listeners — otherwise an
-      // unmount mid-wait leaves a dangling setTimeout that
-      // tries to setState on an unmounted component.
+      // Cancel any pending long-wait escalation timer before tearing down listeners — otherwise an unmount mid-wait leaves a dangling setTimeout…
       try { if (thinkingEscalateTimerRef.current) clearTimeout(thinkingEscalateTimerRef.current); } catch {}
       thinkingEscalateTimerRef.current = null;
       try { wakeSub?.remove?.(); } catch {}
@@ -5437,11 +3114,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
 
   const appStateRef = useRef<string>(AppState.currentState);
-  // v3.1.36: rate-limit the AppState 'foregrounded/backgrounded'
-  // log so it doesn't spam. AppState 'change' can fire many times
-  // in a row for spurious reasons (keyboard, WebView mount,
-  // Android lifecycle churn) and we used to log every fire.
-  // Now: log at most once per 1.5s, and skip no-op transitions.
+  // Rate-limit the AppState 'foregrounded/backgrounded' log so it doesn't spam.
   const lastAppStateLogRef = useRef<number>(0);
 
   // Add attachment
@@ -5449,53 +3122,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const uri = asset.uri || '';
     const fileName = asset.fileName || 'attachment';
     const fileType = asset.type || 'image/jpeg';
-    // v3.10.132: read the file to base64 immediately at
-    // picker time. Previously the send path did
-    // `fs.readFile(att.uri, 'base64')` inside a Promise
-    // chain, which had multiple silent-failure modes:
-    //  1. URI didn't start with `file://` or `content://`
-    //     → no branch matched, attachment dropped without
-    //     a single log line. Tobe 2026-08-03 07:08:
-    //     'The image did not go through even tho it was
-    //     attached to my message, but it did not show
-    //     up in the chat.' Zero '[Attachment]' logs on
-    //     the desktop side, confirming the mobile send
-    //     silently dropped.
-    //  2. `fs.readFile` returned an empty string → the
-    //     `.then` fired with empty b64, sent an empty
-    //     image, no error surfaced.
-    //  3. Race between `setAttachments([])` clearing
-    //     state and the async `.then` callback.
-    // Reading at picker time eliminates all three. The
-    // attachment gets the data inline, the bubble
-    // preview can render, and the send path is just a
-    // synchronous call.
-    //
-    // v3.11.35: copy the picked file into the app's
-    // permanent DocumentDirectoryPath at picker time.
-    // The Android gallery returns `content://` URIs that
-    // are ONLY valid for the lifetime of the picker
-    // activity — once the activity closes (e.g. the
-    // picker dialog dismisses), the URI dead-ends. The
-    // bubble stores `{uri: 'content://...'}` and renders
-    // via `<Image source={{uri}}/>`. The URI's a zombie
-    // and the bubble is empty on reopen. Tobe 2026-10-07:
-    // 'a picture i sent earlier was visible then, but now
-    // when i opened it again it was gone from that message,
-    // it should stay, just like on discord.'
-    //
-    // Fix: copy the file into DocumentDirectoryPath /
-    // chat-attachments / <uuid>.<ext> (using the SAME
-    // uuid for the bubble id so the copy and the bubble
-    // are linked) and use THAT URI as the bubble's
-    // `uri`. DocumentDirectoryPath survives app
-    // restarts on Android and isn't subject to
-    // picker-activity scoping. The base64 `data` field
-    // stays as the inline preview; even if it's later
-    // stripped by the desktop during its storage
-    // pipeline, the `uri` alone is sufficient to
-    // render the image (the renderer prefers `data` if
-    // present, falls back to `uri`).
+    // Read the file to base64 immediately at picker time.
     let dataBase64: string | undefined;
     let fileSize: number | undefined;
     let stableUri: string = uri;
@@ -5509,11 +3136,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         dataBase64 = await fs.readFile(readPath, 'base64');
         fileSize = dataBase64 ? Math.floor((dataBase64.length * 3) / 4) : 0;
         addLogEntry(`📎 Read: ${fileName} (${fileSize} bytes from ${uri.slice(0, 60)}…)`, 'info');
-        // v3.11.35: copy to permanent storage so the uri
-        // survives the picker activity closing. Use a
-        // uuid filename derived from the bubble id we
-        // generate below; this keeps the file and the
-        // bubble linked (same id both places).
+        // Copy to permanent storage so the uri survives the picker activity closing.
         const uuid = (Date.now().toString(36) + '-' +
           Math.floor(Math.random() * 1e9).toString(36));
         const ext = (() => {
@@ -5528,11 +3151,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         if (!dirExists) {
           await fs.mkdir(attachmentsDir).catch(() => { /* mkdir may fail if it already exists between exists and mkdir — swallow */ });
         }
-        // `copyFile` source can be a `file://` or bare path;
-        // for `content://` we read into base64 above and
-        // write the base64 directly (copyFile doesn't
-        // resolve content:// URIs reliably across all
-        // Android versions).
+        // `copyFile` source can be a `file://` or bare path; for `content://` we read into base64 above and write the base64 directly (copyFile…
         if (uri.startsWith('content://')) {
           await fs.writeFile(targetPath, dataBase64, 'base64');
         } else {
@@ -5542,10 +3161,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         addLogEntry(`📎 Copied to: ${targetPath}`, 'info');
       } catch (e: any) {
         addLogEntry(`📎 Read/copy failed at picker time: ${fileName}: ${e?.message ?? 'unknown'}`, 'error');
-        // Don't add to the list if we can't read it —
-        // attaching a broken attachment is worse UX
-        // than telling the user "this image couldn't
-        // be opened".
+        // Don't add to the list if we can't read it — attaching a broken attachment is worse UX than telling the user "this image couldn't be opened".
         return;
       }
     }
@@ -5570,43 +3186,17 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  // v3.11.41: load more history. Increments visibleCount by
-  // VISIBLE_BATCH, causing the FlatList to re-render with
-  // more (older) messages. Crucially, we clear the scroll
-  // latch so the onContentSizeChange handler doesn't fire
-  // a scrollToEnd that would yank the user to the bottom
-  // — they want to STAY at their current scroll position
-  // (now scrolled "deeper" into the content with older
-  // messages above them).
+  // Load more history.
   const handleLoadMore = useCallback(() => {
     setVisibleCount(prev => prev + VISIBLE_BATCH);
     pendingScrollKeyRef.current = null;
-    // Force the projection effect to update its
-    // lastProjectedMessagesLenRef on the next run, so a
-    // subsequent bucket growth (e.g., a new realtime chat
-    // message) still fires the scroll-to-bottom latch
-    // correctly. Without this, the projection effect
-    // would see the visibleCount-induced re-render as
-    // a "bucket grew" event and might yank.
+    // Force the projection effect to update its lastProjectedMessagesLenRef on the next run, so a subsequent bucket growth (e.g., a new realtime…
     lastProjectedMessagesLenRef.current = -1;
   }, []);
 
-  // v3.10.131: removed the auto-paste-on-focus handler and
-  // the explicit 📋 clipboard paste button. Tobe 2026-08-03
-  // 06:33: 'i cant use the clipboard button, i need to select
-  // from gallery not clipboard, as i have said that clipboard
-  // button is useless'. The clipboard path is unreliable on
-  // Android (Clipboard.getImage() returns null in many cases)
-  // and not what Tobe wants. Going forward the only attachment
-  // path is the `+` button → gallery picker (launchImageLibrary).
-  // Camera stays available via the Alert that `+` shows.
+  // Removed the auto-paste-on-focus handler and the explicit 📋 clipboard paste button.
 
-  // Toggle Wake Mode - v3.1.12: delegate to App-level navigation so the
-  // wake mode UI always renders in the dedicated WakeModeScreen (not as
-  // v3.2.18: Wake Mode is gone. Voice Mode is the only
-  // fullscreen. The legacy `toggleWakeWordMode` is kept as
-  // a no-op shim for any code paths that still call it,
-  // but it just routes to Voice Mode.
+  // Toggle Wake Mode - v3.1.12: delegate to App-level navigation so the wake mode UI always renders in the dedicated WakeModeScreen (not as…
   const toggleWakeWordMode = useCallback(async () => {
     addLogEntry('🗣️ Wake Mode toggle (legacy) → Voice Mode', 'info');
     if (onOpenVoiceMode) {
@@ -5614,20 +3204,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
   }, [onOpenVoiceMode]);
 
-  // v3.10.36: extracted from the companion tab's onPress
-  // handler so the cross-agent banner can also call it.
-  // The banner shows above the chat input when another
-  // agent has unread messages — tapping it switches to
-  // that agent's tab, exactly the same effect as
-  // tapping the tab itself.
+  // Extracted from the companion tab's onPress handler so the cross-agent banner can also call it.
   const switchToAgent = useCallback((aid: string) => {
     setActiveChatAgentId(aid);
-    // v3.11.0: per-quest buckets. The view-sync effect
-    // below handles the actual `messages` swap when
-    // activeChatAgentId changes (it reads the active
-    // quest from activeChatQuestId). We don't set
-    // messages here directly to avoid a double-render
-    // with stale data.
+    // Per-quest buckets.
     setChatUnreadByAgent(prev => ({ ...prev, [aid]: 0 }));
     try { syncClient.requestAgentHistory(aid); } catch (_) {}
     try {
@@ -5641,10 +3221,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
       { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
-        // v3.10.132: addAttachment is async (reads base64
-        // at picker time). Fire and forget; picker callbacks
-        // don't surface errors anyway, the addAttachment
-        // log entries are the source of truth.
+        // AddAttachment is async (reads base64 at picker time).
         if (res.assets?.[0]) addAttachment(res.assets[0]).catch((e: any) => {
           addLogEntry(`📎 Camera attach failed: ${e?.message ?? 'unknown'}`, 'error');
         });
@@ -5664,49 +3241,11 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   const sendMessage = useCallback(async () => {
     if (!isConnected) return;
-    // v3.10.180: REMOVED the v3.10.179 pre-send snap
-    // that tried to scroll the chat to the most recent
-    // failed taskSummary card. Tobe's 19:17 feedback:
-    // the card was already visible (it was scrolled to
-    // on arrival — see messages.length effect) and the
-    // snap on send didn't add anything. Worse, the snap
-    // ran AFTER the card had already been auto-collapsed
-    // (which happens in the same messages.length effect
-    // when the user bubble lands), so the snap was
-    // pointing at a card that was now a collapsed pill
-    // — visible-but-noise.
-    //
-    // The right behaviour is: the card is visible on
-    // arrival, it auto-collapses on next-user-message,
-    // and the typing bubble takes over the bottom of
-    // the chat. No pre-send snap needed.
-    //
-    // v3.10.110: log every send attempt so we can see
-    // when the user presses Send on an empty input.
-    // Before this, an empty-tap-Send silently returned
-    // via the `if (!text && attachments.length === 0)`
-    // check below, with no log, no toast, no feedback.
-    // Tobe's 2026-07-29 18:30 report: "I wrote in the
-    // chat but no thinking indication and no response"
-    // turned out to be the empty-input silent-return
-    // case. Logging both entry AND skip paths here
-    // gives us a paper trail in the Log tab without
-    // changing visible UI.
+    // REMOVED the v3.10.179 pre-send snap that tried to scroll the chat to the most recent failed taskSummary card.
     addLogEntry('🟢 send: pressed', 'info');
-    // v3.10.103: see the sendMessageRef declaration above.
-    // The ref is updated on every render so the recent-
-    // pills long-press handler (defined inline in the JSX,
-    // outside the useCallback closure) can call the latest
-    // sendMessage without re-rendering the JSX tree.
+    // See the sendMessageRef declaration above.
     sendMessageRef.current = sendMessage;
-    // v3.10.177: open a task session for this turn. The
-    // session lives across HomeScreen unmounts (Settings,
-    // Wake Mode navigation) and is closed either by the
-    // agent reply landing in onChat, by an error bubble
-    // landing, or by the send_error IPC. The summary
-    // gets attached to the resulting bubble so the user
-    // can see "what happened" in the chat itself, not
-    // just in the Log tab.
+    // Open a task session for this turn.
     const _sendAid = activeChatAgentIdRef.current || 'companion';
     const _sendAgent = (agentsRef.current || []).find(x => x.id === _sendAid);
     startTaskSession({
@@ -5714,14 +3253,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       agentId: _sendAid,
       agentName: _sendAgent?.name,
     });
-    // v3.10.3: kick the active companion awake on any chat
-    // submit. The desktop's sendChatMessage() also auto-wakes
-    // when the text arrives, but the explicit mobile-side
-    // kick ensures the sleepState flips BEFORE the agent
-    // starts responding (the broadcast-back happens via
-    // agents_list when the renderer flips state). Without
-    // this, the sleeping sprite on the phone stays
-    // grayscaled for the duration of the chat round-trip.
+    // Kick the active companion awake on any chat submit.
     try {
       const aid = activeChatAgentIdRef.current || 'companion';
       syncClient.sendWakeAgent(aid);
@@ -5744,73 +3276,20 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
     const text = inputText.trim();
     if (!text && attachments.length === 0) {
-      // v3.10.110: silent empty-tap-send is confusing.
-      // Log the skip path so the user can see in the
-      // Log tab "send: pressed" followed by "send: empty
-      // input, ignored". Optionally also show a soft
-      // toast — disabled for now to avoid visual noise;
-      // the log is the first step; a haptic + toast
-      // can land in a later release.
+      // Silent empty-tap-send is confusing.
       addLogEntry('⬜ send: empty input, ignored', 'warn');
       return;
     }
 
     if (text || attachments.length > 0) {
-      // v3.1.17: tag the user message with the active companion's
-      // agentId so it lands in the right slot of messagesByAgent and
-      // the desktop routes the response back to the same companion.
-      // v3.10.20: include attachments in the local message so the
-      // image preview shows up in the chat immediately (instead of
-      // disappearing after send). Also wait for attachments to be
-      // read as base64 BEFORE clearing them — otherwise the user
-      // sees the previews vanish before they're sent.
-      // v3.10.68: prefix the local user message with
-      // `[From: <deviceName>] ` to match the desktop's
-      // echo format (sync-server.js:320 adds the same
-      // prefix on inbound `chat` messages from non-Desktop
-      // clients). Without this, the local plain text and
-      // the desktop-echo prefixed text look like
-      // different messages to the dedupe check and both
-      // land in the chat. Tobe reported this as a
-      // duplicate-bubble bug.
+      // Tag the user message with the active companion's agentId so it lands in the right slot of messagesByAgent and the desktop routes the…
       const aid = activeChatAgentIdRef.current || 'companion';
       const deviceName = syncClient.getDeviceName?.() || 'Android Phone';
       // v3.10.85: stamp with which quest was active at
       // typed-send time. Same snapshot-at-append pattern
       // as the desktop-echo and voice paths.
       const aq = chatCasualRef.current ? null : activeQuestRef.current;
-      // v3.11.31 FIX (Tobe 2026-10-05 18:43): use
-      //   stableHistoryMessageId so the local user
-      //   bubble has the SAME id as the chat_history
-      //   replay entry. Previously used
-      //   `user-${Date.now()}` which is unique per
-      //   local append — when the desktop sent
-      //   chat_history on the next WS reconnect, the
-      //   chat_history handler's id-dedupe didn't
-      //   match the local user bubble and pushed a
-      //   duplicate. The bucket grew by one entry per
-      //   user message per reconnect, messages.length
-      //   bumped, and the "↓ N new messages" badge
-      //   fired. Symptom: chat flickers and thinks
-      //   there are new messages on every refresh.
-      //
-      //   The `ts` we stamp locally is the mobile's
-      //   Date.now() at send time. The desktop
-      //   records the message at addChatMsg time with
-      //   its OWN Date.now() (slightly later). The
-      //   ts values may differ by a few ms. The
-      //   stableHistoryMessageId takes both as input,
-      //   so the local and chat_history entries get
-      //   different ids even with this fix — UNLESS
-      //   we stamp the same ts the desktop will see.
-      //
-      //   Cleaner approach: also dedupe by Stage 1
-      //   criteria (text + isUser + ts-window) in the
-      //   chat_history handler, the way
-      //   appendAgentMessage's Stage 1 already does.
-      //   See line ~4474 v3.11.31 below. The
-      //   stableHistoryMessageId change here is
-      //   belt-and-suspenders.
+      // V3.11.31 FIX (Tobe 2026-10-05 18:43): use stableHistoryMessageId so the local user bubble has the SAME id as the chat_history replay entry.
       const userMsg: ChatMessage = {
         id: stableHistoryMessageId(Date.now(), text ? `[From: ${deviceName}] ${text}` : text),
         text: text ? `[From: ${deviceName}] ${text}` : text,
@@ -5837,13 +3316,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
 
     for (const att of attachments) {
-      // v3.10.132: send the pre-read base64 from
-      // addAttachment(). The previous code did an async
-      // file read here with multiple silent-failure modes
-      // (no branch match for the URI scheme, empty result,
-      // race with setAttachments([])). Reading at picker
-      // time stores the data inline so the send path is
-      // synchronous and observable.
+      // Send the pre-read base64 from addAttachment().
       let b64 = att.data;
       if (!b64 && att.uri) {
         // Fallback: the pre-read at picker time failed but
@@ -5870,17 +3343,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
     setInputText('');
     setAttachments([]);
-    // v3.11.30 FIX (Tobe 2026-10-05 08:32): add
-    //   `attachments` to the deps. Without it, the
-    //   closure captured `attachments = []` from the
-    //   initial render. The button's `disabled` prop
-    //   reads `attachments.length` inline (always
-    //   fresh), so the button enabled correctly, but
-    //   the onPress pointed at the stale sendMessage
-    //   — which built userMsg WITHOUT attachments and
-    //   then looped over an empty array (no
-    //   sendAttachment calls). Symptom: 'pictures
-    //   disappeared right after i sent it.'
+    // V3.11.30 FIX (Tobe 2026-10-05 08:32): add `attachments` to the deps.
   }, [inputText, isConnected, pendingAudioPath, attachments]);
 
   const toggleVoiceInput = useCallback(async () => {
@@ -5962,56 +3425,23 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     }
   }, [isConnected, isVoiceListening]);
 
-  // Auto-scroll to bottom when switching to chat tab or getting new messages
-  // v3.1.14: track incoming (non-user) messages so we can surface a
-// "↓ new messages" badge when the user has scrolled up to read
-// history. User-sent messages don't count.
-// v3.1.16: data is stored in chronological order (oldest→newest). The
-// newest message is at index length-1, not 0. FlatList is NOT
-// inverted — scrollToEnd jumps to the bottom of the screen.
-//
-// v3.8.6: read chatAtBottom via the ref (chatAtBottomRef)
-// instead of the closure. The closure captures the value at
-// effect-run time, but the FlatList's onScroll updates
-// chatAtBottom via setState, which can race with this
-// effect on the same render. The ref is updated in the
-// useEffect above and is always current.
+  // Auto-scroll to bottom when switching to chat tab or getting new messages v3.1.14: track incoming (non-user) messages so we can surface a…
 const lastMessageIdRef = useRef<string | null>(null);
-// v3.11.31 FIX (Tobe 2026-10-05 18:43): track the
-//   last message's text + ts so the unread counter
-//   can handle the chat_history-replay case where
-//   the same bubble lands with a fresh id (mobile
-//   vs desktop ts differ by a few ms, so
-//   stableHistoryMessageId yields a different id
-//   even though the content is identical). Without
-//   this, every WS reconnect appended the
-//   chat_history-replay of the last agent message
-//   to the bucket with a new id, the messages.length
-//   effect fired, and the '↓ N new messages' badge
-//   incremented on every refresh. Symptom: chat
-//   flickers and thinks there are new messages.
+// V3.11.31 FIX (Tobe 2026-10-05 18:43): track the last message's text + ts so the unread counter can handle the chat_history-replay case…
 const lastMessageTextRef = useRef<string | null>(null);
 const lastMessageTsRef = useRef<number | null>(null);
 useEffect(() => {
   if (messages.length === 0) return;
   const last = messages[messages.length - 1];
   if (last.id === lastMessageIdRef.current) return;
-  // Stage 1 fallback (matches the realtime appendAgentMessage
-  // dedupe): if text + ts match the previous last (within
-  // 60s), it's a chat_history replay of an already-known
-  // bubble — don't bump unread. Use only when both refs
-  // are non-null (i.e. we've seen at least one prior
-  // bubble).
+  // Stage 1 fallback (matches the realtime appendAgentMessage dedupe): if text + ts match the previous last (within 60s), it's a chat_history…
   const prevText = lastMessageTextRef.current;
   const prevTs = lastMessageTsRef.current;
   if (prevText !== null && prevTs !== null) {
     const textMatches = last.text === prevText;
     const tsWithinWindow = Math.abs((last.ts || 0) - prevTs) < 60000;
     if (textMatches && tsWithinWindow) {
-      // It's a replay. Adopt the new id so we don't
-      // re-evaluate, but keep the prior ts (closer to
-      // the original local-append time) for future
-      // Stage 1 checks.
+      // It's a replay.
       lastMessageIdRef.current = last.id;
       // Keep prevTs unchanged so a future genuine
       // duplicate (e.g. another reconnect) still
@@ -6030,26 +3460,7 @@ useEffect(() => {
     if (chatAtBottomRef.current) {
       setTimeout(() => chatRef.current?.scrollToOffset({ offset: 0, animated: false }), 50);
     }
-    // v3.10.180: the user just sent a new message — any
-    // failed taskSummary cards from PRIOR turns are now
-    // stale. Collapse them so the chat doesn't sit on a
-    // loud Retry/Copy button the user has already moved
-    // past. The user can still tap the collapsed card to
-    // re-expand and retry the old task if they want.
-    //
-    // Tobe 2026-08-30 19:17: "That error message still
-    // appears after I sent a new message." — he meant the
-    // card persists as visual noise after the user has
-    // moved on. Collapsing it gives the same information
-    // (the card is still there, scrollable) without the
-    // loud action buttons.
-    //
-    // We only collapse cards that are NOT the most
-    // recent bubble (we don't collapse the card that's
-    // currently in-flight — that one should stay loud).
-    // And we only collapse cards in the SAME agent's
-    // chat list — cross-agent collapses would be
-    // confusing.
+    // The user just sent a new message — any failed taskSummary cards from PRIOR turns are now stale.
     setCollapsedTaskCards(prev => {
       let next: Set<string> | null = null;
       // Walk backwards through messages. Find any
@@ -6063,57 +3474,13 @@ useEffect(() => {
             next.add(m.id);
           }
         }
-        // We could stop at the first user message we
-        // hit (cards from older turns), but actually
-        // cards from any turn should collapse when a
-        // new user message lands. Keep scanning.
+        // We could stop at the first user message we hit (cards from older turns), but actually cards from any turn should collapse when a new user…
       }
       return next || prev;
     });
     return;
   }
-  // v3.10.90: increment the unread badge whenever a new message
-  // arrives — even when the user is already at the bottom. The
-  // previous behaviour ("at bottom = no badge") made the
-  // v3.2.23 missed-broadcast replay invisible: the replay
-  // arrived while the user was at the bottom, auto-scrolled
-  // them there, but they had no visual cue that messages had
-  // been added. Tobe's request (2026-07-23 23:26): "do we have
-  // a update function when scrolling to the bottom? A refresh
-  // for new messages like function?"
-  //
-  // New behaviour: always increment the badge when a new
-  // message arrives. At bottom: still auto-scroll + show badge
-  // (badge fades after a tap or when count clears). Scrolled up:
-  // same as before — stay put + show badge.
-  //
-  // We DO NOT auto-scroll when at bottom if the new message
-  // looks like a replay (e.g. text is identical to the last
-  // one). The dedupe in appendAgentMessage catches most cases,
-  // but defensively skipping the scroll when the last message
-  // already matches prevents nudging the chat for every
-  // miss-and-recover.
-  // v3.10.179: when the new (last) bubble carries a
-  // failed taskSummary, force-scroll to it so the user
-  // sees the diagnostic card immediately — even if they
-  // were scrolled up reading history. Tobe's
-  // 2026-08-30 11:56 feedback: "the bug report card
-  // should be visible before I send something again".
-  // Without this, a failure that arrives while the user
-  // is mid-history stays out of view until they happen
-  // to scroll to the bottom, by which point they may
-  // have already started typing a follow-up and the
-  // typing bubble pushes the error card further
-  // off-screen.
-  //
-  // The trick: scrollToIndex needs the item to be
-  // measured first. We do a small retry loop because
-  // FlatList measures lazily — first attempt often
-  // returns 'item-0' before measurement completes.
-  // Two attempts ~80ms apart is enough on real
-  // hardware; fall back to scrollToEnd if even the
-  // second attempt can't find the item (very rare,
-  // only if the FlatList was just mounted).
+  // Increment the unread badge whenever a new message arrives — even when the user is already at the bottom.
   if (!last.isUser && last.taskSummary && last.taskSummary.status === 'failed') {
     const failedIndex = messages.length - 1;
     const scrollToFailed = () => {
@@ -6139,61 +3506,18 @@ useEffect(() => {
     setChatUnreadCount(0);
     return;
   }
-  // v3.11.15: removed the duplicate scrollToEnd here.
-  // The onContentSizeChange handler is now the single
-  // source of truth for "new message arrived, auto-scroll
-  // to bottom if user is at bottom." It uses animated:true
-  // for smooth scrolling matching Discord's behaviour.
-  // Previously this effect ALSO fired scrollToEnd with
-  // animated:false, producing a double-jump on every new
-  // message (smooth scroll + jump). Tobe's 2026-09-27
-  // 20:52 "jumps up and down like crazy" symptom.
+  // Removed the duplicate scrollToEnd here.
   setChatUnreadCount(c => c + 1);
 }, [messages.length]);
 
-// v3.10.178: when the user switches to the chat tab, ONLY
-// clear the unread badge — do NOT scroll to end.
-// v3.1.16 / v3.10.111: used to scroll-to-bottom here for
-// "open at the bottom" behaviour. That contradicted
-// Tobe's 2026-08-28 ask: "the chat should just be where
-// it last left off. Just like discord chat behaviour."
-// Discord doesn't scroll-to-bottom on tab re-open — it
-// preserves the channel's scroll position. We now do the
-// same. If the user is mid-history and switches to
-// Settings and back, they stay where they were.
-//
-// The FlatList is conditionally rendered in this screen
-// v3.11.33: clear unread count when the chat tab becomes
-// visible. (Previously this hook also referenced the
-// deleted scroll-save/restore path; that path is gone.)
+// When the user switches to the chat tab, ONLY clear the unread badge — do NOT scroll to end.
 useEffect(() => {
   if (activeTab === 'chat') {
     setChatUnreadCount(0);
   }
 }, [activeTab]);
 
-// v3.10.91: periodic activity heartbeat while the chat
-// tab is open + app is foregrounded. The desktop uses
-// this to bump lastInteractionTs on the active companion
-// so its auto-sleep timer (12 min default) doesn't fire
-// while the user is actively engaged with the chat on
-// mobile. Tobe's report (2026-07-23 23:28): "The
-// companions should sleep on the mobile also like they
-// do on desktop."
-//
-// Only fires when:
-//   - Connected to the desktop
-//   - activeTab === 'chat' (not Events / Log)
-//   - appState === 'active' (app is foregrounded)
-//
-// 30s interval. Pinging more often wastes battery;
-// pinging less often risks missing the 12-min auto-sleep
-// window. 30s × 24 = 12 min budget — at the very edge
-// but still safe.
-//
-// Note: ping does NOT wake a sleeping companion. It only
-// RESETS the auto-sleep timer. To wake a sleeping companion
-// the user must actively engage (chat / voice / treat).
+// Periodic activity heartbeat while the chat tab is open + app is foregrounded.
 const activityPingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 useEffect(() => {
   const tick = () => {
@@ -6221,34 +3545,14 @@ useEffect(() => {
   };
 }, [isConnected, activeTab]);
 
-// v3.8.6 (REMOVED in v3.11.15): the explicit first-paint
-// scroll-to-bottom effect was redundant with the v3.11.15
-// onContentSizeChange handler, which now handles initial
-// auto-scroll via the `messages.length grew` check. The
-// v3.8.6 effect was firing scrollToEnd 200ms after the
-// first non-empty render, which combined with
-// onContentSizeChange's same-frame scrollToEnd to produce
-// a visible jump-and-settle on cold start. Tobe's
-// 2026-09-27 20:52 "jumps up and down like crazy now"
-// report traced back to this duplication (combined with
-// the v3.10.181 initial-decision effect and the new-
-// message effect). Removing the duplicate.
+// The explicit first-paint scroll-to-bottom effect was redundant with the v3.11.15 onContentSizeChange handler, which now handles initial…
 
   const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => {
     if (!item || typeof item.text !== 'string' || !item.ts || typeof item.isUser !== 'boolean') {
       return <View />;
     }
 
-    // v3.11.5: derive the quest name for this bubble's
-    // header. Three sources, in order:
-    //   1. item.activeQuestName — stamped at append time
-    //      by the chat pipeline (desktop v3.3.18 sends
-    //      activeQuestId; older code stamped the name too).
-    //   2. The questNameById map populated by the
-    //      onQuestsList listener from the latest
-    //      quests_list broadcast.
-    //   3. Fallback: '(unnamed quest)' so the user sees
-    //      the chip rather than nothing.
+    // Derive the quest name for this bubble's header.
     const qidForLabel = item.activeQuestId;
     const questNameFromId = (id: string) =>
       questNameByIdRef.current[id] || null;
@@ -6266,25 +3570,7 @@ useEffect(() => {
       showDateSeparator = prevBucket !== currBucket;
     }
 
-    // v3.10.85: quest-change separator. Shows above the
-    // current message when its `activeQuestId` differs from
-    // the previous message's. The label shows the quest
-    // name (or "No active quest" if null) so the user can
-    // see at a glance which quest was active when each
-    // message was exchanged. The chat becomes self-
-    // documenting: scroll back and read the conversation
-    // boundaries by which quest was being worked on.
-    //
-    // Comparison logic:
-    //   - undefined vs undefined → no separator (both legacy)
-    //   - undefined vs null → no separator (legacy messages
-    //     don't break the no-quest label continuity)
-    //   - null vs id → separator (entering a quest)
-    //   - id vs null → separator (leaving to no quest)
-    //   - id1 vs id2 → separator (switching quests)
-    //   - same value → no separator
-    //   - undefined vs id → separator (legacy message
-    //     followed by a stamped message)
+    // Quest-change separator.
     let showQuestSeparator = false;
     let questSeparatorLabel: string | null = null;
     if (olderMsg) {
@@ -6304,23 +3590,7 @@ useEffect(() => {
       }
     }
 
-    // v3.1.15: show the actual agent name (e.g. "🐾 Lamasuu") if we
-    // know which agent spoke, otherwise fall back to the legacy label.
-    // v3.1.15+ also reads item.agentName from the desktop payload.
-    // v3.1.15: show the actual agent name (e.g. "🐾 Lamasuu") if we
-    // know which agent spoke, otherwise fall back to the legacy label.
-    // v3.1.15+ also reads item.agentName from the desktop payload.
-    // v3.1.16: prefer a lookup against the cached `agents` list so
-    // the fallback label uses the user's chosen name (customName on
-    // the desktop) and emoji instead of the hard-coded 'Clawsuu'.
-    // v3.1.71: always look up the agent from the cached `agents`
-    // list first — `item.agentName` from the desktop is just the
-    // bare name with no emoji prefix, so returning it directly
-    // short-circuited the v3.1.68 emoji/icon fallback and the
-    // message labels rendered without an icon. The desktop v3.1.29
-    // already sends emoji + icon + iconFile + iconDataUri per
-    // agent in the agents_list broadcast, so the lookup is the
-    // canonical source for the rendered label.
+    // Show the actual agent name (e.g.
     const agentLabel = (() => {
       if (item.isUser) return '👤 You';
       if (item.agentId) {
@@ -6538,16 +3808,7 @@ useEffect(() => {
                   <TouchableOpacity
                     style={styles.taskActionButton}
                     onPress={() => {
-                      // v3.10.177: Retry re-fires the
-                      // user's previous message text
-                      // (captured in the task session).
-                      // We prime the input box and
-                      // auto-send it after a brief
-                      // delay so the user can cancel by
-                      // tapping the input if they want
-                      // to edit. The previous bubbles
-                      // stay in the chat history so the
-                      // user has full context.
+                      // Retry re-fires the user's previous message text (captured in the task session).
                       const last = getLastFinishedTaskSession();
                       if (!last || !last.requestText || last.requestText === '[voice or remote trigger]') {
                         addLogEntry('Cannot retry: original message not captured (likely a voice/remote trigger)', 'warn');
@@ -6569,12 +3830,7 @@ useEffect(() => {
                   <TouchableOpacity
                     style={styles.taskActionButton}
                     onPress={() => {
-                      // Copy a structured summary to
-                      // the clipboard so the user can
-                      // paste it into a bug report or
-                      // share it. Uses the same clipboard
-                      // helper that the rest of the app
-                      // uses.
+                      // Copy a structured summary to the clipboard so the user can paste it into a bug report or share it.
                       const last = getLastFinishedTaskSession();
                       const parts = [
                         `[${item.taskSummary!.errorCategory || 'error'}] ${formatTaskDuration(item.taskSummary!.durationMs)}`,
@@ -6618,13 +3874,7 @@ useEffect(() => {
                   >
                     {isImage ? (
                       <Image
-                        // v3.10.132: prefer a data: URI when we
-                        // have the base64 inline. The `file://`
-                        // path from the picker can disappear if
-                        // the app's cache is cleaned, and the
-                        // Image component can't load it on demand.
-                        // The data URI is always available until
-                        // the attachment is cleared.
+                        // Prefer a data: URI when we have the base64 inline.
                         source={att.data
                           ? { uri: `data:${att.type};base64,${att.data}` }
                           : { uri: att.uri }}
@@ -6648,11 +3898,7 @@ useEffect(() => {
         </View>
       </View>
     );
-    // v3.1.71: also depend on `agents` so the message label re-renders
-    // when the agents state is hydrated from cache or refreshed by a
-    // fresh `agents_list` broadcast from the desktop. Without this,
-    // messages rendered with the old (stale, no-icon) agents state
-    // never updated when new agent data arrived.
+    // Also depend on `agents` so the message label re-renders when the agents state is hydrated from cache or refreshed by a fresh `agents_list`…
   }, [messages, agents, questNameById]);
 
   const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
@@ -6687,33 +3933,9 @@ useEffect(() => {
     connState === 'connecting' ? 'Connecting...' :
     connState === 'lost' ? 'Lost' : 'Offline';
 
-  // v3.1.27: removed the per-companionId WebView reload. The
-  // old version (v3.1.26 and earlier) did
-  // `setWebViewKey(k => k + 1)` on every companionId change,
-  // which forced a full WebView reload. The reload triggered
-  // a `companion_id` echo from the desktop (the WebView
-  // announced its current companion, the desktop echoed it
-  // back via the sync server, and React set the state again),
-  // and the loop ran every 3-8 seconds — visible in the Log
-  // tab as the "Companion updated: hare / boar" ping-pong.
-  //
-  // Now: tab clicks call `setArenaCompanion(id)` which
-  // injects a `setCompanion(id)` call into the WebView (no
-  // reload). The WebView swaps its sprite in place. The
-  // desktop's echo of `companion_id` only updates a ref
-  // (lastArenaCompanionFromDesktop) for diagnostic purposes
-  // and does NOT trigger a reload.
+  // Removed the per-companionId WebView reload.
 
-  // v3.1.15: when the agents list updates, push it into the WebView so
-  // the arena can render one sprite per agent. Only injects if the
-  // WebView is mounted; otherwise the next onLoadEnd will pick it up
-  // via the agents list sent in the prefs message.
-  // v3.1.37: switched from dispatchEvent('agentsList', ...) (which
-  // the WebView doesn't listen for) to calling
-  // window.Arena.setAgents() directly. The old code path was a
-  // no-op — the WebView only handles 'setAgents' messages, not
-  // 'agentsList', so the inject was silently ignored and the user
-  // saw an empty arena until the next 60s periodic sync.
+  // When the agents list updates, push it into the WebView so the arena can render one sprite per agent.
   useEffect(() => {
     if (agents.length === 0) return;
     if (!webViewRef.current) return;
@@ -6804,19 +4026,9 @@ useEffect(() => {
           <WebView
             key={webViewKey}
             ref={webViewRef}
-            // v3.1.41: include APP_VERSION in the URI so Android WebView
-            // doesn't serve a cached arena.html after an app upgrade. The
-            // `platform=mobile` param was the only query string before, and
-            // Android WebView caches file:///android_asset/ aggressively,
-            // so changes to arena.html didn't show up after upgrade without
-            // a clear-data or full reinstall. Adding v=APP_VERSION makes
-            // each version's arena.html a distinct URL → no cache hit.
+            // Include APP_VERSION in the URI so Android WebView doesn't serve a cached arena.html after an app upgrade.
             source={{ uri: `file:///android_asset/arena.html?v=${APP_VERSION}&platform=mobile` }}
-            // v3.10.43: sleeping companions render desaturated + dim.
-            // The opacity 0.65 is the dim filter; combined with the
-            // 💤 overlay below, this makes the sleep state visible
-            // without modifying arena.html itself. `sleepOverlay` is
-            // derived at the top of the component (see line ~603).
+            // Sleeping companions render desaturated + dim.
             style={
               sleepOverlay
                 ? { flex: 1, backgroundColor: '#0a0a2e', opacity: 0.65, transform: [{ scale: 1 }] }
@@ -6828,19 +4040,7 @@ useEffect(() => {
             allowFileAccess
             originWhitelist={['*']}
             onMessage={handleArenaMessage}
-            // v3.10.184: re-init the arena canvas whenever the
-            // WebView's container is laid out (tilt, fullscreen
-            // toggle, arena show/hide). Without this, the canvas
-            // stays at the original SCREEN_WIDTH × ARENA_HEIGHT
-            // set in onLoadEnd, so treats dropped after tilt
-            // land in the bottom-right corner of the
-            // visually-wider arena (the bitmap is still 360 wide
-            // but CSS scales it to 800 — user taps at 700px get
-            // clamped to canvas.width-28=332, then CSS scales
-            // that to ~770/800 = ~96% of the visual width).
-            // Fires before onLoadEnd on the initial mount, so
-            // we also re-read webViewSizeRef in onLoadEnd and
-            // re-init if a layout has already happened.
+            // Re-init the arena canvas whenever the WebView's container is laid out (tilt, fullscreen toggle, arena show/hide).
             onLayout={(e) => {
               const { width, height } = e.nativeEvent.layout;
               if (width <= 0 || height <= 0) return;
@@ -6856,24 +4056,7 @@ useEffect(() => {
               }
             }}
             onLoadEnd={() => {
-              // v3.1.42: tell the WebView its actual rendered size so
-              // it doesn't have to rely on window.innerWidth/Height
-              // (which on Android WebView returns the full viewport,
-              // not the WebView container's size — see the floating-
-              // feet bug history in MEMORY.md and CHANGES_3.1.42.md).
-              // We pass SCREEN_WIDTH (the full WebView width) and
-              // ARENA_HEIGHT (the configured arena height). The
-              // canvas inside the WebView uses these instead of
-              // guessing from window.innerHeight.
-              //
-              // v3.10.184: prefer the live container size from
-              // webViewSizeRef (set by onLayout) over the module-
-              // level SCREEN_WIDTH/ARENA_HEIGHT constants. Without
-              // this, if the user is already in landscape at app
-              // launch (some tablets), the arena would initialise
-              // at portrait width even though the visible WebView
-              // is wider. Falls back to the module-level values
-              // if no onLayout has fired yet.
+              // Tell the WebView its actual rendered size so it doesn't have to rely on window.innerWidth/Height (which on Android WebView returns the…
               const live = webViewSizeRef.current;
               const initW = live?.w ?? SCREEN_WIDTH;
               const initH = live?.h ?? ARENA_HEIGHT;
@@ -6889,10 +4072,7 @@ useEffect(() => {
                 // doesn't reliably handle for 'loadPrefs' either).
                 const bgJs = `window.Arena && window.Arena.setBackground(${JSON.stringify(bgId || 'forest')}); true;`;
                 webViewRef.current?.injectJavaScript(bgJs);
-                // v3.1.15: also seed the agents list at load so the
-                // arena can show all companions immediately. v3.1.37:
-                // switched to window.Arena.setAgents (the dispatchEvent
-                // path was a no-op — the WebView ignored 'agentsList').
+                // Also seed the agents list at load so the arena can show all companions immediately.
                 if (agents.length > 0) {
                   const slim = agents.map((a) => ({
                     id: a.id, name: a.name, sprite: a.sprite || null, scale: a.scale || null,
@@ -7071,31 +4251,7 @@ useEffect(() => {
 
       {/* Tab content - Hidden when fullscreen or landscape */}
       {!fullscreen && !isLandscape && (
-      // v3.10.80: KeyboardAvoidingView on iOS only. The
-      // v3.10.71 reasoning ("Android's adjustResize already
-      // handles it natively") was correct for Android <15,
-      // but the app's targetSdk is 36 — Android 15+
-      // enforces edge-to-edge and silently DISABLES
-      // windowSoftInputMode="adjustResize" when the system
-      // bars are transparent. Result: the chat input sits at
-      // the bottom of the unresized window and the keyboard
-      // covers it (Tobe reported 2026-07-23, "input field
-      // etc seems stuck on the bottom now. It should be
-      // above the keyboard").
-      //
-      // The fix: track keyboard height via
-      // `Keyboard.addListener('keyboardDidShow', ...)` and
-      // apply it as paddingBottom on the inputContainer
-      // itself (see the v3.10.80 comment at the
-      // inputContainer render site). This works regardless
-      // of adjustResize / edge-to-edge mode because we're
-      // pushing the input up directly via padding, not
-      // relying on the OS to resize the window.
-      //
-      // On iOS we still use KeyboardAvoidingView with
-      // behavior='padding' because the iOS-native keyboard
-      // avoidance path is reliable and doesn't have the
-      // Android 15+ adjustResize problem.
+      // KeyboardAvoidingView on iOS only.
       <KeyboardAvoidingView style={styles.tabContent} behavior='padding' enabled={Platform.OS === 'ios'}>
         {/* v3.11.39: keep all tab contents mounted (only
             toggle visibility via display:none) so the
@@ -7221,17 +4377,7 @@ useEffect(() => {
               extraData={visibleCount}
               keyExtractor={i => i.id}
               renderItem={renderMessage}
-              // v3.11.41: "Load more" button at the top of the
-              // chat, only shown when there are more older
-              // messages to reveal. Clicking it calls
-              // handleLoadMore (defined near removeAttachment
-              // above) which increments visibleCount by
-              // VISIBLE_BATCH and clears the scroll latch so
-              // the FlatList re-renders without yanking the
-              // user to the bottom. The user's scrollY is
-              // preserved by the FlatList (the new items
-              // prepend above the current viewport, pushing
-              // the user's view deeper into the content).
+              // "Load more" button at the top of the chat, only shown when there are more older messages to reveal.
               ListFooterComponent={
                 messages.length > visibleCount ? (
                   <TouchableOpacity
@@ -7246,37 +4392,7 @@ useEffect(() => {
                   </TouchableOpacity>
                 ) : null
               }
-              // v3.10.123: footer-height estimate 56 → 44
-              // to match the slimmer input row (paddingVertical
-              // 8→4 + paddingBottom-closed 8+insets→insets =
-              // ~12dp shorter). The 4dp breathing room + insets.
-              // bottom stay the same. Net: chat list gains
-              // ~12dp of room.
-              //
-              // v3.10.125: revert the v3.10.124 keyboardHeight
-              // addition. The v3.10.124 patch was a band-aid
-              // that grew contentSize by keyboardHeight when
-              // the keyboard opened, which fired
-              // onContentSizeChange → scrollToEnd → the user
-              // ended up at the new padded bottom. That
-              // created a "rubber-band at fake bottom" feel
-              // — the user could see the last message above
-              // the input but the FlatList had blank
-              // paddingBottom below it, so scrolling further
-              // down snapped back. Tobe hit this on 2026-08-02
-              // 16:46: "when Im almost at the bottom and i
-              // try to scroll further down it takes me back
-              // where I started."
-              //
-              // The real fix (in v3.10.125) is to make
-              // footerOverlay flex-flow instead of
-              // position:absolute, so the FlatList flex-shrinks
-              // when the keyboard opens (because the
-              // footerOverlay's input grows by keyboardHeight
-              // via paddingBottom). No paddingBottom trick on
-              // the FlatList needed — the FlatList's visible
-              // area now stops at the input's top edge, no
-              // matter where the input is on screen.
+              // Footer-height estimate 56 → 44 to match the slimmer input row (paddingVertical 8→4 + paddingBottom-closed 8+insets→insets = ~12dp shorter).
               contentContainerStyle={[styles.chatList, {
                 // inverted: paddingTop sits visually at the bottom
                 paddingTop: 4 + 44 + insets.bottom,
@@ -7288,28 +4404,10 @@ useEffect(() => {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
-              // v3.1.16: simple chronological FlatList (not inverted).
-              // Newest message lives at the end of the array and the
-              // end of the screen, where the user reads it. We use
-              // scrollToEnd to jump there.
+              // Simple chronological FlatList (not inverted).
               inverted
               onScroll={(e) => {
-                // v3.11.33: SCROLL HANDLER SIMPLIFIED.
-                //   The previous handler also wrote the scroll
-                //   offset to AsyncStorage on every event (for
-                //   restore-on-revisit). Without restore-on-
-                //   revisit we only need to track the at-bottom
-                //   state for the ↓ button's visibility.
-                //
-                //   Threshold 50px from v3.10.111 (was 32px).
-                //   Within 50px of the bottom → "at bottom";
-                //   the ↓ jump-to-bottom button hides. Beyond
-                //   → button shows.
-                //
-                // v3.11.41: also cache the latest scrollY and
-                // viewport height so onContentSizeChange can
-                // re-derive the at-bottom state when content
-                // grows without a user scroll.
+                // SCROLL HANDLER SIMPLIFIED.
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 lastScrollYRef.current = contentOffset.y;
                 lastViewportHeightRef.current = layoutMeasurement.height;
@@ -7317,10 +4415,7 @@ useEffect(() => {
                 const isAtBottom = contentOffset.y < 50;
                 if (chatScrollKeyRef.current && pendingRestoreRef.current === null) setChatScrollPos(chatScrollKeyRef.current, contentOffset.y);
                 setChatAtBottom(isAtBottom);
-                // v3.10.96 kept: clear the unread badge + the
-                // per-companion tab badge when the user
-                // scrolls to the bottom. Same semantic — "if
-                // you're at the bottom you've seen everything".
+                // V3.10.96 kept: clear the unread badge + the per-companion tab badge when the user scrolls to the bottom.
                 if (isAtBottom) {
                   setChatUnreadCount(0);
                   const aid = activeChatAgentIdRef.current;
@@ -7332,29 +4427,7 @@ useEffect(() => {
                   }
                 }
               }}
-              // v3.11.33: NO AUTO-SCROLL on content size
-              // changes. The previous 12 layers of
-              // scroll-on-new-content / scroll-on-layout /
-              // scroll-on-hydrate are all deleted. The chat
-              // only scrolls when (a) the user scrolls, (b) the
-              // ↓ button is tapped, or (c) the chat panel is
-              // (re-)presented for a new active agent/quest
-              // (handled by the pendingScrollKeyRef latch
-              // consumed below).
-              //
-              // v3.11.40: the onContentSizeChange handler is
-              // the SINGLE source of truth for "the FlatList
-              // has just been (re-)populated with content".
-              // It fires AFTER the FlatList has measured its
-              // contentSize, so a scrollToEnd called from
-              // here is guaranteed to find a non-zero target.
-              // The projection effect sets the
-              // pendingScrollKeyRef latch; this handler
-              // consumes it on the first qualifying fire and
-              // runs the scroll. Subsequent fires (the
-              // multi-pass measurement concern from
-              // v3.11.18 / v3.11.27) see a null latch and
-              // are no-ops.
+              // NO AUTO-SCROLL on content size changes.
               onContentSizeChange={(_w, h) => {
                 // v3.11.45: when a chat opens, jump to where the user left it
                 // (0 = newest). New messages stay pinned via
@@ -7404,21 +4477,7 @@ useEffect(() => {
                 more vertical room for messages. */}
             <View style={styles.footerOverlay}>
             {chatVoiceStatus && (
-              // v3.11.1: Claude-style thinking bar.
-              //   Row 1: pulsing dot + status text.
-              //     The dot is `Animated.View` with opacity
-              //     driven by thinkPulse (0..1, 1.2s loop).
-              //   Row 2 (optional): recent tool actions.
-              //     Only renders if the desktop has emitted
-              //     at least one `agent_tool` event during
-              //     this turn (currently empty for
-              //     mobile-routed chats because the desktop
-              //     suppresses tool events on the
-              //     non-Discord path, but the infra is in
-              //     place for when that lands).
-              //   Wrapped in `Animated.View` so the
-              //     bar fades in/out on transitions
-              //     instead of popping.
+              // Claude-style thinking bar.
               <Animated.View style={[styles.chatStatusBar, { opacity: indicatorOpacity }]}>
                 <View style={styles.chatStatusRow}>
                   <Animated.View
@@ -7449,10 +4508,7 @@ useEffect(() => {
                         key={`${idx}-${act}`}
                         style={[
                           styles.chatActionText,
-                          // Dim older actions; the most recent
-                          // one stays at full opacity. Gives
-                          // the user a sense of progress
-                          // without the bar feeling busy.
+                          // Dim older actions; the most recent one stays at full opacity.
                           idx < chatActions.length - 1 && styles.chatActionTextFaded,
                         ]}
                         numberOfLines={1}
@@ -7489,19 +4545,7 @@ useEffect(() => {
                   return (
                     <View key={att.id} style={styles.attachmentPreviewItem}>
                       {isImage ? (
-                        // v3.10.98: tap the pending thumbnail to
-                        // open the same fullscreen viewer the
-                        // chat-history attachments use. Tobe's
-                        // v3.10.97 feedback: "i still cannot
-                        // Click the attached images to look
-                        // closer before sending my message."
-                        // Previously the thumb was a static
-                        // <Image> with no onPress; users had
-                        // to send + view the message to see
-                        // the image at full size. The fullscreen
-                        // viewer is already wired (setFullscreenAttachment
-                        // is used for chat-history attachments);
-                        // we just reuse it here.
+                        // Tap the pending thumbnail to open the same fullscreen viewer the chat-history attachments use.
                         <TouchableOpacity
                           onPress={() => setFullscreenAttachment({
                             uri: att.uri,
@@ -7564,13 +4608,7 @@ useEffect(() => {
             {activeTab === 'chat' && agents
               .filter(a => a.id !== activeChatAgentId && (chatUnreadByAgent[a.id] || 0) > 0)
               .map((a) => {
-                // v3.11.0: per-quest buckets. The unread
-                // preview for an inactive companion shows
-                // the last message from the SAME quest
-                // bucket the user is currently viewing
-                // (activeChatQuestId) — not the default
-                // bucket, so the preview matches what the
-                // user would see if they switched tabs.
+                // Per-quest buckets.
                 const aidBuckets = messagesByAgentAndQuest[a.id] || {};
                 const previewQid: string | null =
                   activeChatQuestId === undefined ? null : activeChatQuestId;
@@ -7620,34 +4658,7 @@ useEffect(() => {
               </View>
             )}
             <View style={[styles.inputContainer, {
-              // v3.10.80: Android keyboard avoidance. See
-              // the comment at the keyboardHeight state
-              // declaration for why we apply this manually
-              // instead of relying on adjustResize (Android
-              // 15+ disables it on edge-to-edge apps). When
-              // the keyboard is open, set paddingBottom to
-              // the keyboard height — this effectively pushes
-              // the input row up to sit just above the
-              // keyboard. When the keyboard is closed, fall
-              // back to the v3.10.70 nav-bar inset handling.
-              //
-              // v3.10.123: closed-keyboard paddingBottom
-              // dropped from 8 + insets.bottom to
-              // insets.bottom. Tobe's 2026-08-01 15:22
-              // follow-up: "I think there is a little more
-              // room for the keyboard at the bottom, it
-              // perhaps can go lower, not sure." Reading the
-              // ambiguity as "the input row could sit lower
-              // on the screen" — the extra 8dp of padding
-              // was unused space between the input content
-              // and the nav bar. Removing it lets the input
-              // sit ~8dp closer to the bottom edge; the
-              // chat list gains 8dp of vertical room.
-              //
-              // iOS keeps using KeyboardAvoidingView (the
-              // wrapping component above) for keyboard
-              // avoidance, so we DON'T need to add keyboard
-              // height there.
+              // Android keyboard avoidance.
               paddingBottom: Platform.OS === 'android' && keyboardHeight > 0
                 ? keyboardHeight
                 : insets.bottom,
@@ -7757,22 +4768,14 @@ useEffect(() => {
               contentContainerStyle={styles.logList}
               showsVerticalScrollIndicator={false}
               onScroll={(e) => {
-                // v3.1.57: detect whether the user is at the
-                // bottom. contentOffset.y is the scrolled
-                // position; contentSize.height is the total
-                // content height; layoutMeasurement.height is
-                // the viewport. Distance from bottom =
-                // contentSize - layoutMeasurement - offset.
+                // Detect whether the user is at the bottom.
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
                 logStickyBottomRef.current = distanceFromBottom < 32;
               }}
               scrollEventThrottle={16}
               onContentSizeChange={() => {
-                // v3.1.57: only auto-scroll if the user was
-                // already at the bottom when new content
-                // arrived. If they scrolled up to read, leave
-                // them there.
+                // Only auto-scroll if the user was already at the bottom when new content arrived.
                 if (logStickyBottomRef.current) {
                   logRef.current?.scrollToEnd({ animated: false });
                 }
@@ -7805,11 +4808,7 @@ useEffect(() => {
             <View style={styles.fullscreenAttachmentContent}>
               {fullscreenAttachment.type?.startsWith('image/') ? (
                 <Image
-                  // v3.10.132: prefer the inline base64 data
-                  // URI over the cached file path. The
-                  // cached file can be cleared by Android's
-                  // cache cleaner at any time, which would
-                  // leave the fullscreen viewer blank.
+                  // Prefer the inline base64 data URI over the cached file path.
                   source={fullscreenAttachment.data
                     ? { uri: `data:${fullscreenAttachment.type};base64,${fullscreenAttachment.data}` }
                     : { uri: fullscreenAttachment.uri }}
@@ -7872,13 +4871,7 @@ useEffect(() => {
                 onPress={() => {
                   // Open the existing fullscreen viewer.
                   setFullscreenAttachment(item.att);
-                  // Don't close the gallery — the user
-                  // closes it via the fullscreen viewer's
-                  // ✕ button (or back button on Android).
-                  // Actually, we DO close the gallery so
-                  // the fullscreen viewer is the only
-                  // overlay; the gallery reopens on
-                  // close.
+                  // Don't close the gallery — the user closes it via the fullscreen viewer's ✕ button (or back button on Android).
                   setGalleryOpen(false);
                 }}
                 activeOpacity={0.7}
@@ -7920,12 +4913,7 @@ useEffect(() => {
   );
 }
 
-// v3.10.103: short time-ago for the recent-pills row.
-// Mirrors the formatTimeAgo in QuestsScreen.tsx but
-// shorter ("3m ago" instead of "3 minutes ago") so it
-// fits in the pill's small 9px secondary line. Caps
-// at "1d ago" for anything older (the pills are short-
-// term recovery, not history).
+// Short time-ago for the recent-pills row.
 function formatTimeAgoShort(ts: number): string {
   const now = Date.now();
   const diff = Math.max(0, now - ts);
@@ -7938,47 +4926,14 @@ function formatTimeAgoShort(ts: number): string {
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-  // v3.10.121: skyStrip + skyStripCloud styles removed.
-  // Was a decorative ~14dp pale-blue/pale-green band with a
-  // white cloud silhouette rendered between the header and the
-  // arena. Tobe flagged it twice (v3.10.120: "weird slider" on
-  // dark mode; v3.10.121: "we dont need that cloud pill in
-  // light mode either, it looks terrible"). Element is fully
-  // removed from the render and the styles are now dead — left
-  // in for now in case a future theme wants a different
-  // decorative element between header and arena. Safe to delete
-  // in a future cleanup PR.
-  // v3.10.114: heavy forest green frame around the arena. Tobe's
-  // spec (2026-07-30 19:16 GMT+2): "I want green and blue, especially
-  // heavy around the arena and below the chat." This is the
-  // border that surrounds the dark WebView (which is the arena)
-  // and gives the home screen its forest depth.
-  // v3.10.115: light mode uses border.strong (deep forest) instead
-  // of brand.accent (orange) so the frame reads as forest, not neon.
-  // Dark mode keeps brand.accent because the dark-mode arena frame
-  // is meant to be a neon-accent outline on a black bg.
+  // SkyStrip + skyStripCloud styles removed.
   arenaFrame: {
     height: ARENA_HEIGHT,
     borderWidth: 3,
-    // v3.10.119: arena frame border per theme. Sun
-    // (light) uses border.strong (deep blue) — a
-    // sky-blue frame around the arena. Forest uses
-    // border.strong (deep forest) — a forest-green
-    // frame. Moon (dark) keeps the neon-accent
-    // orange border — the v3.10.115 design intent
-    // (neon outline on near-black). The new forest
-    // theme also uses border.strong (it's not a
-    // dark/light distinction anymore, just a moon
-    // gets a special border).
+    // Arena frame border per theme.
     borderColor: t.name === 'dark' ? t.brand.accent : t.border.strong,
     borderRadius: 6,
-    // v3.10.119: arena fill per theme. Sun (light) and
-    // Forest both get bg.forestDark — a deep forest
-    // fill that's visible while the WebView loads (the
-    // WebView itself is dark, so the fill shows through
-    // the brief loading gap). Moon (dark) is
-    // 'transparent' so the arena dark background shows
-    // through directly.
+    // Arena fill per theme.
     backgroundColor: t.name === 'dark' ? 'transparent' : t.bg.forestDark,
   },
   arenaFrameFullscreen: {
@@ -7986,23 +4941,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     top: 0, left: 0, right: 0, bottom: 0,
     zIndex: 100,
   },
-  // v3.10.122: collapsed-arena strip. ~52dp tall bar shown
-  // when arenaHidden=true (Tobe's 13:52 follow-up). Holds
-  // the active companion's icon + name on the left, a
-  // "▼ Show arena" button on the right. Chat list extends
-  // into the freed ~260dp+ vertical space.
-  //
-  // v3.10.124: strip height 52 → 28 ("almost half the size").
-  // Tobe's 2026-08-02 15:22 follow-up: "the hide arena can be
-  // smaller. Almost half the size." The 52dp strip was
-  // visually heavy and felt like the arena was still partly
-  // there.
-  //
-  // v3.10.125: 28 → 22 ("Make it smaller." — Tobe's 16:46
-  // follow-up on 2026-08-02). The 28dp strip still felt
-  // chunky next to the 18-20dp tabs row. 22dp matches the
-  // visual weight of a compact status row. Label and button
-  // text shrunk one more step to fit comfortably.
+  // Collapsed-arena strip.
   arenaStrip: {
     height: 22,
     flexDirection: 'row',
@@ -8032,20 +4971,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-  // v3.10.123: hide-arena button overlay (TOP-center of
-  // the arena, per Tobe's 15:22 follow-up). Small pill
-  // with "▲ Hide arena" text, dark translucent
-  // background so it's readable over both the dark and
-  // forest backgrounds. Was bottom:8 in v3.10.122;
-  // moved to top:8 in v3.10.123.
-  //
-  // v3.10.125: shrink the pill itself to match the
-  // slimmer arena strip aesthetic. Tobe's 16:46
-  // follow-up: "the hide arena don't seem to have
-  // changed size." — he was looking at this top-center
-  // pill (which the v3.10.124 work didn't touch).
-  // paddingVertical 6 → 3, font 11 → 10, width 104 → 88,
-  // radius 14 → 10. Net: ~half the vertical footprint.
+  // Hide-arena button overlay (TOP-center of the arena, per Tobe's 15:22 follow-up).
   arenaHideButton: {
     position: 'absolute',
     top: 6,
@@ -8082,16 +5008,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: Platform.OS === 'ios' ? 54 : 44,
-    // v3.10.122: 6 → 2 AND borderBottom removed. Tobe's
-    // 2026-08-01 13:52 follow-up: "We can move the arena
-    // even further up so close as possible to the
-    // settings button so the border almost touches the
-    // settings button." The arena's own top border
-    // (borderWidth: 3 in arenaFrame) provides the
-    // separator between header and arena — having both
-    // borders was double-bordered visual noise. Padding
-    // dropped to 2 to bring the arena's orange border as
-    // close to the gear icon row as possible.
+    // 6 → 2 AND borderBottom removed.
     paddingBottom: 2,
     backgroundColor: t.bg.primary,
   },
@@ -8140,34 +5057,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   tabActive: { borderBottomWidth: 2, borderBottomColor: t.brand.accent },
   tabText: { color: t.text.dim, fontSize: 13 },
   tabTextActive: { color: t.brand.accent, fontWeight: 'bold' },
-  // v3.1.17: companion tab bar (one tab per companion). Sits
-  // between the system tabs and the chat content.
-  // v3.1.48: companion tab bar tightened — Tobe asked for minimal
-  // space between companion tabs (Clawsuu / Lamasuu / etc). Reduced
-  // padding, margin, and max height.
+  // Companion tab bar (one tab per companion).
   companionTabBar: {
-    // v3.10.114: forest green to match the arena frame,
-    // reading as a single 'forest zone' above the chat.
-    // v3.10.115: in light mode, switch to warm brown earth
-    // (bg.ground) — the tab bar sits between the arena (forest)
-    // and the chat (cream/sky), so it reads as 'the ground under
-    // the trees'. Border becomes earth-brown for the same reason.
-    // v3.10.116: dark mode also gets the forest treatment (was
-    // brand.accentDim, the dim orange) because bright orange on
-    // a dark page reads as a neon ad, not a tab bar. Switching
-    // to bg.forestDark (#1f3d28) keeps the home-screen dark-mode
-    // aesthetic consistent (forest frame -> forest tab -> dark
-    // chat) without the orange flash that Tobe flagged in
-    // Discord at 2026-07-31 12:19 GMT+2.
-    // v3.10.119: companion tab bar bg per theme. Each
-    // theme has a distinct "ground" treatment that
-    // matches its home-screen composition:
-    //   - sun (light): bg.skyLight (pale blue strip —
-    //     reads as "sky continuation under the arena")
-    //   - forest: bg.ground (warm brown bark — reads
-    //     as "ground under the tree")
-    //   - moon (dark): bg.forestDark (deep forest — the
-    //     v3.10.117 dark-mode forest treatment)
+    // Forest green to match the arena frame, reading as a single 'forest zone' above the chat.
     backgroundColor: t.name === 'light' ? t.bg.skyLight
                    : t.name === 'forest' ? t.bg.ground
                    : t.bg.forestDark,
@@ -8185,10 +5077,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     paddingVertical: 3,
     alignItems: 'center',
   },
-  // v3.1.16: small inline label that shows in place of the tab
-  // bar while the desktop's agents list is still loading. Keeps
-  // the bar's height stable so the layout doesn't jump when the
-  // real tabs arrive.
+  // Small inline label that shows in place of the tab bar while the desktop's agents list is still loading.
   companionTabPlaceholder: {
     color: t.text.muted,
     fontSize: 12,
@@ -8209,22 +5098,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     borderColor: '#222',
   },
   companionTabActive: {
-    // v3.10.118: was rgba(247,147,26,0.18) bg + #f7931a
-    // border. Tobe reported (Discord #cyber-dev
-    // 2026-07-31 15:45 GMT+2) that the bright orange
-    // active tab still "looks off in relation to the
-    // rest" — the home screen now has forest frame +
-    // forest tab bar (v3.10.114-117) and the orange
-    // active state fights that palette.
-    //
-    // Switch to bg.forestDark bg + border.strong border
-    // in BOTH light + dark mode (no `t.name === 'light'`
-    // check — the contrast issue is the same in both
-    // modes because the orange is on top of the
-    // earth/forest tab bar bg, which is dark in both).
-    // The active tab still pops (deeper green on dark
-    // forest) but matches the home-screen palette
-    // instead of shouting brand-accent orange.
+    // Was rgba(247,147,26,0.18) bg + #f7931a border.
     backgroundColor: t.bg.forestDark,
     borderColor: t.border.strong,
   },
@@ -8233,10 +5107,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontSize: 12,
     marginRight: 4,
   },
-  // v3.1.69: Twemoji SVG icon for the companion tab. Sized to
-  // match the original chat-tab emoji cell (20x20). The SVG
-  // renders crisp at any size and looks identical on every
-  // device, unlike the system emoji font which varies wildly.
+  // Twemoji SVG icon for the companion tab.
   companionTabIconImg: {
     width: 20,
     height: 20,
@@ -8249,15 +5120,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     maxWidth: 80,
   },
   companionTabNameActive: {
-    // v3.10.118: was #f7931a (brand accent orange). Tobe
-    // reported (Discord #cyber-dev 2026-07-31 15:45 GMT+2)
-    // that the orange active tab "looks off in relation
-    // to the rest" — the home screen is now forest-themed
-    // and the orange competes with that. Switch to
-    // text.primary (bright white in dark mode, deep
-    // charcoal in light) so the active companion name
-    // reads as "the one you're using" without shouting
-    // brand-accent.
+    // Was #f7931a (brand accent orange).
     color: t.text.primary,
   },
   companionTabBadge: {
@@ -8275,30 +5138,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontWeight: '700',
   },
   tabContent: { flex: 1 },
-  // v3.10.114: chat list bg is the soft cream (matches the
-    // 'chat can be more of the White' spec from Tobe). Bubbles
-    // themselves are pure white with sky/forest borders so the
-    // contrast is bubble -> bg, not bg -> page.
-  // v3.10.119: chat list bg per theme. Sun (light)
-    // and Moon (dark) use the page bg (white / near-
-    // black) — the chat just sits on the page.
-    // Forest uses bg.ground (warm brown) — the chat
-    // becomes the "tree trunk cavity" that Tobe
-    // described: "Brown in the chat area for a tree
-    // trunk, and green under there again for bushes/
-    // foliage." The page bg around the chat stays
-    // bg.primary (forest green), so the chat looks
-    // like a brown inset in a green frame.
+  // Chat list bg is the soft cream (matches the 'chat can be more of the White' spec from Tobe).
     chatList: {
-    // v3.10.121: bumped paddingBottom from 8 to ~64+insets
-    // so the last chat message can scroll above the
-    // floating input row. The input row is now
-    // position:absolute at the bottom of
-    // chatScrollContainer, so the chat list would otherwise
-    // extend behind it. The paddingBottom reserves space
-    // for the input + the nav-bar inset. The exact pixel
-    // value is computed inline (not a style token) because
-    // it depends on the live insets.bottom.
+    // Bumped paddingBottom from 8 to ~64+insets so the last chat message can scroll above the floating input row.
     padding: 12,
     paddingBottom: 8,
     backgroundColor: t.name === 'forest' ? t.bg.ground : t.bg.primary,
@@ -8313,12 +5155,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     marginVertical: 10,
     opacity: 0.85,
   },
-  // v3.10.85: quest-change separator. Centered pill with
-  // a thin top/bottom border to visually mark the boundary
-  // between "talking about quest A" and "talking about
-  // quest B" (or "no quest"). Lighter color than the
-  // dateSeparator so the date is still the primary
-  // chronological landmark; quest is secondary context.
+  // Quest-change separator.
   questSeparator: {
     alignItems: 'center',
     marginTop: 6,
@@ -8334,26 +5171,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontWeight: '600',
     opacity: 0.7,
   },
-  // v3.10.114: white bubbles with sky/forest borders per Tobe's
-  // spec ('the chat can be more of the White. Green for forest,
-  // blue for sky'). User bubble: white bg, sky blue border +
-  // accent. AI bubble: white bg, forest green border + accent.
-  // The dark navy/old hex values are gone.
+  // White bubbles with sky/forest borders per Tobe's spec ('the chat can be more of the White.
   messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 12, marginBottom: 8, backgroundColor: t.bg.secondary, borderWidth: 1, borderColor: t.border.mid },
   userBubble: { alignSelf: 'flex-end', backgroundColor: t.bg.secondary, borderBottomRightRadius: 4, borderColor: t.brand.cyan, borderWidth: 1.5 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: t.bg.secondary, borderBottomLeftRadius: 4, borderColor: t.brand.accent, borderWidth: 1.5 },
-  // v3.10.177: task summary footer styles. Error-only:
-  //   - taskErrorCard: a structured block for error
-  //     bubbles with category + duration + steps +
-  //     action buttons. Visually distinct from a normal
-  //     error bubble (which was just red text saying
-  //     "Error: ..."); the card format makes it obvious
-  //     what's actionable. Successful replies render
-  //     normally without any summary footer (per
-  //     Tobe's 2026-08-28 clarification).
-  // v3.10.180: collapsed variant. A muted single-line
-  // pill that replaces the full card once the user
-  // moves on to a new turn. Tapping re-expands.
+  // Task summary footer styles.
   taskErrorCard: { marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: 'rgba(255, 80, 80, 0.08)', borderWidth: 1, borderColor: t.brand.danger },
   taskErrorCardCollapsed: { marginTop: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, backgroundColor: 'rgba(255, 80, 80, 0.04)', borderWidth: 1, borderColor: 'rgba(255, 80, 80, 0.25)' },
   taskErrorCollapsedText: { fontSize: 11, color: t.text.muted, fontStyle: 'italic' },
@@ -8368,57 +5190,19 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   agentLabel: { fontSize: 10, fontWeight: '700', marginBottom: 4, color: t.text.muted },
   userLabel: { color: t.brand.cyanDim, fontWeight: 'bold' },
   aiLabel: { color: t.brand.accent, fontWeight: 'bold' },
-  // v3.11.5: bubble header row hosts the agent label on
-  // the left and the quest chip on the right. Using
-  // spaceBetween so the chip floats to the upper right
-  // of the bubble (matches Tobe's request: 'the current
-  // quest name at the upper right of each text bubble').
-  //
-  // v3.11.22: switch to absolute positioning for the quest
-  // chip. Tobe 2026-09-30 12:37 report: the chip was
-  // rendering top-LEFT (next to or wrapping under the
-  // agent label) and the gray tint was too low-contrast
-  // against the bubble's secondary bg. Absolute positioning
-  // pins the chip to top-right regardless of the agent
-  // label's length or the bubble's width. The chip's
-  // background is now a solid orange (no alpha overlay) so
-  // it's legible at a glance. Tobe's request: 'That text
-  // should also be in the top right of the text bubble,
-  // not top left, and the text is hard to see in gray, it
-  // should be Orange.'
+  // Bubble header row hosts the agent label on the left and the quest chip on the right.
   bubbleHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   // The quest chip: small, tinted (NOT solid), rounded.
-  // Sits inline to the right of the agent label via
-  // space-between on the row above. Two variants so it
-  // reads as 'quest context' without clobbering the bubble
-  // border-color identity (orange-tint for AI bubbles,
-  // sky-tint for user bubbles).
-  //
-  // v3.11.25: reverted from the v3.11.22 absolute-
-  // positioned solid-orange chip back to the v3.11.5–
-  // v3.11.17 inline tinted pill. Tobe 2026-10-01 07:18:
-  // 'change back to the previous quest text style in the
-  // chat bubbles'. The solid-orange absolute chip was too
-  // prominent and visually 'stuck-on' against the bubble
-  // background; the inline tinted pill reads as
-  // supplementary context.
   bubbleQuestLabel: { fontSize: 9, fontWeight: '600', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden', marginLeft: 6, maxWidth: '60%' },
   bubbleQuestLabelAi: { backgroundColor: t.brand.accentDim + '22', color: t.brand.accent },
   bubbleQuestLabelUser: { backgroundColor: t.brand.cyanDim + '22', color: t.brand.cyanDim },
-  // v3.10.114: text follows the bubble border color so user
-  // messages read as 'from you' (sky blue text) and AI as
-  // 'from companion' (forest green text). Both on a white bg,
-  // high contrast, easy to scan.
+  // Text follows the bubble border color so user messages read as 'from you' (sky blue text) and AI as 'from companion' (forest green text).
   messageText: { fontSize: 13, lineHeight: 18, color: t.text.primary },
   userText: { color: t.brand.cyanDim, fontWeight: '500' },
   aiText: { color: t.brand.accentDim, fontWeight: '500' },
   timestamp: { color: t.text.muted, fontSize: 9, marginTop: 4, textAlign: 'right' },
 
-  // v3.10.20: attachment rendering. Inline image
-  // previews (square 96px thumbnails) inside the
-  // message bubble, plus a tap-to-fullscreen Modal
-  // for the full-size view. Non-image attachments
-  // show as a file card.
+  // Attachment rendering.
   attachmentsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -8426,16 +5210,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     gap: 6,
   },
   attachmentImageWrap: {
-    // v3.10.88: bigger image preview for chat attachments
-    // (Tobe's request 2026-07-23: "Click the image that i
-    // have attached to inspect it like one can on discord").
-    // Discord-style chat uses a larger preview with a tap-
-    // to-expand affordance. Old was 96x96 (thumbnail-sized)
-    // which doesn't communicate "tap me to inspect". The
-    // tap-to-fullscreen modal was already wired (line 3091),
-    // but the small thumbnail didn't visually invite the tap.
-    // 180x180 is big enough to see detail at-a-glance but
-    // small enough that 2-3 still fit in a single bubble.
+    // Bigger image preview for chat attachments (Tobe's request 2026-07-23: "Click the image that i have attached to inspect it like one can on…
     width: 180,
     height: 180,
     borderRadius: 8,
@@ -8521,13 +5296,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   inputContainer: {
     flexDirection: 'row', alignItems: 'flex-end',
     paddingHorizontal: 12,
-    // v3.10.123: paddingVertical 8 → 4. Combined with
-    // the paddingBottom 8→0 change in the inline override,
-    // the input row is ~12dp shorter. Tobe: "there is a
-    // little more room for the keyboard at the bottom,
-    // it perhaps can go lower." The reduced vertical
-    // padding gives the chat list 12dp of recovered
-    // vertical room when the input is at rest.
+    // PaddingVertical 8 → 4.
     paddingVertical: 4,
     borderTopWidth: 1, borderTopColor: t.border.subtle, backgroundColor: t.bg.primary,
   },
@@ -8550,23 +5319,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 6,
-    // v3.10.101: removed `overflow: 'hidden'` so the
-    // floating ×-remove button (positioned at top: 2,
-    // right: 2 with negative offsets in earlier versions)
-    // isn't clipped. The rounded corners are now drawn
-    // by the inner Image's borderRadius instead of the
-    // container's overflow. Tobe's v3.10.98 feedback:
-    // "the red remove button is clipped for the
-    // attachment." (Visible in the screenshot — the X
-    // was at top: -4, right: -4, outside the 60×60
-    // container that had overflow:hidden.)
+    // Removed `overflow: 'hidden'` so the floating ×-remove button (positioned at top: 2, right: 2 with negative offsets in earlier versions)…
   },
-  // v3.10.101: inner image gets its own borderRadius
-  // (slightly smaller than the container's 6 so the
-  // rounded corners still show). The image is also
-  // padded on the top-right so the × button (now
-  // positioned at top: 2, right: 2 INSIDE the
-  // container) doesn't overlap the image content.
+  // Inner image gets its own borderRadius (slightly smaller than the container's 6 so the rounded corners still show).
   attachmentPreviewThumbWrap: {
     width: '100%',
     height: '100%',
@@ -8574,11 +5329,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   attachmentPreviewThumb: {
     width: '100%',
     height: '100%',
-    // v3.10.101: match the container's borderRadius so
-    // the image is visually clipped to the same rounded
-    // shape. The container no longer has overflow:hidden
-    // (so the X button can sit outside the image bounds),
-    // so the image itself needs to be rounded.
+    // Match the container's borderRadius so the image is visually clipped to the same rounded shape.
     borderRadius: 6,
   },
   attachmentPreviewFile: {
@@ -8599,15 +5350,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   },
   attachmentPreviewRemove: {
     position: 'absolute',
-    // v3.10.101: was top: -4, right: -4 (outside the 60×60
-    // container that had overflow:hidden) which clipped the
-    // button. Now positioned at top: 2, right: 2 inside the
-    // container. The button is still 18×18 with a 9px
-    // borderRadius, so it overlaps the image by 16px (most
-    // of the button). Users see a red circle in the
-    // top-right corner of the thumbnail. Tobe's v3.10.98
-    // feedback: "the red remove button is clipped for the
-    // attachment."
+    // Was top: -4, right: -4 (outside the 60×60 container that had overflow:hidden) which clipped the button.
     top: 2,
     right: 2,
     width: 18,
@@ -8652,11 +5395,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   },
 
   micButtonText: { color: '#f7931a', fontWeight: '600' },
-  // v3.10.16: different sizes for the + vs mic-icon
-  // labels so each renders cleanly inside the smaller
-  // 36x36 button. The + is a single ASCII char and
-  // looks fine at fontSize 22; the mic/stop emoji
-  // glyphs render a bit larger and look better at 18.
+  // Different sizes for the + vs mic-icon labels so each renders cleanly inside the smaller 36x36 button.
   micButtonPlusText: { fontSize: 22, lineHeight: 24 },
   micButtonMicText: { fontSize: 18, lineHeight: 20 },
   voicePreview: {
@@ -8674,12 +5413,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   chatStatusRow: {
     flexDirection: 'row', alignItems: 'center',
   },
-  // v3.11.1: pulsing dot. 8dp circle with the same
-  // warm-orange palette as the rest of the bar. The
-  // animation lives in the render path; the styles
-  // here are static so the layout settles once per
-  // remount and only the transform/opacity re-run on
-  // each animation frame.
+  // Pulsing dot.
   chatStatusDot: {
     width: 8, height: 8, borderRadius: 4,
     backgroundColor: '#f7931a',
@@ -8688,12 +5422,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   chatStatusText: {
     color: 'rgba(247,147,26,0.95)', fontSize: 13, fontStyle: 'italic', fontWeight: '500',
   },
-  // v3.11.1: action log row. Shows the last few
-  // agent tool calls in chronological order, one per
-  // line. Kept short (12px) and indented 16dp to
-  // signal "subordinate to the main status text
-  // above". Older actions fade to 0.5 opacity so the
-  // most recent action pops first.
+  // Action log row.
   chatActionsRow: {
     marginTop: 4, marginLeft: 16,
   },
@@ -8704,63 +5433,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   chatActionTextFaded: {
     color: 'rgba(247,147,26,0.55)',
   },
-  // v3.4.8: wrapper View for the chat FlatList. flex:1 so it
-  // fills all space above the input row, with `position: relative`
-  // so the absolutely-positioned chatScrollToBottomBtn below
-  // sits at the bottom of THIS container (above the input) rather
-  // than the bottom of the whole chat tab (which put it inside
-  // the input row). Replaces the previous direct FlatList render.
-  // v3.10.125: flex column layout. The FlatList is the first
-  // flex child (flex:1) so it fills the available space;
-  // the footerOverlay (status bar / attachment row / cross-
-  // agent banner / input row) is the second flex child
-  // taking its natural height. When the keyboard opens,
-  // the inputContainer's paddingBottom grows by
-  // keyboardHeight, which grows the footerOverlay's natural
-  // height by keyboardHeight, which makes the FlatList
-  // flex-shrink by keyboardHeight. The chat list's visible
-  // area now stops at the input's top edge.
+  // Wrapper View for the chat FlatList.
   chatScrollContainer: { flex: 1, flexDirection: 'column' },
-  // v3.10.121: floating footer overlay. Wraps the chat
-  // status bar + attachment previews + cross-agent
-  // banner + input row. Was originally position:absolute
-  // at the bottom of chatScrollContainer (v3.10.121
-  // rationale: chat list extends behind the overlay to
-  // gain ~50dp of vertical room; Tobe: "lets optimize
-  // space more"). The paddingBottom trick on the
-  // FlatList's contentContainerStyle reserved the
-  // scroll-space for the overlay.
-  //
-  // v3.10.125: switched from position:absolute to
-  // flex-flow (no absolute positioning). The v3.10.124
-  // approach (add keyboardHeight to the FlatList's
-  // paddingBottom when the keyboard is up on Android)
-  // created a "fake bottom" the FlatList rubber-banded
-  // against: the last message was visible above the
-  // input, but the FlatList had keyboardHeight of blank
-  // space below it, so any "scroll down past the last
-  // message" gesture snapped back. Tobe's 2026-08-02
-  // 16:46 report: "when Im almost at the bottom and i
-  // try to scroll further down it takes me back where I
-  // started, like thats the bottom while there are text
-  // further down."
-  //
-  // Flex-flow fixes this cleanly: the inputContainer's
-  // paddingBottom grows by keyboardHeight when the
-  // keyboard is up (the existing v3.10.80 Android
-  // edge-to-edge workaround), which grows the
-  // footerOverlay's natural height by keyboardHeight,
-  // which makes the FlatList above it flex-shrink by
-  // keyboardHeight. The FlatList's visible area now stops
-  // at the input's top edge — the last message can
-  // always scroll fully above the input, no rubber-band.
-  //
-  // The "chat behind input" optimization from v3.10.121
-  // is sacrificed (~50dp of chat space), but the
-  // keyboard behavior is now correct and the trade is
-  // worth it. Future improvement: bring back the
-  // behind-input chat area as a separate "ghost"
-  // background-only layer if the user wants the visual.
+  // Floating footer overlay.
   footerOverlay: {
     backgroundColor: t.bg.primary,
   },
@@ -8784,15 +5459,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
   },
-  // v3.10.138: persistent circular jump-to-bottom button. Pinned
-  // to the lower-right of the chat list (overlays the scrollable
-  // content). Only visible when !chatAtBottom (so it never gets
-  // in the way of the latest message). Distinct from the unread
-  // badge above: this is the always-available scroll handle, not
-  // a "new messages" indicator. Lower-right placement (right: 12,
-  // bottom: 12 + insets.bottom) so it doesn't collide with the
-  // centered unread badge or the bottom-left companion-emoji
-  // overlay.
+  // Persistent circular jump-to-bottom button.
   chatJumpToBottomBtn: {
     position: 'absolute',
     right: 12,
@@ -8818,10 +5485,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     fontWeight: '700',
     lineHeight: 22,  // vertical-center the ↓ glyph in the 40px circle
   },
-  // v3.11.41: "Load more" button at the top of the chat.
-  // Centered text in a subtle pill. The button only renders
-  // when there are more older messages to reveal
-  // (messages.length > visibleCount).
+  // "Load more" button at the top of the chat.
   chatLoadMoreBtn: {
     alignSelf: 'center',
     marginTop: 12,
@@ -8904,28 +5568,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  // v3.10.36: cross-companion chat banner. Shown above
-  // the input row when OTHER agents have new messages
-  // (unread > 0 for an agentId != activeChatAgentId). The
-  // companion tab bar already shows a per-agent unread
-  // badge, but the user has to LOOK at the tab bar to know
-  // — they don't necessarily when their focus is on the
-  // chat they're typing in. Tobe's report (v3.10.35): "I
-  // noticed when receiving a new message that it did not
-  // appear in the chat but clawsuu had a red sign meaning
-  // he has sent a new message. Clicked that red and it
-  // appeared in the chat. This should just appear in
-  // the chat automatically, and it should appear an
-  // update button in the chat at the bottom if we must".
-  //
-  // We render an inline banner above the chat input. Tapping
-  // jumps to that agent's tab (same behavior as the
-  // companion tab onPress — loads messages, clears unread,
-  // swaps arena sprite, requests fresh history). One
-  // banner per agent with unread; stacked vertically when
-  // more than one. Keyboard-aware: shrinks to a single
-  // line per banner so it doesn't dominate the bottom of
-  // the screen.
+  // Cross-companion chat banner.
   crossAgentBanner: {
     flexDirection: 'row',
     alignItems: 'center',

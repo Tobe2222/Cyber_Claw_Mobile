@@ -1,22 +1,4 @@
-// v3.1.77: shared types and storage helpers for the wake-word
-// training model. Replaces the v3.1.67 trainer's flat data
-// shape with a per-companion entry that supports multiple
-// wake phrases and style-tagged samples.
-//
-// Storage: one entry per companion under
-// `cyberclaw-wake-samples-<companionId>`. The entry contains
-// a `phrases` array (each phrase has style-tagged samples)
-// plus a top-level `features` array that's the flattened sum
-// across all phrases and styles. The matcher in HomeScreen /
-// WakeWordTester reads `features` directly without caring
-// about phrase or style structure.
-//
-// Pre-v3.1.77 the trainer wrote one entry per companion with
-// a single phrase and flat features, while the menu / tester
-// / matcher used per-phrase keys. The two key shapes didn't
-// share data, so samples trained after v3.1.67 didn't appear
-// in the menu. v3.1.77 consolidates everything under the
-// per-companion key.
+// Shared types and storage helpers for the wake-word training model.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AudioFeatures } from './AudioSampleMatcher';
@@ -84,22 +66,12 @@ export async function loadWakeTraining(companionId: string): Promise<WakeTrainin
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed) return null;
-    // v3.1.77: accept both the new shape (phrases[]) and the
-    // v3.1.67 shape (flat features + phrase string). If we
-    // see the old shape, upgrade it to the new one in memory
-    // and persist on next save.
+    // Accept both the new shape (phrases[]) and the v3.1.67 shape (flat features + phrase string).
     if (Array.isArray(parsed.phrases)) {
       return parsed as WakeTrainingEntry;
     }
     if (Array.isArray(parsed.features) && parsed.features.length > 0) {
-      // v3.1.78: AudioFeatures.duration is the PCM sample
-      // count (set by extractAudioFeatures), NOT seconds.
-      // Pre-v3.1.77 the trainer wrote f.duration straight
-      // into the WakeSample.duration slot, producing
-      // "3934.0s" / "3921.0s" / "3959.0s" on the Normal
-      // samples (i.e. ~65 min of audio that doesn't
-      // exist). Divide by 16kHz to get seconds. Default
-      // 1.0s if the field is missing.
+      // AudioFeatures.duration is the PCM sample count (set by extractAudioFeatures), NOT seconds.
       const migrated: WakeTrainingEntry = {
         features: parsed.features,
         phrases: [{
@@ -117,14 +89,7 @@ export async function loadWakeTraining(companionId: string): Promise<WakeTrainin
         }],
         trainedAt: parsed.trainedAt ?? new Date().toISOString(),
       };
-      // v3.1.81: persist the migrated shape immediately so
-      // the user's screen reflects the corrected duration
-      // (e.g. 1.0s instead of 3934.0s) on this load, not
-      // just on the next save. Without this, the user
-      // opens the menu after upgrading and STILL sees the
-      // wrong duration until they record a new sample or
-      // delete one. Idempotent: saveWakeTraining writes
-      // the same shape back.
+      // Persist the migrated shape immediately so the user's screen reflects the corrected duration (e.g.
       try {
         await saveWakeTraining(companionId, migrated);
       } catch {
@@ -175,12 +140,7 @@ export function countByStyle(samples: WakeSample[]): Record<WakeSampleStyle, num
   return counts;
 }
 
-// ── Migration: pre-v3.1.77 per-phrase keys ─────────────────────────────
-// The v3.1.67 trainer wrote to per-companion keys; the menu /
-// tester read from per-phrase keys. On first run, copy any
-// per-phrase data into the matching companion's training entry
-// (treating it as the "normal" style). Skips companions that
-// already have new-shape data to avoid clobbering it.
+// ── Migration: pre-v3.1.77 per-phrase keys ───────────────────────────── The v3.1.67 trainer wrote to per-companion keys; the menu / tester…
 export async function migrateLegacyPhraseKeys(
   availableCompanions: Array<{ id: string; name: string }>,
 ): Promise<void> {
@@ -239,28 +199,7 @@ export async function migrateLegacyPhraseKeys(
   }
 }
 
-// ── v3.1.79: Auto-retrain for normal samples ────────────────────────────
-//
-// Tobe: "I did not see a retrain button for normal samples.
-// That should automatically use better samples which is
-// retrained to replace worse samples."
-//
-// The idea: when the user records a new normal sample and we
-// already have 3 normal samples for a phrase, check whether
-// the new sample is more consistent with the others than one
-// of the existing ones. If so, silently replace the worst
-// existing sample with the new one. The user sees a small
-// toast/hint instead of a manual retrain flow.
-//
-// "More consistent" = higher average DTW similarity to the
-// other samples. We don't need a full retrain pipeline — the
-// comparison is O(N) DTW calls, fine on-device.
-//
-// Returns: { replaced: boolean, replacedIndex: number | null,
-//            oldQuality: number | null, newQuality: number }
-// If `replaced` is false, the caller should just append the
-// new sample as normal. If true, the caller should NOT append
-// (the new sample has already replaced the old one in storage).
+// ── v3.1.79: Auto-retrain for normal samples ──────────────────────────── Tobe: "I did not see a retrain button for normal samples.
 export interface AutoRetrainResult {
   replaced: boolean;
   replacedIndex: number | null;
@@ -276,11 +215,7 @@ export async function autoRetrainNormal(
   newSample: WakeSample,
   newQuality: number,
 ): Promise<AutoRetrainResult> {
-  // Only auto-retrain NORMAL samples. Loud / whisper / short /
-  // elongated have intentional acoustic differences; replacing
-  // them based on similarity would erase the diversity the user
-  // explicitly trained. Normal samples should all sound
-  // similar, so picking the most-similar-to-others is correct.
+  // Only auto-retrain NORMAL samples.
   if (newSample.style !== 'normal') {
     return { replaced: false, replacedIndex: null, oldQuality: null, newQuality };
   }
@@ -299,10 +234,7 @@ export async function autoRetrainNormal(
     return { replaced: false, replacedIndex: null, oldQuality: null, newQuality };
   }
 
-  // Score each existing normal sample by its average DTW
-  // similarity to the other normal samples. The sample with
-  // the lowest avg score is the "worst" — least consistent
-  // with the rest of the training set.
+  // Score each existing normal sample by its average DTW similarity to the other normal samples.
   const scores: number[] = normalSamples.map(s => {
     const others = normalSamples.filter(x => x !== s);
     const sims = others.map(o => compareAudioFeatures(s.features, o.features));
@@ -349,27 +281,7 @@ export async function autoRetrainNormal(
   };
 }
 
-// ── v3.1.79: False-open detection ───────────────────────────────────────
-//
-// Tobe: "the recording starts getting long. Perhaps we
-// should set a maximum or a smart feature to detect false
-// opens."
-//
-// A "false open" is a wake event that fires but the user
-// wasn't actually addressing the device — typically a TV
-// or another person said something wake-word-like, or the
-// matcher hit a false positive. We can't perfectly detect
-// these, but two signals are strong:
-//   1. The user exits Wake Mode within 3s of opening it
-//      (no recording happened — they didn't actually need
-//      to talk to the companion).
-//   2. Wake Mode times out idle for > 60s (the user
-//      probably triggered this by accident and walked away).
-//
-// When 3 false opens accumulate within 5 minutes, raise the
-// match threshold by 0.05 (auto-tighten). Reset the counter
-// after 5 minutes of clean operation. Threshold is capped at
-// 0.85 — beyond that, legitimate wake words get rejected.
+// ── v3.1.79: False-open detection ─────────────────────────────────────── Tobe: "the recording starts getting long.
 
 const FALSE_OPEN_WINDOW_MS = 5 * 60 * 1000;
 const FALSE_OPEN_THRESHOLD = 3;
@@ -423,11 +335,7 @@ export async function noteWakeModeOpen(): Promise<number> {
   return state.threshold;
 }
 
-// Call this on exiting Wake / Voice Mode. If the mode was
-// open for less than FALSE_OPEN_EXIT_MS (no real recording
-// happened), count it as a false open. Returns the new
-// auto-incremented threshold if the count hit the limit,
-// or 0 if no change.
+// Call this on exiting Wake / Voice Mode.
 export async function noteWakeModeExit(
   mode: 'wake' | 'voice',
   openDurationMs: number,

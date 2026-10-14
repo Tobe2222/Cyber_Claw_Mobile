@@ -1,32 +1,4 @@
-/**
- * CyberClaw Mobile — theme tokens
- *
- * v3.10.112: Light/Dark theme support. Two named palettes
- * (dark = default, light = "Forest"). The ThemeContext (see
- * ./ThemeContext.tsx) selects one and exposes its tokens via
- * `useTheme()`. Screens should import colors from here, not
- * hardcode hex literals.
- *
- * Migration guide when converting a StyleSheet:
- *   const styles = StyleSheet.create({
- *     root: { backgroundColor: '#0a0a0a' },  // OLD
- *   });
- *
- *   const styles = makeStyles((t) => ({
- *     root: { backgroundColor: t.bg.primary },  // NEW
- *   }));
- *
- *   Then in the component:
- *     const { theme, styles } = useThemedStyles(makeStyles);
- *
- * Or if you don't want themed styles right now:
- *   const t = useTheme();
- *     <View style={{ backgroundColor: t.bg.primary }} />
- *
- * Important: existing rules say "shared AsyncStorage keys must
- * have one canonical constant" (see MEMORY.md 2026-07-14). The
- * theme key is `cyberclaw-mobile-theme` — defined here once.
- */
+/** CyberClaw Mobile — theme tokens v3.10.112: Light/Dark theme support. */
 
 export type ThemeName = 'dark' | 'light' | 'forest';
 
@@ -34,30 +6,11 @@ export const THEME_STORAGE_KEY = 'cyberclaw-mobile-theme';
 
 export const DEFAULT_THEME: ThemeName = 'dark';
 
-/**
- * Dark = the original CyberClaw look. Neon orange + cyan on
- * near-black. Preserved exactly as it was before the theme
- * toggle existed. Any token you find in the codebase that
- * doesn't match a key here is a token we haven't migrated yet.
- */
+/** Dark = the original CyberClaw look. */
 export const darkTheme = {
   name: 'dark' as ThemeName,
 
-  // v3.10.119: redesign as the "moon" theme. Tobe's spec
-  // (2026-07-31 16:00 GMT+2): "dark mode to the right
-  // (moon) which is mostly black and cyber Orange + other
-  // neon colors." The pre-v3.10.119 dark palette was
-  // pretty muted — neon orange on near-black, but the
-  // accents (cyan, green, etc.) were desaturated.
-  // v3.10.119 cranks everything up to cyberpunk-neon:
-  //   - bg.primary = near-black (#050510 — deep space)
-  //   - bg.tertiary / bg.elevated get a slight blue tint
-  //     so the surface elevation reads as "lit by neon"
-  //     not "lit by grey"
-  //   - scene tokens stay dim-navy (no need to redesign)
-  //     but get a deeper sky for night feel
-  //   - brand accent gets brighter (ff8c1a vs ff6b35) and
-  //     the cyan/success/danger/info all go full neon
+  // Redesign as the "moon" theme.
   bg: {
     primary: '#050510',       // near-black, deep space
     secondary: '#0a0a18',     // panels
@@ -66,11 +19,7 @@ export const darkTheme = {
     overlay: 'rgba(247,147,26,0.12)',
     scrim: 'rgba(0,0,0,0.65)',
 
-    // Scene tokens — deep night versions. The sky strip
-    // becomes a deep navy gradient (the night sky), the
-    // ground becomes a dark earth, the forest becomes a
-    // deep dark forest. These stay dim so the home screen
-    // doesn't get visually loud.
+    // Scene tokens — deep night versions.
     sky: '#0c1a2e',
     skyDeep: '#050a18',
     skyLight: '#1a2a4e',
@@ -101,19 +50,9 @@ export const darkTheme = {
 
   // Brand
   brand: {
-    // v3.10.119: brighter neon orange. The pre-v3.10.119
-    // #ff6b35 was already saturated; bumping to #ff8c1a
-    // makes it pop harder against the deeper bg.primary
-    // (#050510 vs the old #0a0a0a). Cyberpunk-neon.
+    // Brighter neon orange.
     accent: '#ff8c1a',
-    // v3.10.133: bumped from #cc5528 to #ffaa3f for chat
-    // text legibility on the deep-space bg.primary (#050510).
-    // The dim orange was hard to read on the dark chat
-    // background — Tobe 2026-08-04: 'we need to brighten
-    // the companion text, its hard to see in dark mode,
-    // the Orange is too dark'. accentBright (#ffaa3f) is
-    // bright enough to be legible at body text sizes (13px)
-    // while still reading as CyberClaw orange (not yellow).
+    // Bumped from #cc5528 to #ffaa3f for chat text legibility on the deep-space bg.primary (#050510).
     accentDim: '#ffaa3f',
     accentBright: '#ffc66d',
     accentGlow: 'rgba(255,140,26,0.5)',
@@ -157,41 +96,11 @@ export const darkTheme = {
   },
 } as const;
 
-/**
- * Light = "Forest" theme. Inspired by Norwegian forests in
- * summer light:
- *   - sky blue accents (--sky-*)
- *   - deep forest greens (--forest-*)
- *   - warm cream backgrounds (--cream-*)
- * Readable dark green text on light background. Tested at
- * 13px body text against WCAG AA (4.5:1).
- *
- * If you tweak these numbers, also update the card-side
- * comparison chart in DESIGN.md.
- */
+/** Light = "Forest" theme. */
 export const lightTheme = {
   name: 'light' as ThemeName,
 
-  // v3.10.119: redesign as the "sun" theme. Tobe's spec
-  // (2026-07-31 16:00 GMT+2): "light mode (sun) which is
-  // light colors, white and light blue etc." The v3.10.113
-  // sage-cream palette read as "forest floor" — it was
-  // meant to complement the dark "forest" companion theme,
-  // but Tobe now wants a true light/bright option, not a
-  // second forest variant. The sun theme should feel like
-  // a clear bright day:
-  //   - bg.primary = pure white (not cream/sage)
-  //   - bg.secondary = very pale gray (subtle card lift)
-  //   - bg.tertiary = pale blue (sky-tinted elevated)
-  //   - bg.elevated = pure white (popovers)
-  //   - scene tokens (sky/ground/forest) all move toward
-  //     sky-blue tones — the home screen becomes "white
-  //     page with blue sky accents" instead of "cream
-  //     page with brown earth accents"
-  //   - border tokens move toward pale blue
-  //   - brand accent stays CyberClaw orange (brand
-  //     identity) but accentBright becomes sky-blue so
-  //     secondary actions don't shout orange
+  // Redesign as the "sun" theme.
   bg: {
     primary: '#ffffff',       // pure white — main app background
     secondary: '#f8fafc',     // very pale gray — cards / panels
@@ -229,10 +138,7 @@ export const lightTheme = {
   },
 
   brand: {
-    // CyberClaw orange stays as the primary accent —
-    // brand identity, not theme-specific. AccentBright
-    // becomes sky-blue so non-primary CTAs don't shout
-    // orange.
+    // CyberClaw orange stays as the primary accent — brand identity, not theme-specific.
     accent: '#f7931a',        // CyberClaw orange (the brand)
     // v3.10.133: bumped from #cc5528 to #d97e0e for chat
     // text legibility in light mode. The previous
@@ -283,53 +189,7 @@ export const lightTheme = {
   },
 } as const;
 
-/**
- * Forest theme — the middle option, between sun and moon.
- *
- * v3.10.119: NEW theme. Tobe's spec (2026-07-31 16:00
- * GMT+2): "Forest mode (forest) which is in the middle.
- * Where we create it to look like an actual forest or a
- * tree in graphics/looks. Green around the arena, Brown
- * in the chat area for a tree trunk, and green under
- * there again for bushes/foliage. And blue and white as
- * sky above the arena."
- *
- * The whole point of this theme is the COMPOSITION, not
- * the individual tokens. The token values are designed
- * so the home screen reads as "looking up at the sky
- * through a forest canopy, with a tree trunk in front of
- * you." Visually:
- *
- *   ┌─────────────────────────────┐  <- sky strip (sky/skyDeep)
- *   │   sky strip (pale blue)     │
- *   ├─────────────────────────────┤
- *   │  ┏━━━━━━━━━━━━━━━━━━━━━━━┓  │
- *   │  ┃     ARENA             ┃  │  <- arena frame: forest green
- *   │  ┃   (forest fill)       ┃  │
- *   │  ┗━━━━━━━━━━━━━━━━━━━━━━━┛  │
- *   ├─────────────────────────────┤  <- companion tab bar: brown bark
- *   │      🍖 🌄 (tab buttons)   │
- *   ├─────────────────────────────┤
- *   │                             │
- *   │   CHAT (brown trunk cavity) │  <- chat list: brown ground
- *   │                             │
- *   │   [user] [clawsuu] [user]  │
- *   │                             │
- *   ├─────────────────────────────┤
- *   │   bushes/foliage (green)    │  <- below chat: forest green
- *   └─────────────────────────────┘
- *
- * Token-by-token:
- *   - bg.primary: forest green (the foliage around the chat)
- *   - bg.secondary: lighter green for cards
- *   - bg.tertiary: deeper green for elevated surfaces
- *   - sky/skyDeep/skyLight: pale blue for the sky strip
- *   - ground/groundDark/groundLight: warm brown (tree trunk)
- *   - forest/forestDark: vibrant green for the arena frame
- *   - border.brown/brownDark: bark-colored borders
- *   - text.primary: cream-white (readable on both green + brown)
- *   - brand.accent: stays CyberClaw orange (brand identity)
- */
+/** Forest theme — the middle option, between sun and moon. */
 export const forestTheme = {
   name: 'forest' as ThemeName,
 
@@ -376,10 +236,7 @@ export const forestTheme = {
   },
 
   brand: {
-    // CyberClaw orange stays as the primary accent — the
-    // brand identity is independent of theme. AccentBright
-    // becomes bark-brown so secondary actions don't shout
-    // orange over the green/brown scene.
+    // CyberClaw orange stays as the primary accent — the brand identity is independent of theme.
     accent: '#f7931a',        // CyberClaw orange
     // v3.10.133: bumped from #cc5528 to #d97e0e for chat
     // text legibility in forest mode. Same rationale as
@@ -434,10 +291,7 @@ export type Theme = {
     readonly elevated: string;
     readonly overlay: string;
     readonly scrim: string;
-    // v3.10.115: scene tokens — sky / ground / forest palette.
-    // These don't have to match across dark and light themes
-    // (dark uses dim navy variants, light uses the colorful
-    // palette) — the type just says "all strings exist".
+    // Scene tokens — sky / ground / forest palette.
     readonly sky: string;
     readonly skyDeep: string;
     readonly skyLight: string;

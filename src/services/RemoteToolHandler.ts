@@ -1,18 +1,4 @@
-/**
- * RemoteToolHandler — handles incoming `remote_tool` messages from the desktop
- * agent, checks permissions, executes the requested operation natively, and
- * sends back a `remote_tool_result` via SyncClient.
- *
- * Supported ops:
- *   file_read     — read file as base64 (scoped to safe paths)
- *   file_write    — write base64 content to path
- *   file_mkdir    — create directory
- *   file_list     — list directory (name, size, isDir)
- *   get_location  — return current GPS coords
- *   launch_intent — open an Android intent URI via Linking
- *   camera_snap   — take a photo, return base64 JPEG
- *   list_notifications — not supported in RN, returns ok:false
- */
+/** RemoteToolHandler — handles incoming `remote_tool` messages from the desktop agent, checks permissions, executes the requested operation… */
 
 import { Linking, PermissionsAndroid, Platform } from 'react-native';
 import * as RNFS from 'react-native-fs';

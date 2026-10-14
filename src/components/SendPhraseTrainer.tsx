@@ -1,51 +1,4 @@
-/**
- * SendPhraseTrainer — Record user samples + train a send-word model.
- * v3.8.3.
- *
- * Mirror of ExitPhraseTrainer for the explicit end-of-utterance
- * send word (e.g. "send", "go", "done"). The send word is the
- * safety valve for noisy environments where silence detection
- * can't reliably tell "user paused" from "ambient table talk" —
- * saying the send word commits the current turn immediately.
- *
- * Records 6 audio samples of the user's chosen send word. Each
- * sample is captured as raw PCM16 mono 16kHz WAV via
- * WakeWordModule.startSampleRecord. Samples ship to the desktop
- * for openWakeWord training, the trained .tflite comes back,
- * and we hot-swap it into the running send classifier via
- * WakeWordModule.setSendModelFromBase64.
- *
- * The result: "send" spoken during a recording turn instantly
- * commits the turn, even when STT transcription hasn't fired
- * yet. Works alongside (not instead of) the silence timer and
- * the gibberish gate.
- *
- * Differs from ExitPhraseTrainer in three ways:
- *   - Hot-swaps into sendInterpreter, not exitInterpreter
- *     (WakeWordModule.setSendModelFromBase64)
- *   - Storage is global, not per-companion (one send word
- *     across all companions, like the wake word itself)
- *   - SyncClient sends to the send_* message channel
- *     (request_send_training / send_training_result /
- *     send_model_data)
- *
- * v3.8.3: rewrote the trainer body to match the wake-word
- * trainer's step-by-step UX. The previous version had a flat
- * "Tap to record / Status text" layout with no progress
- * indicator, no stage label, no logging card, and no
- * elapsed-time / last-event / event-log display. If the
- * desktop hung mid-training (e.g. it never received the
- * request because the case was missing), the user just saw
- * "Uploading samples to desktop…" spin indefinitely with no
- * indication of where the run actually was. The new layout
- * mirrors `OpenWakeWordTrainer.tsx` so the user can tell
- * at a glance whether the desktop is actively progressing
- * or stuck.
- *
- * Also bumped the top padding from 20 to 60 + SafeAreaView
- * so the title clears the system status bar — Tobe reported
- * "Train Send Word" being clipped on his phone.
- */
+/** SendPhraseTrainer — Record user samples + train a send-word model. */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
@@ -130,11 +83,7 @@ export default function SendPhraseTrainer({ presetPhrase, onCancel, onComplete }
   const [stage, setStage] = useState<Stage>('idle');
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
-  // v3.8.3: logging state. Same shape as `OpenWakeWordTrainer.tsx`
-  // so the user can tell at a glance whether the desktop is
-  // actively progressing or stuck. `eventLog` is a rolling 50-entry
-  // timeline surfaced in the logging card; `lastEventAt` powers
-  // the color-coded "Ns ago" indicator.
+  // Logging state.
   const [lastEventAt, setLastEventAt] = useState<number>(0);
   const [trainingStartedAt, setTrainingStartedAt] = useState<number>(0);
   const [now, setNow] = useState<number>(Date.now());
@@ -206,11 +155,7 @@ export default function SendPhraseTrainer({ presetPhrase, onCancel, onComplete }
     };
   }, [stage]);
 
-  // v3.8.3: v3.8.2 watchdog pattern from the wake trainer —
-  // when we mount in idle, ask the desktop if it has a cached
-  // recent send result. Covers the case where the WebSocket
-  // died mid-training and the desktop finished the run while
-  // we were offline.
+  // V3.8.2 watchdog pattern from the wake trainer — when we mount in idle, ask the desktop if it has a cached recent send result.
   useEffect(() => {
     const sync = syncClient;
     const queryLatest = () => {
@@ -289,11 +234,7 @@ export default function SendPhraseTrainer({ presetPhrase, onCancel, onComplete }
     return () => sub.remove();
   }, [samples.length, stopPulse]);
 
-  // v3.8.3: attach the training listeners ONCE on mount and
-  // never remove. Same v3.2.12 fix from the wake trainer —
-  // attach-then-remove-inside-startTraining was attaching for
-  // ~10ms before the next React render removed them, dropping
-  // every progress event on the floor.
+  // Attach the training listeners ONCE on mount and never remove.
   const _onProgress = useRef((msg: any) => {
     console.log(`[SendTrainer] _onProgress: stage=${msg?.stage} pct=${msg?.percent}`);
     if (msg?.stage) {

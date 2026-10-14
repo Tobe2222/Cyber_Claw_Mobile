@@ -1,32 +1,4 @@
-/**
- * EXIT PHRASE MATCHER — v3.2.17
- *
- * Pure-JS, offline. Decides whether a transcribed user
- * utterance contains one of the user-configured exit phrases
- * (e.g. "thanks", "goodbye", "that's all").
- *
- * Matching is intentionally fuzzy-but-bounded:
- *
- *   1. Normalize both sides: lowercase, collapse whitespace,
- *      strip trailing punctuation (.!?,), strip leading
- *      filler ("um", "uh", "okay so", "ok").
- *   2. For each exit phrase:
- *        - If the phrase is a single word → check
- *          word-substring containment in the transcribed
- *          text. "thanks" matches "thanks!", "Thanks.", and
- *          "thanks for that" (substring on whole words).
- *        - If the phrase is multi-word → require a contiguous
- *          substring in the normalized text. "that's all"
- *          matches "that's all", "Oh, that's all I wanted."
- *          but not "all that that's". The phrase must appear
- *          with at most one non-letter character between its
- *          words (so "thank you" matches "thank-you" too).
- *
- * Returns the matched phrase (so the UI can log which one
- * fired) or null when no phrase matched.
- *
- * No LLM, no API, no native dep. ~50 lines.
- */
+/** EXIT PHRASE MATCHER — v3.2.17 Pure-JS, offline. */
 
 const FILLER_PREFIXES = /^(um|uh|okay so|ok so|ok|so|well|hey|hi)\s+/i;
 

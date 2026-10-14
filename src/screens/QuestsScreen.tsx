@@ -1,41 +1,4 @@
-// v3.7.6: lifted out of CompanionSettingsScreen so Quests is its
-// own top-level page. Quests are global on the desktop (single
-// quests.json, not per-companion), so they should be global on the
-// mobile too — not nested inside a companion's settings.
-//
-// v3.7.7: safe-area padding at the top so the header doesn't
-// collide with the iOS status bar / Android Dynamic Island
-// (Tobe's v3.7.6 screenshot showed the "← Back" arrow under
-// the 11:57 status indicator). Follows the v3.4.5 pattern from
-// CompanionSettingsScreen / SettingsScreen (paddingTop: 50 on
-// the scroll container + paddingTop: 34 on the header row on
-// Android for the extra system-bar height).
-//
-// v3.7.7: tap a card to open a detail modal showing the full
-// description, the full goals list (checkboxes per step), the
-// full directory path, and the created date. The list-card
-// long-press-to-copy-path is preserved. Tobe: "we should be
-// able to click for a more detailed view of the quest, its
-// points/steps, directory etc."
-//
-// v3.7.8: render the two new fields that desktop v3.1.50 added
-// to the quest model. (1) `active: true|false` on each quest —
-// the active quest is the one the companion is currently
-// working on, persisted in ~/.openclaw/cyberclaw/quests.json.
-// Show a loud ⚡ ACTIVE badge on the active card and put it
-// first in the sort. (2) `latestChanges: [{timestamp, text}]`
-// — the companion's running journal of what it did on this
-// quest. Show as a timeline in the detail modal.
-//
-// Wire protocol: no new channels — the new fields ride the
-// existing `quests_list` event from v3.1.49. The mobile just
-// reads them off the quest object the SyncClient already
-// hands it.
-//
-// Pure-render component: all hooks live at the screen level (per
-// the v3.7.1 lesson about hook-order-invariants when a screen has
-// multiple render-functions). No helpers here that need to call
-// hooks.
+// Lifted out of CompanionSettingsScreen so Quests is its own top-level page.
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -54,20 +17,9 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import syncClient from '../services/SyncClient';
-// v3.10.86: SafeAreaInsets for the editor modal's top
-// padding. Without this, the editor modal's bottom-sheet
-// card sits at the bottom and the dimmed quest list above
-// it shows through the scrim, with the status bar drawn on
-// top of the scrim — looks like a visual conflict at the
-// top of the screen (Tobe reported 2026-07-23). With the
-// inset padding, the modal starts below the status bar.
+// SafeAreaInsets for the editor modal's top padding.
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-// v3.11.2: setters/getter for the per-device
-// active-quest anchor (defined in HomeScreen.tsx).
-// The anchor is module-scoped so QuestsScreen can
-// update it on handleSetActive without prop-drilling.
-// See the comment on `mobileActiveQuestAnchor` in
-// HomeScreen.tsx for the bug history.
+// Setters/getter for the per-device active-quest anchor (defined in HomeScreen.tsx).
 import { setMobileActiveQuestAnchor } from './HomeScreen';
 
 type CompanionQuest = {
@@ -78,10 +30,7 @@ type CompanionQuest = {
   directory?: string;
   goals?: Array<{ text: string; completed: boolean }>;
   created?: string;
-  // v3.7.8: new fields from desktop v3.1.50. `active` flags
-  // which quest the companion is currently working on (exactly
-  // one per desktop). `latestChanges` is the companion's
-  // running journal of what it did on this quest.
+  // New fields from desktop v3.1.50.
   active?: boolean;
   latestChanges?: Array<{ timestamp: string; text: string }>;
   [k: string]: any;
@@ -102,24 +51,11 @@ export default function QuestsScreen({
   const insets = useSafeAreaInsets();
   const [quests, setQuests] = useState<CompanionQuest[]>([]);
   const [hydrated, setHydrated] = useState(false);
-  // v3.10.73: track whether at least one fresh broadcast
-  // from the desktop has been received. Without this, the
-  // user can tap ✏️ while the cache is still showing
-  // pre-broadcast data — the editor opens with a stale id
-  // that the desktop doesn't recognize, and Save fails
-  // with "quest not found". Tobe hit this on 2026-07-22.
-  // We render cards from cache for instant paint, but
-  // block edits (and show a hint) until the first
-  // broadcast arrives so the editor always uses fresh ids.
+  // Track whether at least one fresh broadcast from the desktop has been received.
   const [firstBroadcastReceived, setFirstBroadcastReceived] = useState(false);
   // v3.7.7: tapped quest shown in the detail modal. null = closed.
   const [detail, setDetail] = useState<CompanionQuest | null>(null);
-  // v3.8.0: editor modal. null = closed, otherwise the
-  // quest being edited (a shallow copy of the current state
-  // so the form fields can be edited without mutating the
-  // displayed quest). When the user taps Save we send an
-  // update to the desktop and the broadcast replaces the
-  // state with the canonical version.
+  // Editor modal.
   const [editorOpen, setEditorOpen] = useState<CompanionQuest | null>(null);
   // v3.8.0: confirm dialog state. null = hidden,
   // otherwise {title, message, onConfirm}.
@@ -128,74 +64,30 @@ export default function QuestsScreen({
   // on the desktop). Cleared automatically on next render
   // or on user dismiss.
   const [error, setError] = useState<string | null>(null);
-  // v3.10.117: refresh-button spinner state. True while a
-  // user-initiated re-request from the desktop is in flight.
-  // Cleared by either the quests_list broadcast arriving
-  // (early success) or a 2s safety timeout (so the UI can't
-  // get stuck if the desktop is offline / slow).
+  // Refresh-button spinner state.
   const [refreshing, setRefreshing] = useState(false);
-  // v3.10.117: ref so the quests_list handler (which lives
-  // inside a useEffect with empty deps, like the others)
-  // can read+clear the current refresh timeout without
-  // going stale. Same pattern as editorOpenRef / detailRef.
+  // Ref so the quests_list handler (which lives inside a useEffect with empty deps, like the others) can read+clear the current refresh…
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // v3.10.117: mirror of the `refreshing` state for the
-  // broadcast handler. The handler is captured at the
-  // useEffect mount and re-captured on every change, but
-  // reading `refreshing` from a closure inside the
-  // handler would always see the initial false (the v3.8.0
-  // stale-closure trap that editorOpenRef exists for).
-  // Using a ref keeps the handler logic simple: read the
-  // ref, decide whether to clear the spinner.
+  // Mirror of the `refreshing` state for the broadcast handler.
   const refreshingRef = useRef<boolean>(false);
-  // v3.8.0: refs so the quests_list handler (which lives
-  // inside a useEffect with empty deps) can read the
-  // current editorOpen / detail state without going stale.
-  // Without these, the handler would always see the values
-  // from the first render (both null) and never auto-close
-  // the editor when the broadcast confirms the edit.
+  // Refs so the quests_list handler (which lives inside a useEffect with empty deps) can read the current editorOpen / detail state without…
   const editorOpenRef = useRef<CompanionQuest | null>(null);
   const detailRef = useRef<CompanionQuest | null>(null);
-  // v3.8.1: ref for "is the editor open for a new quest".
-  // When true, the broadcast handler closes the editor on
-  // the next broadcast (we don't need to match an id since
-  // the new quest gets a fresh id from the desktop).
+  // Ref for "is the editor open for a new quest".
   const creatingNewRef = useRef<boolean>(false);
   useEffect(() => { editorOpenRef.current = editorOpen; }, [editorOpen]);
   useEffect(() => { detailRef.current = detail; }, [detail]);
   useEffect(() => { creatingNewRef.current = !!(editorOpen && !editorOpen.id); }, [editorOpen]);
-  // v3.10.117: keep refreshingRef in sync so the
-  // quests_list broadcast handler can read the latest
-  // value without going stale (same trap the other refs
-  // exist for).
+  // Keep refreshingRef in sync so the quests_list broadcast handler can read the latest value without going stale (same trap the other refs…
   useEffect(() => { refreshingRef.current = refreshing; }, [refreshing]);
 
-  // v3.10.84: Android system back / gesture-nav back
-  // should pop the screen (and any open modals) instead
-  // of exiting the app. Tobe reported on v3.10.83
-  // (2026-07-23): "when inside the quest menu the phone
-  // back swipe exits the program. It should just go back
-  // to the home screen."
-  //
-  // Mirrors the pattern SettingsScreen (line 472) and
-  // CompanionSettingsScreen (line 765) use for their own
-  // back handling. Priority order matters:
-  //   1. confirm dialog (delete confirmation)
-  //   2. editor modal (create/edit quest)
-  //   3. detail modal (view quest)
-  //   4. screen itself → onBack() to return to home
-  // Each step returns true to tell the OS "I handled
-  // this, don't bubble it up to the activity (which would
-  // exit the app)."
+  // Android system back / gesture-nav back should pop the screen (and any open modals) instead of exiting the app.
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (confirm) { setConfirm(null); return true; }
       if (editorOpen) {
         setEditorOpen(null);
-        // If the editor was opened from the detail modal,
-        // the detail modal is already null (we close
-        // detail when opening editor). But onBack flow
-        // already cleared it, so nothing else to do here.
+        // If the editor was opened from the detail modal, the detail modal is already null (we close detail when opening editor).
         return true;
       }
       if (detail) { setDetail(null); return true; }
@@ -205,37 +97,10 @@ export default function QuestsScreen({
     return () => sub.remove();
   }, [onBack, confirm, editorOpen, detail]);
 
-  // v3.7.6: hydrate from the global cache key on mount, then
-  // migrate any v3.7.4-era per-companion keys (cyberclaw-quests-<id>)
-  // into the global cache before deleting them.
-  //
-  // v3.7.10: also fire `requestQuestsList()` on mount so the
-  // desktop sends a fresh payload within ~100ms. Without this,
-  // the screen relies on the broadcast that fired at auth time
-  // (SyncClient auto-fires request_quests_list 500ms after
-  // auth), which the user may have missed if they navigated
-  // here long after connecting, or were on a different tab
-  // when the broadcast went out. The cache is read first for
-  // instant render, then the fresh request fires and the
-  // handler replaces the cache data with the live broadcast.
-  //
-  // Lesson (v3.7.8 → v3.7.10): when a screen mirrors data
-  // from a source that broadcasts only on certain events
-  // (auth, save, etc.), the screen needs to also request on
-  // mount to guarantee a fresh payload. Otherwise the screen
-  // is at the mercy of the auth-time broadcast, which can be
-  // missed in normal navigation patterns. Tobe's first
-  // v3.7.8 test showed the v3.7.7 visual because the cache
-  // was holding pre-v3.1.50 data and the screen wasn't
-  // re-requesting on mount. Adding the mount-time request
-  // fixes this.
+  // Hydrate from the global cache key on mount, then migrate any v3.7.4-era per-companion keys (cyberclaw-quests-<id>) into the global cache…
   useEffect(() => {
     let cancelled = false;
-    // v3.10.73: reset the first-broadcast-received flag
-    // on every mount of this screen. Otherwise the flag
-    // is sticky across navigations and a user who enters
-    // Quests a second time could land on stale-id data
-    // if the cache wasn't refreshed in the meantime.
+    // Reset the first-broadcast-received flag on every mount of this screen.
     setFirstBroadcastReceived(false);
     (async () => {
       try {
@@ -247,16 +112,7 @@ export default function QuestsScreen({
           if (Array.isArray(parsed)) initial = parsed;
         }
 
-        // 2. Sweep legacy per-companion keys, union them into the
-        //    global cache. Dedup by id, prefer the entry from the
-        //    global cache if both exist (the global is fresher
-        //    because it's what the SyncClient writes to).
-        //
-        //    NOTE: the v3.0+ AsyncStorage API renamed
-        //    `multiGet` → `getMany` and `multiRemove` →
-        //    `removeMany`. `getMany` returns a Record<key,val>
-        //    rather than Array<[key,val]>, so we iterate
-        //    Object.entries() instead of destructuring tuples.
+        // 2.
         const allKeys = await AsyncStorage.getAllKeys();
         const legacyKeys = allKeys.filter((k) => k.startsWith(LEGACY_KEY_PREFIX));
         if (legacyKeys.length > 0) {
@@ -299,27 +155,9 @@ export default function QuestsScreen({
     const handler = (msg: any) => {
       const list: CompanionQuest[] = Array.isArray(msg?.quests) ? msg.quests : [];
       setQuests(list);
-      // v3.10.73: mark first-broadcast as received so the
-      // editor can be safely opened. Cache-only data has
-      // potentially stale ids that the desktop won't
-      // recognize (Tobe hit "Couldn't update quest: quest
-      // not found" on 2026-07-22). After this point the
-      // card data is canonical and edits will round-trip.
+      // Mark first-broadcast as received so the editor can be safely opened.
       setFirstBroadcastReceived(true);
-      // v3.10.117: if a user-initiated refresh is in flight
-      // (the refresh button is showing its spinner), this
-      // broadcast is the confirmation that the desktop
-      // answered. Stop the spinner early and cancel the
-      // safety timeout so the UI feels responsive (the
-      // desktop usually replies within ~100ms, well under
-      // the 2s timeout). We use the ref for the timeout
-      // because the handler is inside a useEffect with empty
-      // deps — reading state directly would give us stale
-      // values. The `refreshing` state itself is fine to
-      // read here because React re-renders the handler on
-      // every state change... wait, no, the handler is
-      // captured at useEffect mount and never re-captured.
-      // So we need a ref for refreshing too.
+      // If a user-initiated refresh is in flight (the refresh button is showing its spinner), this broadcast is the confirmation that the desktop…
       if (refreshTimerRef.current || refreshingRef.current) {
         if (refreshTimerRef.current) {
           clearTimeout(refreshTimerRef.current);
@@ -328,18 +166,9 @@ export default function QuestsScreen({
         setRefreshing(false);
       }
       AsyncStorage.setItem(CACHE_KEY, JSON.stringify(list)).catch(() => {});
-      // v3.8.0: if the editor is open and the broadcast
-      // includes a quest with the same id, the desktop has
-      // confirmed the edit. Close the editor so the user
-      // sees the new state in the list. We use refs here
-      // (not state) because the handler lives inside a
-      // useEffect with empty deps — reading state directly
-      // would give us the stale initial value.
+      // If the editor is open and the broadcast includes a quest with the same id, the desktop has confirmed the edit.
       const editingId = editorOpenRef.current?.id;
-      // v3.8.1: if the editor is open for a new quest
-      // (empty id), the desktop has just created it; any
-      // broadcast that lands after the create_quest call
-      // is the confirmation. Close the editor.
+      // If the editor is open for a new quest (empty id), the desktop has just created it; any broadcast that lands after the create_quest call is…
       if (creatingNewRef.current) {
         setEditorOpen(null);
       } else if (editingId) {
@@ -355,28 +184,12 @@ export default function QuestsScreen({
     };
     syncClient.on?.('quests_list', handler);
 
-    // v3.8.0: listen for failed quest edits. The desktop
-    // sends `quests_update_failed` when the mutation
-    // couldn't be applied (e.g. quest not found). Show an
-    // error toast so the user knows the edit didn't take.
-    //
-    // v3.10.74: include the desktop's diagnostic info
-    // (the list of available quest ids, when provided) so
-    // Tobe can see "looking for X, available [a, b, c]"
-    // and we can pinpoint the id-mismatch bug without
-    // guessing. Also log the full msg to console for the
-    // dev menu / log tab.
+    // Listen for failed quest edits.
     const failedHandler = (msg: any) => {
       const action = msg?.action || 'edit';
       const reason = msg?.error || 'unknown error';
       let detail = `Couldn't ${action.replace(/_/g, ' ')}: ${reason}`;
-      // v3.10.77: rich diagnostic info from the
-      // desktop. Shows id + name pairs so Tobe can
-      // see whether the id is genuinely unknown or
-      // just stale (e.g. "id=abc123 is for the
-      // CYBERHIVE_WEBSITE V2 quest on the desktop, but
-      // the mobile is asking for id=xyz789 which
-      // doesn't match").
+      // Rich diagnostic info from the desktop.
       if (Array.isArray(msg?.available) && msg.available.length > 0) {
         const entries = msg.available
           .slice(0, 3)
@@ -390,24 +203,12 @@ export default function QuestsScreen({
         detail += ` · wanted id "${msg.id}", desktop has no quests`;
       }
       setError(detail);
-      // v3.10.74: also surface the diagnostic in the
-      // console for the dev menu / log tab. addLogEntry
-      // is a HomeScreen helper not in scope here, but
-      // console.log gets picked up by the log tab via
-      // the WebView's console listener.
+      // Also surface the diagnostic in the console for the dev menu / log tab.
       console.warn('[QuestsScreen] edit failed:', detail, msg);
     };
     syncClient.on?.('quests_update_failed', failedHandler);
 
-    // v3.7.10: request a fresh list on mount. The auth-time
-    // request fires 500ms after WebSocket auth, but the user
-    // may have navigated to the QuestsScreen long after that
-    // — or the auth-time broadcast may have been missed if the
-    // screen wasn't mounted yet. Requesting on mount guarantees
-    // the handler fires with the latest data, which sets state
-    // to the live broadcast (with the latest `active` and
-    // `latestChanges` fields). The cache read above covered the
-    // brief render window before the response arrives.
+    // Request a fresh list on mount.
     try {
       syncClient.requestQuestsList?.();
     } catch (_) {}
@@ -426,45 +227,10 @@ export default function QuestsScreen({
     };
   }, []);
 
-  // v3.8.0: action handlers. Each one calls the
-  // corresponding SyncClient method which sends a WebSocket
-  // message to the desktop. The desktop performs the
-  // mutation and broadcasts the updated list (existing
-  // path); the handler in the useEffect above replaces the
-  // local state with the canonical data within ~100ms.
-  //
-  // No optimistic update here — the broadcast is fast
-  // enough that the user perceives an instant change, and
-  // skipping the optimistic-update path means we never have
-  // to roll back if the desktop rejects the edit. The
-  // `quests_update_failed` handler (also in the useEffect)
-  // shows a toast on rejection.
+  // Action handlers.
   const handleSetActive = (id: string | null) => {
     setError(null);
-    // v3.11.2: optimistically anchor the local active
-    // quest before the desktop replies. The mobile's
-    // `onQuestsList` listener (in HomeScreen) consults
-    // the anchor when broadcasts arrive; without an
-    // explicit anchor update here, the listener could
-    // lock onto whatever an in-flight broadcast carries
-    // (e.g. a stale `_lastQuestsList` cache hit from an
-    // earlier session) and ignore the user's pick.
-    //
-    // Setting the anchor optimistically is safe: when
-    // the desktop's reply broadcast arrives carrying
-    // the same active, the listener's `Case 2: anchor
-    // matches broadcast` path runs (no-op state swap).
-    // If the desktop replies with a different active
-    // (shouldn't happen — the IPC we just sent sets
-    // active, and the reply broadcast reflects that),
-    // the listener will keep the user's optimistic
-    // pick (Case 3: ignore) and the user sees the
-    // quest they expected.
-    //
-    // `null` (the deactivate button) is also a valid
-    // anchor value — the listener treats `null ===
-    // null` as "match." A user who explicitly picks no
-    // quest gets to keep that decision.
+    // Optimistically anchor the local active quest before the desktop replies.
     setMobileActiveQuestAnchor(id ?? null);
     syncClient.setQuestActive?.(id);
   };
@@ -476,53 +242,17 @@ export default function QuestsScreen({
     setError(null);
     syncClient.deleteQuest?.(id);
   };
-  // v3.10.170: removed the card-level complete-toggle
-  // button (and its handleToggleComplete helper). Tobe
-  // (2026-08-18): "no clue what this does but i dont
-  // need it" — the open-state ◻️ emoji read as a
-  // mysterious white square at the bottom-right of
-  // every quest card. Keep the desktop's quest UI as
-  // the source of truth for status flips; the mobile
-  // card list now exposes only the three actions that
-  // already had clear semantics: edit, set active,
-  // delete. Per-quest status is still readable from
-  // the card header (✅ Done / ⚔️ Active) and the
-  // detail modal.
+  // Removed the card-level complete-toggle button (and its handleToggleComplete helper).
   const handleMarkGoalDone = (id: string, goalIndex: number, completed: boolean) => {
     setError(null);
     syncClient.markQuestGoalDone?.(id, goalIndex, completed);
   };
-  // v3.10.117: user-initiated refresh. Calls the same
-  // `request_quests_list` WebSocket message that the
-  // mount-time useEffect sends, but tied to a button so
-  // the user can recover when the broadcast was missed
-  // (Tobe hit this on 2026-07-31: the chat pipeline
-  // confirmed a quest creation but the quest page showed
-  // nothing — either the broadcast landed before the
-  // screen mounted, or it was missed entirely).
-  //
-  // Spinner stops on either (a) the quests_list broadcast
-  // arriving (handler below) or (b) the 2s safety timeout.
-  // The 2s timeout is a safety net for the desktop being
-  // offline / slow — without it, a missed broadcast would
-  // leave the spinner spinning forever.
+  // User-initiated refresh.
   const handleRefresh = () => {
     if (refreshing) return; // double-tap guard
     setError(null);
     setRefreshing(true);
-    // v3.11.2: user-initiated refresh means "I want to
-    // re-sync from the desktop." Reset the mobile's
-    // per-device active-quest anchor so the next
-    // `quests_list` broadcast is adopted instead of
-    // being compared against the (possibly stale)
-    // anchor. Without this reset, the refresh would
-    // surface the latest quest list data in the cards
-    // (the local state), but the active highlight
-    // would still be locked to whatever the user last
-    // picked or was first seeded with. For users who
-    // e.g. switched active on the desktop and want
-    // the mobile to follow, this reset is the recovery
-    // path.
+    // User-initiated refresh means "I want to re-sync from the desktop." Reset the mobile's per-device active-quest anchor so the next…
     setMobileActiveQuestAnchor(null);
     try {
       syncClient.requestQuestsList?.();
@@ -534,10 +264,7 @@ export default function QuestsScreen({
     }, 2000);
   };
 
-  // v3.7.8: sort order is now (1) the active quest, then
-  // (2) non-completed quests, then (3) completed quests.
-  // Matches the desktop's intent: the working quest is
-  // always at the top, even if it's been marked completed.
+  // Sort order is now (1) the active quest, then (2) non-completed quests, then (3) completed quests.
   const sorted = quests.slice().sort((a, b) => {
     if (a.active && !b.active) return -1;
     if (!a.active && b.active) return 1;
@@ -545,38 +272,11 @@ export default function QuestsScreen({
     if (a.status !== 'active' && b.status === 'active') return 1;
     return 0;
   });
-  // v3.10.172: split the sorted list so the active quest
-  // can be pinned ABOVE the "No active quest" card.
-  // Previously the visual order was [No active quest] →
-  // [active quest] → [other quests], which put the active
-  // quest in the middle of the list. Tobe's screenshot
-  // (2026-08-21, post-v3.10.171) showed the purple
-  // ACTIVE card sandwiched between the dashed "No active
-  // quest" header and the orange inactive cards below.
-  // He wanted the active quest pinned at the very top.
-  //
-  // Now: [active quest] → [No active quest] → [other quests].
-  // The active quest is the user's current focus; the
-  // "No active quest" card is the one-tap "I'm taking
-  // a break" toggle, so it sits right below the active
-  // quest where the user can reach it without scrolling.
-  //
-  // When no quest is active, activeQuest is null and the
-  // "No active quest" card is the de facto top card
-  // (matches the previous behavior in that case).
+  // Split the sorted list so the active quest can be pinned ABOVE the "No active quest" card.
   const activeQuest = sorted.find((q) => q.active) || null;
   const remainingQuests = sorted.filter((q) => !q.active);
 
-  // v3.10.172: extracted the per-quest card render out of
-  // the JSX so we can call it twice — once for the pinned
-  // active quest above the "No active quest" card, and once
-  // for the remaining (inactive) quests below it. Same
-  // shape, same styling, same action row as v3.10.171.
-  // The function is a plain nested helper (no hooks) so
-  // it's safe to call inside the render tree. It captures
-  // setDetail / setEditorOpen / setConfirm / handleSetActive
-  // / handleDeleteQuest / firstBroadcastReceived from the
-  // outer scope; nothing changes about the captured values.
+  // Extracted the per-quest card render out of the JSX so we can call it twice — once for the pinned active quest above the "No active quest"…
   const renderQuestCard = (q: CompanionQuest) => {
     const isComplete = q.status === 'completed';
     const isActive = !!q.active;
@@ -586,31 +286,14 @@ export default function QuestsScreen({
     const dirName = q.directory
       ? q.directory.split('/').filter(Boolean).pop() || q.directory
       : '';
-    // v3.10.106: swapped active/inactive colors.
-    // The active quest is now PURPLE and the
-    // inactive ones are ORANGE. Most of the app's
-    // accent colors are orange (Connect indicator,
-    // active chat, send button, BTC ticker, the
-    // "Set active" button, etc.) so a gold-border
-    // active quest blended in. Inverting the
-    // active/inactive colors makes the active quest
-    // the only purple on a list of orange cards,
-    // which is the most distinct possible signal.
-    // Tobe's 2026-07-29 feedback: "the current
-    // quest is orange while the rest is purple. it
-    // should be the other way around since most of
-    // the things are orange. to make the current
-    // selected more distinct."
+    // Swapped active/inactive colors.
     const borderColor = isActive
       ? (isComplete ? 'rgba(168, 85, 247, 0.6)' : '#a855f7')
       : (isComplete ? '#10b981' : '#f7931a');
     const cardOpacity = isActive
       ? (isComplete ? 0.85 : 1)
       : (isComplete ? 0.55 : 1);
-    // v3.7.8: the number of recent changes goes
-    // next to the done/total as a small inline
-    // counter — subtle hint that the detail modal
-    // has more.
+    // The number of recent changes goes next to the done/total as a small inline counter — subtle hint that the detail modal has more.
     const changeCount = Array.isArray(q.latestChanges) ? q.latestChanges.length : 0;
     // v3.11.44: sleek card. Tobe 2026-10-13: 'clean up quest page,
     // it just looks bad, make it prettier and more sleek'. One quiet
@@ -877,11 +560,7 @@ export default function QuestsScreen({
               <QuestDetailBody
                 quest={detail}
                 onEdit={() => {
-                  // v3.8.0: open the editor with a copy of
-                  // the current quest. Closing the detail
-                  // modal first so we don't have two modals
-                  // stacked. The editor handles its own
-                  // save/cancel flow.
+                  // Open the editor with a copy of the current quest.
                   setEditorOpen({ ...detail });
                   setDetail(null);
                 }}
@@ -938,38 +617,9 @@ export default function QuestsScreen({
               insets={insets}
               onClose={() => setEditorOpen(null)}
               onSave={async (updates) => {
-                // v3.8.1: if we opened the editor for a new
-                // quest (empty id), call createQuest instead
-                // of updateQuest. The desktop assigns the id
-                // and broadcasts the new quest; the handler
-                // in the useEffect above closes the editor
-                // when the next broadcast arrives.
-                //
-                // v3.10.134 bug fix: the previous version
-                // read `editorOpen.goals` instead of
-                // `updates.goals` — `editorOpen` was the
-                // empty stub we initialized on "+ New" with
-                // `goals: []`, so the user's freshly-typed
-                // steps never made it to the wire. Tobe
-                // 2026-08-04 13:58: 'the steps that i layed
-                // in when creating it are gone for some
-                // reason.' The cause was here: the editor's
-                // local `goals` state was filled in but
-                // thrown away at save time because the
-                // create path read from a different source.
-                // Use `updates.goals` (the editor's cleaned
-                // + trimmed + filtered array) for both
-                // create and update so the two paths stay
-                // symmetric.
+                // If we opened the editor for a new quest (empty id), call createQuest instead of updateQuest.
                 if (!editorOpen.id) {
-                  // v3.10.156: forward the user's
-                  // defaultQuestDir from cyberclaw-mobile-
-                  // settings so the desktop can pick the
-                  // same default location the mobile
-                  // suggests in its 'Suggested:' hint.
-                  // Without this, an empty directory input
-                  // would land the quest at ~/quests/<name>
-                  // instead of the user's intended default.
+                  // Forward the user's defaultQuestDir from cyberclaw-mobile- settings so the desktop can pick the same default location the mobile suggests…
                   let defaultQuestDir: string | undefined;
                   try {
                     const raw = await AsyncStorage.getItem('cyberclaw-mobile-settings');
@@ -1078,18 +728,7 @@ export default function QuestsScreen({
   );
 }
 
-// v3.8.0: quest editor body. Pure render (no hooks
-// inside, v3.7.1 pattern). The form fields are local
-// state — when the user taps Save we call the
-// onSave callback with the diff and the parent
-// (QuestsScreen) sends the update to the desktop.
-//
-// The form is intentionally simple: a ScrollView
-// with TextInput rows. For a richer editor we'd
-// add a goals sub-list with add/remove buttons, but
-// the v3.8.0 scope is the basics (name, description,
-// status, active, plus goal-completion via the detail
-// modal's tap-to-toggle).
+// Quest editor body.
 function QuestEditorBody({
   quest,
   isNew,
@@ -1099,11 +738,7 @@ function QuestEditorBody({
   insets,
 }: {
   quest: CompanionQuest;
-  // v3.8.1: when true, the editor is in "new quest" mode.
-  // Hides the Delete button (nothing to delete yet) and
-  // the title changes to "New quest". The Save handler in
-  // the parent detects this via the empty quest.id and
-  // calls createQuest instead of updateQuest.
+  // When true, the editor is in "new quest" mode.
   isNew?: boolean;
   onClose: () => void;
   onSave: (updates: Record<string, any>) => void;
@@ -1113,24 +748,11 @@ function QuestEditorBody({
   // Android edge-to-edge.
   insets?: { top: number; bottom: number; left: number; right: number };
 }) {
-  // v3.10.102: quest project instructions (markdown).
-  // The mobile's quest editor now exposes the same field
-  // the desktop's quest editor has. Hydrated from the
-  // desktop on mount via the request_quest_instructions
-  // sync message. Save writes the file via
-  // saveQuestInstructions + the new
-  // quest_instructions_saved ack. Tobe's v3.10.101
-  // feedback: "I still dont see a section for that
-  // quest instructions file." — the field was on the
-  // desktop but not the mobile. Now it is.
+  // Quest project instructions (markdown).
   const [questInstructionsContent, setQuestInstructionsContent] = useState<string>('');
   const [questInstructionsPath, setQuestInstructionsPath] = useState<string | null>(null);
   const [questInstructionsLoading, setQuestInstructionsLoading] = useState<boolean>(true);
-  // v3.10.102: track whether the user edited the
-  // instructions textarea, so we can decide whether to
-  // send a save when they hit the editor's Save button.
-  // (If they didn't touch it, we skip the save entirely
-  // — no need to round-trip to the desktop.)
+  // Track whether the user edited the instructions textarea, so we can decide whether to send a save when they hit the editor's Save button.
   const [questInstructionsDirty, setQuestInstructionsDirty] = useState<boolean>(false);
   useEffect(() => {
     if (isNew || !quest.id) {
@@ -1168,43 +790,10 @@ function QuestEditorBody({
   // Save bundles them into an updates object.
   const [name, setName] = useState(quest.name || '');
   const [description, setDescription] = useState(quest.description || '');
-  // v3.10.134: status is no longer editor-editable. The
-  // "complete / active" state lives on the quest card
-  // list (a 🏁 button next to delete — same control the
-  // mobile's already used for the detail-modal badge).
-  // Tobe 2026-08-04 13:58: 'We dont need to have that
-  // status active or complete there, we can just add a
-  // complete sign in the quest overview right beside the
-  // delete Instead.' The status is still READ inside the
-  // editor (used to render the directory hint + the
-  // confirmation prompt wording for an already-completed
-  // quest) but no longer mutated here.
-  // v3.10.134: project directory is now editable for NEW
-  // quests. Pre-filled with a `<settingsDir>/<sanitized-
-  // name>` suggestion when the user has set a default
-  // quest directory in Settings; the user can edit, paste,
-  // or leave blank. Tobe: 'add a quest directory in the
-  // settings, and when a new quest is created the user
-  // creates a new directory within the specified quest
-  // directory, with the name of the quest.' Mobile-only
-  // change — the field is a string the desktop stores
-  // verbatim (no need for a folder picker on mobile,
-  // which would need desktop cooperation and is out of
-  // scope here).
+  // Status is no longer editor-editable.
   const [directory, setDirectory] = useState<string>(() => {
     if (!isNew) return quest.directory || '';
-    // For new quests, start blank. The pre-filled
-    // suggestion is computed and shown as a hint
-    // below the input; the user taps a button to
-    // accept it. This keeps the input itself
-    // clearly empty until the user opts in.
-    //
-    // v3.10.136: for EXISTING quests (Tobe 2026-08-04
-    // 17:31: directory should be editable), start
-    // pre-filled with the current quest.directory so
-    // the user sees what's currently in use and can
-    // edit in place. The desktop's `quests:update`
-    // detects a change and re-scaffolds.
+    // For new quests, start blank.
     if (!isNew) {
       return quest.directory || '';
     }
@@ -1212,19 +801,7 @@ function QuestEditorBody({
   });
   const [directorySuggestion, setDirectorySuggestion] = useState<string>('');
   useEffect(() => {
-    // v3.10.134: compute the suggested directory path
-    // when the editor opens. Combines the
-    // Settings.defaultQuestDir (if set) with a
-    // filesystem-safe version of the quest name.
-    //
-    // v3.10.136: now fires for both new AND existing
-    // quests. The suggestion is the new "auto-default"
-    // — for existing quests it appears as a "← Use"
-    // chip below the input (which is currently
-    // pre-filled with the EXISTING directory), letting
-    // the user one-tap replace with the new auto-
-    // default. Same logic, same JSX; just no
-    // `if (!isNew) return;` early-out.
+    // Compute the suggested directory path when the editor opens.
     let cancelled = false;
     (async () => {
       try {
@@ -1246,15 +823,7 @@ function QuestEditorBody({
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew]);
-  // v3.10.74: goal list is now editable in the editor.
-  // Each entry is { text: string, completed: boolean }.
-  // We normalize string[] legacy entries on load. The
-  // editor renders one TextInput per goal with a remove
-  // button, plus an "Add step" button at the bottom.
-  // Tobe reported on 2026-07-22: "Still missing the
-  // steps" — the previous "Goal text editing lands in a
-  // future release" hint was correct but the feature is
-  // shipping now.
+  // Goal list is now editable in the editor.
   const [goals, setGoals] = useState<Array<{ text: string; completed: boolean }>>(() => {
     if (!Array.isArray(quest.goals)) return [];
     return quest.goals.map((g) =>
@@ -1265,12 +834,7 @@ function QuestEditorBody({
   });
 
   return (
-    // v3.10.86: paddingTop includes the safe-area inset so
-    // the editor header starts below the status bar on
-    // Android (edge-to-edge mode). `insets.top` is 0 on
-    // iOS with the system status bar, ~30-50dp on Android
-    // depending on the device. The paddingTop: 8 in the
-    // style adds a small breathing-room on top of that.
+    // PaddingTop includes the safe-area inset so the editor header starts below the status bar on Android (edge-to-edge mode).
     <View style={[styles.editorCard, { paddingTop: insets.top + 8 }]}>
       <View style={styles.editorHeader}>
         <Text style={styles.editorTitle}>{isNew ? '➕  New quest' : '✏️  Edit quest'}</Text>
@@ -1527,43 +1091,11 @@ function QuestEditorBody({
         <TouchableOpacity
           style={[styles.editorFooterBtn, styles.editorFooterBtnPrimary]}
           onPress={() => {
-            // v3.10.74: goals are now editable. We send
-            // the full array (preserving `completed`
-            // flags and order) and filter out empty
-            // entries so the user can save a step mid-
-            // typing without losing the rest. The
-            // desktop's onUpdateQuest strips `id`/`active`
-            // and accepts goals as-is.
+            // Goals are now editable.
             const cleanedGoals = goals
               .map((g) => ({ text: g.text.trim(), completed: g.completed }))
               .filter((g) => g.text.length > 0);
-            // v3.10.134: status is no longer editor-editable,
-            // so we don't include it in `updates` here. The
-            // quest keeps whatever status it had on the
-            // desktop (the parent's onSave only sends the
-            // fields it actually needs to update). For new
-            // quests the desktop defaults new ones to status:
-            // 'active' so the field falls into place
-            // automatically.
-            //
-            // Directory handling:
-            //   - For NEW quests: pass the user's
-            //     free-text value (trimmed; empty
-            //     string → undefined so the desktop
-            //     doesn't store a stray empty path).
-            //   - For EXISTING quests (v3.10.136):
-            //     pass the user's edited value. The
-            //     desktop detects a directory CHANGE
-            //     and re-scaffolds the new dir (mkdir
-            //     + write INSTRUCTIONS.md + CONVERSATION.md
-            //     placeholders). Empty string = clear
-            //     the directory (falls back to the
-            //     id-based path on next read). Same
-            //     wire-level behavior in both cases;
-            //     no branching beyond the trim.
-            //     Tobe 2026-08-04 17:31: 'Here we
-            //     potentially need to move and/or
-            //     create new directories for the user.'
+            // Status is no longer editor-editable, so we don't include it in `updates` here.
             const updates: Record<string, any> = {
               name: name.trim() || quest.name,
               description: description.trim(),
@@ -1571,30 +1103,11 @@ function QuestEditorBody({
             };
             const trimmedDir = directory.trim();
             updates.directory = trimmedDir || undefined;
-            // Note: updates.directory is now always
-            // present in the payload (new + existing).
-            // For new quests, undefined = no directory
-            // (the desktop's existing default). For
-            // existing quests, if the user didn't edit
-            // the directory, the value is the same as
-            // the current quest.directory so the
-            // desktop's no-op-on-equal branch fires.
+            // Note: updates.directory is now always present in the payload (new + existing).
             onSave(updates);
-            // v3.10.102: if the user edited the
-            // instructions textarea, send the file to
-            // the desktop as part of the same Save. We
-            // wait for the quest_instructions_saved ack
-            // before closing the editor (so the file is
-            // actually written before the user moves
-            // on). For NEW quests the section is hidden
-            // — nothing to save here.
+            // If the user edited the instructions textarea, send the file to the desktop as part of the same Save.
             if (!isNew && quest.id && questInstructionsDirty) {
-              // v3.10.102: the parent's onClose
-              // happens in QuestsScreen after the
-              // ack. We listen for the ack here, fire
-              // onClose, and the parent's onSave
-              // callback already handled the quest
-              // update by the time the ack arrives.
+              // The parent's onClose happens in QuestsScreen after the ack.
               const onSaved = (msg: any) => {
                 if (msg.questId !== quest.id) return;
                 syncClient.off?.('quest_instructions_saved', onSaved);
@@ -1619,12 +1132,7 @@ function QuestEditorBody({
   );
 }
 
-// v3.7.7: detail-modal body. Pure render — props in, JSX out,
-// no hooks. Keeping it a sibling function of QuestsScreen so
-// the screen-level hook order stays clean (v3.7.1 pattern).
-// v3.8.0: detail body takes optional callbacks for
-// edit and mark-goal-done. Passed in from QuestsScreen so
-// the body stays pure (no hooks) per the v3.7.1 pattern.
+// Detail-modal body.
 function QuestDetailBody({
   quest,
   onEdit,
@@ -1645,11 +1153,7 @@ function QuestDetailBody({
   // most recent work is at the top of the timeline.
   const changes = Array.isArray(quest.latestChanges) ? quest.latestChanges.slice().reverse() : [];
 
-  // v3.10.101: per-quest instructions. Read-only on the
-  // mobile. We request the file content from the desktop
-  // when the detail modal opens and cache it locally.
-  // The desktop's editor is the source of truth; the
-  // mobile just shows what the file currently says.
+  // Per-quest instructions.
   const [questInstructionsContent, setQuestInstructionsContent] = useState<string | null>(null);
   const [questInstructionsPath, setQuestInstructionsPath] = useState<string | null>(null);
   const [questInstructionsLoading, setQuestInstructionsLoading] = useState<boolean>(true);
@@ -1686,16 +1190,7 @@ function QuestDetailBody({
 
       <View style={styles.modalStatusRow}>
         {isActive && (
-          // v3.7.8: separate ACTIVE badge so the detail
-          // modal makes it clear which quest is the
-          // working one. The Active/Completed badge
-          // below describes the quest's status; this
-          // ACTIVE badge describes whether the
-          // companion is currently working on it.
-          // The two are independent: you can have a
-          // Completed quest that is still ACTIVE (you
-          // finished but still have it open for
-          // reference).
+          // Separate ACTIVE badge so the detail modal makes it clear which quest is the working one.
           <View style={styles.modalActiveBadge}>
             <Text style={styles.modalActiveBadgeText}>⚡ ACTIVE</Text>
           </View>
@@ -1793,13 +1288,7 @@ function QuestDetailBody({
             Steps / goals ({done}/{goals.length})
           </Text>
           {goals.map((g, i) => (
-            // v3.8.0: tap a goal to toggle its completed
-            // flag. TouchableOpacity absorbs the touch so
-            // it doesn't bubble. Optional onMarkGoalDone
-            // callback (only wired when the screen is
-            // rendered via QuestsScreen, which always wires
-            // it; the prop is optional so the function
-            // remains usable in isolation).
+            // Tap a goal to toggle its completed flag.
             <TouchableOpacity
               key={i}
               style={styles.goalRow}
@@ -1844,10 +1333,7 @@ function QuestDetailBody({
           <TouchableOpacity
             onPress={() => {
               Clipboard.setString(quest.directory!);
-              // v3.10.159: surface the copy result so the
-              // user knows it worked. Without this, tapping
-              // the path silently copies to clipboard and
-              // the user has no idea the action took.
+              // Surface the copy result so the user knows it worked.
               Alert.alert('Copied', quest.directory);
             }}
             style={styles.modalDirBox}
@@ -1870,11 +1356,7 @@ function QuestDetailBody({
       )}
 
       {changes.length > 0 && (
-        // v3.7.8: latest changes timeline. Shows the
-        // companion's journal of what it did on this quest,
-        // newest first. Each entry has a relative timestamp
-        // (e.g. "2h ago") plus the text. The user can
-        // scroll through the full history.
+        // Latest changes timeline.
         <View style={styles.modalSection}>
           <Text style={styles.modalSectionTitle}>
             Latest changes ({changes.length})
@@ -1903,10 +1385,7 @@ function QuestDetailBody({
   );
 }
 
-// v3.7.8: format a date as a relative time-ago string.
-// Pure function, no hooks, used in the latestChanges
-// timeline. Mirrors the desktop's fmtAgo in app.js so
-// the mobile and desktop render the same way.
+// Format a date as a relative time-ago string.
 function formatTimeAgo(date: Date): string {
   const now = Date.now();
   const t = date.getTime();
@@ -1948,13 +1427,7 @@ const styles = StyleSheet.create({
   qcIcon: { color: '#6b7088', fontSize: 15 },
   qcIconDelete: { color: '#a15a5a' },
   container: { flex: 1, backgroundColor: '#0a0a0a' },
-  // v3.7.7: paddingTop: 50 matches the v3.4.5 pattern from
-  // CompanionSettingsScreen / SettingsScreen. Clears both
-  // Android status bars (~30-40dp) and iOS Dynamic Island
-  // (~30pt + safe area). SafeAreaView in App.tsx handles the
-  // bottom inset; the ScrollView still needs explicit top
-  // padding because the SafeAreaView's top extends to the top
-  // of the device edge.
+  // PaddingTop: 50 matches the v3.4.5 pattern from CompanionSettingsScreen / SettingsScreen.
   scroll: { padding: 16, paddingTop: 50, paddingBottom: 64 },
   detailHeaderRow: {
     flexDirection: 'row',
@@ -1978,22 +1451,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(247, 147, 26, 0.55)',
     backgroundColor: 'rgba(247, 147, 26, 0.08)',
   },
-  // v3.10.117: right-side action cluster. Holds
-  // + New and ↻ Refresh side by side with a small gap.
-  // Wrapped in a row so the outer header's `space-between`
-  // layout still works (single child on the right of
-  // the header row, balancing against Back + title).
+  // Right-side action cluster.
   headerActionsCluster: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  // v3.10.117: ↻ Refresh button. Same visual language as
-  // + New (subtle orange outline, low-opacity orange
-  // background) so they read as siblings. Slightly lighter
-  // border so it visually subordinates to + New (the
-  // primary action). Same height/padding so the two
-  // buttons align horizontally.
+  // ↻ Refresh button.
   refreshBtn: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -2008,10 +1472,7 @@ const styles = StyleSheet.create({
     color: '#f7931a',
     fontSize: 14,
   },
-  // v3.10.117: refresh button text while a refresh is
-  // in flight. Slight opacity dim so the button feels
-  // "busy" but is still readable. No spinner animation
-  // — the icon swap (↻ → ⏳) is the visual cue.
+  // Refresh button text while a refresh is in flight.
   refreshBtnTextActive: {
     opacity: 0.7,
   },
@@ -2027,10 +1488,7 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'center',
   },
-  // v3.10.189: pill row directly below the header.
-  // Holds either the green "active quest name" pill or
-  // the red "No active quest" pill. Centered, with a
-  // bit of bottom margin so the cards sit cleanly below.
+  // Pill row directly below the header.
   headerStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2038,14 +1496,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 8,
   },
-  // v3.10.189: shared pill base. Small, pill-shaped
-  // chip with a thin border, soft tint, and tight
-  // padding so it doesn't shout. Sized to fit its
-  // content (no flex on the pill itself) but the
-  // row above centers it. v3.10.190: now uses
-  // flexDirection: 'row' + alignItems: 'center' + gap
-  // so the quest name and the ✕ deactivate icon sit
-  // side-by-side when the pill is acting as a button.
+  // Shared pill base.
   headerStatusPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2056,13 +1507,7 @@ const styles = StyleSheet.create({
     maxWidth: '92%',
     gap: 8,
   },
-  // v3.10.189: green active-state pill. Mirrors the
-  // green used by the "Active" button on the quest
-  // cards and the ✓ Active text on the in-card
-  // set-active button — so all three "this quest is
-  // active" signals stay consistent across the page.
-  // v3.10.190: now a TouchableOpacity (button) that
-  // deactivates the current quest on tap.
+  // Green active-state pill.
   headerStatusPillActive: {
     backgroundColor: 'rgba(16, 185, 129, 0.14)',
     borderColor: 'rgba(16, 185, 129, 0.55)',
@@ -2083,15 +1528,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginLeft: 2,
   },
-  // v3.10.189: red "no active quest" pill. Tobe's
-  // 2026-09-07 request. Red is intentionally
-  // distinct from the rest of the page's accent
-  // colors (orange / gold / purple / green) so it
-  // reads as a different signal — "no project
-  // context, conversations are off-quest." Same
-  // red family as the delete-confirm button and
-  // the error toast so the user has consistent
-  // "destructive / needs attention" visual cues.
+  // Red "no active quest" pill.
   headerStatusPillNoActive: {
     backgroundColor: 'rgba(170, 68, 85, 0.16)',
     borderColor: 'rgba(170, 68, 85, 0.7)',
@@ -2104,10 +1541,7 @@ const styles = StyleSheet.create({
   },
   section: { marginBottom: 24 },
   sectionTitle: { color: '#f7931a', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
-  // v3.10.189: tighter description. Drops from 16 to 8
-  // marginBottom so the cards are higher up on first
-  // paint, and the line-height is shorter so the
-  // one-liner doesn't waste a vertical row.
+  // Tighter description.
   sectionDesc: { color: '#888', fontSize: 12, marginBottom: 8, lineHeight: 16 },
   hint: { color: '#aaa', fontSize: 12, fontStyle: 'italic', marginBottom: 12 },
   questCard: {
@@ -2118,12 +1552,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginVertical: 5,
   },
-  // v3.10.190: removed `noQuestCard`, `noQuestCardActive`,
-  // `noQuestCardDesc`, `noQuestCardHint` — the dashed
-  // "No active quest" card in the middle of the list was
-  // removed (the green button at the top now serves as
-  // the deactivate action, and the red pill in the header
-  // shows the no-active state). Dead styles.
+  // Removed `noQuestCard`, `noQuestCardActive`, `noQuestCardDesc`, `noQuestCardHint` — the dashed "No active quest" card in the middle of the…
   questTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2142,10 +1571,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   questFill: { height: '100%', borderRadius: 2 },
-  // v3.10.79: inline step list on the card. Compact
-  // display so a 3-step quest fits without making the
-  // card feel crowded; longer lists fall back to "+N
-  // more (tap card)" hint.
+  // Inline step list on the card.
   questSteps: { marginTop: 4, marginBottom: 4 },
   questStepText: {
     color: '#cfd2e0',
@@ -2175,10 +1601,7 @@ const styles = StyleSheet.create({
   },
   emptyHintText: { color: '#888', fontSize: 13, lineHeight: 18, textAlign: 'center' },
 
-  // v3.7.7: detail-modal styles. Modal renders over the
-  // list with a translucent dark scrim. The card has its
-  // own ScrollView so long goal lists don't overflow the
-  // viewport.
+  // Detail-modal styles.
   modalScrim: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.75)',
@@ -2239,11 +1662,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-  // v3.10.101: per-quest instructions display. The
-  // path is shown in a monospace font with a muted
-  // color so it doesn't compete with the content.
-  // The content is in a styled box with a monospace
-  // font to mirror the desktop editor's textarea.
+  // Per-quest instructions display.
   modalQuestInstructionsPath: {
     color: '#666',
     fontSize: 11,
@@ -2325,12 +1744,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // v3.7.10: list-card ACTIVE banner (inline, top of card).
-  // Replaces the v3.7.8 absolute-positioned badge which was
-  // too subtle (9pt font) and overlapped the done/total count.
-  // Now: full-width banner at the top of the card, 11pt font,
-  // bold gold text on a soft gold tint, slight letter-spacing
-  // for that "alert" feel. Impossible to miss.
+  // List-card ACTIVE banner (inline, top of card).
   activeBanner: {
     backgroundColor: 'rgba(247, 147, 26, 0.18)',
     borderWidth: 1,
@@ -2427,18 +1841,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 6,
   },
-  // v3.10.83: prominent "Set as active" button.
-  // Gold-tinted pill, sits on the right side of the
-  // action row. v3.10.82 had ☆ as a small icon-only
-  // button which Tobe found unintuitive — the icon
-  // was visually similar to the ✕ next to it and
-  // didn't read as a primary action. Now it's a
-  // proper labeled pill: star icon + "Set active"
-  // text, gold border + soft gold background. When
-  // the quest IS active, the same button becomes
-  // green (✓ Active) to show the current state at
-  // a glance without relying on the ACTIVE banner
-  // at the top of the card.
+  // Prominent "Set as active" button.
   cardSetActiveBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2461,14 +1864,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.3,
   },
-  // v3.10.83: active-state visual for the set-active
-  // button. Green (instead of gold) so it reads as
-  // "this is the current state" rather than "tap to
-  // do something". The ACTIVE banner at the top of
-  // the card is gold, so green here gives a clear
-  // visual distinction between "the card is the
-  // active quest" (top, gold) and "this button
-  // confirms the active state" (bottom, green).
+  // Active-state visual for the set-active button.
   cardSetActiveBtnActive: {
     borderColor: '#10b981',
     backgroundColor: 'rgba(16, 185, 129, 0.18)',
@@ -2476,17 +1872,11 @@ const styles = StyleSheet.create({
   cardSetActiveBtnTextActive: {
     color: '#10b981',
   },
-  // v3.10.73: stale-id guard. When the first desktop
-  // broadcast hasn't arrived yet (cache-only render),
-  // the card action buttons dim so the user sees they
-  // can't safely edit yet.
+  // Stale-id guard.
   cardActionBtnDisabled: {
     opacity: 0.35,
   },
-  // v3.10.73: small hint shown above the card list
-  // when no broadcast has been received from the
-  // desktop yet. Explains why edit/active/delete
-  // buttons are dimmed.
+  // Small hint shown above the card list when no broadcast has been received from the desktop yet.
   syncingHint: {
     color: '#888',
     fontSize: 11,
@@ -2506,13 +1896,7 @@ const styles = StyleSheet.create({
     color: '#a55',
   },
 
-  // v3.10.82: detail-modal footer (Close + Edit). Both
-  // buttons get flex: 1 so they share width equally.
-  // v3.8.0 had flex: 1 only on Edit, which made Close
-  // hug the left edge while Edit stretched across the
-  // rest — looked wonky. Both buttons now get their own
-  // visible border (the v3.10.82 polish Tobe asked for)
-  // and a bit more vertical breathing room.
+  // Detail-modal footer (Close + Edit).
   modalFooter: {
     flexDirection: 'row',
     paddingTop: 8,
@@ -2604,27 +1988,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // v3.10.86: editor modal. Full-screen layout with safe-
-  // area top padding instead of the v3.8.0 bottom-sheet
-  // style. Tobe reported (2026-07-23): "some padding top
-  // for the background when editing quests. You can see
-  // the conflict in the top here." The v3.8.0 bottom-
-  // sheet design used `marginTop: 'auto'` to push the card
-  // to the bottom with `maxHeight: '90%'`, which left the
-  // top ~10% of the scrim showing the dimmed quest list
-  // behind. Combined with Android 15+ edge-to-edge (status
-  // bar drawn on top of the scrim, not above it), the top
-  // of the screen ended up showing a confusing mix of
-  // dimmed quest content + status bar + modal — the
-  // "conflict" Tobe saw.
-  //
-  // The fix: make the editor card full-screen (width +
-  // height 100%) with a small top padding for the safe
-  // area. This makes the editor feel like a dedicated
-  // editing screen rather than a partial bottom sheet,
-  // and the dimmed quest list is no longer visible
-  // through the scrim. The bottom-sheet rounded corners
-  // are gone too — a full-screen card doesn't need them.
+  // Editor modal.
   editorCard: {
     backgroundColor: '#0f1626',
     borderWidth: 1,
@@ -2717,10 +2081,7 @@ const styles = StyleSheet.create({
     color: '#cfd2e0',
     fontSize: 13,
   },
-  // v3.10.74: goal list editor styles. The mobile
-  // previously had no way to edit goal text — only
-  // tap-to-toggle in the detail modal. Tobe reported
-  // the missing-steps bug 2026-07-22.
+  // Goal list editor styles.
   editorGoalsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2803,13 +2164,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  // v3.10.134: directory-suggestion hint for NEW
-  // quests. Shows the suggested path inline (so the
-  // user sees what filling in would do), with a "←
-  // Use" button to copy it into the input. The
-  // suggestion comes from
-  // Settings.defaultQuestDir + sanitized quest name;
-  // see the editor's directory useEffect.
+  // Directory-suggestion hint for NEW quests.
   editorDirectorySuggestion: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2856,12 +2211,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontStyle: 'italic',
   },
-  // v3.10.102: per-quest project instructions field in
-  // the editor. Same monospace + dark theme as the
-  // desktop's editor. The textarea is full-width with
-  // 8 lines visible (scrollable for longer content).
-  // The path is shown below the textarea so the user
-  // can verify it lives in the expected directory.
+  // Per-quest project instructions field in the editor.
   editorInstructionsBlock: {
     marginTop: 16,
     paddingTop: 12,

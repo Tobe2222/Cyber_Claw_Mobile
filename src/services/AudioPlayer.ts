@@ -1,34 +1,4 @@
-/**
- * AudioPlayer — shared audio playback helper for all
- * desktop-synthesized audio (greeting, AI response, exit
- * reply, attachment viewer audio).
- *
- * v3.10.161: lifted out of WakeModeScreen.tsx where it
- * was a closure (playCachedGreeting) so HomeScreen's
- * onAudioResponse handler could call it too. Previously
- * each call site had its own copy of the startPlayer +
- * audioPlayerFinished listener wiring, with subtle
- * differences (the WakeModeScreen version registered the
- * audioPlayerFinished listener, the HomeScreen version
- * didn't) that caused inconsistent behaviour across
- * screens. Centralizing on this helper means a fix in
- * one place applies everywhere.
- *
- * Behaviour:
- * - Calls WakeWordModule.startPlayer with the file path.
- * - Subscribes to `audioPlayerFinished` to detect
- *   natural completion.
- * - Returns a Promise that resolves on either natural
- *   completion OR a 10s safety timeout.
- * - On startPlayer error, the promise rejects with the
- *   underlying error so callers can decide what to do.
- *
- * The 10s safety is generous — desktop-synthesized
- * responses are typically 2-8 seconds. If we hit the
- * safety timeout, something is wrong (audio focus
- * stealing, MediaPlayer hung) and we don't want to
- * block the calling flow indefinitely.
- */
+/** AudioPlayer — shared audio playback helper for all desktop-synthesized audio (greeting, AI response, exit reply, attachment viewer audio). */
 
 import { NativeModules, NativeEventEmitter } from 'react-native';
 
@@ -38,10 +8,7 @@ let emitter: NativeEventEmitter | null = null;
 function getEmitter(): NativeEventEmitter | null {
   if (!WakeWordModule) return null;
   if (!emitter) {
-    // v3.10.161: NativeEventEmitter takes the module
-    // directly (not a wrapped object like on some
-    // Android variants). The WakeWordModule has the
-    // DeviceEventEmitter constants baked in.
+    // NativeEventEmitter takes the module directly (not a wrapped object like on some Android variants).
     try {
       emitter = new NativeEventEmitter(WakeWordModule);
     } catch (_) {
@@ -57,11 +24,7 @@ function getEmitter(): NativeEventEmitter | null {
   return emitter;
 }
 
-/**
- * Play an audio file at the given path and resolve
- * when it finishes (or after a 10s safety timeout).
- * Rejects on startPlayer error.
- */
+/** Play an audio file at the given path and resolve when it finishes (or after a 10s safety timeout). */
 export async function playAudioFile(filePath: string): Promise<void> {
   if (!WakeWordModule?.startPlayer) {
     throw new Error('WakeWordModule.startPlayer not available');

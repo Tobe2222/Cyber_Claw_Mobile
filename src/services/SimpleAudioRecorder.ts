@@ -1,32 +1,11 @@
-/**
- * SimpleAudioRecorder - Clean audio recording wrapper
- * 
- * PURPOSE: Handle chat mic and voice mode recording without any wake word logic
- * 
- * API:
- *   - start(filepath: string, silenceTimeoutMs?: number) → Promise<void>
- *   - stop() → Promise<string> (returns WAV filepath; v3.9.4
- *     switched from m4a/MediaRecorder to WAV/AudioRecord so
- *     the recorder stream can be fed to the openWakeWord
- *     send-phrase detector in lockstep with the recording)
- *   - isSilenceDetected() → boolean
- *   - dispose() → void
- * 
- * Events:
- *   - 'silence' → Emitted when silence timeout reached
- *   - 'error' → Emitted on error
- */
+/** SimpleAudioRecorder - Clean audio recording wrapper PURPOSE: Handle chat mic and voice mode recording without any wake word logic API: -… */
 
 import { NativeModules, NativeEventEmitter } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { WakeWordModule } = NativeModules;
 
-// v3.10.28: AsyncStorage key for the smart-silence
-// user toggle. Read on every recorder start (not at
-// app boot) so the user can change it in Voice mode
-// settings and the next recording turn picks up the
-// new value without an app restart.
+// AsyncStorage key for the smart-silence user toggle.
 const SMART_SILENCE_KEY = 'cyberclaw-smart-silence';
 
 interface SimpleAudioRecorderListener {
@@ -46,12 +25,6 @@ export class SimpleAudioRecorder {
       this.emitter = new NativeEventEmitter(WakeWordModule);
 
       // Listen for silence events from native module.
-      // v3.10.28: payload now carries smart-silence
-      // calibration stats (noise floor, speech floor,
-      // current thresholds) so the JS side can log
-      // them. Backward-compatible: if the payload
-      // is null (older native builds), we just
-      // don't log.
       this.emitter.addListener('recorderSilence', (payload: any) => {
         this.silenceDetected = true;
         this.lastSilenceEvent = payload || null;
@@ -60,11 +33,7 @@ export class SimpleAudioRecorder {
     }
   }
 
-  // v3.10.28: cache of the most recent silence
-  // event payload (null for older native builds).
-  // Exposed via getLastSilenceStats() so the
-  // caller can log it next to the existing
-  // "silence detected after Xms" message.
+  // Cache of the most recent silence event payload (null for older native builds).
   private lastSilenceEvent: any = null;
   getLastSilenceStats(): {
     useSmartSilence: boolean;
@@ -87,13 +56,7 @@ export class SimpleAudioRecorder {
     };
   }
 
-  /**
-   * Start recording to the specified filepath
-   * @param filepath Path where the WAV file will be saved
-   *   (v3.9.4: was m4a, now WAV — internal format change,
-   *   callers should pass a `.wav` path)
-   * @param silenceTimeoutMs Timeout in milliseconds (default 5000)
-   */
+  /** Start recording to the specified filepath @param filepath Path where the WAV file will be saved (v3.9.4: was m4a, now WAV — internal… */
   async start(filepath: string, silenceTimeoutMs: number = 5000): Promise<void> {
     if (this.isRecording) {
       throw new Error('Recording already in progress');
@@ -108,14 +71,7 @@ export class SimpleAudioRecorder {
         throw new Error('WakeWordModule not available');
       }
 
-      // v3.10.28: read the smart-silence toggle from
-      // AsyncStorage. Default ON (true) — the
-      // relative-threshold design is strictly better
-      // than the v3.10.12 absolute-threshold design
-      // in every environment we can think of (quiet
-      // room, café, traffic, HVAC). Users who want
-      // the old behavior can flip the toggle off in
-      // Voice mode settings.
+      // Read the smart-silence toggle from AsyncStorage.
       let useSmartSilence = true;
       try {
         const stored = await AsyncStorage.getItem(SMART_SILENCE_KEY);

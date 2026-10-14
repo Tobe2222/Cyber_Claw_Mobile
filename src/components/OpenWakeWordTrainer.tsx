@@ -1,40 +1,4 @@
-/**
- * OpenWakeWordTrainer — Record user samples + ship them to the
- * desktop for openWakeWord training. v3.2.0.
- *
- * Replaces the old DTW-based WakeWordTrainerV2 with a flow that
- * drives the real openWakeWord training pipeline (Piper TTS
- * synthesis → melspec → DNN training → TFLite export) running
- * on the desktop's GPU.
- *
- * Flow:
- *  1. User types the wake phrase (e.g. "hey clawsuu")
- *  2. User records 6 samples of the phrase on the phone
- *  3. Samples are sent to the desktop via sync-server WS
- *  4. Desktop spawns scripts/train_wake_phrase.py, streams
- *     progress back as 'wake_training_progress' messages
- *  5. On completion, desktop sends 'wake_training_result'
- *     with the .tflite path
- *  6. Phone fetches the .tflite bytes via 'read_wake_model'
- *  7. Phone hot-swaps it into the running OpenWakeWordDetector
- *     via WakeWordModule.setWakeModelFromBase64
- *  8. Model is persisted across app restarts (the Kotlin
- *     side saves the file to filesDir/wake_models/)
- *
- * The user sees a step-by-step progress UI driven by the
- * 'stage' field in each progress message:
- *   - setup
- *   - generating_synthetic (Piper TTS doing the heavy lifting)
- *   - augmenting
- *   - training (DNN, takes 1-10 minutes)
- *   - converting (TFLite export)
- *   - complete
- *
- * Why the desktop does the training: it has the GPU, the
- * 17GB ACAV100M feature file, the Piper voice models, and the
- * 200MB trained TFLite is small enough to ship back over the
- * WS in <1s.
- */
+/** OpenWakeWordTrainer — Record user samples + ship them to the desktop for openWakeWord training. */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
@@ -83,22 +47,7 @@ const REQUIRED_SAMPLES = 12;  // v3.10.59: bumped from 6 → 12. The desktop's
 // negatives.
 const REQUIRED_NEAR_MISS_SAMPLES = 3;
 
-// v3.8.2: generate suggested near-miss phrases from the
-// wake phrase. These are similar-but-wrong phrases the
-// model should reject. The heuristics:
-//
-//   - Swap trailing consonants for similar-sounding ones
-//     (m/n, s/t, k/g) so "hey clawsuu" -> "hey clawsu"
-//   - Drop the trailing vowel so "hey clawsuu" -> "hey claws"
-//   - Add a different first word ("hi clawsuu", "ok clawsuu")
-//   - Sub a different trailing word ("hey clawsaw",
-//     "hey claws you")
-//
-// These are SUGGESTIONS only — the user can type anything.
-// The point is to give them a starting point so they
-// don't have to think of similar-sounding phrases from
-// scratch. The actual training reads the audio bytes,
-// not the text, so the suggestions are just labels.
+// Generate suggested near-miss phrases from the wake phrase.
 function suggestNearMisses(phrase: string, n: number = 3): string[] {
   const trimmed = phrase.trim();
   if (!trimmed) return [];
@@ -138,13 +87,7 @@ function suggestNearMisses(phrase: string, n: number = 3): string[] {
 interface Props {
   companionId: string;
   companionName: string;
-  // v3.3.0: optional preset phrase. When set, the
-  // trainer's TextInput initializes with this string
-  // instead of the default `hey ${companionName}`.
-  // Used by the per-row "Retrain" button in the new
-  // WakePhrasePicker to pre-fill the trainer with the
-  // existing phrase so the user can re-record samples
-  // without accidentally training a different word.
+  // Optional preset phrase.
   presetPhrase?: string;
   onComplete: (ok: boolean) => void;
   onCancel: () => void;
@@ -192,28 +135,9 @@ function formatClock(d: Date): string {
 }
 
 export default function OpenWakeWordTrainer({ companionId, companionName, presetPhrase, onComplete, onCancel }: Props) {
-  // v3.3.0: if presetPhrase is provided (retrain path
-  // from the WakePhrasePicker), use it as the initial
-  // value. Otherwise default to `hey ${companionName}`
-  // — the existing behavior for first-time training.
+  // If presetPhrase is provided (retrain path from the WakePhrasePicker), use it as the initial value.
   const [wakePhrase, setWakePhrase] = useState(presetPhrase ?? `hey ${companionName}`);
-  // v3.10.54: wakePhraseRef is kept in sync with the
-  // wakePhrase state on every render, so async callbacks
-  // registered via useRef (like _onModel below) can read
-  // the LATEST typed phrase at fire time. Before this
-  // fix, the _onModel handler was captured by useRef on
-  // the FIRST render — when wakePhrase was either '' (if
-  // the user tapped "Train new wake phrase" with no
-  // preset) or the placeholder default ('hey clawsuu').
-  // When training completed, _onModel called
-  // setWakeModelFromBase64(companionId, base64,
-  // wakePhrase) with that STALE initial value, so the
-  // native side stored an empty phrase → setId fallback
-  // to 'wake-<timestamp>' → activeWakeDirect.phrase
-  // empty → UI showed the setId instead of the user's
-  // typed name. Tobe hit this on 2026-07-18:
-  // 'Its name is still not the same as i set it to, i
-  // called it Hey clawsuu.'
+  // WakePhraseRef is kept in sync with the wakePhrase state on every render, so async callbacks registered via useRef (like _onModel below)…
   const wakePhraseRef = useRef(wakePhrase);
   wakePhraseRef.current = wakePhrase;
   const [samples, setSamples] = useState<string[]>([]);  // absolute paths
@@ -222,67 +146,28 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
   // the cross-sample consistency check. Index-aligned
   // with `samples`.
   const [sampleRms, setSampleRms] = useState<number[]>([]);
-  // v3.8.2: optional user-recorded near-miss clips. Each
-  // entry is { path, phrase } where `phrase` is what the user
-  // said (just for their reference — the model gets the
-  // audio bytes, not the text). Sent to the desktop with the
-  // training request; the desktop copies them into the
-  // negative_train / negative_test dirs so the training
-  // script picks them up alongside the Piper-TTS adversarial
-  // negatives. Optional — if empty, training proceeds with
-  // only TTS negatives (v3.8.1 behavior).
+  // Optional user-recorded near-miss clips.
   const [nearMissSamples, setNearMissSamples] = useState<Array<{ path: string; phrase: string }>>([]);
-  // v3.8.4: per-slot draft phrases for empty near-miss
-  // rows. Previously the empty-slot TextInput had no
-  // onChangeText handler, so the user could tap to focus
-  // the input but typing went nowhere (Tobe: 'It did not
-  // allow me to input near misses'). With this state,
-  // typing into an empty slot is captured into drafts[i]
-  // and is then used by the mic button instead of the
-  // fallback suggestion. Drafts are cleared once the
-  // slot is filled.
+  // Per-slot draft phrases for empty near-miss rows.
   const [nearMissDrafts, setNearMissDrafts] = useState<string[]>(['', '', '']);
   const [stage, setStage] = useState<Stage>('idle');
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
-  // v3.2.9: explicit logging of desktop activity on the mobile
-  // side. The bar and status text are useful but they don't show
-  // you WHEN something last happened — the bar at 30% and the
-  // bar at 95% look identical if they aren't moving. We track
-  // the timestamp of every PROGRESS:: event from the desktop
-  // and surface "last event: Ns ago" + a rolling event log so
-  // the user can see at a glance whether training is actually
-  // progressing or stuck.
+  // Explicit logging of desktop activity on the mobile side.
   const [lastEventAt, setLastEventAt] = useState<number>(0);
   const [trainingStartedAt, setTrainingStartedAt] = useState<number>(0);
   const [now, setNow] = useState<number>(Date.now());
   const [eventLog, setEventLog] = useState<Array<{ ts: number; msg: string }>>([]);
-  // v3.2.8: the wake phrase currently active on the device for
-  // this companion, if any. null means no trained model is
-  // installed. Surfaced as a status badge at the top of the
-  // trainer so the user knows what they're about to overwrite
-  // (or that they have to train to get a model).
+  // The wake phrase currently active on the device for this companion, if any.
   const [currentTrainedPhrase, setCurrentTrainedPhrase] = useState<string | null>(null);
   const [trainedModelPath, setTrainedModelPath] = useState<string | null>(null);
-  // v3.2.14: snapshot of the trained phrase at the moment the
-  // trainer mounted, used by the cleanup useEffect to re-init
-  // the OWW listener with the right wake word when the trainer
-  // closes. Without this, the cleanup falls back to whatever
-  // was loaded on HomeScreen mount (usually 'hey_jarvis'),
-  // even if the trainer completed a fresh training and
-  // hot-swapped in a new model for the current companion.
+  // Snapshot of the trained phrase at the moment the trainer mounted, used by the cleanup useEffect to re-init the OWW listener with the right…
   const [currentTrainedPhraseOnMount, setCurrentTrainedPhraseOnMount] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pulseRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  // v3.2.8: on mount, fetch the currently-active trained model for
-  // this companion (if any). The native side persists each trained
-  // model in filesDir/wake_models/ and exposes getSavedWakeModels()
-  // returning { agentId: { phrase, path, savedAt } }. We use this
-  // to surface a "currently listening for: <phrase>" status badge
-  // at the top of the trainer, so the user knows whether they're
-  // about to train a new model or overwrite an existing one.
+  // On mount, fetch the currently-active trained model for this companion (if any).
   useEffect(() => {
     let cancelled = false;
     WakeWordModule?.getSavedWakeModels?.()
@@ -292,12 +177,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
         if (entry?.phrase) {
           setCurrentTrainedPhrase(entry.phrase);
           setTrainedModelPath(entry.path || null);
-          // v3.2.14: snapshot the trained phrase on mount so the
-          // cleanup useEffect knows what wake word to re-init
-          // the OWW listener with. Only set this once, the
-          // first time we resolve the saved models for this
-          // companion — later training completions update
-          // currentTrainedPhrase but NOT this snapshot.
+          // Snapshot the trained phrase on mount so the cleanup useEffect knows what wake word to re-init the OWW listener with.
           setCurrentTrainedPhraseOnMount((prev) =>
             prev === null ? entry.phrase : prev
           );
@@ -310,11 +190,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     return () => { cancelled = true; };
   }, [companionId]);
 
-  // v3.2.8: after a successful training, refresh the trained-phrase
-  // state so the badge updates to show what was just installed.
-  // stage 'complete' is set in _onModel after the native side has
-  // accepted the .tflite. We re-fetch from the native side because
-  // that's the single source of truth for what's actually active.
+  // After a successful training, refresh the trained-phrase state so the badge updates to show what was just installed.
   useEffect(() => {
     if (stage !== 'complete') return;
     WakeWordModule?.getSavedWakeModels?.()
@@ -332,15 +208,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
   // Cleanup on unmount: stop any in-flight recorder and stop listening
   // for progress events from the sync server.
   useEffect(() => {
-    // v3.2.6: on mount, ask the desktop if there's a recent wake
-    // training result for this companion. The user may have lost
-    // their socket mid-training (Android killed the WebSocket, brief
-    // network blip, app was backgrounded) and the desktop finished
-    // the run while we were offline. The desktop caches the last
-    // result per agent for 15 minutes — if it's there, we can pick
-    // up where the training left off without re-recording samples.
-    // Only do this when the trainer is in the idle state, so we
-    // don't conflate a fresh training with a cached previous one.
+    // On mount, ask the desktop if there's a recent wake training result for this companion.
     const sync = syncClient;
     const queryLatest = () => {
       if (sync?.connected) {
@@ -359,56 +227,22 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       }
     }
 
-    // v3.2.11: stop the bundled pre-trained wake listener while
-    // the trainer is mounted. The trainer is doing wake-word work
-    // (either recording samples, training, or running a fresh
-    // model preview) and the bundled "hey jarvis" listener from
-    // HomeScreen is still active underneath — it grabs the mic,
-    // it can fire the wake notification and interrupt the trainer,
-    // and (less obviously) it competes with the trainer's sample
-    // recorder for the audio device. Restart it on unmount.
+    // Stop the bundled pre-trained wake listener while the trainer is mounted.
     WakeWordModule?.stopOwwListening?.().catch(() => {});
 
     return () => {
       try { getSimpleAudioRecorder().stop(); } catch (_) {}
       try { WakeWordModule?.stopSampleListening?.(); } catch (_) {}
-      // v3.2.14: re-init the OWW wake listener with the right
-      // wake phrase before starting it. Without this, the
-      // listener falls back to whatever was loaded on
-      // HomeScreen mount — usually 'hey_jarvis' from the
-      // bundled pre-trained model. After the user trains a
-      // new wake word, the trainer's setWakeModelFromBase64
-      // hot-swaps the model in the detector, but if we just
-      // call startOwwListening here, the listener uses the
-      // original 'hey_jarvis' init and ignores the hot-swap.
-      // The fix: re-init with the wake phrase that was active
-      // when the trainer mounted (which already accounts for
-      // any saved custom model for this companion). If the
-      // trainer completed a fresh training, currentTrainedPhrase
-      // is the new phrase; otherwise we re-init with whatever
-      // was loaded previously.
+      // Re-init the OWW wake listener with the right wake phrase before starting it.
       const phraseToReactivate = currentTrainedPhrase || currentTrainedPhraseOnMount;
       if (phraseToReactivate) {
-        // v3.10.169: bumped default wake threshold from
-        // 0.5 to 0.55 to suppress bucket-A false wakes
-        // (TV/radio blips whose melspec peaks above
-        // threshold briefly). Same nudge as the lazy-
-        // init default at WakeWordModule.kt — both
-        // load paths now use 0.55 by default. The
-        // FIRE-LOG will tell us whether 0.55 is too
-        // aggressive in v3.10.169a.
+        // Bumped default wake threshold from 0.5 to 0.55 to suppress bucket-A false wakes (TV/radio blips whose melspec peaks above threshold…
         WakeWordModule?.initOww?.(phraseToReactivate, 0.55)
           .catch(() => {})
           .then(() => WakeWordModule?.startOwwListening?.())
           .catch(() => {});
       } else {
-        // No model for this companion — fall back to the bundled
-        // pre-trained wake word so Voice Mode at least listens
-        // for SOMETHING.
-        // v3.10.169: same 0.55 nudge as the active-wake
-        // path above. Hey_jarvis default needs to match
-        // the lazy-init default (WakeWordModule.kt v3.10.169)
-        // so all load paths agree.
+        // No model for this companion — fall back to the bundled pre-trained wake word so Voice Mode at least listens for SOMETHING.
         WakeWordModule?.initOww?.('hey_jarvis', 0.55)
           .catch(() => {})
           .then(() => WakeWordModule?.startOwwListening?.())
@@ -417,15 +251,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     };
   }, [companionId, stage]);
 
-  // v3.2.12: attach the wake-training event listeners ONCE on
-  // mount and never re-run. Previously these were attached in
-  // startTraining() and removed by the [stage] useEffect cleanup
-  // when stage transitioned from 'idle' to 'uploading' — so the
-  // listener was attached for ~10ms (between sync.on() and the
-  // next React render) and then removed. Every wake_training_progress
-  // event broadcast by the desktop went to a removed listener.
-  // The fix: attach the listeners in a useEffect with empty deps,
-  // and never remove them (the trainer screen is single-mount).
+  // Attach the wake-training event listeners ONCE on mount and never re-run.
   useEffect(() => {
     const s = syncClient;
     s?.on?.('wake_training_progress', _onProgress);
@@ -439,13 +265,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // v3.2.7: training-result watchdog. While the trainer is in any
-  // non-terminal stage (uploading / generating_synthetic / augmenting
-  // / training / converting), poll the desktop every 20s for the
-  // cached result. This is belt + suspenders to the v3.2.6 mount-time
-  // poll — that one only fires when the user navigates into the
-  // trainer screen; this one fires even if the user just stares at
-  // the stuck progress bar.
+  // Training-result watchdog.
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -516,10 +336,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     pulseAnim.setValue(1);
   };
 
-  // ----- recording -----
-  // Hard max duration for a single sample. The native side's silence
-  // detection is normally what stops us, but we cap as a safety net so a
-  // runaway mic can't hold the user hostage.
+  // ----- recording ----- Hard max duration for a single sample.
   const MAX_SAMPLE_MS = 4000;
 
   const recordOne = useCallback(async (): Promise<string | null> => {
@@ -539,11 +356,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       // via the 'silence' event below — never immediately after start.
       await recorder.start(path, 1500);
 
-      // v3.2.4: WAIT for the silence event before stopping. The previous
-      // code called stop() right after start(), which made
-      // MediaRecorder.stop() throw "stop failed" because no frames had
-      // been written yet. Race the silence event against a hard cap so
-      // a quiet room (or a stuck mic) can't hang us forever.
+      // WAIT for the silence event before stopping.
       const stopped: { v: boolean } = { v: false };
       const doStop = async (): Promise<string | null> => {
         if (stopped.v) return null;
@@ -592,10 +405,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     const path = await recordOne();
     if (path) {
       setSamples((s) => [...s, path]);
-      // v3.10.59: compute RMS from the WAV file so we can
-      // give the user volume-consistency feedback. Skip
-      // silently on read failure — the sample is still
-      // usable, just no RMS hint for it.
+      // Compute RMS from the WAV file so we can give the user volume-consistency feedback.
       try {
         const b64 = await RNFS.readFile(path, 'base64');
         const pcm = base64ToInt16Array(b64);
@@ -616,12 +426,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     }
   }, [samples.length, wakePhrase, recordOne]);
 
-  // v3.8.2: near-miss recording. Same audio-capture path as
-  // positive samples (recordOne), but stores into a
-  // separate array. The phrase argument is the user's
-  // label for what they said — captured into AsyncStorage
-  // so the trainer can show "Hey Car (recorded)" in the
-  // near-miss list. Not used by the model itself.
+  // Near-miss recording.
   const onTapToRecordNearMiss = useCallback(async (phrase: string) => {
     if (nearMissSamples.length >= REQUIRED_NEAR_MISS_SAMPLES) return;
     if (!phrase.trim()) {
@@ -654,12 +459,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     setSampleRms([]);
   }, []);
 
-  // ----- progress event handlers (refs so the cleanup useEffect can reach them) -----
-  // v3.2.9: 1-second tick while training is active. We use this
-  // to update the "Ns since last event" indicator without
-  // running a setInterval per render. The interval is started
-  // when training begins (stage leaves 'idle') and stopped when
-  // it reaches a terminal state.
+  // ----- progress event handlers (refs so the cleanup useEffect can reach them) ----- v3.2.9: 1-second tick while training is active.
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     const activeStages: Stage[] = ['uploading', 'generating_synthetic', 'augmenting', 'training', 'converting', 'downloading'];
@@ -696,11 +496,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       setStage(newStage);
       setProgress(msg.percent || 0);
       if (msg.message) setStatusMsg(msg.message);
-      // v3.2.9: log every progress event with a timestamp so the
-      // user can see at a glance whether the desktop is actively
-      // working or stuck. Also push an entry to a rolling event
-      // log (capped at 50 entries) so they can scroll back and
-      // see what happened, even after the status text scrolls off.
+      // Log every progress event with a timestamp so the user can see at a glance whether the desktop is actively working or stuck.
       const now = Date.now();
       setLastEventAt(now);
       setNow(now);
@@ -767,13 +563,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     setProgress(98);
     setStatusMsg('Activating on this device...');
     try {
-      // v3.10.54: read wakePhrase from wakePhraseRef, NOT
-      // the captured-in-closure wakePhrase variable. The
-      // latter was the initial value at the time _onModel
-      // was first created (via useRef); if the user typed
-      // a new phrase after opening the trainer, the typed
-      // text never reached this callback. See wakePhraseRef
-      // declaration above for the full bug writeup.
+      // Read wakePhrase from wakePhraseRef, NOT the captured-in-closure wakePhrase variable.
       const savedPath: string = await WakeWordModule.setWakeModelFromBase64(
         companionId,
         msg.base64,
@@ -784,44 +574,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
       setStatusMsg(`Wake word ready. Saved to ${savedPath}`);
       // Clean up the sample WAVs from cache
       clearSamples();
-      // v3.10.1: push the new wake phrase to the
-      // background-listening service. Before this fix,
-      // the OWW detector (foreground, used while the
-      // app is in WakeModeScreen) got the hot-swap
-      // above, but the BACKGROUND CyberClawService
-      // (Vosk + PhoneticMatcher, runs whenever
-      // "Background listening" is on) kept listening
-      // for whatever was in
-      // `cyberclaw-audio-settings.wakeWord` — usually
-      // the old "hey clawsuu" default. Tobe hit this
-      // hard: trained a unique phrase, then got
-      // repeated false wakes because the BG service
-      // was still fuzzy-matching natural speech
-      // containing "hey" + vaguely similar second
-      // word against the OLD phrase. Three writes
-      // need to happen atomically with the training
-      // completion:
-      //
-      //   1. `cyberclaw-audio-settings.wakeWord` — the
-      //      phrase the BG service uses (read by
-      //      startBgService in HomeScreen).
-      //   2. `cyberclaw-active-wake-companion` — which
-      //      companion owns the active wake. The
-      //      Settings screen reads this to highlight
-      //      the right row.
-      //   3. If BG listening is enabled, restart
-      //      BackgroundService with the new phrase.
-      //      (stop + start, in case the running
-      //      service cached the old phrase and
-      //      doesn't pick up the AsyncStorage change
-      //      until restart.)
-      //
-      // We do these in parallel — none of them block
-      // the training completion, and a partial
-      // failure (e.g. AsyncStorage write fails) is
-      // logged but doesn't roll back the training
-      // (the .tflite is already on disk + hot-swapped
-      // into the OWW detector).
+      // Push the new wake phrase to the background-listening service.
       try {
         const [settingsRaw, bgRaw] = await Promise.all([
           AsyncStorage.getItem('cyberclaw-audio-settings'),
@@ -835,13 +588,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
         ];
         await Promise.all(writes);
         if (bgRaw === 'true' && BackgroundService?.stop && BackgroundService?.start) {
-          // BG listening is on. The running service
-          // cached the old phrase on start. Stop +
-          // start with the new phrase so the
-          // detector picks it up. Brief audio gap
-          // (~200ms) is acceptable — this is right
-          // after a training completion, the user
-          // hasn't started talking yet.
+          // BG listening is on.
           try { await BackgroundService.stop(); } catch (_) {}
           try { await BackgroundService.start(wakePhraseRef.current); } catch (_) {}
         }
@@ -875,20 +622,13 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     setStage('uploading');
     setProgress(5);
     setStatusMsg('Sending samples to desktop...');
-    // v3.2.9: reset the logging state for a fresh run. Clear
-    // the event log and seed lastEventAt / trainingStartedAt
-    // so the "Ns since last event" indicator starts from
-    // zero rather than showing a stale value from a
-    // previous run.
+    // Reset the logging state for a fresh run.
     setEventLog([{ ts: Date.now(), msg: 'Started — sending samples to desktop...' }]);
     setLastEventAt(Date.now());
     setTrainingStartedAt(Date.now());
     setNow(Date.now());
 
-    // v3.2.7: poll for the cached result 10s after we fire the
-    // request. If our WebSocket dies during the readFile loop or
-    // during the first second of training, this catches it without
-    // making the user wait the full 20s watchdog interval.
+    // Poll for the cached result 10s after we fire the request.
     const earlyPoll = setTimeout(() => {
       if (syncClient?.connected) {
         syncClient.requestLatestWakeTrainingResult(companionId);
@@ -896,11 +636,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
     }, 10000);
 
     try {
-      // v3.2.5: ship the audio bytes themselves, not the on-phone
-      // file paths. The desktop can't reach the phone's filesystem
-      // (`/data/user/0/com.cyberclawmobile/cache/...`) so it always
-      // reported "sample not found". Read each .wav as base64 and
-      // let the desktop decode and write it to its training dir.
+      // Ship the audio bytes themselves, not the on-phone file paths.
       const encoded: Array<{ name: string; data: string }> = [];
       for (let i = 0; i < samples.length; i++) {
         const p = samples[i];
@@ -910,18 +646,11 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
         encoded.push({ name, data });
         setProgress(5 + Math.round(((i + 1) / samples.length) * 25));
       }
-      // v3.8.2: encode the user-recorded near-miss clips
-      // the same way and ship them with the training
-      // request. Optional — empty array means the desktop
-      // falls back to Piper-TTS-only adversarial
-      // negatives (v3.8.1 behavior).
+      // Encode the user-recorded near-miss clips the same way and ship them with the training request.
       const nearMissEncoded: Array<{ name: string; data: string }> = [];
       for (let i = 0; i < nearMissSamples.length; i++) {
         const nm = nearMissSamples[i];
-        // Use the phrase (sanitized) as the filename prefix
-        // so the desktop can see what each near-miss is.
-        // Falls back to a numeric name if the phrase has
-        // weird characters.
+        // Use the phrase (sanitized) as the filename prefix so the desktop can see what each near-miss is.
         const safeName = nm.phrase.replace(/[^a-z0-9]+/gi, '_').toLowerCase().slice(0, 20) || `near_miss_${i}`;
         const name = `${safeName}_${i}.wav`;
         const data = await RNFS.readFile(nm.path, 'base64');
@@ -1204,17 +933,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
               // Show suggestions only on the first empty
               // slot to avoid cluttering the UI.
               const suggestions = i === 0 ? suggestNearMisses(wakePhrase, 3) : [];
-              // v3.8.4: empty-slot value precedence:
-              //   1. The user's typed draft for this slot (if any)
-              //   2. The auto-suggestion for slot 0 (only on first
-              //      mount, so it doesn't overwrite what the user
-              //      typed)
-              //   3. Empty string — placeholder takes over
-              // The auto-suggestion only auto-fills the FIRST slot
-              // the first time the screen renders. After that the
-              // user's draft wins. Without this priority order, the
-              // suggestion would overwrite the user's typed text on
-              // every render and typing would silently fail.
+              // Empty-slot value precedence: 1.
               const slotValue = existing?.phrase
                 ?? (nearMissDrafts[i] !== undefined
                       ? nearMissDrafts[i]
@@ -1225,12 +944,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
                     style={[styles.input, styles.nearMissInput]}
                     value={slotValue}
                     onChangeText={(text) => {
-                      // v3.8.4: capture typed text into the
-                      // per-slot draft array. Once the slot
-                      // gets a recorded entry, the draft is
-                      // superseded by `existing.phrase`.
-                      // Editable stays true for empty slots
-                      // even though `existing` is undefined.
+                      // Capture typed text into the per-slot draft array.
                       if (existing) {
                         setNearMissSamples((prev) => prev.map((nm, idx) => idx === i ? { ...nm, phrase: text } : nm));
                       } else {
@@ -1256,12 +970,7 @@ export default function OpenWakeWordTrainer({ companionId, companionName, preset
                     <TouchableOpacity
                       style={styles.nearMissRecordBtn}
                       onPress={() => {
-                        // v3.8.4: phrase resolution precedence
-                        //   1. Whatever the user typed in this slot
-                        //   2. The slot's existing recorded phrase
-                        //   3. The first suggestion for slot 0
-                        //   4. Empty (the recording handler will
-                        //      alert if empty)
+                        // Phrase resolution precedence 1.
                         const typed = nearMissDrafts[i];
                         const phrase = (typed && typed.trim())
                           || existing?.phrase
@@ -1352,10 +1061,7 @@ const styles = StyleSheet.create({
   scroll: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 100 },
   title: { color: '#fff', fontSize: 22, fontWeight: '700', marginBottom: 8 },
   subtitle: { color: '#9ca3af', fontSize: 14, lineHeight: 20, marginBottom: 24 },
-  // v3.2.8: trained-model status badge. Green-tinted when there's
-  // an active model (so the user knows the wake word is currently
-  // working); gray-tinted with a hint when there isn't (so the
-  // user knows they need to train before the wake word works).
+  // Trained-model status badge.
   trainedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1422,10 +1128,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     overflow: 'hidden',
   },
-  // v3.10.59: cross-sample consistency hint shown once
-  // 4+ samples have been recorded. Gives a friendly
-  // summary of whether the recordings are consistent
-  // enough for reliable training.
+  // Cross-sample consistency hint shown once 4+ samples have been recorded.
   consistencyHint: {
     fontSize: 11,
     color: '#bbb',
@@ -1466,11 +1169,7 @@ const styles = StyleSheet.create({
   progressPct: { color: '#9ca3af', fontSize: 12, textAlign: 'right', marginTop: 6 },
   statusMsg: { color: '#6b7280', fontSize: 12, marginTop: 8, fontStyle: 'italic' },
   hint: { color: '#6b7280', fontSize: 12, marginTop: 12, lineHeight: 18 },
-  // v3.2.9: explicit logging card. Shows elapsed time + time
-  // since the last desktop event (color-coded green / yellow /
-  // red) + a scrolling event log so the user can tell at a
-  // glance whether the desktop is actively working or has
-  // gone silent.
+  // Explicit logging card.
   loggingCard: {
     backgroundColor: 'rgba(0, 0, 0, 0.35)',
     borderRadius: 8,
@@ -1534,10 +1233,7 @@ const styles = StyleSheet.create({
   },
   cancelBtnText: { color: '#9ca3af', fontSize: 14 },
 
-  // v3.8.2: near-miss recording UI. Three rows, each with
-  // a text input (for the phrase label) + a record button.
-  // When recorded, the row shows a green check and disables
-  // the input.
+  // Near-miss recording UI.
   nearMissHint: {
     color: '#9aa0b4',
     fontSize: 12,

@@ -1,8 +1,4 @@
-/**
- * RemoteToolPermissions — AsyncStorage-backed permission toggles for Agent Reach.
- * Each permission controls whether the desktop AI agent can invoke a category
- * of operations on this device remotely.
- */
+/** RemoteToolPermissions — AsyncStorage-backed permission toggles for Agent Reach. */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 

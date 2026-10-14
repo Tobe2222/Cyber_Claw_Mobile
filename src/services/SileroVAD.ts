@@ -1,13 +1,4 @@
-/**
- * Simplified Voice Activity Detection (VAD) for Real-Time Audio
- * 
- * Detects speech vs silence using:
- * 1. RMS (Root Mean Square) energy threshold
- * 2. Frequency analysis
- * 3. Zero-crossing rate
- * 
- * Returns probability (0.0-1.0) that current frame contains speech
- */
+/** Simplified Voice Activity Detection (VAD) for Real-Time Audio Detects speech vs silence using: 1. */
 
 export interface VADConfig {
   sampleRate: number;
@@ -36,11 +27,7 @@ export class SimpleVAD {
     };
   }
   
-  /**
-   * Process audio frame and return speech probability
-   * @param audioFrame PCM audio samples (Int16Array or Float32Array)
-   * @returns Probability 0.0-1.0 (0=silence, 1=definite speech)
-   */
+  /** Process audio frame and return speech probability @param audioFrame PCM audio samples (Int16Array or Float32Array) @returns Probability… */
   process(audioFrame: Int16Array | Float32Array): number {
     // Convert to float if needed
     const samples = this.toFloat32(audioFrame);
@@ -129,10 +116,7 @@ export class SimpleVAD {
     return float32;
   }
   
-  /**
-   * Calculate RMS energy of audio frame
-   * RMS = sqrt(mean(x^2))
-   */
+  /** Calculate RMS energy of audio frame RMS = sqrt(mean(x^2)) */
   private calculateRMS(samples: Float32Array): number {
     let sumSquares = 0;
     for (let i = 0; i < samples.length; i++) {
@@ -141,10 +125,7 @@ export class SimpleVAD {
     return Math.sqrt(sumSquares / samples.length);
   }
   
-  /**
-   * Calculate zero-crossing rate
-   * Speech has specific ZCR patterns, useful for differentiating from noise
-   */
+  /** Calculate zero-crossing rate Speech has specific ZCR patterns, useful for differentiating from noise */
   private calculateZeroCrossingRate(samples: Float32Array): number {
     let zeroCount = 0;
     for (let i = 1; i < samples.length; i++) {

@@ -1,41 +1,4 @@
-/**
- * VoiceEnrollmentBar — shared visual indicator for the
- * global passive speaker profile.
- *
- * v3.10.24: created (Tobe's v3.10.23 follow-up — "the
- * progress bar was good, just put it in Voice mode
- * settings. Plus a small one in voice mode at the top
- * so one can see it moving up as one uses it").
- *
- * v3.10.29: redesigned. Tobe's feedback: "I don't see
- * the learning bar. Actually it's in the top. But we
- * need to style it differently, it looks more like a
- * bug now. Add a small text also for voice mode."
- *
- * The v3.10.24 compact variant was a thin 3px bar with
- * no label. In voice mode that read as a UI bug
- * (especially at 0% fill — looked like an empty track).
- * The settings variant was a bar with a label above but
- * the empty/loading state also looked unfinished.
- *
- * v3.10.29 design:
- *   - compact (voice mode): small PILL at the top
- *     with a mic icon + tiny text label ("🎙 247/1000"
- *     or "🎙 Locked"). The progress is a thin bar
- *     inside the pill, not the pill itself. A subtle
- *     pulse animation (gentle opacity oscillation)
- *     while learning so the user can see it's alive.
- *   - full (settings): keeps the labeled bar layout
- *     but adds a clear "calibrating..." placeholder
- *     while status is loading (instead of an empty
- *     bar that looks like a 0% state).
- *   - locked state: pill becomes solid emerald with
- *     a check icon, no pulse, no shimmer.
- *
- * Same color/animation language so the two variants
- * read as the same indicator: cyan for learning,
- * emerald for locked.
- */
+/** VoiceEnrollmentBar — shared visual indicator for the global passive speaker profile. */
 
 import React, { useEffect, useState, useRef } from 'react';
 import {
@@ -70,44 +33,12 @@ type SpeakerStatus = {
 const ACTIVE_CONTRIBUTIONS_KEY = 'cyberclaw-voice-enrollment-active';
 const ACTIVE_CONTRIBUTION_PER_TURN = 1;  // v3.10.38: was 50, now 1 per turn (Tobe: 'should count 1 by 1')
 
-// Native-side thresholds. Mirrored here for the UI math
-// only — the native side is the single source of truth
-// for actual locking. If these drift, the UI is wrong
-// but the gate is correct.
+// Native-side thresholds.
 const LOCK_THRESHOLD_SAMPLES = 1000;
 const LOCK_THRESHOLD_WAKES = 5;
 const POLL_INTERVAL_MS = 2000;
 
-// v3.10.46: active-only threshold for compact bar in
-// voice mode. The compact bar shows on the voice-mode
-// screen and on the Settings screen. Voice mode pauses
-// the OWW listener (recorder owns the mic) so passive
-// samples don't accumulate there. Showing the combined
-// count (passive + active) in voice mode is misleading:
-// a user entering voice mode sees e.g. "100/1000" even
-// though they haven't done a single voice-mode turn yet
-// — the 100 came from passive OWW accumulation BEFORE
-// voice mode started. Tobe (v3.10.45): "the bar in voice
-// mode says 100/1000 now for some reason. 100 is not
-// correct, it should be 1 for each sample."
-//
-// Fix: in 'active-only' mode (used by WakeModeScreen),
-// the count and bar fill reflect only activeContributions
-// (1 per voice-mode turn), with a smaller threshold
-// (ACTIVE_LOCK_THRESHOLD turns). Full mode + compact
-// mode in Settings keep the combined view.
-//
-// v3.10.166: bumped ACTIVE_LOCK_THRESHOLD from 20 to 100.
-// Tobe (2026-08-13): "the bar says Learning 20/20 for
-// some reason. It should be 104/1000 but i think x/100
-// should be enough, should it not? 100 samples to learn
-// from?" The 20 cap was hitting him after only ~20 voice
-// turns — too few to actually represent the user's voice.
-// 100 turns is a more honest sample size while still
-// remaining visibly progressive in the bar. The native
-// OWW profiling threshold (which gates the actual lock
-// + matchScore usage) is unchanged — this is only the
-// UI progress denominator.
+// Active-only threshold for compact bar in voice mode.
 const ACTIVE_LOCK_THRESHOLD = 100;
 
 type Variant = 'full' | 'compact';
@@ -120,11 +51,7 @@ export default function VoiceEnrollmentBar({
 }: {
   variant?: Variant;
   mode?: Mode;
-  // v3.10.168: optional tap handler. When set, the
-  // compact pill becomes pressable and opens the
-  // voice-training screen. Used by WakeModeScreen so
-  // the user can tap the bar and learn what each
-  // tier means / start training.
+  // Optional tap handler.
   onPress?: () => void;
 }) {
   const [status, setStatus] = useState<SpeakerStatus | null>(null);
@@ -151,10 +78,7 @@ export default function VoiceEnrollmentBar({
     return () => loop.stop();
   }, [status?.profileLocked, shimmerX]);
 
-  // Pulse animation (compact variant only). A gentle
-  // opacity oscillation on the chip itself so the user
-  // can see the indicator is alive even when progress
-  // is at 0%. Disabled when locked.
+  // Pulse animation (compact variant only).
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (status?.profileLocked) {
@@ -182,10 +106,7 @@ export default function VoiceEnrollmentBar({
     return () => loop.stop();
   }, [status?.profileLocked, pulse]);
 
-  // Poll native status + the JS-side active-contributions
-  // counter (v3.10.35). Both feeds are merged into a single
-  // status object so the rest of the rendering pipeline
-  // doesn't need to know about the persistence split.
+  // Poll native status + the JS-side active-contributions counter (v3.10.35).
   useEffect(() => {
     cancelledRef.current = false;
     const tick = async () => {
@@ -235,37 +156,7 @@ export default function VoiceEnrollmentBar({
     );
   }
 
-  // Compute progress % as the max of the two
-  // thresholds' ratios.
-  //
-  // v3.10.35: also include the active voice-mode
-  // contributions in the combined progress. The bar
-  // is the user's primary feedback signal that their
-  // chats are contributing to the profile — without
-  // this, voice-mode users see a stuck 0/1000 bar
-  // even after many chats because the OWW listening
-  // path never runs while the recorder owns the mic.
-  //
-  // The actual profile lock still requires the
-  // native embeddings + confirmed wakes (via
-  // tryLockPrimaryProfile in OpenWakeWordDetector).
-  // The active contributions are UX feedback only:
-  // they fill the bar visually but don't unlock
-  // anything. profileLocked stays false until the
-  // native prerequisites are met, so the chip
-  // stays in the 'learning' state with the
-  // non-locked styling.
-  // v3.10.168: bar fill is now driven by
-  // progressToNextTier — the per-tier progress so
-  // each tier transition rewires the denominator
-  // (5 → 100 → 1000 → 5000). The old samplePct /
-  // wakePct / combinedPct math is preserved below
-  // for the label-generation logic (it still needs
-  // the sample and chat counts in the legacy
-  // "Learning X/Y" format for active-only mode).
-  // The new label-line tier display co-exists with
-  // this math; the bar fill is the new tier-based
-  // value.
+  // Compute progress % as the max of the two thresholds' ratios.
   const samplePct = Math.min(1, status.samplesTotal / LOCK_THRESHOLD_SAMPLES);
   const wakePct = Math.min(1, status.confirmedWakeFires / LOCK_THRESHOLD_WAKES);
   const activePct = Math.min(1, status.activeContributions / LOCK_THRESHOLD_SAMPLES);
@@ -274,88 +165,22 @@ export default function VoiceEnrollmentBar({
   const displayProgress = mode === 'active-only'
     ? activeOnlyPct
     : Math.max(samplePct, wakePct, activePct, combinedPct);
-  // Kept around in case a future caller wants the
-  // legacy "max-of-buckets" display (e.g. an
-  // analysis tool). Currently unused in the bar;
-  // the bar fill is `progressToNextTier(...)` below.
+  // Kept around in case a future caller wants the legacy "max-of-buckets" display (e.g.
   const _legacyProgress = status.profileLocked ? 1 : displayProgress;
 
-  // v3.10.37: combined display per Tobe's report:
-  // "the learning bar says 0+50/1000 ... it should
-  // just say 1/1000 if it uses 1 sample to analyze my
-  // voice currently". The "+50" looked like an error,
-  // not a value add. We now show a single combined
-  // count where:
-  //   - 1 voice-mode turn ≈ 1 'pseudo-sample' for display
-  //     (matching the +50 increment per turn)
-  //   - 1 OWW sample ≈ 1 native sample
-  //   - the bar fills on max(samplesTotal, activeContrib
-  //     utions) so each axis individually can drive fill
-  //
-  // The COMBINED total number shown is samplesTotal +
-  // activeContributions — both increase together so the
-  // user sees the bar moving (1, 51, 101, ...) instead
-  // of two separate numbers. The denominator is still
-  // LOCK_THRESHOLD_SAMPLES (1000) so the bar fills with
-  // ~20 voice turns OR ~1000 OWW samples, same as before.
+  // Combined display per Tobe's report: "the learning bar says 0+50/1000 ...
   const combinedCount = status.samplesTotal + status.activeContributions;
   const showActive = status.activeContributions > 0;
-  // Label is the same content for both variants; the
-  // COMPACT pill is a shorter version (just count
-  // + threshold, no "Learning your voice" prefix).
-  // v3.10.37: dropped the "+ N voice turns" suffix —
-  // the combined count is now in the main fraction so
-  // the label reads as "Learning X/Y" without parenthesized
-  // breakdowns. A small "🎤 N chats" badge remains in
-  // the full variant for users who want to see the
-  // contributions are working.
-  //
-  // v3.10.46: in 'active-only' mode (voice-mode
-  // compact bar), label shows only activeContributions
-  // with the smaller ACTIVE_LOCK_THRESHOLD denominator.
-  // Users in voice mode see a bar that ticks 1-per-turn
-  // from 0 toward 20, matching the discrete-turn model
-  // Tobe expects ("it should count 1 by 1").
-  //
-  // v3.10.48: cap the displayed count at the threshold
-  // so the label reads "X/Y" where X ≤ Y. Tobe hit
-  // "Learning 101/20" in v3.10.47 because the bar
-  // fill was capped (Math.min(1, ...)) but the label
-  // showed the raw count. The bar was at 100% but the
-  // label said "101/20" which looked like an overflow
-  // bug. Fix: cap the display value with Math.min so
-  // the label never shows a numerator larger than the
-  // denominator. The actual native
-  // enrollmentSamplesTotal continues to accumulate
-  // uncapped — only the UI display is capped.
+  // Label is the same content for both variants; the COMPACT pill is a shorter version (just count + threshold, no "Learning your voice"…
   const activeCapped = Math.min(status.activeContributions, ACTIVE_LOCK_THRESHOLD);
   const combinedCapped = Math.min(combinedCount, LOCK_THRESHOLD_SAMPLES);
   const samplesCapped = Math.min(status.samplesTotal, LOCK_THRESHOLD_SAMPLES);
-  // v3.10.168: tier labels replace the old "Learning
-  // X/Y" / "Voice profile locked" numerology. The bar
-  // shows the current tier + progress to the next, so
-  // the user can tell at a glance where they are on
-  // the training ladder.
-  //
-  // Tier ladder: 0 (none) → 1 (locked) → 2 (100+) →
-  // 3 (1000+) → 4 (5000+, finalized). See
-  // src/utils/speakerTier.ts for the full state
-  // machine.
-  //
-  // 'active-only' mode keeps the older 1-per-turn
-  // count for the wake-mode bar (Tobe's v3.10.46
-  // feedback) — the tier display fires in 'combined'
-  // mode and in locked states where active-vs-passive
-  // doesn't matter.
+  // Tier labels replace the old "Learning X/Y" / "Voice profile locked" numerology.
   const tier: SpeakerTier = deriveSpeakerTier({
     samplesTotal: status.samplesTotal,
     profileLocked: status.profileLocked,
   });
-  // Per-variant label strings. Tier display gives the
-  // user a clear "Tier N · progress" line. The chat
-  // count badge stays on the full variant for users
-  // who want to see voice-mode contributions separate
-  // from passive OWW samples.
+  // Per-variant label strings.
   const tierDisplay = `🎯 Tier ${tier}`;
   const tierProgress = tierProgressLabel({
     samplesTotal: status.samplesTotal,
@@ -420,20 +245,7 @@ function BarShell({
   const compact = variant === 'compact';
 
   if (compact) {
-    // v3.10.29: small pill with mic icon + label +
-    // thin progress bar inside. Pinned to the top of
-    // voice-mode screens. The pill itself is the
-    // visible surface; the progress bar is INSIDE.
-    // Opacity pulses while learning (gentle, 0.85
-    // ↔ 1.0 — barely noticeable, just enough to
-    // signal "alive" without being distracting).
-    //
-    // v3.10.168: when an onPress is provided
-    // (typically from WakeModeScreen), the pill
-    // becomes a pressable TouchableOpacity that
-    // opens the voice-training screen. Without an
-    // onPress, behavior is unchanged (pointerEvents
-    // none, decorative only).
+    // Small pill with mic icon + label + thin progress bar inside.
     const pillInner = (
       <Animated.View
         style={[
@@ -484,10 +296,7 @@ function BarShell({
     return pillInner;
   }
 
-  // Full variant: keep the existing labeled-bar layout
-  // but with a clear "calibrating" placeholder for the
-  // loading state (instead of an empty bar that looks
-  // like 0% fill).
+  // Full variant: keep the existing labeled-bar layout but with a clear "calibrating" placeholder for the loading state (instead of an empty…
   return (
     <View style={[styles.container, styles.containerFull]}>
       {label && (
@@ -504,11 +313,7 @@ function BarShell({
         ]}
       >
         {loading ? (
-          // Loading state: a flat dim track with a
-          // small "calibrating" shimmer. No fill
-          // (we don't have a number yet). The
-          // shimmer is in the same place the fill
-          // would be so the visual is consistent.
+          // Loading state: a flat dim track with a small "calibrating" shimmer.
           <Animated.View
             style={[
               styles.shimmer,
@@ -626,16 +431,7 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
 
-  // ── Compact (voice mode) pill styles ─────────────────────
-  // v3.10.29: a small floating pill, not a full-width
-  // bar. The pill is the surface; the progress is
-  // a thin strip inside.
-  // v3.10.31: larger pill. Tobe's v3.10.30 feedback:
-  // "the bar can be longer and slightly bigger for
-  // both voice mode and in the settings." Bumped
-  // padding 10/5 → 16/8, font 10 → 12, track width
-  // 60 → 140, track height 2 → 3. Same color/pulse
-  // language, just bigger and more readable.
+  // ── Compact (voice mode) pill styles ───────────────────── v3.10.29: a small floating pill, not a full-width bar.
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
