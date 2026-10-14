@@ -4925,9 +4925,26 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessagesByAgentAndQuest(prev => {
           const next: Record<string, Record<string, ChatMessage[]>> = { ...prev };
           const existingBuckets = next[aid] || {};
-          const mergedForAgent: Record<string, ChatMessage[]> = { ...existingBuckets };
+          // v3.11.46: desktop is the source of truth. Its buckets REPLACE
+          // the local ones; only very recent local messages the desktop
+          // hasn't echoed yet (in flight) are kept on top.
+          const IN_FLIGHT_MS = 120000;
+          const nowTs = Date.now();
+          const keepInFlight = (local: ChatMessage[] | undefined, loaded: ChatMessage[]) => {
+            const ids = new Set(loaded.map(m => m.id));
+            const texts = new Set(loaded.map(m => String(m.text || '').trim()));
+            const extra = (local || []).filter(m => m && m.ts > nowTs - IN_FLIGHT_MS && !ids.has(m.id) && !texts.has(String(m.text || '').trim()));
+            return extra.length ? loaded.concat(extra).sort((a, b) => (a.ts || 0) - (b.ts || 0)) : loaded;
+          };
+          const mergedForAgent: Record<string, ChatMessage[]> = {};
+          for (const [k, local] of Object.entries(existingBuckets)) {
+            if (!(k in bucketsMsg)) {
+              const fresh = keepInFlight(local, []);
+              if (fresh.length) mergedForAgent[k] = fresh;
+            }
+          }
           for (const [bucketKey, msgs] of Object.entries(bucketsMsg)) {
-            if (!Array.isArray(msgs) || msgs.length === 0) continue;
+            if (!Array.isArray(msgs)) continue;
             // Map each message with a stable id + preserve
             // quest attribution.
             const loadedBucket: ChatMessage[] = msgs.map((m: any) => ({
@@ -4954,7 +4971,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
                 ? m.attachments
                 : undefined,
             }));
-            mergedForAgent[bucketKey] = loadedBucket;
+            mergedForAgent[bucketKey] = keepInFlight(existingBuckets[bucketKey], loadedBucket);
           }
           next[aid] = mergedForAgent;
           return next;
@@ -5053,7 +5070,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         // Desktop says empty but we have local history
         // (e.g. the desktop restarted). KEEP the local
         // copy. The user can still see their old messages.
-        addLogEntry(`← Desktop history empty for ${aid}, keeping local cache (${localSlot.length} msg)`, 'info');
+        // v3.11.46: desktop is the source of truth — empty there means empty here.
+        addLogEntry(`← Desktop history empty for ${aid}, clearing local copy (${localSlot.length} msg)`, 'info');
+        setMessagesByAgentAndQuest(prev => ({ ...prev, [aid]: { ...(prev[aid] || {}), [DEFAULT_QUEST_KEY]: [] } }));
+        if (activeChatAgentIdRef.current === aid && activeChatQuestId === null) setMessages([]);
       }
       // History is loaded — clear unread for this agent.
       setChatUnreadByAgent(prev => ({ ...prev, [aid]: 0 }));
@@ -5299,12 +5319,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
           return;
         }
-        // Case 3: fresh broadcast carries a different
-        // active than our anchor. Don't swap state
-        // (projection effect won't re-fire); update
-        // activeQuestRef so outgoing agent messages get
-        // stamped correctly.
+        // v3.11.46: Case 3 — desktop is the source of truth for the
+        // active quest. A fresh broadcast always wins over the phone's
+        // cached anchor (before, the phone kept its own and could show
+        // a different quest chat than the desktop).
+        setMobileActiveQuestAnchor(nextQid);
         activeQuestRef.current = next; setActiveQuestInfo((next as any) ?? null);
+        setActiveChatQuestId(prev => (prev === nextQid ? prev : nextQid));
       } catch {}
     };
     syncClient.on('quests_list', onQuestsList);
