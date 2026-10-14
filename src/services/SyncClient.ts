@@ -247,14 +247,21 @@ class SyncClient {
     this.send({ type: 'voice_transcript', transcript, context, lookbackMinutes });
   }
 
-  sendAudioInput(audioBase64: string, mimeType: string = 'audio/wav') {
+  // v3.11.47: end-of-turn check — desktop transcribes what's recorded so far
+  // and answers voice_peek_result { id, text, complete }.
+  peekVoice(id: string, audioBase64: string, mimeType: string = 'audio/wav') {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    try { this.send({ type: 'voice_peek', id, audioBase64, mimeType }); return true; } catch { return false; }
+  }
+
+  sendAudioInput(audioBase64: string, mimeType: string = 'audio/wav', transcript?: string) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.error('[SyncClient] Audio input failed: WebSocket not open (state: ' + (this.ws?.readyState || 'none') + ')');
       this.emit('send_error', { type: 'audio_input', reason: 'not_connected' });
       return;
     }
     try {
-      this.send({ type: 'audio_input', audioBase64, mimeType });
+      this.send({ type: 'audio_input', audioBase64, mimeType, ...(transcript ? { transcript } : {}) });
     } catch (e: any) {
       console.error('[SyncClient] Audio input send failed:', e.message);
       this.emit('send_error', { type: 'audio_input', reason: e?.message });
@@ -584,6 +591,10 @@ class SyncClient {
           // v3.11.43: old token rejected (new desktop / reinstall) → ask for a code.
           this.emit('pairing_required', { reason: 'token_rejected', error: msg.error });
         }
+        break;
+
+      case 'voice_peek_result':
+        this.emit('voice_peek_result', msg);
         break;
 
       case 'chat_context':

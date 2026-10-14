@@ -125,6 +125,11 @@ export default function WakeModeScreen({
   // Sustained-speech counters for the JS side.
   const speechEventsRunRef = useRef<number>(0);
   const lastSpeechEventAtRef = useRef<number>(0);
+  // v3.11.47: last time the mic heard voice-level audio (any moment), for end-of-turn.
+  const lastVoiceAtRef = useRef<number>(0);
+  // v3.11.47: sentence-by-sentence reply playback + tap-to-interrupt.
+  const audioChainRef = useRef<Promise<void>>(Promise.resolve());
+  const interruptedRef = useRef(false);
   // Counter for consecutive recording turns where no speech was detected.
   const consecutiveEmptyRoundsRef = useRef<number>(0);
   // How many "no speech" rounds before we exit voice mode automatically.
@@ -235,7 +240,7 @@ export default function WakeModeScreen({
   }, []);
 
   // Play a cached greeting audio file (WAV synthesized by the desktop's piper TTS).
-  const playCachedGreeting = useCallback(async (filePath: string): Promise<void> => {
+  const playCachedGreeting = useCallback(async (filePath: string, maxMs?: number): Promise<void> => {
     if (!WakeWordModule?.startPlayer) {
       addVoiceLog('🔊 cached play: startPlayer unavailable');
       return;
@@ -243,7 +248,7 @@ export default function WakeModeScreen({
     const t0 = Date.now();
     try {
       const { playAudioFile } = require('../services/AudioPlayer');
-      await playAudioFile(filePath);
+      await playAudioFile(filePath, maxMs || 10000);
       addVoiceLog(`🔊 done (cached-play, ${Date.now() - t0}ms)`);
     } catch (e: any) {
       addVoiceLog(`🔊 cached play failed: ${e?.message}`);
@@ -775,7 +780,7 @@ export default function WakeModeScreen({
   }, []);
 
   // Shared stop-and-send path.
-  const stopAndSendRecording = useCallback(async (triggerReason: 'silence' | 'send') => {
+  const stopAndSendRecording = useCallback(async (triggerReason: 'silence' | 'send', peekTranscript?: string) => {
     if (stopInFlightRef.current) return;
     stopInFlightRef.current = true;
     // Reset the late-response flag for this new turn.
@@ -864,7 +869,7 @@ export default function WakeModeScreen({
         return;
       }
       setVoiceStatus('transcribing');
-      syncClient.sendAudioInput(base64, 'audio/wav');
+      syncClient.sendAudioInput(base64, 'audio/wav', peekTranscript);
       addLogEntry(`Wake Mode: audio sent for transcription (trigger=${triggerReason})`, 'sent');
       addVoiceLog(triggerReason === 'send' ? '📤 Send word → sent' : '📏 Sent, waiting...');
 
@@ -1008,7 +1013,53 @@ export default function WakeModeScreen({
       }
 
       // Silence detection.
+      // v3.11.47: smart end-of-turn. After a short pause the phone sends what
+      // it has so far to the desktop, which transcribes it and judges whether
+      // the sentence is finished ("check the miner and…" → keep listening).
+      // Finished → send right away, reusing that transcript (no 3 s countdown,
+      // no second transcription). Unfinished → keep listening and check again.
       const onSilenceEvent = async () => {
+        if (silenceFiredRef.current) return;
+        silenceFiredRef.current = true;
+        setVoiceStatus('silence_countdown');
+        const fsMod = require('react-native-fs');
+        const peekOnce = async (): Promise<{ text: string; complete: boolean } | null> => {
+          let b64 = '';
+          try { b64 = await fsMod.readFile(recPath, 'base64'); } catch (_) { return null; }
+          if (!b64 || b64.length < 2000) return null;
+          const id = 'peek-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+          return await new Promise((resolve) => {
+            const t = setTimeout(() => { syncClient.off?.('voice_peek_result', onRes); resolve(null); }, 5000);
+            const onRes = (m: any) => {
+              if (!m || m.id !== id) return;
+              clearTimeout(t); syncClient.off?.('voice_peek_result', onRes);
+              resolve({ text: String(m.text || ''), complete: !!m.complete });
+            };
+            syncClient.on('voice_peek_result', onRes);
+            if (!syncClient.peekVoice(id, b64, 'audio/wav')) { clearTimeout(t); syncClient.off?.('voice_peek_result', onRes); resolve(null); }
+          });
+        };
+        const deadline = Date.now() + Math.max(silenceMs, 1800) + 6000;
+        let lastText: string | null = null;
+        for (;;) {
+          if (stopInFlightRef.current) return;
+          const r = await peekOnce();
+          if (stopInFlightRef.current) return;
+          if (!r || !r.text.trim()) { addVoiceLog('📏 Sending…'); await stopAndSendRecording('silence'); return; }
+          const stillTalking = Date.now() - lastVoiceAtRef.current < 500;
+          if (!stillTalking && (r.complete || r.text === lastText || Date.now() > deadline)) {
+            addVoiceLog('✅ "' + r.text.slice(0, 40) + '"');
+            addLogEntry('Wake/Voice Mode: end of turn (' + (r.complete ? 'sentence complete' : 'no new speech') + ')', 'info');
+            await stopAndSendRecording('silence', r.text);
+            return;
+          }
+          lastText = r.text;
+          setVoiceStatus('listening');
+          addVoiceLog('… go on');
+          await new Promise<void>(res => setTimeout(() => res(), 1200));
+        }
+      };
+      const onSilenceEventOld = async () => {
         if (silenceFiredRef.current) return;
         silenceFiredRef.current = true;
         addVoiceLog(`⏳ Silence detected (${silenceMs}ms)...`);
@@ -1042,7 +1093,9 @@ export default function WakeModeScreen({
       };
       silenceUnsubRef.current = recorder.on('silence', onSilenceEvent);
 
-      await recorder.start(recPath, silenceMs);
+      // v3.11.47: short pause triggers the end-of-turn check; the user's
+      // silence setting is now the upper bound, not the fixed wait.
+      await recorder.start(recPath, Math.min(silenceMs, 800));
       recorderActiveRef.current = true;
       addLogEntry(`Wake Mode: recorder started (silence=${silenceMs}ms)`, 'info');
     } catch (e: any) {
@@ -1134,6 +1187,28 @@ export default function WakeModeScreen({
       setVoiceStatus('responding');
     };
     const onAudioResponse = async (msg: any) => {
+      // v3.11.47: sentence-by-sentence reply. Non-final parts are queued and
+      // played in order; the final part waits for them, then runs the normal
+      // end-of-reply logic below.
+      if (msg && msg.final === false) {
+        if (msg.part === 0) { interruptedRef.current = false; cancelWorkingCue(); setVoiceStatus('responding'); }
+        if (transcribingTimeoutRef.current) { clearTimeout(transcribingTimeoutRef.current); transcribingTimeoutRef.current = null; }
+        if (thinkingTimerRef.current) { clearTimeout(thinkingTimerRef.current); thinkingTimerRef.current = null; }
+        lateResponseReceivedRef.current = true;
+        const partB64 = msg.audioBase64;
+        audioChainRef.current = audioChainRef.current.then(async () => {
+          if (interruptedRef.current || !partB64) return;
+          try {
+            const fsP = require('react-native-fs');
+            const p = fsP.TemporaryDirectoryPath + '/cyberclaw-part-' + Date.now() + '.wav';
+            await fsP.writeFile(p, partB64, 'base64');
+            await playCachedGreeting(p, Math.ceil(partB64.length * 0.75 / 44100 * 1000) + 2500);
+          } catch (_) {}
+        });
+        return;
+      }
+      if (msg && msg.final === true) { await audioChainRef.current; if (interruptedRef.current) return; }
+      audioChainRef.current = Promise.resolve();
       // Desktop sends synthesized audio. Wake Mode just lets it play.
       addLogEntry('🔊 Wake Mode: audio response from desktop', 'info');
       // v3.2.20 — clear the transcribing timeout since we
@@ -1171,6 +1246,7 @@ export default function WakeModeScreen({
         clearTimeout(transcribingTimeoutRef.current);
         transcribingTimeoutRef.current = null;
       }
+      let playbackDone = false;
       // Actually PLAY the audio.
       if (msg.audioBase64) {
         try {
@@ -1185,7 +1261,8 @@ export default function WakeModeScreen({
           // Use the same playCachedGreeting helper as
           // the greeting path so error handling, audio
           // focus, and afterPlayback hooks are identical.
-          await playCachedGreeting(tmpPath);
+          await playCachedGreeting(tmpPath, Math.ceil(msg.audioBase64.length * 0.75 / 44100 * 1000) + 2500);
+          playbackDone = true;
           addLogEntry('🔊 Wake Mode: response audio playback resolved', 'info');
         } catch (e: any) {
           addLogEntry(`🔊 Wake Mode: response audio failed: ${e?.message}`, 'error');
@@ -1199,6 +1276,7 @@ export default function WakeModeScreen({
       const afterPlayback = async () => {
         if (afterPlaybackFired) return;
         afterPlaybackFired = true;
+        if (interruptedRef.current) { interruptedRef.current = false; return; }
         // Flip the visual to YOUR TURN IMMEDIATELY.
         setVoiceStatus('listening');
         addVoiceLog('🎤 Your turn...');
@@ -1256,6 +1334,9 @@ export default function WakeModeScreen({
       setTimeout(afterPlayback, fallbackMs);
       // Also listen for audioPlayerFinished.
       wakeWordEmitter?.addListener('audioPlayerFinished', afterPlayback);
+      // v3.11.47: playback already finished above → hand the turn back now
+      // instead of waiting for the multi-second fallback timer.
+      if (playbackDone) setTimeout(afterPlayback, 150);
     };
     syncClient.on('chat', onChat);
     syncClient.on('audio_response', onAudioResponse);
@@ -1381,6 +1462,7 @@ export default function WakeModeScreen({
     const SPEECH_EVENT_RUN_MAX_GAP_MS = 1500;
     const sub = emitter.addListener('owwVad', (e: { rms: number; zcr: number }) => {
       const now = Date.now();
+      if (e.rms > 0.015) lastVoiceAtRef.current = now;
       // Sustained-speech guard mirrors the native counter.
       if (!speechDetectedDuringRecordingRef.current && e.rms > 0.015 && e.zcr > 0.02) {
         if (now - lastSpeechEventAtRef.current > SPEECH_EVENT_RUN_MAX_GAP_MS) {
@@ -1616,6 +1698,22 @@ export default function WakeModeScreen({
           <Text style={styles.voiceStatusYourTurn}>
             🎤 YOUR TURN
           </Text>
+        )}
+        {/* v3.11.47: tap-to-interrupt while the companion is talking. */}
+        {voiceMode && voiceStatus === 'responding' && (
+          <TouchableOpacity
+            style={{ marginTop: 14, alignSelf: 'center', paddingHorizontal: 22, paddingVertical: 12, borderRadius: 24, backgroundColor: 'rgba(247,147,26,0.18)', borderWidth: 1, borderColor: '#f7931a' }}
+            onPress={() => {
+              interruptedRef.current = true;
+              audioChainRef.current = Promise.resolve();
+              try { WakeWordModule?.stopPlayer?.(); } catch (_) {}
+              addVoiceLog('✋ Interrupted — your turn');
+              setVoiceStatus('listening');
+              startRecordingTurnRef.current?.().catch(() => {});
+            }}
+          >
+            <Text style={{ color: '#f7931a', fontSize: 16, fontWeight: '700' }}>✋ Tap to interrupt</Text>
+          </TouchableOpacity>
         )}
       </View>
 

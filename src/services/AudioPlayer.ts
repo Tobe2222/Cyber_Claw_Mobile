@@ -25,7 +25,7 @@ function getEmitter(): NativeEventEmitter | null {
 }
 
 /** Play an audio file at the given path and resolve when it finishes (or after a 10s safety timeout). */
-export async function playAudioFile(filePath: string): Promise<void> {
+export async function playAudioFile(filePath: string, maxMs: number = 10000): Promise<void> {
   if (!WakeWordModule?.startPlayer) {
     throw new Error('WakeWordModule.startPlayer not available');
   }
@@ -42,7 +42,7 @@ export async function playAudioFile(filePath: string): Promise<void> {
     };
     const e = getEmitter();
     const sub = e?.addListener?.('audioPlayerFinished', () => finish('play')) ?? null;
-    const safetyTimer = setTimeout(() => finish('safety'), 10000);
+    const safetyTimer = setTimeout(() => finish('safety'), maxMs);
     WakeWordModule.startPlayer(filePath, false)
       .then(() => {
         // startPlayer resolved — the audio is now playing.
