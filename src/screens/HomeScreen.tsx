@@ -157,6 +157,15 @@ interface AttachmentItem {
   size?: number;
 }
 
+// v3.11.49: classify a desktop error text for the error card.
+function classifyErrorText(t: string): 'timeout' | 'crash' | 'network' | 'ratelimit' | 'error' {
+  if (/rate.?limit|429|too many requests|overloaded|quota/i.test(t)) return 'ratelimit';
+  if (/timed?\s*out|timeout/i.test(t)) return 'timeout';
+  if (/exited with code \d|agent CLI|crash/i.test(t)) return 'crash';
+  if (/HTTP request failed|fetch failed|network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(t)) return 'network';
+  return 'error';
+}
+
 interface ChatMessage {
   id: string;
   text: string;
@@ -186,7 +195,7 @@ interface ChatMessage {
     steps: string[];
     // Error category classified by pattern-match on
     // the desktop's "Error: <text>" wire format.
-    errorCategory: 'timeout' | 'crash' | 'network' | 'error';
+    errorCategory: 'timeout' | 'crash' | 'network' | 'ratelimit' | 'error';
     // The full error text including the "Error:" prefix.
     // Preserved in case the renderer wants to show it
     // again or the user copies it.
@@ -785,6 +794,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   // v3.11.45: Discord-style chat = inverted FlatList, newest first.
   const chatData = useMemo(() => messages.slice(-visibleCount).reverse(), [messages, visibleCount]);
   const chatDataRef = useRef<ChatMessage[]>([]);
+  // v3.11.49: id of my most recent message (gets the small resend button).
+  const lastUserMsgId = useMemo(() => chatData.find(m => m.isUser)?.id || null, [chatData]);
   chatDataRef.current = chatData;
   const chatScrollKeyRef = useRef<string>('');
   const pendingRestoreRef = useRef<string | null>(null);
@@ -2161,11 +2172,12 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         chatCasualRef.current ? null : activeChatQuestId,
       );
       // Classify error bubbles so the chat can render a structured card with category, duration, and partial-step list.
-      let errorCategory: 'timeout' | 'crash' | 'network' | 'error' | null = null;
+      let errorCategory: 'timeout' | 'crash' | 'network' | 'ratelimit' | 'error' | null = null;
       if (!incoming.isUser && typeof incoming.text === 'string') {
         const t = incoming.text;
-        if (/^Error:\s/.test(t)) {
-          if (/timed?\s*out/i.test(t) || /timeout/i.test(t)) {
+        if (/^Error:\s/.test(t) || msg.isError) {
+          errorCategory = classifyErrorText(t);
+          if (false) {
             errorCategory = 'timeout';
           } else if (/exited with code \d/i.test(t) || /agent CLI/i.test(t)) {
             errorCategory = 'crash';
@@ -2251,7 +2263,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         }
         // If replyIsForActiveBucket is false, leave the sticky flag and timer alone — the indicator stays up for the still-in-flight active request.
       }
-      if (aid !== activeChatAgentIdRef.current) {
+      if (aid !== activeChatAgentIdRef.current && !msg.replay && !msg.ambient) {
         setChatUnreadByAgent(prev => ({ ...prev, [aid]: (prev[aid] || 0) + 1 }));
       }
       // Fire a system notification when a companion replies and the user isn't actively watching the chat for that companion.
@@ -2839,6 +2851,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
               ts: m.ts,
               activeQuestId: m.activeQuestId ?? (bucketKey === DEFAULT_QUEST_KEY ? null : bucketKey),
               activeQuestName: m.activeQuestName ?? null,
+              // v3.11.49: desktop errors (timeouts, rate limits) come back as error cards.
+              ...((m.isError || (!m.isUser && /^Error:\s/.test(String(m.text || '')))) ? { taskSummary: { status: 'failed' as const, durationMs: 0, stepCount: 0, steps: [], errorCategory: classifyErrorText(String(m.text || '')), errorText: String(m.text || '') } } : {}),
               // Forward attachments on history sync.
               attachments: Array.isArray(m.attachments) && m.attachments.length > 0
                 ? m.attachments
@@ -3447,6 +3461,8 @@ const lastMessageIdRef = useRef<string | null>(null);
 // V3.11.31 FIX (Tobe 2026-10-05 18:43): track the last message's text + ts so the unread counter can handle the chat_history-replay case…
 const lastMessageTextRef = useRef<string | null>(null);
 const lastMessageTsRef = useRef<number | null>(null);
+// v3.11.49: newest message time already seen — re-synced history never counts as new.
+const newestSeenTsRef = useRef<number>(0);
 useEffect(() => {
   if (messages.length === 0) return;
   const last = messages[messages.length - 1];
@@ -3463,6 +3479,14 @@ useEffect(() => {
       // Keep prevTs unchanged so a future genuine
       // duplicate (e.g. another reconnect) still
       // matches.
+      return;
+    }
+  }
+  {
+    const seen = newestSeenTsRef.current;
+    newestSeenTsRef.current = Math.max(seen, last.ts || 0);
+    if (seen && (last.ts || 0) <= seen + 2000 && lastMessageIdRef.current !== null) {
+      lastMessageIdRef.current = last.id; lastMessageTextRef.current = last.text; lastMessageTsRef.current = last.ts || 0;
       return;
     }
   }
@@ -3800,6 +3824,7 @@ useEffect(() => {
                   {item.taskSummary.errorCategory === 'timeout' ? '⏱️ Model timed out' :
                    item.taskSummary.errorCategory === 'crash' ? '💥 Model crashed' :
                    item.taskSummary.errorCategory === 'network' ? '🌐 Network error' :
+                   item.taskSummary.errorCategory === 'ratelimit' ? '🚦 Rate limited — the AI provider is busy' :
                    '⚠️ Error'}
                   {'  ·  '}
                   <Text style={styles.taskErrorDuration}>
@@ -3913,10 +3938,24 @@ useEffect(() => {
           )}
           <Text style={styles.timestamp}>{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
         </View>
+        {item.isUser && item.id === lastUserMsgId && !!item.text && (
+          <TouchableOpacity
+            style={styles.resendBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            onPress={() => {
+              const clean = item.text.replace(/^\[From:[^\]]*\]\s*/, '');
+              setInputText(clean);
+              addLogEntry('🔁 Resending last message', 'info');
+              setTimeout(() => { try { sendMessageRef.current?.(); } catch (_) {} }, 80);
+            }}
+          >
+            <Text style={styles.resendText}>↻ Resend</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
     // Also depend on `agents` so the message label re-renders when the agents state is hydrated from cache or refreshed by a fresh `agents_list`…
-  }, [messages, agents, questNameById]);
+  }, [messages, agents, questNameById, lastUserMsgId]);
 
   const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
     // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)
@@ -5444,6 +5483,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   chatStatusText: {
     color: 'rgba(247,147,26,0.95)', fontSize: 13, fontStyle: 'italic', fontWeight: '500', flexShrink: 1,
   },
+  resendBtn: { alignSelf: 'flex-end', marginTop: 3, marginRight: 6, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(34,211,238,0.35)' },
+  resendText: { color: 'rgba(34,211,238,0.85)', fontSize: 11, fontWeight: '600' },
   chatStatusElapsed: {
     marginLeft: 'auto', paddingLeft: 10, color: 'rgba(247,147,26,0.6)', fontSize: 11, fontVariant: ['tabular-nums'],
   },
