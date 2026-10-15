@@ -748,6 +748,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [chatVoiceStatus, setChatVoiceStatus] = useState<string | null>(null);
   // Claude-style action log.
   const [chatActions, setChatActions] = useState<string[]>([]);
+  // v3.11.48: seconds since the companion started working (thinking bar).
+  const [thinkingElapsed, setThinkingElapsed] = useState(0);
   // Animated value driving the pulsing-dot "is thinking..." spinner.
   const thinkPulse = useRef(new Animated.Value(0)).current;
   const indicatorOpacity = useRef(new Animated.Value(0)).current;
@@ -817,11 +819,21 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     lastVoiceStatusRef.current = chatVoiceStatus;
     if (isOn && !wasOn) {
       setChatActions([]);
+      setThinkingElapsed(0);
       Animated.timing(indicatorOpacity, { toValue: 1, duration: 180, useNativeDriver: true }).start();
     } else if (!isOn && wasOn) {
       Animated.timing(indicatorOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start();
     }
   }, [chatVoiceStatus, indicatorOpacity]);
+  // v3.11.48: tick the elapsed timer while the thinking bar is visible.
+  useEffect(() => {
+    if (!chatVoiceStatus) return;
+    const id = setInterval(() => {
+      const start = thinkingStartedAtRef.current;
+      setThinkingElapsed(start ? Math.floor((Date.now() - start) / 1000) : 0);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [chatVoiceStatus]);
   // SCROLL BEHAVIOR REWRITE.
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const fullscreenRef = useRef(false);
@@ -2244,7 +2256,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
       }
       // Fire a system notification when a companion replies and the user isn't actively watching the chat for that companion.
       const isOwnReply = !msg.isUser;
-      if (isOwnReply && !msg.replay) {
+      // v3.11.48: no phone notification for ambient chatter (idle comments,
+      // toy/snack reactions) — it lands in casual chat, nothing to read.
+      if (isOwnReply && !msg.replay && !msg.ambient) {
         const isChatFocused =
           appStateRef.current === 'active' &&
           !fullscreenRef.current &&
@@ -2423,10 +2437,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     // Tool-call events from the desktop's OpenClaw session tailer.
     const onAgentTool = (msg: any) => {
       if (!msg || typeof msg.friendly !== 'string') return;
-      setChatVoiceStatus(msg.friendly);
-      // Claude-style action log.
+      // v3.11.48: only while this phone is waiting for a reply from that
+      // companion (Discord / other sessions also produce tool calls).
+      if (!thinkingStickyRef.current) return;
+      if (msg.agentId && msg.agentId !== activeChatAgentIdRef.current) return;
       const friendly = msg.friendly;
       setChatActions(prev => {
+        if (prev[prev.length - 1] === friendly) return prev;
         const next = [...prev, friendly];
         // Keep the last 3 (oldest drops first).
         return next.length > 3 ? next.slice(next.length - 3) : next;
@@ -4499,7 +4516,12 @@ useEffect(() => {
                       },
                     ]}
                   />
-                  <Text style={styles.chatStatusText}>{chatVoiceStatus}</Text>
+                  <Text style={styles.chatStatusText} numberOfLines={1}>{chatVoiceStatus}</Text>
+                  {thinkingElapsed >= 3 && (
+                    <Text style={styles.chatStatusElapsed}>
+                      {thinkingElapsed < 60 ? thinkingElapsed + 's' : Math.floor(thinkingElapsed / 60) + 'm ' + (thinkingElapsed % 60) + 's'}
+                    </Text>
+                  )}
                 </View>
                 {chatActions.length > 0 && (
                   <View style={styles.chatActionsRow}>
@@ -4513,7 +4535,7 @@ useEffect(() => {
                         ]}
                         numberOfLines={1}
                       >
-                        • {act}
+                        {idx < chatActions.length - 1 ? '✓ ' : '› '}{act}
                       </Text>
                     ))}
                   </View>
@@ -5420,7 +5442,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     marginRight: 8,
   },
   chatStatusText: {
-    color: 'rgba(247,147,26,0.95)', fontSize: 13, fontStyle: 'italic', fontWeight: '500',
+    color: 'rgba(247,147,26,0.95)', fontSize: 13, fontStyle: 'italic', fontWeight: '500', flexShrink: 1,
+  },
+  chatStatusElapsed: {
+    marginLeft: 'auto', paddingLeft: 10, color: 'rgba(247,147,26,0.6)', fontSize: 11, fontVariant: ['tabular-nums'],
   },
   // Action log row.
   chatActionsRow: {
