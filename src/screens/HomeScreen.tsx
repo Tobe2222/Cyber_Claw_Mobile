@@ -759,6 +759,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [chatActions, setChatActions] = useState<string[]>([]);
   // v3.11.48: seconds since the companion started working (thinking bar).
   const [thinkingElapsed, setThinkingElapsed] = useState(0);
+  // v3.11.50: final state of the status line (Done / error / stopped).
+  const finishTimerRef = useRef<any>(null);
+  const finishedLabelRef = useRef<string | null>(null);
+  const finishThinkingRef = useRef<((kind: 'done' | 'error' | 'stopped') => void) | null>(null);
   // Animated value driving the pulsing-dot "is thinking..." spinner.
   const thinkPulse = useRef(new Animated.Value(0)).current;
   const indicatorOpacity = useRef(new Animated.Value(0)).current;
@@ -914,6 +918,22 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const thinkingStickyRef = useRef(false);
   // Long-wait escalation refs.
   const thinkingStartedAtRef = useRef<number | null>(null);
+  finishThinkingRef.current = (kind) => {
+    const start = thinkingStartedAtRef.current;
+    const secs = start ? Math.round((Date.now() - start) / 1000) : 0;
+    const t = secs ? ' · ' + (secs < 60 ? secs + 's' : Math.floor(secs / 60) + 'm ' + (secs % 60) + 's') : '';
+    const label = kind === 'done' ? '✓ Done' + t
+      : kind === 'error' ? '⚠️ Stopped with an error' + t + ' — see the card below'
+      : '■ Stopped without a reply' + t + ' — tap Resend to try again';
+    finishedLabelRef.current = label;
+    setChatVoiceStatus(label);
+    if (finishTimerRef.current) clearTimeout(finishTimerRef.current);
+    finishTimerRef.current = setTimeout(() => {
+      finishTimerRef.current = null;
+      setChatVoiceStatus(cur => (cur === label ? null : cur));
+      if (finishedLabelRef.current === label) finishedLabelRef.current = null;
+    }, kind === 'done' ? 8000 : 30000);
+  };
   const thinkingEscalateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
@@ -2250,7 +2270,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const replyIsForActiveBucket =
           aid === activeChatAgentIdRef.current &&
           replyBucketKey === activeBucketKey;
-        if (replyIsForActiveBucket) {
+        if (replyIsForActiveBucket && !msg.ambient) {
+          // v3.11.50: show the outcome (✓ Done · 42s / ⚠️ error) instead of vanishing.
+          finishThinkingRef.current?.(/^Error:\s/.test(String(msg.text || '')) ? 'error' : 'done');
           thinkingStickyRef.current = false;
           thinkingStartedAtRef.current = null;
           if (thinkingEscalateTimerRef.current) {
@@ -2259,7 +2281,6 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           }
           setIsThinking(false);
           setArenaThinking(false);
-          setChatVoiceStatus(null);
         }
         // If replyIsForActiveBucket is false, leave the sticky flag and timer alone — the indicator stays up for the still-in-flight active request.
       }
@@ -2376,7 +2397,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         return;
       }
       addLogEntry(`📨 Adding to chat: "${msg.text.substring(0, 50)}..."`, 'received');
-      setChatVoiceStatus(null); // clear status when response arrives
+      // v3.11.50: the status line is closed by finishThinking (above) for real
+      // replies only — not by the echo of my own message or ambient chatter,
+      // which used to wipe it a few seconds after sending.
       // v3.1.17: incoming message already appended to messagesByAgent[aid]
       // and (if active) `messages` at the top of onChat. The legacy
       // duplicate-detection log entry still helps when debugging the
@@ -2395,6 +2418,19 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     const onTyping = (msg: any) => {
       setIsThinking(!!msg.active);
       setArenaThinking(!!msg.active);
+      if (msg.active) {
+        if (finishTimerRef.current) { clearTimeout(finishTimerRef.current); finishTimerRef.current = null; }
+        if (finishedLabelRef.current) { finishedLabelRef.current = null; setChatActions([]); }
+      } else {
+        // Desktop stopped working. If no reply arrived, say so.
+        setTimeout(() => {
+          if (thinkingStickyRef.current && !fullscreenRef.current) {
+            finishThinkingRef.current?.('stopped');
+            thinkingStickyRef.current = false;
+            thinkingStartedAtRef.current = null;
+          }
+        }, 3000);
+      }
       // When typing starts (and a session isn't already open), open one.
       if (msg.active && !activeTaskSession) {
         const _a2 = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
