@@ -759,6 +759,15 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [chatActions, setChatActions] = useState<string[]>([]);
   // v3.11.48: seconds since the companion started working (thinking bar).
   const [thinkingElapsed, setThinkingElapsed] = useState(0);
+  // v3.11.51: auto-scroll latch. Real new messages keep the chat pinned for
+  // one render, then we stop touching the user's scroll position. History
+  // re-syncs and activity pings stay on the user's current view.
+  const [autoScrollTick, setAutoScrollTick] = useState(0);
+  const autoScrollEnabledRef = useRef(false);
+  const autoScrollMaintainConfig = useMemo(() => {
+    if (!autoScrollEnabledRef.current) return undefined;
+    return { minIndexForVisible: 0, autoscrollToTopThreshold: 80 };
+  }, [autoScrollTick]);
   // v3.11.50: final state of the status line (Done / error / stopped).
   const finishTimerRef = useRef<any>(null);
   const finishedLabelRef = useRef<string | null>(null);
@@ -928,12 +937,33 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
     finishedLabelRef.current = label;
     setChatVoiceStatus(label);
     if (finishTimerRef.current) clearTimeout(finishTimerRef.current);
+    // v3.11.51: 3 s for ✓ Done is plenty — the reply is already on screen. Errors and
+    // stopped-without-reply stick around so the user notices.
     finishTimerRef.current = setTimeout(() => {
       finishTimerRef.current = null;
       setChatVoiceStatus(cur => (cur === label ? null : cur));
       if (finishedLabelRef.current === label) finishedLabelRef.current = null;
-    }, kind === 'done' ? 8000 : 30000);
+    }, kind === 'done' ? 3000 : 30000);
   };
+  // v3.11.51: hide the finished label immediately when the reply is already
+  // on screen, or when the user starts typing. The reply itself is the
+  // "done" — the status line is noise after that.
+  useEffect(() => {
+    if (!finishedLabelRef.current) return;
+    const last = messages.length ? messages[messages.length - 1] : null;
+    if (last && !last.isUser) {
+      if (finishTimerRef.current) clearTimeout(finishTimerRef.current);
+      setChatVoiceStatus(null);
+      finishedLabelRef.current = null;
+    }
+  }, [messages]);
+  useEffect(() => {
+    if (inputText && inputText.length > 0 && finishedLabelRef.current) {
+      if (finishTimerRef.current) clearTimeout(finishTimerRef.current);
+      setChatVoiceStatus(null);
+      finishedLabelRef.current = null;
+    }
+  }, [inputText]);
   const thinkingEscalateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
@@ -2281,6 +2311,18 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           }
           setIsThinking(false);
           setArenaThinking(false);
+        }
+        // v3.11.51: let the FlatList auto-scroll for the first real new content
+        // (user message or active reply), then go back to preserving the user's
+        // scroll position. Without this, history re-syncs nudge the list by
+        // a pixel or two every 30 s. 600 ms covers image bubble layout + measure.
+        if (!msg.replay && replyIsForActiveBucket) {
+          autoScrollEnabledRef.current = true;
+          setAutoScrollTick(t => t + 1);
+          setTimeout(() => {
+            autoScrollEnabledRef.current = false;
+            setAutoScrollTick(t => t + 1);
+          }, 600);
         }
         // If replyIsForActiveBucket is false, leave the sticky flag and timer alone — the indicator stays up for the still-in-flight active request.
       }
@@ -4492,7 +4534,11 @@ useEffect(() => {
               }]}
               onEndReached={() => { if (messages.length > visibleCount) handleLoadMore(); }}
               onEndReachedThreshold={0.5}
-              maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
+              // v3.11.51: keep the list pinned for the FIRST real new message only.
+              // History re-syncs and live activity pings were causing the chat to
+              // shift a pixel or two every ~30 s. Subsequent updates use undefined,
+              // so the user's scroll position is preserved.
+              maintainVisibleContentPosition={autoScrollMaintainConfig}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={true}
               scrollEnabled={true}
