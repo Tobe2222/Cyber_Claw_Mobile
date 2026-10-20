@@ -2491,7 +2491,10 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         const name = a?.name || 'Companion';
         setChatVoiceStatus(`${name} is thinking...`);
         // Stamp the moment the indicator went up so the long-wait escalation (below) can flip the text to "still working..." after 30s, 90s, and 4min.
-        thinkingStartedAtRef.current = Date.now();
+        // v3.11.52: also track work started elsewhere (desktop, or before the app was reopened) so steps, timer and resume keep working.
+        const alreadyTracking = thinkingStickyRef.current && thinkingStartedAtRef.current;
+        thinkingStickyRef.current = true;
+        if (!alreadyTracking) thinkingStartedAtRef.current = (msg.replay && msg.ts) ? msg.ts : Date.now();
         // Cancel any previous long-wait timer; restart fresh.
         if (thinkingEscalateTimerRef.current) {
           clearTimeout(thinkingEscalateTimerRef.current);
