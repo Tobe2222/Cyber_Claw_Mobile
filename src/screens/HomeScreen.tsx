@@ -638,7 +638,11 @@ function appendAgentMessage(
       },
     };
     // Always sync the visible chat to the active (agent, quest) bucket — NOT just when the new message's bucket matches.
-    if (activeAgentId != null) {
+    // v3.11.53: only refresh the visible list when the message landed in the
+    // chat actually on screen. Callers passed a stale quest id (captured when
+    // the listener was registered), so casual chatter replaced the open quest
+    // chat with the casual one for a few seconds.
+    if (activeAgentId != null && activeAgentId === agentId && questKeyForStorage(activeQuestId === undefined ? null : activeQuestId) === bucketKey) {
       const activeBucketKey = questKeyForStorage(
         activeQuestId === undefined ? null : activeQuestId
       );
@@ -685,6 +689,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   // Which quest's chat bucket is currently shown.
   const [activeChatQuestId, setActiveChatQuestId] = useState<string | null | undefined>(undefined);
+  // v3.11.53: always-current copy for long-lived listeners.
+  const activeChatQuestIdRef = useRef<string | null | undefined>(undefined);
+  activeChatQuestIdRef.current = activeChatQuestId;
 
   // Per-chat draft refs.
   const lastDraftKeyRef = useRef<string | null>(null);
@@ -2192,7 +2199,8 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         ? null
         : (questFromBroadcast
           || (mobileActiveQuestAnchor ? { id: mobileActiveQuestAnchor } : aq));
-      const questForStamp = questForRoute || aq || null;
+      // v3.11.53: casual chatter carries no quest tag.
+      const questForStamp = forceNoQuest ? null : (questForRoute || aq || null);
       const qidForRoute = questForRoute
         ? questForRoute.id
         : null;
@@ -2219,7 +2227,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessagesByAgentAndQuest,
         setMessages,
         activeChatAgentIdRef.current,
-        chatCasualRef.current ? null : activeChatQuestId,
+        chatCasualRef.current ? null : activeChatQuestIdRef.current,
       );
       // Classify error bubbles so the chat can render a structured card with category, duration, and partial-step list.
       let errorCategory: 'timeout' | 'crash' | 'network' | 'ratelimit' | 'error' | null = null;
@@ -2876,7 +2884,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessagesByAgentAndQuest,
         setMessages,
         activeChatAgentIdRef.current,
-        chatCasualRef.current ? null : activeChatQuestId,
+        chatCasualRef.current ? null : activeChatQuestIdRef.current,
       );
       // Send to AI - desktop transcribed the audio but we must send the text to trigger the AI response
       const a = (agentsRef.current || []).find(x => x.id === activeChatAgentIdRef.current);
@@ -3169,7 +3177,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
           setMessagesByAgentAndQuest,
           setMessages,
           activeChatAgentIdRef.current,
-          chatCasualRef.current ? null : activeChatQuestId,
+          chatCasualRef.current ? null : activeChatQuestIdRef.current,
         );
       }
     };
@@ -3419,7 +3427,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         setMessagesByAgentAndQuest,
         setMessages,
         activeChatAgentIdRef.current,
-        chatCasualRef.current ? null : activeChatQuestId,
+        chatCasualRef.current ? null : activeChatQuestIdRef.current,
       );
       if (text) {
         syncClient.sendChat(text, aid);
