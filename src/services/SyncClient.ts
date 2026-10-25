@@ -220,8 +220,10 @@ class SyncClient {
     text: string,
     agentId: string = 'companion',
     deviceMeta?: { deviceName?: string; deviceType?: string },
+    attachmentCount: number = 0,
   ) {
-    this.send({ type: 'chat', text, agentId, ...(deviceMeta ? { deviceMeta } : {}) });
+    // v3.11.54: tell the desktop how many images follow, so it waits for them.
+    this.send({ type: 'chat', text, agentId, ...(deviceMeta ? { deviceMeta } : {}), ...(attachmentCount > 0 ? { attachmentCount } : {}) });
   }
 
   // Mobile-initiated companion wake.

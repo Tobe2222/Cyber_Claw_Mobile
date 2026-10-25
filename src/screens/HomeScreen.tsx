@@ -3430,7 +3430,7 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         chatCasualRef.current ? null : activeChatQuestIdRef.current,
       );
       if (text) {
-        syncClient.sendChat(text, aid);
+        syncClient.sendChat(text, aid, undefined, attachments.length);
         addLogEntry(`→ [${aid}] ${text.substring(0, 80)}`, 'sent');
       }
     }
