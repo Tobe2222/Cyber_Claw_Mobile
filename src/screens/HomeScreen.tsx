@@ -148,6 +148,7 @@ async function bringToForeground() {
 }
 
 interface AttachmentItem {
+  fileId?: string; // v3.11.55: companion-attached file on the desktop
   id: string;
   uri: string;
   name: string;
@@ -753,6 +754,42 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   // Fullscreen attachment viewer.
   const [fullscreenAttachment, setFullscreenAttachment] = useState<{ uri: string; type: string; name: string; data?: string } | null>(null);
+  // v3.11.55: files companions attach (audio plays in-app, others save to Downloads).
+  const [fileBusy, setFileBusy] = useState<string | null>(null);
+  const [playingFile, setPlayingFile] = useState<string | null>(null);
+  const playingFileRef = useRef<string | null>(null);
+  const openSharedFile = useCallback(async (att: any) => {
+    const isAudio = String(att.type || '').startsWith('audio/');
+    if (isAudio && playingFileRef.current === att.fileId) {
+      try { WakeWordModule?.stopPlayer?.(); } catch (_) {}
+      playingFileRef.current = null; setPlayingFile(null); return;
+    }
+    const safe = String(att.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const cachePath = RNFS.CachesDirectoryPath + '/shared-' + att.fileId + '-' + safe;
+    try {
+      if (!(await RNFS.exists(cachePath))) {
+        setFileBusy(att.fileId);
+        const r = await syncClient.requestFile(att.fileId);
+        setFileBusy(null);
+        if (!r || !r.ok) { Alert.alert('Could not get file', (r && r.error) || 'unknown error'); return; }
+        await RNFS.writeFile(cachePath, r.data, 'base64');
+      }
+      if (isAudio) {
+        playingFileRef.current = att.fileId; setPlayingFile(att.fileId);
+        const { playAudioFile } = require('../services/AudioPlayer');
+        await playAudioFile(cachePath, 60 * 60 * 1000);
+        if (playingFileRef.current === att.fileId) { playingFileRef.current = null; setPlayingFile(null); }
+      } else {
+        const dest = RNFS.DownloadDirectoryPath + '/' + safe;
+        if (await RNFS.exists(dest)) await RNFS.unlink(dest);
+        await RNFS.copyFile(cachePath, dest);
+        Alert.alert('Saved to Downloads', att.name);
+      }
+    } catch (e: any) {
+      setFileBusy(null); playingFileRef.current = null; setPlayingFile(null);
+      Alert.alert('File error', e?.message || String(e));
+    }
+  }, []);
   // Image gallery overlay.
   const [galleryOpen, setGalleryOpen] = useState<boolean>(false);
 
@@ -4000,7 +4037,7 @@ useEffect(() => {
                   <TouchableOpacity
                     key={`${item.id}-att-${idx}`}
                     style={isImage ? styles.attachmentImageWrap : styles.attachmentFileWrap}
-                    onPress={() => setFullscreenAttachment(att)}
+                    onPress={() => ((att as any).fileId ? openSharedFile(att) : setFullscreenAttachment(att))}
                     activeOpacity={0.8}
                   >
                     {isImage ? (
@@ -4014,9 +4051,9 @@ useEffect(() => {
                       />
                     ) : (
                       <View style={styles.attachmentFileInner}>
-                        <Text style={styles.attachmentFileIcon}>📎</Text>
+                        <Text style={styles.attachmentFileIcon}>{(att as any).fileId ? (fileBusy === (att as any).fileId ? '⏳' : String(att.type || '').startsWith('audio/') ? (playingFile === (att as any).fileId ? '⏹' : '▶️') : '⬇️') : '📎'}</Text>
                         <Text style={styles.attachmentFileName} numberOfLines={1}>
-                          {att.name}
+                          {att.name}{(att as any).fileId && att.size ? '  ·  ' + (att.size >= 1048576 ? (att.size / 1048576).toFixed(1) + ' MB' : Math.round(att.size / 1024) + ' KB') : ''}
                         </Text>
                       </View>
                     )}
@@ -4044,7 +4081,7 @@ useEffect(() => {
       </View>
     );
     // Also depend on `agents` so the message label re-renders when the agents state is hydrated from cache or refreshed by a fresh `agents_list`…
-  }, [messages, agents, questNameById, lastUserMsgId]);
+  }, [messages, agents, questNameById, lastUserMsgId, fileBusy, playingFile, openSharedFile]);
 
   const renderLog = useCallback(({ item, index }: { item: LogEntry; index: number }) => {
     // Show date separator when bucket changes (Today/Yesterday/This Week/Last Week/Older date)

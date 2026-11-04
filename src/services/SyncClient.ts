@@ -8,6 +8,8 @@ const STORAGE_KEY_HOST = 'cyberclaw-sync-host';
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'lost';
 
 type MessageHandler = (msg: any) => void;
+// v3.11.55: pending file fetches (companion-attached files).
+const fileWaiters: Record<string, (m: any) => void> = {};
 
 class SyncClient {
   private ws: WebSocket | null = null;
@@ -532,6 +534,15 @@ class SyncClient {
   get authenticated(): boolean { return this._authenticated; }
   // v3.11.43: socket open (may still be unpaired). `connected` only
   // flips true after auth, so the pairing UI can't key off it.
+  // v3.11.55: fetch a file a companion attached on the desktop.
+  requestFile(id: string, timeoutMs: number = 120000): Promise<any> {
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { delete fileWaiters[id]; resolve({ ok: false, error: 'timed out' }); }, timeoutMs);
+      fileWaiters[id] = (m) => { clearTimeout(t); delete fileWaiters[id]; resolve(m); };
+      try { this.send({ type: 'get_file', id }); } catch (e: any) { clearTimeout(t); delete fileWaiters[id]; resolve({ ok: false, error: e?.message || 'not connected' }); }
+    });
+  }
+
   get socketOpen(): boolean { return !!this.ws && this.ws.readyState === WebSocket.OPEN; }
 
   private _handleMessage(msg: any) {
@@ -593,6 +604,10 @@ class SyncClient {
           // v3.11.43: old token rejected (new desktop / reinstall) → ask for a code.
           this.emit('pairing_required', { reason: 'token_rejected', error: msg.error });
         }
+        break;
+
+      case 'file_data':
+        if (msg && msg.id && fileWaiters[msg.id]) fileWaiters[msg.id](msg);
         break;
 
       case 'voice_peek_result':
