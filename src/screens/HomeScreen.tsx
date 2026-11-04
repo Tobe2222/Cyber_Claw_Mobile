@@ -3377,13 +3377,13 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
 
   const handleAttach = useCallback(() => {
     Alert.alert('Attach', 'Choose source', [
-      { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8 }, (res) => {
+      { text: 'Camera', onPress: () => launchCamera({ mediaType: 'mixed', quality: 0.8, maxWidth: 2560, maxHeight: 2560 }, (res) => {
         // AddAttachment is async (reads base64 at picker time).
         if (res.assets?.[0]) addAttachment(res.assets[0]).catch((e: any) => {
           addLogEntry(`📎 Camera attach failed: ${e?.message ?? 'unknown'}`, 'error');
         });
       })},
-      { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 0 }, (res) => {
+      { text: 'Gallery', onPress: () => launchImageLibrary({ mediaType: 'mixed', selectionLimit: 0, quality: 0.8, maxWidth: 2560, maxHeight: 2560 }, (res) => {
         if (res.assets && res.assets.length > 0) {
           res.assets.forEach(asset => {
             addAttachment(asset).catch((e: any) => {
@@ -3494,6 +3494,9 @@ export default function HomeScreen({ onOpenSettings, onOpenVoiceMode, onOpenQues
         addLogEntry(`📎 No data for ${att.name}, skipping`, 'warn');
         continue;
       }
+      // v3.11.56: photos are now downscaled + made upright at pick time (8 MB
+      // camera shots made the socket drop after the first one); still pace sends.
+      if (attachments.indexOf(att) > 0) await new Promise<void>(r => setTimeout(() => r(), 400));
       const ok = syncClient.sendAttachment(b64, att.type, att.name);
       addLogEntry(ok ? `📎 Sent: ${att.name} (${Math.floor((b64.length * 3) / 4)} bytes)` : `📎 Send failed: ${att.name}`, ok ? 'info' : 'error');
     }
